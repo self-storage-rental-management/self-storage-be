@@ -15,8 +15,18 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class LoginHistoryService {
 
+    private static final int MAX_FAILED_ATTEMPTS = 10;
+    private static final long RATE_WINDOW_MINUTES = 15;
+
     private final LoginHistoryRepository repository;
     private final UserRepository userRepository;
+
+    public boolean isRateLimited(String email) {
+        return repository.countByEmailAttemptedAndSuccessFalseAndOccurredAtAfter(
+            email,
+            Instant.now().minus(RATE_WINDOW_MINUTES, java.time.temporal.ChronoUnit.MINUTES)
+        ) >= MAX_FAILED_ATTEMPTS;
+    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(User user, String email, boolean success, String ip, String userAgent, String failureReason) {

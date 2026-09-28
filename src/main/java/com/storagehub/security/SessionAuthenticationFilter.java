@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.common.api.ApiErrorWriter;
 import com.storagehub.common.api.ErrorCode;
 import com.storagehub.domain.model.Session;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.SessionRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -36,9 +37,15 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
                 UUID sessionId = UUID.fromString(jwt.getClaimAsString("sid"));
                 UUID userId = UUID.fromString(jwt.getSubject());
                 Session session = sessionRepository.findByIdAndRevokedAtIsNull(sessionId).orElse(null);
-                if (session == null || !session.isActive(Instant.now()) || !session.getUser().getId().equals(userId)) {
+                if (session == null || !session.isActive(Instant.now()) || !session.getUser().getId().equals(userId)
+                    || session.getUser().getStatus() != UserStatus.ACTIVE) {
                     SecurityContextHolder.clearContext();
                     ApiErrorWriter.write(response, objectMapper, 401, ErrorCode.UNAUTHORIZED, "The session is invalid or expired");
+                    return;
+                }
+                if (session.getUser().isMustChangePassword() && !isPasswordChangeRequest(request)) {
+                    ApiErrorWriter.write(response, objectMapper, 403, ErrorCode.FORBIDDEN,
+                        "Password change is required before using this resource");
                     return;
                 }
             } catch (IllegalArgumentException exception) {
@@ -48,5 +55,10 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
             }
         }
         filterChain.doFilter(request, response);
+    }
+
+    private boolean isPasswordChangeRequest(HttpServletRequest request) {
+        return "POST".equalsIgnoreCase(request.getMethod())
+            && "/api/auth/password".equals(request.getServletPath());
     }
 }

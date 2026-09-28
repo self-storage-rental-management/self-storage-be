@@ -25,7 +25,12 @@ public class ActorResponseMapper {
             user.getPhone(),
             user.getStatus(),
             user.getRoles().stream().map(role -> role.getCode()).collect(Collectors.toUnmodifiableSet()),
-            Map.copyOf(scopes)
+            Map.copyOf(scopes),
+            user.isMustChangePassword(),
+            user.getRoles().stream()
+                .flatMap(role -> role.getPermissions().stream())
+                .map(permission -> permission.getCode())
+                .collect(Collectors.toUnmodifiableSet())
         );
     }
 }

@@ -13,13 +13,18 @@ public class JwtRoleConverter implements Converter<Jwt, AbstractAuthenticationTo
 
     @Override
     public AbstractAuthenticationToken convert(Jwt jwt) {
-        Object rawRoles = jwt.getClaim("roles");
-        List<GrantedAuthority> authorities = rawRoles instanceof Collection<?> roles
-            ? roles.stream()
-                .map(String::valueOf)
-                .map(role -> (GrantedAuthority) new SimpleGrantedAuthority("ROLE_" + role))
-                .toList()
-            : List.of();
+        List<GrantedAuthority> authorities = new java.util.ArrayList<>();
+        addAuthorities(jwt.getClaim("roles"), "ROLE_", authorities);
+        addAuthorities(jwt.getClaim("permissions"), "PERM_", authorities);
         return new JwtAuthenticationToken(jwt, authorities, jwt.getSubject());
+    }
+
+    private void addAuthorities(Object rawValues, String prefix, List<GrantedAuthority> authorities) {
+        if (rawValues instanceof Collection<?> values) {
+            values.stream()
+                .map(String::valueOf)
+                .map(value -> (GrantedAuthority) new SimpleGrantedAuthority(prefix + value))
+                .forEach(authorities::add);
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.storagehub.domain.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -26,6 +27,7 @@ public class User extends BaseEntity {
     private String email;
 
     @Column(nullable = false, length = 100)
+    @JsonIgnore
     private String passwordHash;
 
     @Column(nullable = false, length = 160)
@@ -37,6 +39,9 @@ public class User extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private UserStatus status = UserStatus.ACTIVE;
+
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    private boolean mustChangePassword = false;
 
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(

@@ -26,8 +26,14 @@ public class Session extends BaseEntity {
     @Column(unique = true, length = 128)
     private String tokenHash;
 
+    @Column(unique = true, length = 128)
+    private String refreshTokenHash;
+
     @Column(nullable = false)
     private Instant expiresAt;
+
+    @Column
+    private Instant refreshExpiresAt;
 
     @Column
     private Instant revokedAt;

@@ -29,6 +29,7 @@ public class ActorContext {
                 UUID.fromString(jwt.getSubject()),
                 UUID.fromString(jwt.getClaimAsString("sid")),
                 readRoles(jwt.getClaim("roles")),
+                readPermissions(jwt.getClaim("permissions")),
                 readScopes(jwt.getClaim("facilityScopes"))
             );
         } catch (IllegalArgumentException exception) {
@@ -55,5 +56,15 @@ public class ActorContext {
             }
         }
         return Map.copyOf(scopes);
+    }
+
+    private Set<String> readPermissions(Object rawPermissions) {
+        if (!(rawPermissions instanceof Collection<?> values)) {
+            return Set.of();
+        }
+        return values.stream()
+            .map(String::valueOf)
+            .filter(value -> !value.isBlank())
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 }

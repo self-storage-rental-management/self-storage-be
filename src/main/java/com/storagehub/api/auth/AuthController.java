@@ -2,6 +2,7 @@ package com.storagehub.api.auth;
 
 import com.storagehub.common.api.ApiResponse;
 import com.storagehub.common.api.CorrelationIdContext;
+import com.storagehub.service.AuthChallengeService;
 import com.storagehub.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -19,9 +20,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final AuthChallengeService authChallengeService;
 
     @PostMapping("/register")
-    public ApiResponse<ActorResponse> register(@Valid @RequestBody RegisterRequest request) {
+    public ApiResponse<RegisterResponse> register(@Valid @RequestBody RegisterRequest request) {
         return new ApiResponse<>(authService.register(request), CorrelationIdContext.current());
     }
 
@@ -33,10 +35,35 @@ public class AuthController {
         );
     }
 
+    @PostMapping("/refresh")
+    public ApiResponse<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return new ApiResponse<>(authService.refresh(request), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/verify-email")
+    public ApiResponse<ActorResponse> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
+        return new ApiResponse<>(authChallengeService.verifyEmail(request), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/forgot-password")
+    public ApiResponse<AuthChallengeResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return new ApiResponse<>(authChallengeService.requestPasswordReset(request), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/reset-password")
+    public ApiResponse<PasswordResetResponse> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        return new ApiResponse<>(authChallengeService.resetPassword(request), CorrelationIdContext.current());
+    }
+
     @PostMapping("/logout")
     public ApiResponse<Map<String, Boolean>> logout() {
         authService.logout();
         return new ApiResponse<>(Map.of("loggedOut", true), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/password")
+    public ApiResponse<AuthResponse> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        return new ApiResponse<>(authService.changePassword(request), CorrelationIdContext.current());
     }
 
     @GetMapping("/me")

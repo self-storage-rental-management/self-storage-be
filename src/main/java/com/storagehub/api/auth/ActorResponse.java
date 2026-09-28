@@ -14,6 +14,8 @@ public record ActorResponse(
     String phone,
     UserStatus status,
     Set<RoleCode> roles,
-    Map<UUID, FacilityScopeLevel> facilityScopes
+    Map<UUID, FacilityScopeLevel> facilityScopes,
+    boolean mustChangePassword,
+    Set<String> permissions
 ) {
 }

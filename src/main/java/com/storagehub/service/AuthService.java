@@ -2,8 +2,11 @@ package com.storagehub.service;
 
 import com.storagehub.api.auth.ActorResponse;
 import com.storagehub.api.auth.AuthResponse;
+import com.storagehub.api.auth.ChangePasswordRequest;
 import com.storagehub.api.auth.LoginRequest;
 import com.storagehub.api.auth.RegisterRequest;
+import com.storagehub.api.auth.RegisterResponse;
+import com.storagehub.api.auth.RefreshTokenRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.Role;
@@ -39,9 +42,10 @@ public class AuthService {
     private final ActorResponseMapper actorResponseMapper;
     private final LoginHistoryService loginHistoryService;
     private final AuditLogService auditLogService;
+    private final AuthChallengeService authChallengeService;
 
     @Transactional
-    public ActorResponse register(RegisterRequest request) {
+    public RegisterResponse register(RegisterRequest request) {
         String email = normalizeEmail(request.email());
         if (userRepository.existsByEmailIgnoreCase(email)) {
             throw ApiExceptions.conflict("An account with this email already exists");
@@ -54,18 +58,22 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setFullName(request.fullName().trim());
         user.setPhone(normalizeNullable(request.phone()));
-        user.setStatus(UserStatus.ACTIVE);
+        user.setStatus(UserStatus.PENDING_VERIFICATION);
         user.setRoles(Set.of(customerRole));
         User saved = userRepository.saveAndFlush(user);
 
+        AuthChallengeService.ChallengeIssue challenge = authChallengeService.issueEmailVerification(saved);
         ActorResponse response = actorResponseMapper.toResponse(saved);
         auditLogService.recordMutation(saved, "USER_REGISTERED", "User", saved.getId(), null, null, response);
-        return response;
+        return new RegisterResponse(response, true, challenge.debugCode());
     }
 
     @Transactional
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent) {
         String email = normalizeEmail(request.email());
+        if (loginHistoryService.isRateLimited(email)) {
+            throw ApiExceptions.unauthorized("Email or password is incorrect");
+        }
         User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
         if (user == null || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             loginHistoryService.record(user, email, false, ipAddress, userAgent, "INVALID_CREDENTIALS");
@@ -80,13 +88,16 @@ public class AuthService {
         Session session = new Session();
         session.setUser(user);
         session.setExpiresAt(now.plus(jwtService.expirationSeconds(), ChronoUnit.SECONDS));
+        session.setRefreshExpiresAt(now.plus(jwtService.refreshExpirationSeconds(), ChronoUnit.SECONDS));
         session.setCreatedIp(ipAddress);
         session.setUserAgent(userAgent);
         session.setLastSeenAt(now);
         session = sessionRepository.saveAndFlush(session);
 
         JwtService.IssuedToken issuedToken = jwtService.issue(user, session);
+        String refreshToken = jwtService.generateRefreshToken();
         session.setTokenHash(jwtService.hash(issuedToken.value()));
+        session.setRefreshTokenHash(jwtService.hash(refreshToken));
         sessionRepository.saveAndFlush(session);
         loginHistoryService.record(user, email, true, ipAddress, userAgent, null);
         auditLogService.recordMutation(user, "SESSION_CREATED", "Session", session.getId(), null, null,
@@ -97,7 +108,40 @@ public class AuthService {
             "Bearer",
             jwtService.expirationSeconds(),
             session.getId().toString(),
-            actorResponseMapper.toResponse(user)
+            actorResponseMapper.toResponse(user),
+            refreshToken
+        );
+    }
+
+    @Transactional
+    public AuthResponse refresh(RefreshTokenRequest request) {
+        String tokenHash = jwtService.hash(request.refreshToken());
+        Session session = sessionRepository.findByRefreshTokenHashAndRevokedAtIsNull(tokenHash)
+            .orElseThrow(() -> ApiExceptions.unauthorized("The refresh token is invalid or expired"));
+        Instant now = Instant.now();
+        if (session.getRefreshExpiresAt() == null || !session.getRefreshExpiresAt().isAfter(now)
+            || session.getUser().getStatus() != UserStatus.ACTIVE) {
+            throw ApiExceptions.unauthorized("The refresh token is invalid or expired");
+        }
+
+        User user = session.getUser();
+        JwtService.IssuedToken issuedToken = jwtService.issue(user, session);
+        String nextRefreshToken = jwtService.generateRefreshToken();
+        session.setTokenHash(jwtService.hash(issuedToken.value()));
+        session.setRefreshTokenHash(jwtService.hash(nextRefreshToken));
+        session.setExpiresAt(issuedToken.expiresAt());
+        session.setLastSeenAt(now);
+        sessionRepository.saveAndFlush(session);
+        auditLogService.recordMutation(user, "SESSION_REFRESHED", "Session", session.getId(), null, null,
+            Map.of("expiresAt", issuedToken.expiresAt()));
+
+        return new AuthResponse(
+            issuedToken.value(),
+            "Bearer",
+            jwtService.expirationSeconds(),
+            session.getId().toString(),
+            actorResponseMapper.toResponse(user),
+            nextRefreshToken
         );
     }
 
@@ -114,6 +158,46 @@ public class AuthService {
         sessionRepository.save(session);
         auditLogService.recordMutation(session.getUser(), "SESSION_REVOKED", "Session", session.getId(), null,
             Map.of("active", true), Map.of("active", false, "revokedAt", revokedAt));
+    }
+
+    @Transactional
+    public AuthResponse changePassword(ChangePasswordRequest request) {
+        ActorPrincipal actor = actorContext.required();
+        User user = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            throw ApiExceptions.unauthorized("The current password is incorrect");
+        }
+        boolean wasRequiredToChangePassword = user.isMustChangePassword();
+        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+            throw ApiExceptions.validation("The new password must be different from the current password", null);
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        user.setMustChangePassword(false);
+        userRepository.saveAndFlush(user);
+
+        Session session = sessionRepository.findByIdAndRevokedAtIsNull(actor.sessionId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("The session is invalid or already revoked"));
+        JwtService.IssuedToken issuedToken = jwtService.issue(user, session);
+        String refreshToken = jwtService.generateRefreshToken();
+        session.setTokenHash(jwtService.hash(issuedToken.value()));
+        session.setRefreshTokenHash(jwtService.hash(refreshToken));
+        session.setExpiresAt(issuedToken.expiresAt());
+        session.setRefreshExpiresAt(Instant.now().plus(jwtService.refreshExpirationSeconds(), ChronoUnit.SECONDS));
+        session.setLastSeenAt(Instant.now());
+        sessionRepository.save(session);
+        auditLogService.recordMutation(user, "PASSWORD_CHANGED", "User", user.getId(), null,
+            Map.of("mustChangePassword", wasRequiredToChangePassword), Map.of("mustChangePassword", false));
+
+        return new AuthResponse(
+            issuedToken.value(),
+            "Bearer",
+            jwtService.expirationSeconds(),
+            session.getId().toString(),
+            actorResponseMapper.toResponse(user),
+            refreshToken
+        );
     }
 
     @Transactional(readOnly = true)

@@ -66,7 +66,7 @@ Internal exception details are never returned.
 
 ### `POST /api/auth/register`
 
-Public. Creates a `CUSTOMER` with `ACTIVE` status. The request cannot choose role, status, or facility scope.
+Public. Creates a `CUSTOMER` with `PENDING_VERIFICATION` status and sends an email OTP/link. The request cannot choose role, status, or facility scope.
 
 ```json
 {
@@ -79,7 +79,7 @@ Public. Creates a `CUSTOMER` with `ACTIVE` status. The request cannot choose rol
 
 ### `POST /api/auth/login`
 
-Public. Creates a database session and returns a signed JWT containing `sub`, `sid`, `roles`, `facilityIds`, and `facilityScopes`.
+Public. Requires an `ACTIVE` account, creates a database session, and returns a signed short-lived JWT plus a rotating refresh token containing `sub`, `sid`, `roles`, `permissions`, `facilityIds`, and `facilityScopes`.
 
 ```json
 {
@@ -95,6 +95,13 @@ Protected. Revokes the current `sid`; the JWT is rejected afterwards even if its
 ### `GET /api/auth/me`
 
 Protected. Returns the actor projection without password or token fields.
+
+### Verification and password recovery
+
+- `POST /api/auth/verify-email` verifies a one-time OTP or link token.
+- `POST /api/auth/refresh` rotates a refresh token and returns a new access JWT.
+- `POST /api/auth/forgot-password` creates a one-time password-reset OTP/link without exposing whether an account exists.
+- `POST /api/auth/reset-password` consumes the OTP/link, updates the password, and revokes existing sessions.
 
 ## Foundation list APIs
 

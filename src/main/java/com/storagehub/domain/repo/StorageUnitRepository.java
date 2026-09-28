@@ -11,6 +11,12 @@ import org.springframework.data.repository.query.Param;
 
 public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> {
 
+    long countByFacility_IdAndUnitType_IdAndStatus(
+        UUID facilityId,
+        UUID unitTypeId,
+        StorageUnitStatus status
+    );
+
     @Query("""
         select u from StorageUnit u
         where (:facilityId is null or u.facility.id = :facilityId)

@@ -5,6 +5,7 @@ public record AuthResponse(
     String tokenType,
     long expiresIn,
     String sessionId,
-    ActorResponse actor
+    ActorResponse actor,
+    String refreshToken
 ) {
 }

@@ -9,8 +9,10 @@ import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +33,7 @@ public class JwtService {
     private final JwtEncoder jwtEncoder;
     private final JwtProperties properties;
     private final UserFacilityScopeRepository scopeRepository;
+    private final SecureRandom secureRandom = new SecureRandom();
 
     @Transactional(readOnly = true)
     public IssuedToken issue(User user, Session session) {
@@ -39,6 +42,12 @@ public class JwtService {
         Instant now = Instant.now();
         Instant expiresAt = now.plus(properties.getExpiration(), ChronoUnit.SECONDS);
         List<String> roles = user.getRoles().stream().map(role -> role.getCode().name()).sorted().toList();
+        List<String> permissions = user.getRoles().stream()
+            .flatMap(role -> role.getPermissions().stream())
+            .map(permission -> permission.getCode())
+            .distinct()
+            .sorted()
+            .toList();
         List<String> encodedScopes = scopes.entrySet().stream()
             .map(entry -> entry.getKey() + ":" + entry.getValue().name())
             .sorted()
@@ -52,6 +61,8 @@ public class JwtService {
             .id(session.getId().toString())
             .claim("sid", session.getId().toString())
             .claim("roles", roles)
+            .claim("permissions", permissions)
+            .claim("mustChangePassword", user.isMustChangePassword())
             .claim("facilityIds", scopes.keySet().stream().map(Object::toString).sorted().toList())
             .claim("facilityScopes", encodedScopes)
             .build();
@@ -72,6 +83,16 @@ public class JwtService {
 
     public long expirationSeconds() {
         return properties.getExpiration();
+    }
+
+    public long refreshExpirationSeconds() {
+        return properties.getRefreshExpiration();
+    }
+
+    public String generateRefreshToken() {
+        byte[] value = new byte[48];
+        secureRandom.nextBytes(value);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
     }
 
     public record IssuedToken(String value, Instant expiresAt, Map<java.util.UUID, FacilityScopeLevel> facilityScopes) {
