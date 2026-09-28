@@ -10,6 +10,7 @@ import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import jakarta.persistence.Lob;
 
 @Entity
 @Table(name = "activity_logs")
@@ -34,11 +35,13 @@ public class ActivityLog extends BaseEntity {
 
     @Column(nullable = false)
     private UUID entityId;
-
-    @Column(length = 10000)
+  
+    @Lob
+    @Column(columnDefinition = "TEXT")
     private String beforeStateJson;
 
-    @Column(length = 10000)
+    @Lob
+    @Column(columnDefinition = "TEXT")
     private String afterStateJson;
 
     @Column(nullable = false, length = 64)
