@@ -1,6 +1,8 @@
 package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.ActivityLog;
+import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -27,4 +29,7 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> 
         @Param("entityType") String entityType,
         Pageable pageable
     );
+
+    @EntityGraph(attributePaths = {"actor", "facility"})
+    List<ActivityLog> findByActionIn(Collection<String> actions, Pageable pageable);
 }

@@ -46,6 +46,7 @@ public class RoleDataInitializer {
 
             Role admin = roleRepository.findByCode(RoleCode.ADMIN).orElseThrow();
             admin.getPermissions().addAll(Arrays.asList(
+                permissions.get(SystemPermission.VIEW_DASHBOARD),
                 permissions.get(SystemPermission.MANAGE_USERS),
                 permissions.get(SystemPermission.MANAGE_ROLES),
                 permissions.get(SystemPermission.VIEW_AUDIT_LOGS),

@@ -7,6 +7,7 @@ import com.storagehub.api.auth.LoginRequest;
 import com.storagehub.api.auth.RegisterRequest;
 import com.storagehub.api.auth.RegisterResponse;
 import com.storagehub.api.auth.RefreshTokenRequest;
+import com.storagehub.api.auth.UpdateProfileRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.Role;
@@ -208,6 +209,23 @@ public class AuthService {
         return actorResponseMapper.toResponse(user);
     }
 
+    @Transactional
+    public ActorResponse updateCurrentActor(UpdateProfileRequest request) {
+        ActorPrincipal actor = actorContext.required();
+        User user = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        ActorResponse before = actorResponseMapper.toResponse(user);
+
+        user.setFullName(requireText(request.fullName(), "fullName"));
+        user.setPhone(normalizeNullable(request.phone()));
+        user.setAvatarUrl(normalizeNullable(request.avatarUrl()));
+
+        User saved = userRepository.saveAndFlush(user);
+        ActorResponse response = actorResponseMapper.toResponse(saved);
+        auditLogService.recordMutation(user, "USER_PROFILE_UPDATED", "User", user.getId(), null, before, response);
+        return response;
+    }
+
     private String normalizeEmail(String email) {
         return email.trim().toLowerCase(java.util.Locale.ROOT);
     }
@@ -215,6 +233,13 @@ public class AuthService {
     private String normalizeNullable(String value) {
         if (value == null || value.isBlank()) {
             return null;
+        }
+        return value.trim();
+    }
+
+    private String requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw ApiExceptions.validation(field + " must not be blank", null);
         }
         return value.trim();
     }

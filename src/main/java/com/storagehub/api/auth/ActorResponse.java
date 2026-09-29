@@ -12,6 +12,7 @@ public record ActorResponse(
     String email,
     String fullName,
     String phone,
+    String avatarUrl,
     UserStatus status,
     Set<RoleCode> roles,
     Map<UUID, FacilityScopeLevel> facilityScopes,
