@@ -210,6 +210,24 @@ public class AdminUserService {
     }
 
     @Transactional
+    public AdminUserResponse unlock(ActorPrincipal actor, UUID id) {
+        authorizationService.require(actor, SystemPermission.MANAGE_USERS);
+        User user = requiredUser(id);
+        if (user.getStatus() != UserStatus.LOCKED) {
+            throw ApiExceptions.conflict("Only LOCKED accounts can be unlocked");
+        }
+
+        AdminUserResponse before = toResponse(user);
+        user.setStatus(UserStatus.ACTIVE);
+        User saved = userRepository.saveAndFlush(user);
+        revokeSessions(saved);
+
+        AdminUserResponse response = toResponse(saved);
+        auditLogService.recordMutation("UNLOCK_ACCOUNT", "User", saved.getId(), null, before, response);
+        return response;
+    }
+
+    @Transactional
     public AdminUserResponse resetPassword(ActorPrincipal actor, UUID id, AdminPasswordResetRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);

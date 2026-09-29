@@ -83,6 +83,11 @@ public class AdminUserController {
         return new ApiResponse<>(adminUserService.updateStatus(actorContext.required(), id, request), CorrelationIdContext.current());
     }
 
+    @PostMapping("/{id}/unlock")
+    public ApiResponse<AdminUserResponse> unlock(@PathVariable UUID id) {
+        return new ApiResponse<>(adminUserService.unlock(actorContext.required(), id), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{id}/password-reset")
     public ApiResponse<AdminUserResponse> resetPassword(
         @PathVariable UUID id,
