@@ -104,6 +104,20 @@ Backend mặc định chạy tại:
 http://localhost:8080
 ```
 
+Swagger UI:
+
+```text
+http://localhost:8080/swagger-ui.html
+```
+
+OpenAPI JSON:
+
+```text
+http://localhost:8080/v3/api-docs
+```
+
+Trong Swagger UI, chọn `Authorize` và nhập JWT để gọi các API cần đăng nhập.
+
 Dừng server bằng `Ctrl + C`.
 
 ## Các lệnh Maven thường dùng

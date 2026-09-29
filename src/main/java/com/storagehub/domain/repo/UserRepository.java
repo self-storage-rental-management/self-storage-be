@@ -4,6 +4,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.UserStatus;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -15,6 +16,15 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByEmailIgnoreCase(String email);
     boolean existsByEmailIgnoreCase(String email);
     long countByRoles_Code(RoleCode code);
+    long countByStatus(UserStatus status);
+
+    @Query("""
+        select assignedRole.code as roleCode, count(distinct u.id) as total
+        from User u
+        join u.roles assignedRole
+        group by assignedRole.code
+        """)
+    List<RoleUserCount> countUsersByRole();
 
     @Query("""
         select distinct u from User u
@@ -37,4 +47,9 @@ public interface UserRepository extends JpaRepository<User, UUID> {
         @Param("facilityId") UUID facilityId,
         Pageable pageable
     );
+
+    interface RoleUserCount {
+        RoleCode getRoleCode();
+        Long getTotal();
+    }
 }

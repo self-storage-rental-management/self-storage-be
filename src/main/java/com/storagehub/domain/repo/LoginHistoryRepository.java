@@ -2,6 +2,7 @@ package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.LoginHistory;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,6 +14,9 @@ import org.springframework.data.repository.query.Param;
 public interface LoginHistoryRepository extends JpaRepository<LoginHistory, UUID> {
 
     long countByEmailAttemptedAndSuccessFalseAndOccurredAtAfter(String emailAttempted, Instant occurredAt);
+
+    @EntityGraph(attributePaths = "user")
+    List<LoginHistory> findTop5BySuccessFalseOrderByOccurredAtDesc();
 
     @EntityGraph(attributePaths = "user")
     @Query("""

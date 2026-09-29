@@ -79,6 +79,26 @@ Passwords and password hashes are never returned by the API.
 
 `debugCode` is populated only when `app.auth.expose-development-code=true`; production deployments should leave it disabled.
 
+## Current actor profile
+
+`GET /api/auth/me` is protected and returns the current `ActorResponse` without password or token fields.
+
+`PUT /api/auth/me` updates only the current actor's profile fields. The actor is derived from the JWT; `email`,
+`roles`, `status`, and `facilityScopes` are not accepted as update fields.
+
+Request:
+
+```json
+{
+  "fullName": "Nguyen Van B",
+  "phone": "0901234567",
+  "avatarUrl": "https://example.com/avatar.png"
+}
+```
+
+`fullName` must not be blank. `phone` is optional and must use a valid local or international phone format when
+provided. The response uses the same `ActorResponse` structure as `GET /api/auth/me`.
+
 ## Verification and recovery
 
 - `POST /api/auth/verify-email` accepts an email plus OTP, or only a link token. The challenge expires after 15 minutes, is single-use, and locks after five failed attempts.

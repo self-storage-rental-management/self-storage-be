@@ -36,6 +36,9 @@ public class User extends BaseEntity {
     @Column(length = 30)
     private String phone;
 
+    @Column(length = 2048)
+    private String avatarUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private UserStatus status = UserStatus.ACTIVE;
