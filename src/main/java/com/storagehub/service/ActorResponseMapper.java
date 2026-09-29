@@ -23,6 +23,7 @@ public class ActorResponseMapper {
             user.getEmail(),
             user.getFullName(),
             user.getPhone(),
+            user.getAvatarUrl(),
             user.getStatus(),
             user.getRoles().stream().map(role -> role.getCode()).collect(Collectors.toUnmodifiableSet()),
             Map.copyOf(scopes),
