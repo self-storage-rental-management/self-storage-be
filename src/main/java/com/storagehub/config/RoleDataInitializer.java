@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 
 @Configuration
 @RequiredArgsConstructor
@@ -22,6 +23,7 @@ public class RoleDataInitializer {
     private final PermissionRepository permissionRepository;
 
     @Bean
+    @Order(10)
     CommandLineRunner seedSystemRoles() {
         return args -> {
             Map<SystemPermission, Permission> permissions = new EnumMap<>(SystemPermission.class);
