@@ -9,13 +9,18 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.config.PaymentProperties;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.PaymentWebhookEvent;
+import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.PaymentRepository;
+import com.storagehub.domain.repo.PaymentWebhookEventRepository;
+import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -26,6 +31,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
+    private final PaymentWebhookEventRepository paymentWebhookEventRepository;
+    private final ReservationRepository reservationRepository;
     private final UserRepository userRepository;
     private final PaymentProperties paymentProperties;
     private final ObjectMapper objectMapper;
@@ -42,9 +49,11 @@ public class PaymentService {
 
         User initiator = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        Reservation reservation = reservationRepository.findById(request.reservationId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         Payment payment = new Payment();
         payment.setInitiatedBy(initiator);
-        payment.setReservationId(request.reservationId());
+        payment.setReservation(reservation);
         payment.setAmount(request.amount());
         payment.setCurrency(request.currency().trim().toUpperCase(java.util.Locale.ROOT));
         payment.setPurpose(request.purpose());
@@ -69,13 +78,17 @@ public class PaymentService {
         if (payload.eventId() == null || payload.eventId().isBlank() || payload.paymentId() == null || payload.status() == null) {
             throw ApiExceptions.validation("Payment webhook is missing required fields", null);
         }
-        if (payload.status() != PaymentStatus.paid && payload.status() != PaymentStatus.failed && payload.status() != PaymentStatus.cancelled) {
+        if (payload.status() != PaymentStatus.PAID
+            && payload.status() != PaymentStatus.FAILED
+            && payload.status() != PaymentStatus.CANCELLED) {
             throw ApiExceptions.validation("Payment webhook status is not supported", null);
         }
 
-        Payment duplicate = paymentRepository.findByProviderEventId(payload.eventId()).orElse(null);
+        PaymentWebhookEvent duplicate = paymentWebhookEventRepository
+            .findByProviderAndProviderEventId(provider, payload.eventId())
+            .orElse(null);
         if (duplicate != null) {
-            return toResponse(duplicate);
+            return toResponse(duplicate.getPayment());
         }
 
         Payment payment = paymentRepository.findById(payload.paymentId())
@@ -85,9 +98,19 @@ public class PaymentService {
         }
         PaymentStatus before = payment.getStatus();
         payment.setProvider(provider);
-        payment.setProviderEventId(payload.eventId());
         payment.setStatus(payload.status());
+        if (payload.status() == PaymentStatus.PAID) {
+            payment.setProviderPaidAt(Instant.now());
+        }
         Payment saved = paymentRepository.saveAndFlush(payment);
+
+        PaymentWebhookEvent webhookEvent = new PaymentWebhookEvent();
+        webhookEvent.setPayment(saved);
+        webhookEvent.setProvider(provider);
+        webhookEvent.setProviderEventId(payload.eventId());
+        webhookEvent.setPayload(rawBody);
+        webhookEvent.setProcessedAt(Instant.now());
+        paymentWebhookEventRepository.saveAndFlush(webhookEvent);
         PaymentIntentResponse response = toResponse(saved);
         auditLogService.recordMutation(null, "PAYMENT_WEBHOOK_APPLIED", "Payment", saved.getId(), null,
             new PaymentState(before), new PaymentState(saved.getStatus()));
@@ -99,8 +122,7 @@ public class PaymentService {
             throw ApiExceptions.conflict("Idempotency-Key is already used by another actor");
         }
         String currency = request.currency().trim().toUpperCase(java.util.Locale.ROOT);
-        if (existing.getReservationId() != null && !existing.getReservationId().equals(request.reservationId())
-            || existing.getReservationId() == null && request.reservationId() != null
+        if (!existing.getReservation().getId().equals(request.reservationId())
             || existing.getAmount().compareTo(request.amount()) != 0
             || !existing.getCurrency().equals(currency)
             || existing.getPurpose() != request.purpose()) {
@@ -137,7 +159,7 @@ public class PaymentService {
     private PaymentIntentResponse toResponse(Payment payment) {
         return new PaymentIntentResponse(
             payment.getId(),
-            payment.getReservationId(),
+            payment.getReservation().getId(),
             payment.getAmount(),
             payment.getCurrency(),
             payment.getPurpose(),

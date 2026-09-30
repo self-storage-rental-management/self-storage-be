@@ -23,15 +23,19 @@ Example response:
     {
       "id": "uuid",
       "facilityId": "uuid",
+      "code": "S",
       "name": "Kho Nhỏ (S)",
       "lengthM": 5.6,
       "widthM": 6.0,
       "heightM": 3.2,
       "areaM2": 33.6,
       "volumeM3": 107.52,
-      "pricePerM3": 51162.04,
       "monthlyPrice": 5500000,
       "maxLoadKg": 600,
+      "rackCount": 4,
+      "rackLengthM": 2.0,
+      "rackWidthM": 4.0,
+      "rackHeightM": 4.5,
       "status": "active",
       "availableUnitCount": 5,
       "createdAt": "2026-09-27T00:00:00Z",
@@ -49,4 +53,4 @@ Example response:
 }
 ```
 
-`availableUnitCount` is the current count of physical units whose status is `available`. It is not a date-range reservation guarantee; date-range availability belongs to the reservation/availability slice.
+`areaM2` và `volumeM3` do BE tính từ ba kích thước; không lưu như dữ liệu nhập độc lập. `availableUnitCount` là số physical unit hiện có status `available`, chưa phải bảo đảm availability theo khoảng ngày.

@@ -73,7 +73,6 @@ public class FacilityQueryService {
             facility.getName(),
             facility.getAddress(),
             facility.getCity(),
-            facility.getTimezone(),
             facility.getStatus(),
             facility.getCreatedAt(),
             facility.getUpdatedAt()

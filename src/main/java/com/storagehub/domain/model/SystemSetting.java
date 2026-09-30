@@ -29,7 +29,7 @@ public class SystemSetting extends BaseEntity {
     @Column(nullable = false, length = 20)
     private String settingType;
 
-    @Column(nullable = false, length = 2000)
+    @Column(name = "setting_value", nullable = false, length = 2000)
     private String value;
 
     @Column(length = 4000)
