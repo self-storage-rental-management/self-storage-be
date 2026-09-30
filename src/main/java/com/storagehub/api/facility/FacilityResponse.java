@@ -10,7 +10,6 @@ public record FacilityResponse(
     String name,
     String address,
     String city,
-    String timezone,
     FacilityStatus status,
     Instant createdAt,
     Instant updatedAt

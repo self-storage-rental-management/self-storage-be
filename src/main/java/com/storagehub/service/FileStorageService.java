@@ -4,8 +4,10 @@ import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.config.FileProperties;
 import com.storagehub.domain.model.FileAsset;
+import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.FileAssetRepository;
+import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.io.IOException;
@@ -36,6 +38,7 @@ public class FileStorageService {
 
     private final FileProperties properties;
     private final FileAssetRepository fileAssetRepository;
+    private final ReservationGoodsItemRepository reservationGoodsItemRepository;
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
 
@@ -47,6 +50,7 @@ public class FileStorageService {
         String contentType = file.getContentType().toLowerCase(java.util.Locale.ROOT);
         String safeOriginalName = safeOriginalName(file.getOriginalFilename());
         String normalizedEntityType = normalizeEntityType(entityType);
+        validateEntityOwnership(actor, normalizedEntityType, entityId, file.getContentType());
         UUID fileId = UUID.randomUUID();
         Path root = Path.of(properties.getStoragePath()).toAbsolutePath().normalize();
         Path temporary = root.resolve(fileId + ".uploading");
@@ -114,10 +118,33 @@ public class FileStorageService {
             return null;
         }
         String normalized = entityType.trim().toUpperCase(java.util.Locale.ROOT);
-        if (!Set.of("CONTRACT", "CHECK_IN", "RETURN_CASE", "SUPPORT_TICKET", "OTHER").contains(normalized)) {
+        if (!Set.of("CONTRACT", "CHECK_IN", "RETURN_CASE", "SUPPORT_TICKET", "RESERVATION_GOODS_ITEM", "OTHER").contains(normalized)) {
             throw ApiExceptions.validation("entityType is not supported", null);
         }
         return normalized;
+    }
+
+    private void validateEntityOwnership(
+        ActorPrincipal actor,
+        String entityType,
+        UUID entityId,
+        String contentType
+    ) {
+        if (!"RESERVATION_GOODS_ITEM".equals(entityType)) {
+            return;
+        }
+        if (entityId == null) {
+            throw ApiExceptions.validation("entityId is required for a goods image", null);
+        }
+        if (contentType == null || !contentType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+            throw ApiExceptions.validation("Goods attachments must be images", null);
+        }
+
+        ReservationGoodsItem goodsItem = reservationGoodsItemRepository.findById(entityId)
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation goods item was not found"));
+        if (!goodsItem.getReservation().getCustomer().getId().equals(actor.userId())) {
+            throw ApiExceptions.forbidden("The goods item does not belong to the current customer");
+        }
     }
 
     private String sha256(Path path) throws IOException {
