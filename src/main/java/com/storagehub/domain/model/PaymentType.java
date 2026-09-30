@@ -1,7 +1,7 @@
 package com.storagehub.domain.model;
 
 public enum PaymentType {
-    DEPOSIT,
+    RESERVATION_DEPOSIT,
     RENTAL_BALANCE,
     MONTHLY_RENT,
     RENEWAL,

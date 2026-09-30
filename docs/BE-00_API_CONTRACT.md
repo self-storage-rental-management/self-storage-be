@@ -124,7 +124,7 @@ Protected. Requires `Idempotency-Key`. The server derives `initiatedBy` from JWT
   "reservationId": "uuid",
   "amount": 100000,
   "currency": "VND",
-  "purpose": "DEPOSIT"
+  "purpose": "RESERVATION_DEPOSIT"
 }
 ```
 
@@ -146,9 +146,9 @@ The canonical names are declared in `com.storagehub.domain.model`. Reservation s
 
 Important reservation transition:
 
-`awaiting_payment -> DEPOSIT_PAID -> UNIT_RESERVED -> READY_FOR_CHECKIN -> COMPLETED`
+`AWAITING_PAYMENT -> CONFIRMED -> UNIT_RESERVED -> READY_FOR_CHECKIN -> AWAITING_CUSTOMER_RECEIPT -> COMPLETED`
 
-`DEPOSIT_PAID` is not an active rental. `READY_FOR_CHECKIN` requires a concrete unit, signed contract, and required payment; only then can Staff create a check-in and activate the rental.
+`CONFIRMED` xác nhận reservation sau khi cọc hợp lệ, chưa phải rental đang hoạt động. `READY_FOR_CHECKIN` yêu cầu đã có gian kho cụ thể, hợp đồng và các khoản thanh toán cần thiết; sau đó Staff mới có thể check-in và kích hoạt rental.
 
 ## Mutation audit contract
 
