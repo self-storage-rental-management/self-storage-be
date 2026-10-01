@@ -68,17 +68,4 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         Instant now
     );
 
-    @Query("""
-        select reservation from Reservation reservation
-        where reservation.status = com.storagehub.domain.model.ReservationStatus.CONFIRMED
-          and reservation.assignedUnit is null
-          and (:facilityId is null or reservation.facility.id = :facilityId)
-          and (:scoped = false or reservation.facility.id in :facilityIds)
-        """)
-    Page<Reservation> findReservationsAwaitingUnitAssignment(
-        @Param("facilityId") UUID facilityId,
-        @Param("scoped") boolean scoped,
-        @Param("facilityIds") java.util.Collection<UUID> facilityIds,
-        Pageable pageable
-    );
 }
