@@ -8,6 +8,8 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
+import java.time.Instant;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -39,4 +41,13 @@ public class StorageUnit extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)
     private StorageUnitStatus status = StorageUnitStatus.available;
+
+    @Column
+    private Instant availableFrom;
+
+    @Column
+    private Instant lastReleasedAt;
+
+    @Version
+    private long version;
 }

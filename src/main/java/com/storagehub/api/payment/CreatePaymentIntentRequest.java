@@ -9,7 +9,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 public record CreatePaymentIntentRequest(
-    UUID reservationId,
+    @NotNull UUID reservationId,
     @NotNull @DecimalMin(value = "0.01") BigDecimal amount,
     @NotBlank @Size(min = 3, max = 3) String currency,
     @NotNull PaymentType purpose
