@@ -9,12 +9,16 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.config.PaymentProperties;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.PaymentWebhookEvent;
 import com.storagehub.domain.model.Reservation;
+import com.storagehub.domain.model.ReservationPricingSnapshot;
+import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.PaymentWebhookEventRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
@@ -33,6 +37,7 @@ public class PaymentService {
     private final PaymentRepository paymentRepository;
     private final PaymentWebhookEventRepository paymentWebhookEventRepository;
     private final ReservationRepository reservationRepository;
+    private final ReservationPricingSnapshotRepository snapshotRepository;
     private final UserRepository userRepository;
     private final PaymentProperties paymentProperties;
     private final ObjectMapper objectMapper;
@@ -40,25 +45,64 @@ public class PaymentService {
 
     @Transactional
     public PaymentIntentResponse createIntent(ActorPrincipal actor, CreatePaymentIntentRequest request, String idempotencyKey) {
+        if (request.purpose() != PaymentType.RESERVATION_DEPOSIT
+            || !"VND".equalsIgnoreCase(request.currency())) {
+            throw ApiExceptions.validation(
+                "Booking payment must use VND and RESERVATION_DEPOSIT", null
+            );
+        }
+        PaymentIntentResponse response = createReservationDepositIntent(
+            actor, request.reservationId(), idempotencyKey
+        );
+        if (response.amount().compareTo(request.amount()) != 0) {
+            throw ApiExceptions.conflict("Payment amount does not match the reservation deposit");
+        }
+        return response;
+    }
+
+    @Transactional
+    public PaymentIntentResponse createReservationDepositIntent(
+        ActorPrincipal actor,
+        UUID reservationId,
+        String idempotencyKey
+    ) {
         String key = normalizeIdempotencyKey(idempotencyKey);
         Payment existing = paymentRepository.findByIdempotencyKey(key).orElse(null);
         if (existing != null) {
-            assertSameRequest(existing, actor, request);
+            assertSameDepositRequest(existing, actor, reservationId);
             return toResponse(existing);
         }
 
         User initiator = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
-        Reservation reservation = reservationRepository.findById(request.reservationId())
+        Reservation reservation = reservationRepository.findByIdAndCustomer_Id(reservationId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        validateReservationCanBePaid(reservation);
+
+        Payment latestPayment = paymentRepository
+            .findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(
+                reservationId, PaymentType.RESERVATION_DEPOSIT
+            )
+            .orElse(null);
+        if (latestPayment != null && (
+            latestPayment.getStatus() == PaymentStatus.PENDING
+                || latestPayment.getStatus() == PaymentStatus.PROCESSING
+                || latestPayment.getStatus() == PaymentStatus.PAID
+        )) {
+            return toResponse(latestPayment);
+        }
+
+        ReservationPricingSnapshot snapshot = snapshotRepository
+            .findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
         Payment payment = new Payment();
         payment.setInitiatedBy(initiator);
         payment.setReservation(reservation);
-        payment.setAmount(request.amount());
-        payment.setCurrency(request.currency().trim().toUpperCase(java.util.Locale.ROOT));
-        payment.setPurpose(request.purpose());
+        payment.setAmount(snapshot.getReservationDepositAmount());
+        payment.setCurrency("VND");
+        payment.setPurpose(PaymentType.RESERVATION_DEPOSIT);
         payment.setIdempotencyKey(key);
-        payment.setProvider("configured-gateway");
+        payment.setProvider("MOMO");
         payment.setGatewayIntentId("pi_" + UUID.randomUUID());
         Payment saved = paymentRepository.saveAndFlush(payment);
         PaymentIntentResponse response = toResponse(saved);
@@ -66,8 +110,27 @@ public class PaymentService {
         return response;
     }
 
+    @Transactional(readOnly = true)
+    public PaymentIntentResponse getReservationDeposit(
+        ActorPrincipal actor,
+        UUID reservationId
+    ) {
+        reservationRepository.findByIdAndCustomer_Id(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        Payment payment = paymentRepository
+            .findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(
+                reservationId, PaymentType.RESERVATION_DEPOSIT
+            )
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation payment was not found"));
+        return toResponse(payment);
+    }
+
     @Transactional
     public PaymentIntentResponse handleWebhook(String provider, String signature, String rawBody) {
+        if (!"MOMO".equalsIgnoreCase(provider)) {
+            throw ApiExceptions.validation("Payment provider is not supported", null);
+        }
+        String normalizedProvider = provider.trim().toUpperCase(java.util.Locale.ROOT);
         verifySignature(signature, rawBody);
         PaymentWebhookPayload payload;
         try {
@@ -85,7 +148,7 @@ public class PaymentService {
         }
 
         PaymentWebhookEvent duplicate = paymentWebhookEventRepository
-            .findByProviderAndProviderEventId(provider, payload.eventId())
+            .findByProviderAndProviderEventId(normalizedProvider, payload.eventId())
             .orElse(null);
         if (duplicate != null) {
             return toResponse(duplicate.getPayment());
@@ -97,16 +160,17 @@ public class PaymentService {
             throw ApiExceptions.conflict("Payment webhook amount does not match the intent");
         }
         PaymentStatus before = payment.getStatus();
-        payment.setProvider(provider);
+        payment.setProvider(normalizedProvider);
         payment.setStatus(payload.status());
         if (payload.status() == PaymentStatus.PAID) {
             payment.setProviderPaidAt(Instant.now());
+            confirmReservationOrRequireReconciliation(payment);
         }
         Payment saved = paymentRepository.saveAndFlush(payment);
 
         PaymentWebhookEvent webhookEvent = new PaymentWebhookEvent();
         webhookEvent.setPayment(saved);
-        webhookEvent.setProvider(provider);
+        webhookEvent.setProvider(normalizedProvider);
         webhookEvent.setProviderEventId(payload.eventId());
         webhookEvent.setPayload(rawBody);
         webhookEvent.setProcessedAt(Instant.now());
@@ -117,17 +181,41 @@ public class PaymentService {
         return response;
     }
 
-    private void assertSameRequest(Payment existing, ActorPrincipal actor, CreatePaymentIntentRequest request) {
+    private void assertSameDepositRequest(Payment existing, ActorPrincipal actor, UUID reservationId) {
         if (!existing.getInitiatedBy().getId().equals(actor.userId())) {
             throw ApiExceptions.conflict("Idempotency-Key is already used by another actor");
         }
-        String currency = request.currency().trim().toUpperCase(java.util.Locale.ROOT);
-        if (!existing.getReservation().getId().equals(request.reservationId())
-            || existing.getAmount().compareTo(request.amount()) != 0
-            || !existing.getCurrency().equals(currency)
-            || existing.getPurpose() != request.purpose()) {
+        if (!existing.getReservation().getId().equals(reservationId)
+            || !"VND".equals(existing.getCurrency())
+            || existing.getPurpose() != PaymentType.RESERVATION_DEPOSIT) {
             throw ApiExceptions.conflict("Idempotency-Key is already used for a different request");
         }
+    }
+
+    private void validateReservationCanBePaid(Reservation reservation) {
+        if (reservation.getStatus() != ReservationStatus.AWAITING_PAYMENT) {
+            throw ApiExceptions.conflict("Reservation is not awaiting payment");
+        }
+        if (reservation.getHoldExpiresAt() == null
+            || !reservation.getHoldExpiresAt().isAfter(Instant.now())) {
+            throw ApiExceptions.conflict("Reservation hold has expired");
+        }
+    }
+
+    private void confirmReservationOrRequireReconciliation(Payment payment) {
+        Reservation reservation = payment.getReservation();
+        boolean confirmable = reservation.getStatus() == ReservationStatus.AWAITING_PAYMENT
+            && reservation.getHoldExpiresAt() != null
+            && reservation.getHoldExpiresAt().isAfter(Instant.now());
+        if (!confirmable) {
+            payment.setStatus(PaymentStatus.RECONCILIATION_REQUIRED);
+            return;
+        }
+        Instant now = Instant.now();
+        reservation.setStatus(ReservationStatus.CONFIRMED);
+        reservation.setDepositPaidAt(now);
+        reservation.setConfirmedAt(now);
+        reservationRepository.saveAndFlush(reservation);
     }
 
     private String normalizeIdempotencyKey(String value) {
