@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.CommandLineRunner;
@@ -21,6 +22,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 @Configuration
 @ConditionalOnProperty(prefix = "app.bootstrap-admin", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
+@Slf4j
 public class BootstrapAdminInitializer {
 
     private final UserRepository userRepository;
@@ -29,6 +31,9 @@ public class BootstrapAdminInitializer {
 
     @Value("${app.bootstrap-admin.email:}")
     private String email;
+
+    @Value("${app.bootstrap-admin.reset-password:false}")
+    private boolean resetPassword;
 
     @Value("${app.bootstrap-admin.password:}")
     private String password;
@@ -45,14 +50,26 @@ public class BootstrapAdminInitializer {
 
             validateConfiguration(normalizedEmail, configuredPassword);
 
-            if (userRepository.countByRoles_Code(RoleCode.ADMIN) > 0) {
+            User existing = userRepository.findByEmailIgnoreCase(normalizedEmail).orElse(null);
+            if (existing != null) {
+                boolean isAdmin = existing.getRoles().stream()
+                    .anyMatch(role -> role.getCode() == RoleCode.ADMIN);
+                if (!isAdmin) {
+                    throw new IllegalStateException(
+                        "Bootstrap admin email already belongs to a non-admin account"
+                    );
+                }
+                if (resetPassword) {
+                    existing.setPasswordHash(passwordEncoder.encode(configuredPassword));
+                    existing.setMustChangePassword(true);
+                    userRepository.saveAndFlush(existing);
+                    log.info("Bootstrap admin password reset for {}", normalizedEmail);
+                }
                 return;
             }
 
-            if (userRepository.findByEmailIgnoreCase(normalizedEmail).isPresent()) {
-                throw new IllegalStateException(
-                    "Bootstrap admin email already belongs to a non-admin account"
-                );
+            if (userRepository.countByRoles_Code(RoleCode.ADMIN) > 0) {
+                return;
             }
 
             Role adminRole = roleRepository.findByCode(RoleCode.ADMIN)
@@ -66,6 +83,7 @@ public class BootstrapAdminInitializer {
             admin.setMustChangePassword(true);
             admin.setRoles(new HashSet<>(Set.of(adminRole)));
             userRepository.saveAndFlush(admin);
+            log.info("Bootstrap admin created for {}", normalizedEmail);
         };
     }
 
