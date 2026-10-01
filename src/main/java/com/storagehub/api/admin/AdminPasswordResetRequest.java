@@ -1,9 +1,14 @@
 package com.storagehub.api.admin;
 
+import com.storagehub.security.PasswordPolicy;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public record AdminPasswordResetRequest(
-    @NotBlank @Size(min = 12, max = 128) String temporaryPassword
+    @NotBlank
+    @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH)
+    @Pattern(regexp = PasswordPolicy.REGEX, message = PasswordPolicy.MESSAGE)
+    String temporaryPassword
 ) {
 }
