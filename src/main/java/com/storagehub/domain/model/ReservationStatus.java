@@ -1,14 +1,15 @@
 package com.storagehub.domain.model;
 
 public enum ReservationStatus {
-    CREATED,
-    awaiting_email,
-    awaiting_review,
-    awaiting_payment,
-    DEPOSIT_PAID,
+    AWAITING_EMAIL,
+    AWAITING_REVIEW,
+    AWAITING_PAYMENT,
+    CONFIRMED,
     UNIT_RESERVED,
     READY_FOR_CHECKIN,
+    AWAITING_CUSTOMER_RECEIPT,
     COMPLETED,
     CANCELLED,
-    EXPIRED
+    EXPIRED,
+    REJECTED
 }

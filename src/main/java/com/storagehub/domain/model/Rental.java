@@ -9,6 +9,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -45,7 +46,13 @@ public class Rental extends BaseEntity {
     private LocalDate startDate;
 
     @Column(nullable = false)
-    private LocalDate endDate;
+    private LocalDate contractEndDate;
+
+    @Column
+    private Instant actualReturnedAt;
+
+    @Column
+    private Instant completedAt;
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal monthlyPrice;
