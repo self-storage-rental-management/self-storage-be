@@ -14,7 +14,8 @@ Discovery → Goods → Quote → Reservation → Payment → Reservation CONFIR
 - Kích thước kiện dùng `cm`; khối lượng dùng `kg` và là khối lượng mỗi kiện.
 - Khoảng thuê dùng `[startDate, endDate)`.
 - BE tính lại compatibility, giá, giảm giá, tiền cọc và capacity khi tạo reservation.
-- Tiền cọc giữ chỗ bằng `40%` tổng tiền thuê sau giảm giá.
+- Cọc giữ chỗ online bằng `40%` tổng tiền thuê sau giảm giá và được trừ vào tiền thuê.
+- Tiền đảm bảo kho bằng `1 tháng` giá thuê gốc, được thu riêng tại Check-in.
 - Các mutation có khả năng retry phải nhận `Idempotency-Key`.
 - Lỗi chuyển trạng thái hoặc reuse idempotency key sai payload trả `409 CONFLICT`.
 
@@ -95,7 +96,11 @@ Request dùng cùng kỳ thuê và `goodsItems` của compatibility. Response t�
     "discountRate": 0.03,
     "discountAmount": 495000,
     "totalAfterDiscount": 16005000,
-    "depositAmount": 6402000,
+    "reservationDepositAmount": 6402000,
+    "securityDepositAmount": 5500000,
+    "remainingRentalAmount": 9603000,
+    "dueAtCheckIn": 15103000,
+    "totalInitialObligation": 21505000,
     "policyVersion": "string",
     "quotedAt": "instant",
     "expiresAt": "instant"
@@ -104,7 +109,7 @@ Request dùng cùng kỳ thuê và `goodsItems` của compatibility. Response t�
 }
 ```
 
-Policy gói thuê do BO quản lý theo cơ sở và số tháng. Create reservation phải tính lại quote và lưu snapshot bất biến. Hệ thống chỉ dùng VND; cọc giữ chỗ là 40% nhưng snapshot chỉ cần lưu số tiền cọc đã tính, không lưu lặp tỷ lệ cố định.
+Policy gói thuê do BO quản lý theo cơ sở và số tháng. Create reservation phải tính lại quote và lưu snapshot bất biến. Hệ thống chỉ dùng VND. Snapshot lưu riêng cọc giữ chỗ 40%, tiền đảm bảo kho, tiền thuê còn lại 60%, số tiền thu tại Check-in và tổng nghĩa vụ ban đầu.
 
 ## 5. Reservation
 
@@ -134,6 +139,22 @@ có OTHER       → AWAITING_REVIEW
 ```
 
 Staff approve `OTHER` chuyển sang `AWAITING_PAYMENT`; reject chuyển `REJECTED`. Endpoint Staff sẽ được chốt trong module review, không đặt trong Customer controller.
+
+```http
+GET  /api/staff/reservation-reviews
+POST /api/staff/reservation-reviews/{reservationId}/decision
+```
+
+Request xử lý review:
+
+```json
+{
+  "decision": "APPROVE",
+  "note": "Hàng hóa phù hợp điều kiện lưu kho"
+}
+```
+
+`REJECT` bắt buộc phải có `note`. Staff/Manager phải có quyền theo cơ sở; Business/Admin có thể xử lý toàn hệ thống. Sau khi approve, khách có 10 phút để thanh toán cọc.
 
 Trong phạm vi đồ án, Reservation chỉ lưu kết quả duyệt hiện tại và người/thời điểm duyệt; không tạo bảng lịch sử review riêng. Khi Staff xử lý, service kiểm tra `goodsReviewStatus = PENDING` bằng điều kiện `if` trước khi cập nhật.
 
@@ -182,7 +203,24 @@ CONFIRMED → UNIT_RESERVED → READY_FOR_CHECKIN
 → AWAITING_CUSTOMER_RECEIPT → COMPLETED
 ```
 
+Cấp kho vật lý cho reservation đã xác nhận:
+
+```http
+GET  /api/staff/unit-assignments
+POST /api/staff/unit-assignments/{reservationId}
+```
+
+```json
+{
+  "storageUnitId": "uuid"
+}
+```
+
+Storage unit phải `available`, cùng facility và unit type với reservation. Khi cấp thành công, storage unit chuyển `reserved` và reservation chuyển `UNIT_RESERVED`. Thao tác yêu cầu quyền `ASSIGN_UNITS` cùng scope `OPERATE` tại facility.
+
 Các transition khác bị từ chối bằng `409 CONFLICT`. Khi triển khai từng chức năng, service phụ trách phải kiểm tra trạng thái hiện tại bằng điều kiện rõ ràng trước khi cập nhật.
+
+Scheduler kiểm tra reservation quá hạn mỗi 60 giây. Các trạng thái `AWAITING_EMAIL`, `AWAITING_REVIEW`, `AWAITING_PAYMENT` có `holdExpiresAt` đã qua sẽ chuyển sang `EXPIRED`. Payment còn `PENDING` hoặc `PROCESSING` của reservation đó cũng chuyển `EXPIRED`, đồng thời hệ thống ghi audit log và tạo notification cho khách hàng.
 
 Ví dụ khi xác nhận thanh toán:
 
