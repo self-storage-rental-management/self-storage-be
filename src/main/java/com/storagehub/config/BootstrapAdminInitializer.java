@@ -68,10 +68,6 @@ public class BootstrapAdminInitializer {
                 return;
             }
 
-            if (userRepository.countByRoles_Code(RoleCode.ADMIN) > 0) {
-                return;
-            }
-
             Role adminRole = roleRepository.findByCode(RoleCode.ADMIN)
                 .orElseThrow(() -> new IllegalStateException("ADMIN role has not been initialized"));
 
