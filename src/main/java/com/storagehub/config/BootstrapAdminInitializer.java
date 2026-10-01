@@ -6,6 +6,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.RoleRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.security.PasswordPolicy;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -87,9 +88,9 @@ public class BootstrapAdminInitializer {
         if (normalizedEmail.isBlank()) {
             throw new IllegalStateException("STORAGEHUB_BOOTSTRAP_ADMIN_EMAIL is required when bootstrap is enabled");
         }
-        if (configuredPassword.length() < 12 || configuredPassword.length() > 128) {
+        if (!PasswordPolicy.isValid(configuredPassword)) {
             throw new IllegalStateException(
-                "STORAGEHUB_BOOTSTRAP_ADMIN_PASSWORD must contain between 12 and 128 characters"
+                "STORAGEHUB_BOOTSTRAP_ADMIN_PASSWORD must be 8-128 characters and include uppercase, lowercase, number, special character, and no whitespace"
             );
         }
         if (normalizeFullName(fullName).isBlank()) {
