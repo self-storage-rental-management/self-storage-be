@@ -4,30 +4,45 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
-import jakarta.persistence.OneToOne;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "reservation_pricing_snapshots")
+@Table(name = "reservation_quotes")
 @Getter
 @Setter
 @NoArgsConstructor
-public class ReservationPricingSnapshot extends BaseEntity {
+public class ReservationQuote extends BaseEntity {
 
-    @OneToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "reservation_id", nullable = false, unique = true)
-    private Reservation reservation;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "customer_id", nullable = false)
+    private User customer;
 
-    @Column(nullable = false, length = 50)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "facility_id", nullable = false)
+    private Facility facility;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "unit_type_id", nullable = false)
+    private UnitType unitType;
+
+    @Column(nullable = false, length = 30)
     private String pricingPackageCode;
 
     @Column(nullable = false, length = 50)
-    private String pricingPolicyVersion;
+    private String policyVersion;
+
+    @Column(nullable = false)
+    private LocalDate startDate;
+
+    @Column(nullable = false)
+    private LocalDate endDate;
 
     @Column(nullable = false)
     private int rentalMonths;
@@ -36,16 +51,16 @@ public class ReservationPricingSnapshot extends BaseEntity {
     private BigDecimal monthlyPrice;
 
     @Column(nullable = false, precision = 14, scale = 2)
-    private BigDecimal grossRentalAmount;
+    private BigDecimal subtotal;
 
     @Column(nullable = false, precision = 5, scale = 4)
-    private BigDecimal discountRate = BigDecimal.ZERO;
+    private BigDecimal discountRate;
 
     @Column(nullable = false, precision = 14, scale = 2)
-    private BigDecimal discountAmount = BigDecimal.ZERO;
+    private BigDecimal discountAmount;
 
     @Column(nullable = false, precision = 14, scale = 2)
-    private BigDecimal netRentalAmount;
+    private BigDecimal totalAfterDiscount;
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal reservationDepositAmount;
