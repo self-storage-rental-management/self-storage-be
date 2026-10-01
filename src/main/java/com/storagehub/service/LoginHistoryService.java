@@ -6,6 +6,8 @@ import com.storagehub.domain.repo.LoginHistoryRepository;
 import com.storagehub.domain.repo.UserRepository;
 import java.time.Instant;
 import java.util.UUID;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -13,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class LoginHistoryService {
 
     private static final int MAX_FAILED_ATTEMPTS = 10;
@@ -28,17 +31,22 @@ public class LoginHistoryService {
         ) >= MAX_FAILED_ATTEMPTS;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Async
+    @Transactional(propagation = Propagation.REQUIRES_NEW, timeout = 5)
     public void record(User user, String email, boolean success, String ip, String userAgent, String failureReason) {
-        LoginHistory history = new LoginHistory();
-        UUID userId = user == null ? null : user.getId();
-        history.setUser(userId == null ? null : userRepository.getReferenceById(userId));
-        history.setEmailAttempted(email);
-        history.setSuccess(success);
-        history.setIpAddress(ip);
-        history.setUserAgent(userAgent);
-        history.setFailureReason(failureReason);
-        history.setOccurredAt(Instant.now());
-        repository.save(history);
+        try {
+            LoginHistory history = new LoginHistory();
+            UUID userId = user == null ? null : user.getId();
+            history.setUser(userId == null ? null : userRepository.getReferenceById(userId));
+            history.setEmailAttempted(email);
+            history.setSuccess(success);
+            history.setIpAddress(ip);
+            history.setUserAgent(userAgent);
+            history.setFailureReason(failureReason);
+            history.setOccurredAt(Instant.now());
+            repository.saveAndFlush(history);
+        } catch (RuntimeException exception) {
+            log.warn("Login history persistence failed; authentication flow is unaffected: {}", exception.getMessage());
+        }
     }
 }
