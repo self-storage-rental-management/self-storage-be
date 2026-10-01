@@ -203,21 +203,6 @@ CONFIRMED → UNIT_RESERVED → READY_FOR_CHECKIN
 → AWAITING_CUSTOMER_RECEIPT → COMPLETED
 ```
 
-Cấp kho vật lý cho reservation đã xác nhận:
-
-```http
-GET  /api/staff/unit-assignments
-POST /api/staff/unit-assignments/{reservationId}
-```
-
-```json
-{
-  "storageUnitId": "uuid"
-}
-```
-
-Storage unit phải `available`, cùng facility và unit type với reservation. Khi cấp thành công, storage unit chuyển `reserved` và reservation chuyển `UNIT_RESERVED`. Thao tác yêu cầu quyền `ASSIGN_UNITS` cùng scope `OPERATE` tại facility.
-
 Các transition khác bị từ chối bằng `409 CONFLICT`. Khi triển khai từng chức năng, service phụ trách phải kiểm tra trạng thái hiện tại bằng điều kiện rõ ràng trước khi cập nhật.
 
 Scheduler kiểm tra reservation quá hạn mỗi 60 giây. Các trạng thái `AWAITING_EMAIL`, `AWAITING_REVIEW`, `AWAITING_PAYMENT` có `holdExpiresAt` đã qua sẽ chuyển sang `EXPIRED`. Payment còn `PENDING` hoặc `PROCESSING` của reservation đó cũng chuyển `EXPIRED`, đồng thời hệ thống ghi audit log và tạo notification cho khách hàng.

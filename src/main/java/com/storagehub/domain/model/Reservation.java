@@ -56,13 +56,6 @@ public class Reservation extends BaseEntity {
     @JoinColumn(name = "assigned_unit_id")
     private StorageUnit assignedUnit;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "assigned_unit_by")
-    private User assignedUnitBy;
-
-    @Column
-    private Instant assignedUnitAt;
-
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private ReservationStatus status = ReservationStatus.AWAITING_EMAIL;
