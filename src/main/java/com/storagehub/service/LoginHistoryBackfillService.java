@@ -9,6 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +25,9 @@ public class LoginHistoryBackfillService implements ApplicationRunner {
     @Value("${app.login-history.backfill-fingerprints:true}")
     private boolean backfillEnabled;
 
+    @Value("${app.login-history.backfill-batch-size:500}")
+    private int batchSize = 500;
+
     @Override
     public void run(ApplicationArguments args) {
         if (!backfillEnabled) {
@@ -33,23 +39,33 @@ public class LoginHistoryBackfillService implements ApplicationRunner {
 
     @Transactional
     public int backfillPending() {
-        List<LoginHistory> unpopulated = loginHistoryRepository.findAllByDeviceFingerprintIsNullAndUserAgentIsNotNull();
-        if (unpopulated.isEmpty()) {
-            return 0;
-        }
+        int totalUpdated = 0;
+        int batchNumber = 1;
 
-        log.info("Starting backfill of device fingerprints for {} legacy login history records...", unpopulated.size());
-        int updated = 0;
-        for (LoginHistory history : unpopulated) {
-            String ua = history.getUserAgent();
-            if (ua != null && !ua.isBlank()) {
+        while (true) {
+            Pageable pageable = PageRequest.of(0, batchSize, Sort.by("id").ascending());
+            List<LoginHistory> chunk = loginHistoryRepository.findByDeviceFingerprintIsNull(pageable);
+            if (chunk.isEmpty()) {
+                break;
+            }
+
+            for (LoginHistory history : chunk) {
+                String ua = history.getUserAgent();
                 String fp = UserAgentParser.parse(ua).fingerprint();
                 history.setDeviceFingerprint(fp);
-                updated++;
             }
+            loginHistoryRepository.saveAllAndFlush(chunk);
+            totalUpdated += chunk.size();
+            log.info("Backfilled device fingerprints: batch {} ({} records in batch, total updated: {})",
+                batchNumber, chunk.size(), totalUpdated);
+            batchNumber++;
         }
-        loginHistoryRepository.saveAllAndFlush(unpopulated);
-        log.info("Completed backfill of device fingerprints: {} records updated.", updated);
-        return updated;
+
+        if (totalUpdated > 0) {
+            log.info("Completed backfill of device fingerprints: {} total records updated.", totalUpdated);
+        } else {
+            log.info("No legacy login history records found requiring fingerprint backfill.");
+        }
+        return totalUpdated;
     }
 }

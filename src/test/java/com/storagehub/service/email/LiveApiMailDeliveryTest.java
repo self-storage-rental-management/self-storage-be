@@ -59,6 +59,9 @@ class LiveApiMailDeliveryTest {
     @Autowired
     private com.storagehub.domain.repo.LoginHistoryRepository loginHistoryRepository;
 
+    @Autowired
+    private TransactionalEmailService transactionalEmailService;
+
     private static String registeredUserToken;
     private static String adminToken;
     private static UUID registeredUserId;
@@ -470,7 +473,10 @@ class LiveApiMailDeliveryTest {
 
         DecodedEmail email = emails.get(0);
         assertEquals("newstaff@storagehub.test", email.to());
-        assertTrue(email.subject().contains("Tài khoản StorageHub"));
+        assertTrue(email.subject().contains("Tài khoản StorageHub của bạn đã được tạo"));
+        assertTrue(email.bodyHtml().contains("Tài khoản đã được tạo"));
+        assertTrue(email.bodyHtml().contains("Ngày tạo"));
+        assertFalse(email.bodyHtml().contains("Thời gian đặt lại"));
         assertTrue(email.bodyHtml().contains("Nguyen Van Staff"));
 
         // Extract temporary password from email body
@@ -519,7 +525,10 @@ class LiveApiMailDeliveryTest {
 
         DecodedEmail email = emails.get(0);
         assertEquals("flowuser-newemail@storagehub.test", email.to());
-        assertTrue(email.subject().contains("Tài khoản StorageHub"));
+        assertTrue(email.subject().contains("Mật khẩu StorageHub của bạn đã được đặt lại"));
+        assertTrue(email.bodyHtml().contains("Mật khẩu đã được đặt lại"));
+        assertTrue(email.bodyHtml().contains("Thời gian đặt lại"));
+        assertFalse(email.bodyHtml().contains("Ngày tạo"));
 
         // Extract temporary password from email body
         Pattern pattern = Pattern.compile("Mật khẩu tạm thời:[^<]*<b[^>]*>([^<]+)</b>");
@@ -811,5 +820,60 @@ class LiveApiMailDeliveryTest {
         assertTrue(firefoxEmail.subject().contains("Đăng nhập mới"), "Subject must indicate new login");
         assertTrue(firefoxEmail.bodyHtml().contains("Firefox"), "Body must contain parsed browser");
         assertTrue(firefoxEmail.bodyHtml().contains("Mac"), "Body must contain parsed device");
+    }
+
+    @Test
+    @Order(13)
+    @DisplayName("Action: Send all 6 transactional emails to MailHog and verify inline logo CID attachment")
+    void testSendAllSixEmailsToMailHogAndVerifyCidLogo() throws Exception {
+        clearMailHog();
+
+        UUID testUserId = UUID.randomUUID();
+        String to = "mailhog-all-six@storagehub.local";
+
+        transactionalEmailService.sendVerifyEmailAsync(testUserId, to, "Nguyễn Văn Test", "http://localhost:5173/?verifyEmail=sample-tok", 15);
+        transactionalEmailService.sendPasswordResetAsync(testUserId, to, "Nguyễn Văn Test", "http://localhost:5173/?resetPassword=sample-tok", 15);
+        transactionalEmailService.sendNewLoginNoticeAsync(testUserId, to, "Nguyễn Văn Test", "15:00 02/10/2026", "Windows PC", "Chrome", "TP. Hồ Chí Minh", "127.0.0.1", "http://localhost:5173/profile/security");
+        transactionalEmailService.sendAccountCreatedAsync(testUserId, to, "Nguyễn Văn Test", "02/10/2026 15:00", "TempPass@123", "http://localhost:5173/login", false);
+        transactionalEmailService.sendSecurityAlertAsync(testUserId, to, "Nguyễn Văn Test", 5, 15, "15:15 02/10/2026", "15:00 02/10/2026", "127.0.0.1", "TP. Hồ Chí Minh", "http://localhost:5173/?resetPassword=tok", false);
+        transactionalEmailService.sendAccountChangedAsync(testUserId, to, "Nguyễn Văn Test", "15:00 02/10/2026", "Mật khẩu", "••••••••", "••••••••", false, "Chrome trên Windows PC", "127.0.0.1", "http://localhost:5173/profile");
+
+        List<DecodedEmail> emails = waitForEmails(6, 10);
+        assertThat(emails).hasSize(6);
+
+        // Verify that every email received has the inline logo CID <storagehubLogo>
+        JsonNode data = getMailHogMessages();
+        for (JsonNode item : data.get("items")) {
+            String id = item.get("ID").asText();
+            HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(MAILHOG_BASE + "/api/v1/messages/" + id + "/download"))
+                .GET()
+                .build();
+            HttpResponse<InputStream> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
+            MimeMessage mime = new MimeMessage(null, resp.body());
+
+            boolean hasLogoCid = containsContentId(mime, "storagehubLogo");
+            assertTrue(hasLogoCid, "Email " + mime.getSubject() + " must have inline logo CID <storagehubLogo>");
+        }
+    }
+
+    private boolean containsContentId(Part part, String contentId) throws Exception {
+        String[] headers = part.getHeader("Content-ID");
+        if (headers != null) {
+            for (String h : headers) {
+                if (h.contains(contentId)) {
+                    return true;
+                }
+            }
+        }
+        if (part.isMimeType("multipart/*")) {
+            Multipart mp = (Multipart) part.getContent();
+            for (int i = 0; i < mp.getCount(); i++) {
+                if (containsContentId(mp.getBodyPart(i), contentId)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

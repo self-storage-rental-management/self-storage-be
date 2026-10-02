@@ -104,29 +104,52 @@ class EmailTemplateRendererTest {
     }
 
     @Test
-    @DisplayName("4. account-created template shows temp password only when provided")
+    @DisplayName("4. account-created template handles both account creation and admin reset modes")
     void testAccountCreatedTemplate() {
-        // Case A: With temp password (Admin created)
-        Map<String, Object> varsWithPassword = new HashMap<>();
-        varsWithPassword.put("fullName", "Phạm Văn D");
-        varsWithPassword.put("email", "d.pham@example.com");
-        varsWithPassword.put("createdAt", "02/10/2026 15:00");
-        varsWithPassword.put("tempPassword", "TempPass@999");
-        varsWithPassword.put("loginUrl", "http://localhost:5173/login");
+        // Case A: Admin created new account (isReset = false)
+        Map<String, Object> varsCreate = new HashMap<>();
+        varsCreate.put("fullName", "Phạm Văn D");
+        varsCreate.put("email", "d.pham@example.com");
+        varsCreate.put("createdAt", "02/10/2026 15:00");
+        varsCreate.put("tempPassword", "TempPass@999");
+        varsCreate.put("loginUrl", "http://localhost:5173/login");
+        varsCreate.put("isReset", false);
 
-        String htmlWithPassword = renderer.render("account-created", varsWithPassword);
-        assertNotNull(htmlWithPassword);
-        assertTrue(htmlWithPassword.contains("Tài khoản đã được tạo"));
-        assertTrue(htmlWithPassword.contains("TempPass@999"), "Must display temporary password");
-        assertTrue(htmlWithPassword.contains("Tài khoản này do quản trị viên cấp"));
+        String htmlCreate = renderer.render("account-created", varsCreate);
+        assertNotNull(htmlCreate);
+        assertTrue(htmlCreate.contains("Tài khoản đã được tạo"));
+        assertTrue(htmlCreate.contains("Tài khoản StorageHub của bạn đã sẵn sàng"));
+        assertTrue(htmlCreate.contains("Ngày tạo"));
+        assertFalse(htmlCreate.contains("Thời gian đặt lại"));
+        assertTrue(htmlCreate.contains("TempPass@999"), "Must display temporary password");
+        assertTrue(htmlCreate.contains("Tài khoản này do quản trị viên cấp"));
 
-        // Case B: Without temp password (self-registered or no temp password)
+        // Case B: Admin reset password (isReset = true)
+        Map<String, Object> varsReset = new HashMap<>();
+        varsReset.put("fullName", "Phạm Văn D");
+        varsReset.put("email", "d.pham@example.com");
+        varsReset.put("createdAt", "02/10/2026 15:00");
+        varsReset.put("resetTime", "02/10/2026 15:00");
+        varsReset.put("tempPassword", "TempPass@999");
+        varsReset.put("loginUrl", "http://localhost:5173/login");
+        varsReset.put("isReset", true);
+
+        String htmlReset = renderer.render("account-created", varsReset);
+        assertNotNull(htmlReset);
+        assertTrue(htmlReset.contains("Mật khẩu đã được đặt lại"));
+        assertTrue(htmlReset.contains("Mật khẩu tài khoản StorageHub của bạn đã được quản trị viên đặt lại"));
+        assertTrue(htmlReset.contains("Thời gian đặt lại"));
+        assertFalse(htmlReset.contains("Ngày tạo"));
+        assertTrue(htmlReset.contains("TempPass@999"), "Must display temporary password");
+
+        // Case C: Without temp password (self-registered or no temp password)
         Map<String, Object> varsWithoutPassword = new HashMap<>();
         varsWithoutPassword.put("fullName", "Phạm Văn D");
         varsWithoutPassword.put("email", "d.pham@example.com");
         varsWithoutPassword.put("createdAt", "02/10/2026 15:00");
         varsWithoutPassword.put("tempPassword", null);
         varsWithoutPassword.put("loginUrl", "http://localhost:5173/login");
+        varsWithoutPassword.put("isReset", false);
 
         String htmlWithoutPassword = renderer.render("account-created", varsWithoutPassword);
         assertNotNull(htmlWithoutPassword);

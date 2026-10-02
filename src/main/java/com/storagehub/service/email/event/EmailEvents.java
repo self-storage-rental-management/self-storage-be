@@ -44,8 +44,19 @@ public final class EmailEvents {
         String fullName,
         String createdAt,
         String tempPassword,
-        String loginUrl
+        String loginUrl,
+        boolean isReset
     ) {
+        public SendAccountCreatedEvent(
+            UUID userId,
+            String toEmail,
+            String fullName,
+            String createdAt,
+            String tempPassword,
+            String loginUrl
+        ) {
+            this(userId, toEmail, fullName, createdAt, tempPassword, loginUrl, false);
+        }
     }
 
     public record SendSecurityAlertEvent(

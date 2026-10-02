@@ -98,12 +98,14 @@ CREATE INDEX idx_login_history_user_fp ON login_history (user_id, success, devic
 ### 3.3. Cơ chế Backfill Fingerprint cho Dữ liệu Đăng nhập Cũ (Mục 1)
 - **Vấn đề**: Các bản ghi đăng nhập thành công trong quá khứ (`login_history`) có `device_fingerprint = NULL`. Nếu không xử lý, ngay lần đăng nhập đầu tiên sau khi triển khai, người dùng hiện tại sẽ bị hệ thống nhận diện nhầm là "thiết bị mới" và gửi email cảnh báo không cần thiết (false positive).
 - **Giải pháp xử lý 2 tầng (Dual-Layer Strategy)**:
-  1. **Tầng 1 - Backfill tự động khi khởi động (`LoginHistoryBackfillService`)**:
-     - Cài đặt thông qua Spring `ApplicationRunner` với cấu hình bật/tắt:
+  1. **Tầng 1 - Backfill tự động theo lô khi khởi động (`LoginHistoryBackfillService`)**:
+     - Cài đặt thông qua Spring `ApplicationRunner` với cấu hình bật/tắt và kích thước lô:
        ```properties
        app.login-history.backfill-fingerprints=true
+       app.login-history.backfill-batch-size=500
        ```
-     - **Lý do chọn cách này**: Đảm bảo thuật toán phân tích chuỗi `userAgent` thành fingerprint (`Hệ điều hành | Họ trình duyệt`, ví dụ `Windows PC|Chrome`, `Mac|Firefox`) sử dụng **chính xác 100% cùng một logic code Java (`UserAgentParser`)**, không bị sai lệch do sự khác biệt giữa các regex engine của các hệ quản trị CSDL (MySQL, PostgreSQL, H2). Quá trình này idempotent: chỉ cập nhật các dòng có `device_fingerprint IS NULL AND user_agent IS NOT NULL`.
+     - **Cơ chế xử lý theo lô**: Hệ thống xử lý theo từng lô (500 dòng/lần, phân trang sắp xếp theo `id ASC`), ghi log tiến độ cụ thể cho từng lô và tổng số dòng đã cập nhật, **không nạp toàn bộ bảng vào bộ nhớ** để đảm bảo an toàn tài nguyên. Quá trình là idempotent: chỉ cập nhật các dòng có `device_fingerprint IS NULL`.
+     - **Lý do chọn cách này**: Đảm bảo thuật toán phân tích chuỗi `userAgent` thành fingerprint (`Hệ điều hành | Họ trình duyệt`, ví dụ `Windows PC|Chrome`, `Mac|Firefox`) sử dụng **chính xác 100% cùng một logic code Java (`UserAgentParser`)**, không bị sai lệch do sự khác biệt giữa các regex engine của các hệ quản trị CSDL (MySQL, PostgreSQL, H2).
   2. **Tầng 2 - Tự phục hồi tại thời điểm người dùng đăng nhập (Runtime Self-Healing Fallback)**:
      - Trong phương thức `AuthService.handleNewLoginNotice`: Nếu người dùng có các bản ghi lịch sử cũ mang `device_fingerprint = NULL`, backend sẽ duyệt và parse nhanh các `userAgent` cũ đó. Nếu trùng fingerprint với thiết bị đang đăng nhập, backend sẽ:
        - Xem thiết bị này là **thiết bị đã biết** -> **KHÔNG gửi email cảnh báo**.

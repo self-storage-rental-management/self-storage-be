@@ -61,14 +61,15 @@ public class EmailEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onAccountCreated(SendAccountCreatedEvent event) {
-        log.debug("Dispatching account-created event for recipient={}", event.toEmail());
+        log.debug("Dispatching account-created event for recipient={}, isReset={}", event.toEmail(), event.isReset());
         transactionalEmailService.sendAccountCreatedAsync(
             event.userId(),
             event.toEmail(),
             event.fullName(),
             event.createdAt(),
             event.tempPassword(),
-            event.loginUrl()
+            event.loginUrl(),
+            event.isReset()
         );
     }
 

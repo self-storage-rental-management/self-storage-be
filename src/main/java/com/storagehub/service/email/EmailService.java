@@ -72,9 +72,32 @@ public class EmailService {
         String tempPassword,
         String loginUrl
     ) {
+        sendAccountCreated(userId, toEmail, fullName, createdAt, tempPassword, loginUrl, false);
+    }
+
+    public void sendAccountCreated(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String createdAt,
+        String tempPassword,
+        String loginUrl,
+        boolean isReset
+    ) {
         eventPublisher.publishEvent(new SendAccountCreatedEvent(
-            userId, toEmail, fullName, createdAt, tempPassword, loginUrl
+            userId, toEmail, fullName, createdAt, tempPassword, loginUrl, isReset
         ));
+    }
+
+    public void sendAccountPasswordReset(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String resetTime,
+        String tempPassword,
+        String loginUrl
+    ) {
+        sendAccountCreated(userId, toEmail, fullName, resetTime, tempPassword, loginUrl, true);
     }
 
     public void sendAccountCreated(
@@ -84,7 +107,7 @@ public class EmailService {
         String tempPassword,
         String loginUrl
     ) {
-        sendAccountCreated(null, toEmail, fullName, createdAt, tempPassword, loginUrl);
+        sendAccountCreated(null, toEmail, fullName, createdAt, tempPassword, loginUrl, false);
     }
 
     public void sendSecurityAlert(
