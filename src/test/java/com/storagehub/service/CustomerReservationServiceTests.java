@@ -18,6 +18,12 @@ import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.Payment;
+import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.PaymentType;
+import com.storagehub.domain.model.StorageUnit;
+import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -42,6 +48,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 class CustomerReservationServiceTests {
 
     @Mock private ReservationRepository reservationRepository;
+    @Mock private PaymentRepository paymentRepository;
     @Mock private ReservationPricingSnapshotRepository snapshotRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private AuditLogService auditLogService;
@@ -54,7 +61,8 @@ class CustomerReservationServiceTests {
     @BeforeEach
     void setUp() {
         service = new CustomerReservationService(
-            reservationRepository, snapshotRepository, goodsItemRepository, auditLogService
+            reservationRepository, paymentRepository, snapshotRepository,
+            goodsItemRepository, auditLogService
         );
 
         User customer = entityWithId(new User());
@@ -93,7 +101,7 @@ class CustomerReservationServiceTests {
 
     @Test
     void listsOnlyReservationsOwnedByCustomer() {
-        when(reservationRepository.findAllByCustomer_Id(any(), any()))
+        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNull(any(), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));
@@ -102,13 +110,16 @@ class CustomerReservationServiceTests {
 
         assertThat(response.data()).hasSize(1);
         assertThat(response.data().get(0).getId()).isEqualTo(reservation.getId());
-        verify(reservationRepository).findAllByCustomer_Id(any(), any());
+        verify(reservationRepository).findAllByCustomer_IdAndArchivedAtIsNull(any(), any());
     }
 
     @Test
     void cancelsReservationWhileItIsWaiting() {
-        when(reservationRepository.findByIdAndCustomer_Id(reservation.getId(), actor.userId()))
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
+        when(paymentRepository.findReservationPaymentsForUpdate(
+            reservation.getId(), PaymentType.RESERVATION_DEPOSIT
+        )).thenReturn(List.of());
         when(reservationRepository.saveAndFlush(reservation)).thenReturn(reservation);
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));
@@ -125,9 +136,56 @@ class CustomerReservationServiceTests {
     }
 
     @Test
-    void rejectsCancellationAfterReservationIsConfirmed() {
+    void cancelsConfirmedReservationWithoutRefundingPaidDepositOrReleasingAssignedUnit() {
         reservation.setStatus(ReservationStatus.CONFIRMED);
-        when(reservationRepository.findByIdAndCustomer_Id(reservation.getId(), actor.userId()))
+        StorageUnit assignedUnit = entityWithId(new StorageUnit());
+        assignedUnit.setStatus(StorageUnitStatus.assigned);
+        reservation.setAssignedUnit(assignedUnit);
+        Payment payment = new Payment();
+        payment.setStatus(PaymentStatus.PAID);
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(paymentRepository.findReservationPaymentsForUpdate(
+            reservation.getId(), PaymentType.RESERVATION_DEPOSIT
+        )).thenReturn(List.of(payment));
+        when(reservationRepository.saveAndFlush(reservation)).thenReturn(reservation);
+        when(snapshotRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(snapshot));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of());
+
+        service.cancel(
+            actor, reservation.getId(), new CancelReservationRequest("Đổi kế hoạch")
+        );
+
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
+        assertThat(reservation.getAssignedUnit()).isSameAs(assignedUnit);
+        assertThat(assignedUnit.getStatus()).isEqualTo(StorageUnitStatus.assigned);
+    }
+
+    @Test
+    void rejectsCancellationWhilePaymentIsProcessing() {
+        reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);
+        Payment payment = new Payment();
+        payment.setStatus(PaymentStatus.PROCESSING);
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(paymentRepository.findReservationPaymentsForUpdate(
+            reservation.getId(), PaymentType.RESERVATION_DEPOSIT
+        )).thenReturn(List.of(payment));
+
+        assertThatThrownBy(() -> service.cancel(
+            actor, reservation.getId(), new CancelReservationRequest("Đổi kế hoạch")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("payment is processing");
+    }
+
+    @Test
+    void rejectsCancellationAfterCheckInFlowHasStarted() {
+        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
 
         assertThatThrownBy(() -> service.cancel(
@@ -135,6 +193,28 @@ class CustomerReservationServiceTests {
         ))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("cannot be cancelled");
+    }
+
+    @Test
+    void cancelsPendingPaymentWhenReservationIsCancelled() {
+        Payment payment = new Payment();
+        payment.setStatus(PaymentStatus.PENDING);
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(paymentRepository.findReservationPaymentsForUpdate(
+            reservation.getId(), PaymentType.RESERVATION_DEPOSIT
+        )).thenReturn(List.of(payment));
+        when(reservationRepository.saveAndFlush(reservation)).thenReturn(reservation);
+        when(snapshotRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(snapshot));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of());
+
+        service.cancel(
+            actor, reservation.getId(), new CancelReservationRequest("Không còn nhu cầu")
+        );
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
     }
 
     @Test

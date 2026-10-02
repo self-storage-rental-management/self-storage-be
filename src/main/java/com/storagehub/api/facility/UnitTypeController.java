@@ -6,6 +6,7 @@ import com.storagehub.domain.model.UnitTypeStatus;
 import com.storagehub.security.ActorContext;
 import com.storagehub.service.UnitTypeQueryService;
 import java.util.UUID;
+import java.time.LocalDate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -28,10 +29,12 @@ public class UnitTypeController {
     public PageResponse<UnitTypeResponse> list(
         @PathVariable UUID facilityId,
         @RequestParam(required = false) UnitTypeStatus status,
+        @RequestParam(required = false) LocalDate startDate,
+        @RequestParam(required = false) LocalDate endDate,
         @PageableDefault(size = 20, sort = "monthlyPrice", direction = Sort.Direction.ASC) Pageable pageable
     ) {
         return unitTypeQueryService.list(
-            actorContext.required(), facilityId, status, pageable, CorrelationIdContext.current()
+            actorContext.required(), facilityId, status, startDate, endDate, pageable, CorrelationIdContext.current()
         );
     }
 }
