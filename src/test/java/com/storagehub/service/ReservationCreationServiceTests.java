@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.api.reservation.CompatibilityCheckResponse;
@@ -189,6 +190,18 @@ class ReservationCreationServiceTests {
 
         assertThat(response.getId()).isEqualTo(existing.getId());
         assertThat(response.getReservationCode()).isEqualTo("RSV-EXISTING001");
+    }
+
+    @Test
+    void rateLimitsNewReservationCreationButNotIdempotentRetry() {
+        when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-rate"))
+            .thenReturn(Optional.empty());
+        when(reservationRepository.countByCustomer_IdAndCreatedAtAfter(eq(actor.userId()), any()))
+            .thenReturn(5L);
+
+        assertThatThrownBy(() -> service.create(actor, request(), "create-rate"))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("creation limit reached");
     }
 
     private CreateReservationRequest request() {

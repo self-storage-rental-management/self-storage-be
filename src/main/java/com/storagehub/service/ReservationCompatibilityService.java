@@ -9,11 +9,9 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.RoleCode;
-import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
 import com.storagehub.domain.repo.FacilityRepository;
-import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
@@ -34,7 +32,7 @@ public class ReservationCompatibilityService {
 
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
-    private final StorageUnitRepository storageUnitRepository;
+    private final ReservationCapacityService capacityService;
 
     @Transactional(readOnly = true)
     public CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request) {
@@ -58,8 +56,8 @@ public class ReservationCompatibilityService {
             throw ApiExceptions.conflict("Unit type is not available for reservations");
         }
 
-        long availableCount = storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(
-            facility.getId(), unitType.getId(), StorageUnitStatus.available
+        long availableCount = capacityService.availableCount(
+            facility.getId(), unitType.getId(), request.getStartDate(), request.getEndDate()
         );
         BigDecimal totalVolume = BigDecimal.ZERO;
         BigDecimal totalWeight = BigDecimal.ZERO;
