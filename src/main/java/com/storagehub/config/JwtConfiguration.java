@@ -11,10 +11,13 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.context.annotation.Primary;
 
 @Configuration
-@EnableConfigurationProperties({JwtProperties.class, PaymentProperties.class, FileProperties.class})
+@EnableConfigurationProperties({ JwtProperties.class, PaymentProperties.class, FileProperties.class })
 public class JwtConfiguration {
+
+    
 
     @Bean
     SecretKey jwtSecretKey(JwtProperties properties) {
@@ -40,9 +43,10 @@ public class JwtConfiguration {
     }
 
     @Bean
+    @Primary
     JwtDecoder jwtDecoder(SecretKey jwtSecretKey) {
         return NimbusJwtDecoder.withSecretKey(jwtSecretKey)
-            .macAlgorithm(MacAlgorithm.HS256)
-            .build();
+                .macAlgorithm(MacAlgorithm.HS256)
+                .build();
     }
 }

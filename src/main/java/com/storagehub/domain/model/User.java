@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinTable;
+import jakarta.persistence.Lob;
 import jakarta.persistence.ManyToMany;
 import jakarta.persistence.Table;
 import java.util.HashSet;
@@ -36,7 +37,17 @@ public class User extends BaseEntity {
     @Column(length = 30)
     private String phone;
 
-    @Column(length = 2048)
+    @Column(length = 500)
+    private String permanentAddress;
+
+    @Column(length = 160)
+    private String emergencyContactName;
+
+    @Column(length = 30)
+    private String emergencyContactPhone;
+
+    @Lob
+    @Column
     private String avatarUrl;
 
     @Enumerated(EnumType.STRING)

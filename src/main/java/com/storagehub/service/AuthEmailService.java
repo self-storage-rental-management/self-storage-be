@@ -34,10 +34,15 @@ public class AuthEmailService {
     public void sendVerification(User user, String otp, String token) {
         send(
             user.getEmail(),
-            "StorageHub - Xác minh email",
-            "Mã xác minh StorageHub của bạn là: " + otp + "\n\n"
-                + "Liên kết xác minh: " + verificationUrl + token + "\n\n"
-                + "Mã hết hạn sau 15 phút. Nếu bạn không yêu cầu, hãy bỏ qua email này."
+            "StorageHub - Xác minh email đăng ký",
+            "Xin chào " + user.getFullName() + ",\n\n"
+                + "Cảm ơn bạn đã đăng ký tài khoản StorageHub.\n\n"
+                + "CÁCH 1 - Xác minh nhanh:\n"
+                + "Bấm vào liên kết bên dưới để xác minh tự động (không cần nhập token):\n"
+                + verificationUrl + token + "\n\n"
+                + "CÁCH 2 - Nhập mã thủ công:\n"
+                + "Nhập mã 6 chữ số này tại màn hình xác minh email: " + otp + "\n\n"
+                + "Liên kết và mã hết hạn sau 15 phút. Nếu bạn không yêu cầu đăng ký, hãy bỏ qua email này."
         );
     }
 
@@ -45,9 +50,14 @@ public class AuthEmailService {
         send(
             user.getEmail(),
             "StorageHub - Đặt lại mật khẩu",
-            "Mã đặt lại mật khẩu StorageHub của bạn là: " + otp + "\n\n"
-                + "Liên kết đặt lại mật khẩu: " + passwordResetUrl + token + "\n\n"
-                + "Mã hết hạn sau 15 phút. Nếu bạn không yêu cầu, hãy bỏ qua email này."
+            "Xin chào " + user.getFullName() + ",\n\n"
+                + "Bạn vừa yêu cầu đặt lại mật khẩu StorageHub.\n\n"
+                + "CÁCH 1 - Đặt lại nhanh:\n"
+                + "Bấm vào liên kết bên dưới để tạo mật khẩu mới:\n"
+                + passwordResetUrl + token + "\n\n"
+                + "CÁCH 2 - Nhập mã thủ công:\n"
+                + "Nhập mã 6 chữ số này tại màn hình khôi phục tài khoản: " + otp + "\n\n"
+                + "Liên kết và mã hết hạn sau 15 phút. Nếu bạn không yêu cầu, hãy bỏ qua email này."
         );
     }
 
