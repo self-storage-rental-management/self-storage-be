@@ -56,6 +56,9 @@ class LiveApiMailDeliveryTest {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private com.storagehub.domain.repo.LoginHistoryRepository loginHistoryRepository;
+
     private static String registeredUserToken;
     private static String adminToken;
     private static UUID registeredUserId;
@@ -574,31 +577,32 @@ class LiveApiMailDeliveryTest {
         // Clear MailHog
         clearMailHog();
 
-        String uaChromeWindows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        String uaChromeWindows120 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        String uaChromeWindows121 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
         String uaFirefoxMac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/119.0";
         String uaIPhoneSafari = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
-        // Step 1: FIRST LOGIN (Device A - Chrome Windows)
+        // Step 1: FIRST LOGIN (Device A - Chrome 120 Windows)
         // Must SUCCEED, but NO email sent (bỏ qua lần đăng nhập đầu)
         LoginRequest loginReq = new LoginRequest(userEmail, "ValidPass123!");
-        HttpResponse<String> resp1 = postJson("/api/auth/login", loginReq, null, uaChromeWindows);
+        HttpResponse<String> resp1 = postJson("/api/auth/login", loginReq, null, uaChromeWindows120);
         assertThat(resp1.statusCode()).isEqualTo(200);
 
         Thread.sleep(500);
         JsonNode messages1 = getMailHogMessages();
         assertThat(messages1.get("total").asInt()).isEqualTo(0);
 
-        // Step 2: SECOND LOGIN (Device A - Same User-Agent: Chrome Windows)
-        // Must SUCCEED, but NO email sent (same known user-agent)
-        HttpResponse<String> resp2 = postJson("/api/auth/login", loginReq, null, uaChromeWindows);
+        // Step 2: SECOND LOGIN (Device A - Updated Chrome version 121 Windows)
+        // Same fingerprint (Windows PC|Chrome) -> Must SUCCEED, NO email sent (không phải thiết bị mới)
+        HttpResponse<String> resp2 = postJson("/api/auth/login", loginReq, null, uaChromeWindows121);
         assertThat(resp2.statusCode()).isEqualTo(200);
 
         Thread.sleep(500);
         JsonNode messages2 = getMailHogMessages();
         assertThat(messages2.get("total").asInt()).isEqualTo(0);
 
-        // Step 3: THIRD LOGIN (Device B - New User-Agent: Firefox Mac)
-        // Must SUCCEED and SEND new-login notice!
+        // Step 3: THIRD LOGIN (Device B - New Fingerprint: Firefox Mac)
+        // Must SUCCEED and SEND new-login notice (1 email)!
         HttpResponse<String> resp3 = postJson("/api/auth/login", loginReq, null, uaFirefoxMac);
         assertThat(resp3.statusCode()).isEqualTo(200);
 
@@ -613,19 +617,34 @@ class LiveApiMailDeliveryTest {
         // Clear MailHog
         clearMailHog();
 
-        // Step 4: FOURTH LOGIN (Device C - Another New User-Agent: iPhone Safari within 6 hours)
-        // Must SUCCEED, but NO email sent (rate-limited by ActivityLog NEW_LOGIN_EMAIL_SENT in 6 hours)
+        // Step 4: FOURTH LOGIN (Device C - Another New Fingerprint: iPhone Safari immediately after)
+        // Must SUCCEED and SEND 1 email because it is a different new device fingerprint
         HttpResponse<String> resp4 = postJson("/api/auth/login", loginReq, null, uaIPhoneSafari);
         assertThat(resp4.statusCode()).isEqualTo(200);
 
+        List<DecodedEmail> iphoneEmails = waitForEmails(1, 5);
+        assertThat(iphoneEmails).hasSize(1);
+        DecodedEmail iphoneEmail = iphoneEmails.get(0);
+        assertEquals(userEmail, iphoneEmail.to());
+        assertTrue(iphoneEmail.bodyHtml().contains("iPhone"), "Body must contain iPhone");
+        assertTrue(iphoneEmail.bodyHtml().contains("Safari"), "Body must contain Safari");
+
+        // Clear MailHog
+        clearMailHog();
+
+        // Step 5: FIFTH LOGIN (Device B repeated: Firefox Mac)
+        // Fingerprint "Mac|Firefox" was already recorded in step 3 -> Must SUCCEED, NO email sent!
+        HttpResponse<String> resp5 = postJson("/api/auth/login", loginReq, null, uaFirefoxMac);
+        assertThat(resp5.statusCode()).isEqualTo(200);
+
         Thread.sleep(500);
-        JsonNode messages4 = getMailHogMessages();
-        assertThat(messages4.get("total").asInt()).isEqualTo(0);
+        JsonNode messages5 = getMailHogMessages();
+        assertThat(messages5.get("total").asInt()).isEqualTo(0);
     }
 
     @Test
     @Order(11)
-    @DisplayName("Nhóm 5: security-alert flow -> Skip non-existent user, skip below threshold, send on 5th attempt, rate-limit 1/window")
+    @DisplayName("Nhóm 5: security-alert flow -> Skip non-existent user, skip below threshold, send on 5th attempt, rate-limit 1/cooldown (6h)")
     void testSecurityAlertFlow() throws Exception {
         clearMailHog();
 
@@ -712,5 +731,85 @@ class LiveApiMailDeliveryTest {
         Thread.sleep(500);
         JsonNode extraMessages = getMailHogMessages();
         assertThat(extraMessages.get("total").asInt()).isEqualTo(0);
+    }
+
+    @Test
+    @Order(12)
+    @DisplayName("Backfill Fingerprint Test: Legacy login history with fingerprint NULL -> Chrome login sends 0 emails, Firefox login sends 1 email")
+    void testLegacyLoginHistoryFingerprintBackfill() throws Exception {
+        clearMailHog();
+
+        String legacyEmail = "legacy-user@storagehub.test";
+        String legacyPassword = "LegacyPass123!";
+        RegisterRequest registerReq = new RegisterRequest(
+            legacyEmail,
+            legacyPassword,
+            "Legacy User",
+            "0911223344",
+            "789 Tran Hung Dao, Q5",
+            "Nguoi Than Legacy",
+            "0988776655"
+        );
+        HttpResponse<String> regResp = postJson("/api/auth/register", registerReq, null);
+        assertThat(regResp.statusCode()).isEqualTo(200);
+
+        List<DecodedEmail> regEmails = waitForEmails(1, 5);
+        Pattern tokenPattern = Pattern.compile("verifyEmail=([A-Za-z0-9_\\-\\.]+)");
+        Matcher matcher = tokenPattern.matcher(regEmails.get(0).bodyHtml());
+        assertTrue(matcher.find(), "Must find verify token");
+        String verifyToken = matcher.group(1);
+
+        HttpResponse<String> verifyResp = postJson("/api/auth/verify-email", new VerifyEmailRequest(legacyEmail, verifyToken), null);
+        assertThat(verifyResp.statusCode()).isEqualTo(200);
+
+        // Precondition: user exists in DB. Create a legacy LoginHistory record with device_fingerprint = NULL
+        User user = userRepository.findByEmailIgnoreCase(legacyEmail).orElseThrow();
+        String uaChromeWindows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        String uaFirefoxMac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0";
+
+        com.storagehub.domain.model.LoginHistory legacyHistory = new com.storagehub.domain.model.LoginHistory();
+        legacyHistory.setUser(user);
+        legacyHistory.setEmailAttempted(legacyEmail);
+        legacyHistory.setSuccess(true);
+        legacyHistory.setUserAgent(uaChromeWindows);
+        legacyHistory.setDeviceFingerprint(null); // Explicitly NULL legacy fingerprint!
+        legacyHistory.setOccurredAt(java.time.Instant.now().minus(2, java.time.temporal.ChronoUnit.DAYS));
+        legacyHistory.setIpAddress("127.0.0.1");
+        loginHistoryRepository.saveAndFlush(legacyHistory);
+
+        // Clear verification mail
+        clearMailHog();
+
+        // 1. User logs in with Chrome Windows (matching legacy record with NULL fingerprint)
+        // Must SUCCEED and send 0 emails (no false positive new-login alert)
+        HttpResponse<String> respChrome = postJson(
+            "/api/auth/login",
+            new LoginRequest(legacyEmail, legacyPassword),
+            null,
+            uaChromeWindows
+        );
+        assertThat(respChrome.statusCode()).isEqualTo(200);
+
+        Thread.sleep(500);
+        JsonNode messagesChrome = getMailHogMessages();
+        assertThat(messagesChrome.get("total").asInt()).isEqualTo(0);
+
+        // 2. User logs in with Firefox Mac (different device/fingerprint)
+        // Must SUCCEED and send exactly 1 new-login email!
+        HttpResponse<String> respFirefox = postJson(
+            "/api/auth/login",
+            new LoginRequest(legacyEmail, legacyPassword),
+            null,
+            uaFirefoxMac
+        );
+        assertThat(respFirefox.statusCode()).isEqualTo(200);
+
+        List<DecodedEmail> firefoxEmails = waitForEmails(1, 5);
+        assertThat(firefoxEmails).hasSize(1);
+        DecodedEmail firefoxEmail = firefoxEmails.get(0);
+        assertEquals(legacyEmail, firefoxEmail.to());
+        assertTrue(firefoxEmail.subject().contains("Đăng nhập mới"), "Subject must indicate new login");
+        assertTrue(firefoxEmail.bodyHtml().contains("Firefox"), "Body must contain parsed browser");
+        assertTrue(firefoxEmail.bodyHtml().contains("Mac"), "Body must contain parsed device");
     }
 }
