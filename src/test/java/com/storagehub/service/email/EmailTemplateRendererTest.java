@@ -219,6 +219,9 @@ class EmailTemplateRendererTest {
         assertNotNull(htmlUser);
         assertFalse(htmlUser.contains("Quản trị viên"));
         assertTrue(htmlUser.contains("Chrome trên Windows PC · 192.168.1.50"));
+        assertTrue(htmlUser.contains("Đã được thay đổi"), "Password change must display 'Đã được thay đổi'");
+        assertFalse(htmlUser.contains("••••••••"), "Password change must not display masked dots");
+        assertFalse(htmlUser.contains("→"), "Password change must not display arrow");
     }
 
     @Test
@@ -236,5 +239,11 @@ class EmailTemplateRendererTest {
         var unknown = UserAgentParser.parse("");
         assertEquals("Không xác định", unknown.device());
         assertEquals("Không xác định", unknown.browser());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, unknown.fingerprint());
+
+        var unrecognized = UserAgentParser.parse("CustomBot/1.0");
+        assertEquals("Không xác định", unrecognized.device());
+        assertEquals("Không xác định", unrecognized.browser());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, unrecognized.fingerprint());
     }
 }

@@ -2,6 +2,7 @@ package com.storagehub.service;
 
 import com.storagehub.domain.model.LoginHistory;
 import com.storagehub.domain.repo.LoginHistoryRepository;
+import com.storagehub.service.email.UserAgentParser;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -114,24 +115,24 @@ class LoginHistoryBackfillServiceTest {
 
         assertEquals(6, totalUpdated);
 
-        // Verify all records received a non-null, non-blank fingerprint
+        // Verify all records received a non-null, non-blank fingerprint matching the unified fallback constant
         assertNotNull(hNull.getDeviceFingerprint());
-        assertEquals("UNKNOWN|UNKNOWN", hNull.getDeviceFingerprint());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, hNull.getDeviceFingerprint());
 
         assertNotNull(hEmpty.getDeviceFingerprint());
-        assertEquals("UNKNOWN|UNKNOWN", hEmpty.getDeviceFingerprint());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, hEmpty.getDeviceFingerprint());
 
         assertNotNull(hWhitespace.getDeviceFingerprint());
-        assertEquals("UNKNOWN|UNKNOWN", hWhitespace.getDeviceFingerprint());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, hWhitespace.getDeviceFingerprint());
 
         assertNotNull(hWeirdBot.getDeviceFingerprint());
-        assertEquals("Không xác định|Không xác định", hWeirdBot.getDeviceFingerprint());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, hWeirdBot.getDeviceFingerprint());
 
         assertNotNull(hCurl.getDeviceFingerprint());
-        assertFalse(hCurl.getDeviceFingerprint().isBlank());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, hCurl.getDeviceFingerprint());
 
         assertNotNull(hPython.getDeviceFingerprint());
-        assertFalse(hPython.getDeviceFingerprint().isBlank());
+        assertEquals(UserAgentParser.UNKNOWN_FINGERPRINT, hPython.getDeviceFingerprint());
     }
 
     @Test

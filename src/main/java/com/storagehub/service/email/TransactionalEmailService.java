@@ -208,7 +208,7 @@ public class TransactionalEmailService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(
                 mimeMessage,
-                MimeMessageHelper.MULTIPART_MODE_MIXED_RELATED,
+                MimeMessageHelper.MULTIPART_MODE_RELATED,
                 StandardCharsets.UTF_8.name()
             );
 

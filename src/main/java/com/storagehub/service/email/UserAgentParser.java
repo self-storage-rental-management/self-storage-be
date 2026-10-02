@@ -2,6 +2,8 @@ package com.storagehub.service.email;
 
 public final class UserAgentParser {
 
+    public static final String UNKNOWN_FINGERPRINT = "UNKNOWN|UNKNOWN";
+
     private UserAgentParser() {
     }
 
@@ -10,7 +12,7 @@ public final class UserAgentParser {
 
     public static ClientInfo parse(String userAgent) {
         if (userAgent == null || userAgent.isBlank()) {
-            return new ClientInfo("Không xác định", "Không xác định", "Không xác định", "UNKNOWN|UNKNOWN");
+            return new ClientInfo("Không xác định", "Không xác định", "Không xác định", UNKNOWN_FINGERPRINT);
         }
 
         String ua = userAgent.toLowerCase();
@@ -58,7 +60,12 @@ public final class UserAgentParser {
             summary = "Không xác định";
         }
 
-        String fingerprint = device + "|" + browser;
+        String fingerprint;
+        if ("Không xác định".equals(device) && "Không xác định".equals(browser)) {
+            fingerprint = UNKNOWN_FINGERPRINT;
+        } else {
+            fingerprint = device + "|" + browser;
+        }
 
         return new ClientInfo(device, browser, summary, fingerprint);
     }

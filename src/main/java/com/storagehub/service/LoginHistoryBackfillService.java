@@ -66,7 +66,7 @@ public class LoginHistoryBackfillService implements ApplicationRunner {
                 String ua = history.getUserAgent();
                 String fp = UserAgentParser.parse(ua).fingerprint();
                 if (fp == null || fp.isBlank()) {
-                    fp = "UNKNOWN|UNKNOWN";
+                    fp = UserAgentParser.UNKNOWN_FINGERPRINT;
                 }
                 history.setDeviceFingerprint(fp);
                 if (history.getId() != null) {
