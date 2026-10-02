@@ -15,6 +15,20 @@ public interface LoginHistoryRepository extends JpaRepository<LoginHistory, UUID
 
     long countByEmailAttemptedAndSuccessFalseAndOccurredAtAfter(String emailAttempted, Instant occurredAt);
 
+    @Query("select count(h) > 0 from LoginHistory h where h.user.id = :userId and h.success = true")
+    boolean existsByUserIdAndSuccessTrue(@Param("userId") UUID userId);
+
+    @Query("""
+        select count(h) > 0 from LoginHistory h
+        where h.user.id = :userId
+          and h.success = true
+          and ((:userAgent is null and h.userAgent is null) or h.userAgent = :userAgent)
+        """)
+    boolean existsByUserIdAndSuccessTrueAndUserAgent(
+        @Param("userId") UUID userId,
+        @Param("userAgent") String userAgent
+    );
+
     @EntityGraph(attributePaths = "user")
     List<LoginHistory> findTop5BySuccessFalseOrderByOccurredAtDesc();
 

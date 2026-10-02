@@ -135,6 +135,10 @@ class LiveApiMailDeliveryTest {
     }
 
     private HttpResponse<String> postJson(String path, Object body, String bearerToken) throws Exception {
+        return postJson(path, body, bearerToken, null);
+    }
+
+    private HttpResponse<String> postJson(String path, Object body, String bearerToken, String userAgent) throws Exception {
         String json = objectMapper.writeValueAsString(body);
         HttpRequest.Builder builder = HttpRequest.newBuilder()
             .uri(URI.create(baseUrl() + path))
@@ -142,6 +146,9 @@ class LiveApiMailDeliveryTest {
             .POST(HttpRequest.BodyPublishers.ofString(json));
         if (bearerToken != null) {
             builder.header("Authorization", "Bearer " + bearerToken);
+        }
+        if (userAgent != null) {
+            builder.header("User-Agent", userAgent);
         }
         HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
@@ -468,7 +475,7 @@ class LiveApiMailDeliveryTest {
         Pattern pattern = Pattern.compile("Mật khẩu tạm thời:[^<]*<b[^>]*>([^<]+)</b>");
         Matcher matcher = pattern.matcher(email.bodyHtml());
         assertTrue(matcher.find(), "Must find temporary password in email HTML");
-        String tempPassword = matcher.group(1).trim();
+        String tempPassword = org.springframework.web.util.HtmlUtils.htmlUnescape(matcher.group(1).trim());
 
         // Verify temporary password satisfies PasswordPolicy
         assertTrue(com.storagehub.security.PasswordPolicy.isValid(tempPassword),
@@ -482,5 +489,228 @@ class LiveApiMailDeliveryTest {
         JsonNode loginData = objectMapper.readTree(loginResp.body()).get("data");
         assertTrue(loginData.get("actor").get("mustChangePassword").asBoolean(),
             "Actor must have mustChangePassword=true upon login");
+    }
+
+    @Test
+    @Order(9)
+    @DisplayName("Admin reset password -> Auto-generates 12-char temp password, sends account-created email with temp password, sets mustChangePassword=true, response hides password")
+    void testAdminResetPasswordFlow() throws Exception {
+        // Admin calls password reset for registeredUserId with null temporaryPassword (auto-generate)
+        com.storagehub.api.admin.AdminPasswordResetRequest resetReq = new com.storagehub.api.admin.AdminPasswordResetRequest(null);
+        HttpResponse<String> resp = postJson(
+            "/api/admin/users/" + registeredUserId + "/password-reset",
+            resetReq,
+            adminToken
+        );
+        assertThat(resp.statusCode()).isEqualTo(200);
+
+        // Verify response does not leak password to admin
+        JsonNode responseData = objectMapper.readTree(resp.body()).get("data");
+        assertNull(responseData.get("password"));
+        assertNull(responseData.get("temporaryPassword"));
+        assertTrue(responseData.get("mustChangePassword").asBoolean());
+
+        // Verify account-created email received in MailHog
+        List<DecodedEmail> emails = waitForEmails(1, 5);
+        assertThat(emails).hasSize(1);
+
+        DecodedEmail email = emails.get(0);
+        assertEquals("flowuser-newemail@storagehub.test", email.to());
+        assertTrue(email.subject().contains("Tài khoản StorageHub"));
+
+        // Extract temporary password from email body
+        Pattern pattern = Pattern.compile("Mật khẩu tạm thời:[^<]*<b[^>]*>([^<]+)</b>");
+        Matcher matcher = pattern.matcher(email.bodyHtml());
+        assertTrue(matcher.find(), "Must find temporary password in email HTML");
+        String tempPassword = org.springframework.web.util.HtmlUtils.htmlUnescape(matcher.group(1).trim());
+
+        assertTrue(com.storagehub.security.PasswordPolicy.isValid(tempPassword),
+            "Generated temporary password must satisfy PasswordPolicy: " + tempPassword);
+
+        // Verify user can log in with new temp password
+        LoginRequest userLogin = new LoginRequest("flowuser-newemail@storagehub.test", tempPassword);
+        HttpResponse<String> loginResp = postJson("/api/auth/login", userLogin, null);
+        assertThat(loginResp.statusCode()).isEqualTo(200);
+
+        JsonNode loginData = objectMapper.readTree(loginResp.body()).get("data");
+        assertTrue(loginData.get("actor").get("mustChangePassword").asBoolean());
+    }
+
+    @Test
+    @Order(10)
+    @DisplayName("Nhóm 4: new-login notice -> Skip 1st login, skip same user-agent, send on new user-agent, rate-limit 1/6h on ActivityLog")
+    void testNewLoginNoticeFlow() throws Exception {
+        clearMailHog();
+
+        // 1. Create a dedicated user for new-login testing
+        String userEmail = "newlogin-user@storagehub.test";
+        RegisterRequest registerReq = new RegisterRequest(
+            userEmail,
+            "ValidPass123!",
+            "Người Dùng Mới",
+            "0912345678",
+            "123 Nguyen Trai, Q5",
+            "Nguoi Lien He",
+            "0987654321"
+        );
+        HttpResponse<String> regResp = postJson("/api/auth/register", registerReq, null);
+        assertThat(regResp.statusCode()).isEqualTo(200);
+
+        // Fetch verification token from MailHog and verify
+        List<DecodedEmail> regEmails = waitForEmails(1, 5);
+        assertThat(regEmails).hasSize(1);
+        Pattern tokenPattern = Pattern.compile("verifyEmail=([A-Za-z0-9_\\-\\.]+)");
+        Matcher tokenMatcher = tokenPattern.matcher(regEmails.get(0).bodyHtml());
+        assertTrue(tokenMatcher.find(), "Must find verify token in email body");
+        String verifyToken = tokenMatcher.group(1);
+
+        HttpResponse<String> verifyResp = postJson(
+            "/api/auth/verify-email",
+            new VerifyEmailRequest(userEmail, verifyToken),
+            null
+        );
+        assertThat(verifyResp.statusCode()).isEqualTo(200);
+
+        // Clear MailHog
+        clearMailHog();
+
+        String uaChromeWindows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        String uaFirefoxMac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/119.0";
+        String uaIPhoneSafari = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+
+        // Step 1: FIRST LOGIN (Device A - Chrome Windows)
+        // Must SUCCEED, but NO email sent (bỏ qua lần đăng nhập đầu)
+        LoginRequest loginReq = new LoginRequest(userEmail, "ValidPass123!");
+        HttpResponse<String> resp1 = postJson("/api/auth/login", loginReq, null, uaChromeWindows);
+        assertThat(resp1.statusCode()).isEqualTo(200);
+
+        Thread.sleep(500);
+        JsonNode messages1 = getMailHogMessages();
+        assertThat(messages1.get("total").asInt()).isEqualTo(0);
+
+        // Step 2: SECOND LOGIN (Device A - Same User-Agent: Chrome Windows)
+        // Must SUCCEED, but NO email sent (same known user-agent)
+        HttpResponse<String> resp2 = postJson("/api/auth/login", loginReq, null, uaChromeWindows);
+        assertThat(resp2.statusCode()).isEqualTo(200);
+
+        Thread.sleep(500);
+        JsonNode messages2 = getMailHogMessages();
+        assertThat(messages2.get("total").asInt()).isEqualTo(0);
+
+        // Step 3: THIRD LOGIN (Device B - New User-Agent: Firefox Mac)
+        // Must SUCCEED and SEND new-login notice!
+        HttpResponse<String> resp3 = postJson("/api/auth/login", loginReq, null, uaFirefoxMac);
+        assertThat(resp3.statusCode()).isEqualTo(200);
+
+        List<DecodedEmail> loginEmails = waitForEmails(1, 5);
+        assertThat(loginEmails).hasSize(1);
+        DecodedEmail loginEmail = loginEmails.get(0);
+        assertEquals(userEmail, loginEmail.to());
+        assertTrue(loginEmail.subject().contains("Đăng nhập mới"), "Subject must indicate new login");
+        assertTrue(loginEmail.bodyHtml().contains("Firefox"), "Body must contain parsed browser");
+        assertTrue(loginEmail.bodyHtml().contains("Mac"), "Body must contain parsed device");
+
+        // Clear MailHog
+        clearMailHog();
+
+        // Step 4: FOURTH LOGIN (Device C - Another New User-Agent: iPhone Safari within 6 hours)
+        // Must SUCCEED, but NO email sent (rate-limited by ActivityLog NEW_LOGIN_EMAIL_SENT in 6 hours)
+        HttpResponse<String> resp4 = postJson("/api/auth/login", loginReq, null, uaIPhoneSafari);
+        assertThat(resp4.statusCode()).isEqualTo(200);
+
+        Thread.sleep(500);
+        JsonNode messages4 = getMailHogMessages();
+        assertThat(messages4.get("total").asInt()).isEqualTo(0);
+    }
+
+    @Test
+    @Order(11)
+    @DisplayName("Nhóm 5: security-alert flow -> Skip non-existent user, skip below threshold, send on 5th attempt, rate-limit 1/window")
+    void testSecurityAlertFlow() throws Exception {
+        clearMailHog();
+
+        // 1. NON-EXISTENT USER: Multiple failed logins must return 401 and NEVER send security-alert email
+        String ghostEmail = "ghost-nonexistent-user@storagehub.test";
+        for (int i = 0; i < 6; i++) {
+            HttpResponse<String> ghostResp = postJson(
+                "/api/auth/login",
+                new LoginRequest(ghostEmail, "WrongPass123!"),
+                null
+            );
+            assertThat(ghostResp.statusCode()).isEqualTo(401);
+        }
+        Thread.sleep(500);
+        JsonNode ghostMessages = getMailHogMessages();
+        assertThat(ghostMessages.get("total").asInt()).isEqualTo(0);
+
+        // 2. REAL ACTIVE USER: Register & activate dedicated user
+        String targetEmail = "securityalert-user@storagehub.test";
+        RegisterRequest registerReq = new RegisterRequest(
+            targetEmail,
+            "RealSecurePass123!",
+            "Người Dùng Bảo Mật",
+            "0912345679",
+            "456 Le Loi, Q1",
+            "Nguoi Bao Ho",
+            "0987654322"
+        );
+        HttpResponse<String> regResp = postJson("/api/auth/register", registerReq, null);
+        assertThat(regResp.statusCode()).isEqualTo(200);
+
+        List<DecodedEmail> regEmails = waitForEmails(1, 5);
+        Pattern alertTokenPattern = Pattern.compile("verifyEmail=([A-Za-z0-9_\\-\\.]+)");
+        Matcher alertTokenMatcher = alertTokenPattern.matcher(regEmails.get(0).bodyHtml());
+        assertTrue(alertTokenMatcher.find(), "Must find verify token in email body");
+        String otp = alertTokenMatcher.group(1);
+
+        HttpResponse<String> verifyResp = postJson("/api/auth/verify-email", new VerifyEmailRequest(targetEmail, otp), null);
+        assertThat(verifyResp.statusCode()).isEqualTo(200);
+        clearMailHog();
+
+        // Step A: 4 failed attempts (below threshold of 5) -> NO email sent
+        for (int i = 1; i <= 4; i++) {
+            HttpResponse<String> failResp = postJson(
+                "/api/auth/login",
+                new LoginRequest(targetEmail, "WrongPassword" + i + "!"),
+                null
+            );
+            assertThat(failResp.statusCode()).isEqualTo(401);
+        }
+        Thread.sleep(500);
+        JsonNode messagesUnderThreshold = getMailHogMessages();
+        assertThat(messagesUnderThreshold.get("total").asInt()).isEqualTo(0);
+
+        // Step B: 5th failed attempt -> Reaches threshold (5) -> SEND security-alert email!
+        HttpResponse<String> fifthResp = postJson(
+            "/api/auth/login",
+            new LoginRequest(targetEmail, "WrongPassword5!"),
+            null
+        );
+        assertThat(fifthResp.statusCode()).isEqualTo(401);
+
+        List<DecodedEmail> alertEmails = waitForEmails(1, 5);
+        assertThat(alertEmails).hasSize(1);
+        DecodedEmail alert = alertEmails.get(0);
+        assertEquals(targetEmail, alert.to());
+        assertTrue(alert.subject().contains("Cảnh báo bảo mật"), "Subject must indicate security alert");
+        assertTrue(alert.bodyHtml().contains("5 lần đăng nhập sai"), "Must show 5 failed attempts");
+        assertTrue(alert.bodyHtml().contains("tạm thời bị giới hạn đăng nhập"), "Must indicate rate limiting");
+        assertFalse(alert.bodyHtml().contains("tài khoản đã bị <b>tạm khóa</b>"), "isLocked must be false for active user");
+
+        clearMailHog();
+
+        // Step C: 6th and 7th failed attempts within the 15-minute window
+        // Must return 401, but NO duplicate security-alert email sent (1 mail per window)
+        for (int i = 6; i <= 7; i++) {
+            HttpResponse<String> extraFail = postJson(
+                "/api/auth/login",
+                new LoginRequest(targetEmail, "WrongPassword" + i + "!"),
+                null
+            );
+            assertThat(extraFail.statusCode()).isEqualTo(401);
+        }
+        Thread.sleep(500);
+        JsonNode extraMessages = getMailHogMessages();
+        assertThat(extraMessages.get("total").asInt()).isEqualTo(0);
     }
 }

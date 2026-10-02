@@ -31,7 +31,6 @@ public class LoginHistoryService {
         ) >= MAX_FAILED_ATTEMPTS;
     }
 
-    @Async
     @Transactional(propagation = Propagation.REQUIRES_NEW, timeout = 5)
     public void record(User user, String email, boolean success, String ip, String userAgent, String failureReason) {
         try {
@@ -41,7 +40,8 @@ public class LoginHistoryService {
             history.setEmailAttempted(email);
             history.setSuccess(success);
             history.setIpAddress(ip);
-            history.setUserAgent(userAgent);
+            String safeUserAgent = (userAgent != null && userAgent.length() > 512) ? userAgent.substring(0, 512) : userAgent;
+            history.setUserAgent(safeUserAgent);
             history.setFailureReason(failureReason);
             history.setOccurredAt(Instant.now());
             repository.saveAndFlush(history);

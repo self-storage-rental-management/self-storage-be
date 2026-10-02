@@ -24,12 +24,15 @@ import com.storagehub.security.GoogleIdentityService;
 import com.storagehub.security.JwtService;
 import com.storagehub.security.GoogleIdentityService.GoogleIdentity;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -38,6 +41,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AuthService {
 
     private final UserRepository userRepository;
@@ -52,6 +56,8 @@ public class AuthService {
     private final AuthChallengeService authChallengeService;
     private final GoogleIdentityService googleIdentityService;
     private final com.storagehub.service.email.EmailService transactionalEmailService;
+    private final com.storagehub.domain.repo.LoginHistoryRepository loginHistoryRepository;
+    private final com.storagehub.domain.repo.ActivityLogRepository activityLogRepository;
 
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
@@ -84,11 +90,14 @@ public class AuthService {
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent) {
         String email = normalizeEmail(request.email());
         if (loginHistoryService.isRateLimited(email)) {
+            User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
+            handleFailedLoginAlert(user, email, ipAddress);
             throw ApiExceptions.unauthorized("Email or password is incorrect");
         }
         User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
         if (user == null || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             loginHistoryService.record(user, email, false, ipAddress, userAgent, "INVALID_CREDENTIALS");
+            handleFailedLoginAlert(user, email, ipAddress);
             throw ApiExceptions.unauthorized("Email or password is incorrect");
         }
         if (user.getStatus() != UserStatus.ACTIVE) {
@@ -132,13 +141,16 @@ public class AuthService {
     }
 
     private AuthResponse issueSession(User user, String email, String ipAddress, String userAgent) {
+        String safeUserAgent = (userAgent != null && userAgent.length() > 512) ? userAgent.substring(0, 512) : userAgent;
+        handleNewLoginNotice(user, ipAddress, safeUserAgent);
+
         Instant now = Instant.now();
         Session session = new Session();
         session.setUser(user);
         session.setExpiresAt(now.plus(jwtService.expirationSeconds(), ChronoUnit.SECONDS));
         session.setRefreshExpiresAt(now.plus(jwtService.refreshExpirationSeconds(), ChronoUnit.SECONDS));
         session.setCreatedIp(ipAddress);
-        session.setUserAgent(userAgent);
+        session.setUserAgent(safeUserAgent);
         session.setLastSeenAt(now);
         session = sessionRepository.saveAndFlush(session);
 
@@ -147,7 +159,7 @@ public class AuthService {
         session.setTokenHash(jwtService.hash(issuedToken.value()));
         session.setRefreshTokenHash(jwtService.hash(refreshToken));
         sessionRepository.saveAndFlush(session);
-        loginHistoryService.record(user, email, true, ipAddress, userAgent, null);
+        loginHistoryService.record(user, email, true, ipAddress, safeUserAgent, null);
         auditLogService.recordMutation(user, "SESSION_CREATED", "Session", session.getId(), null, null,
             Map.of("sessionId", session.getId(), "expiresAt", issuedToken.expiresAt()));
 
@@ -159,6 +171,100 @@ public class AuthService {
             actorResponseMapper.toResponse(user),
             refreshToken
         );
+    }
+
+    private void handleNewLoginNotice(User user, String ipAddress, String userAgent) {
+        try {
+            boolean hasPriorSuccess = loginHistoryRepository.existsByUserIdAndSuccessTrue(user.getId());
+            if (!hasPriorSuccess) {
+                return;
+            }
+
+            boolean knownDevice = loginHistoryRepository.existsByUserIdAndSuccessTrueAndUserAgent(user.getId(), userAgent);
+            if (knownDevice) {
+                return;
+            }
+
+            Instant sixHoursAgo = Instant.now().minus(6, ChronoUnit.HOURS);
+            boolean recentlyNotified = activityLogRepository.existsByActionAndEntityIdAndCreatedAtAfter(
+                "NEW_LOGIN_EMAIL_SENT",
+                user.getId(),
+                sixHoursAgo
+            );
+            if (recentlyNotified) {
+                return;
+            }
+
+            String loginTime = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+                .withZone(ZoneId.of("Asia/Ho_Chi_Minh"))
+                .format(Instant.now());
+            com.storagehub.service.email.UserAgentParser.ClientInfo clientInfo =
+                com.storagehub.service.email.UserAgentParser.parse(userAgent);
+
+            transactionalEmailService.sendNewLoginNotice(
+                user.getId(),
+                user.getEmail(),
+                user.getFullName(),
+                loginTime,
+                clientInfo.device(),
+                clientInfo.browser(),
+                "Không xác định",
+                ipAddress != null ? ipAddress : "Không xác định",
+                null
+            );
+        } catch (Exception ex) {
+            log.warn("Failed to process new-login email notice: {}", ex.getMessage());
+        }
+    }
+
+    private void handleFailedLoginAlert(User user, String email, String ipAddress) {
+        try {
+            if (user == null) {
+                return;
+            }
+
+            Instant windowStart = Instant.now().minus(15, ChronoUnit.MINUTES);
+            long failedCount = loginHistoryRepository.countByEmailAttemptedAndSuccessFalseAndOccurredAtAfter(
+                email,
+                windowStart
+            );
+
+            if (failedCount < 5) {
+                return;
+            }
+
+            boolean alreadyAlerted = activityLogRepository.existsByActionAndEntityIdAndCreatedAtAfter(
+                "SECURITY_ALERT_EMAIL_SENT",
+                user.getId(),
+                windowStart
+            );
+            if (alreadyAlerted) {
+                return;
+            }
+
+            boolean isLocked = (user.getStatus() == UserStatus.LOCKED);
+            Instant now = Instant.now();
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+                .withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
+            String lastAttemptTime = formatter.format(now);
+            String unlockTime = formatter.format(now.plus(15, ChronoUnit.MINUTES));
+
+            transactionalEmailService.sendSecurityAlert(
+                user.getId(),
+                user.getEmail(),
+                user.getFullName(),
+                (int) failedCount,
+                15,
+                unlockTime,
+                lastAttemptTime,
+                ipAddress != null ? ipAddress : "Không xác định",
+                "Không xác định",
+                null,
+                isLocked
+            );
+        } catch (Exception ex) {
+            log.warn("Failed to process security-alert email notice: {}", ex.getMessage());
+        }
     }
 
     private String limitName(String name, String email) {
