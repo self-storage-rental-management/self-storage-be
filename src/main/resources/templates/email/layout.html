@@ -10,7 +10,7 @@
   <!-- Shared Header Logo Fragment -->
   <tr th:fragment="header">
     <td style="background:#1F1F1F;padding:18px 28px;text-align:left">
-      <img th:src="${logoCid != null ? 'cid:' + logoCid : (logoUrl != null and !logoUrl.isBlank() ? logoUrl : 'cid:storagehubLogo')}"
+      <img th:src="${logoUrl != null and !logoUrl.isBlank() ? logoUrl : (logoCid != null ? 'cid:' + logoCid : 'cid:storagehubLogo')}"
            alt="StorageHub" height="44" style="display:block;border:0;height:44px;width:auto">
     </td>
   </tr>
