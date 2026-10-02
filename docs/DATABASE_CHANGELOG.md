@@ -112,7 +112,7 @@ Nếu sau này cần lưu nhiều vòng duyệt hoặc audit chi tiết, mới t
 - Thay `Payment.reservationId` dạng UUID rời bằng quan hệ JPA `ManyToOne` tới `Reservation`.
 - Cột `payments.reservation_id` trở thành khóa ngoại bắt buộc trong model.
 - Thêm trường `version` bằng `@Version` để Hibernate phát hiện hai tiến trình cùng cập nhật một payment.
-- `PaymentService` phải tìm Reservation tồn tại trước khi tạo payment intent.
+- Payment service phải tìm Reservation tồn tại trước khi tạo payment mô phỏng.
 
 Nếu database local đã có payment không có `reservation_id` hợp lệ, cần xóa dữ liệu payment demo cũ hoặc gắn lại đúng Reservation trước khi chạy backend.
 
@@ -122,20 +122,43 @@ Nếu database local đã có payment không có `reservation_id` hợp lệ, c�
 
 Lưu gói thuê do BO cấu hình theo cơ sở: mã/tên gói, số tháng, tỷ lệ giảm, phiên bản chính sách, trạng thái và thời gian hiệu lực. Unique `(facility_id, code)` là ràng buộc nghiệp vụ, không phải index tối ưu hóa bổ sung.
 
-### `payment_webhook_events`
+### `payment_webhook_events` — đã loại bỏ ngày 2026-10-02
 
-Lưu provider, provider event ID, payment, payload, thời điểm xử lý và lỗi xử lý. Unique `(provider, provider_event_id)` ngăn cùng một webhook được áp dụng hai lần. `Payment` không còn lưu `provider_event_id` trực tiếp.
+Bảng này từng được tạo cho contract cổng thanh toán cũ. Model/repository/API webhook đã bị xóa khi chuyển hoàn toàn sang payment mô phỏng nội bộ. Với database local đang dùng `ddl-auto=update`, Hibernate không tự drop bảng cũ; có thể xóa thủ công sau khi xác nhận không cần dữ liệu demo.
 
 ### `booking_documents`
 
 Lưu một `BOOKING_CONFIRMATION` cho mỗi Reservation, liên kết tới `FileAsset`. Đây là chứng từ xác nhận booking sau thanh toán, không phải hợp đồng thuê đã ký.
 
+Ngày 2026-10-02 đã bổ sung service/API phát hành idempotent. File PDF được lưu với `file_assets.entity_type=BOOKING_DOCUMENT`, `entity_id=reservation_id`, MIME `application/pdf` và checksum SHA-256. Không tạo `SIGNED_CONTRACT` trong booking module.
+
 ### Thay đổi bảng hiện có
 
 - `facilities`: bỏ timezone riêng; toàn hệ thống dùng `Asia/Ho_Chi_Minh`.
-- `unit_types`: thêm code, số khung và ba kích thước khung; bỏ `price_per_m3`; diện tích/thể tích do Java tính từ kích thước; thêm version.
+- `unit_types`: thêm code, số khung và ba kích thước khung; bỏ `price_per_m3`; diện tích/thể tích do Java tính từ kích thước; thêm `image_url` nullable và version.
 - `storage_units`: thêm `available_from`, `last_released_at` và version.
 - `rentals`: dùng `contract_end_date`, thêm `actual_returned_at` và `completed_at` để không nhầm ngày dự kiến với ngày thực trả.
 - `payments`: thêm provider request/transaction reference, paid/failure/refund fields và version.
 
 Các cột cũ như `timezone`, `price_per_m3`, `area_m2`, `volume_m3` hoặc `rentals.end_date` có thể vẫn còn trong MySQL khi dùng `ddl-auto=update`, nhưng code không còn sử dụng. Nếu dựng database demo sạch, Hibernate chỉ tạo schema theo entity mới.
+
+## 2026-10-02 — Payment mô phỏng và payment grace
+
+- Thêm `PAYMENT_GRACE`, `PAYMENT_REVIEW` vào `ReservationStatus`.
+- Thêm `NOT_RECEIVED` vào `PaymentStatus`.
+- Thêm `reservations.complaint_expires_at` để giữ capacity thêm 30 phút sau payment deadline.
+- Thêm `reservations.archived_at` để ẩn đơn kết thúc mà không hard-delete dữ liệu đối soát.
+- Thêm cấu hình local/demo `app.payment.simulation-outcome=SUCCESS|FAILED|NOT_RECEIVED`.
+- Endpoint Customer không nhận amount hoặc outcome; amount luôn lấy từ `ReservationPricingSnapshot`.
+
+`AWAITING_PAYMENT` đến hạn chuyển sang `PAYMENT_GRACE` thay vì `EXPIRED`. Trong grace, Reservation vẫn trừ capacity. Hết `complaint_expires_at` mà chưa có complaint thì mới chuyển `EXPIRED`, đặt `archived_at` và giải phóng capacity.
+
+Đã xóa provider class, gateway interface, payment-intent/reconcile API, public webhook API, webhook entity/repository và cấu hình MoMo khỏi code. Các cột/bảng cũ có thể vẫn tồn tại trong MySQL local vì `ddl-auto=update` không drop schema; chúng không còn được map hoặc sử dụng và có thể xóa thủ công sau khi sao lưu dữ liệu cần thiết.
+
+## 2026-10-02 — Payment complaint và Manager review
+
+Tạo bảng `payment_complaints` với quan hệ duy nhất tới Reservation, Payment và Customer. Bảng lưu trạng thái `PENDING`, `APPROVED`, `REJECTED`, `WITHDRAWN`, `REVIEW_OVERDUE`, lý do, hạn review, người/thời điểm xử lý, lý do quyết định và `version`.
+
+Ảnh chứng minh tiếp tục dùng `file_assets`: Customer upload ảnh chưa liên kết, sau đó gửi các `imageIds`; service kiểm tra ảnh thuộc Customer, đúng MIME ảnh và chưa gắn entity trước khi liên kết `entity_type=PAYMENT_COMPLAINT`.
+
+Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuyển Payment `PAID` và Reservation `CONFIRMED`; reject hoặc Customer withdraw đặt `archived_at` và giải phóng capacity. Scheduler chỉ đánh dấu complaint quá 24 giờ là `REVIEW_OVERDUE`, không tự giải phóng capacity.

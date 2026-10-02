@@ -39,6 +39,7 @@ public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
+    private static final long MAX_RESERVATIONS_PER_HOUR = 5;
 
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -66,6 +67,12 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
+        if (reservationRepository.countByCustomer_IdAndCreatedAtAfter(
+            actor.userId(), Instant.now().minus(1, ChronoUnit.HOURS)
+        ) >= MAX_RESERVATIONS_PER_HOUR) {
+            throw ApiExceptions.conflict("Reservation creation limit reached; please try again later");
+        }
+
         ReservationQuote quote = quoteRepository.findByIdAndCustomer_Id(request.getQuoteId(), actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Quote was not found"));
         if (!quote.getExpiresAt().isAfter(Instant.now())) {
@@ -84,6 +91,10 @@ public class ReservationCreationService {
 
         capacityService.lockAndRequireAvailableCapacity(
             quote.getFacility().getId(), quote.getUnitType().getId(),
+            quote.getStartDate(), quote.getEndDate()
+        );
+        capacityService.requireNoCustomerOverlappingHold(
+            actor.userId(), quote.getFacility().getId(), quote.getUnitType().getId(),
             quote.getStartDate(), quote.getEndDate()
         );
 

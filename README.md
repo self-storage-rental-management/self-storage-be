@@ -50,7 +50,7 @@ git pull --ff-only origin develop
 Lần đầu tạo container:
 
 ```cmd
-docker run --name storagehub-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=storagehub -p 3306:3306 -d mysql:8.4
+docker run --name storagehub-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=storagehub_local -p 3306:3306 -d mysql:8.4
 ```
 
 Nếu container đã tồn tại nhưng đang dừng:
@@ -70,7 +70,7 @@ docker ps
 Các biến dưới đây áp dụng cho cửa sổ CMD hiện tại. Có thể dùng giá trị local khác nếu máy hoặc database khác cấu hình mặc định.
 
 ```cmd
-set "STORAGEHUB_DB_URL=jdbc:mysql://localhost:3306/storagehub?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+set "STORAGEHUB_DB_URL=jdbc:mysql://localhost:3306/storagehub_local?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
 set "STORAGEHUB_DB_USERNAME=root"
 set "STORAGEHUB_DB_PASSWORD=root"
 set "STORAGEHUB_ALLOWED_ORIGIN=http://localhost:5173"
@@ -161,7 +161,17 @@ Các endpoint Admin yêu cầu JWT hợp lệ và permission tương ứng. Khô
 - `GET /api/facilities/{facilityId}/unit-types`
 - `GET /api/storage-units`
 - `POST /api/files`
-- `POST /api/payments/intents`
+- `GET /api/files/{fileId}` (chỉ uploader hoặc Manager có quyền/phạm vi phù hợp)
+- `POST /api/customer/reservations/{reservationId}/simulated-payment`
+- `GET /api/customer/reservations/{reservationId}/payment`
+- `POST /api/customer/reservations/{reservationId}/payment-complaints`
+- `GET /api/customer/reservations/{reservationId}/payment-complaint`
+- `POST /api/customer/payment-complaints/{complaintId}/withdraw`
+- `/api/manager/payment-complaints`
+- `GET /api/manager/payment-complaints/review-queue`
+- `POST /api/customer/reservations/{reservationId}/booking-document`
+- `GET /api/customer/reservations/{reservationId}/booking-document`
+- `GET /api/customer/reservations/{reservationId}/booking-document/download`
 
 Contract của các API nghiệp vụ Customer vẫn cần được hoàn thiện trước khi nối toàn bộ Customer FE.
 

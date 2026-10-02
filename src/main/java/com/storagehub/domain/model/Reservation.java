@@ -109,6 +109,12 @@ public class Reservation extends BaseEntity {
     private Instant paymentExpiresAt;
 
     @Column
+    private Instant complaintExpiresAt;
+
+    @Column
+    private Instant archivedAt;
+
+    @Column
     private Instant confirmedAt;
 
     @Column

@@ -16,13 +16,15 @@ public record UnitTypeResponse(
     BigDecimal areaM2,
     BigDecimal volumeM3,
     BigDecimal monthlyPrice,
+    BigDecimal securityDepositAmount,
+    String imageUrl,
     BigDecimal maxLoadKg,
     int rackCount,
     BigDecimal rackLengthM,
     BigDecimal rackWidthM,
     BigDecimal rackHeightM,
     UnitTypeStatus status,
-    long availableUnitCount,
+    long availableCount,
     Instant createdAt,
     Instant updatedAt
 ) {
