@@ -197,6 +197,22 @@ INSERT INTO reservations (
     13500000.00, 'IDEMP-RES-0001', 1
 ) ON DUPLICATE KEY UPDATE status='COMPLETED';
 
+-- 8.1 Reservation Pricing Snapshot (Lưu vết lịch sử giảm giá bất biến cho hóa đơn)
+INSERT INTO reservation_pricing_snapshots (
+    id, created_at, updated_at, reservation_id, pricing_package_code, pricing_policy_version,
+    rental_months, monthly_price, gross_rental_amount, discount_rate, discount_amount,
+    net_rental_amount, reservation_deposit_amount, security_deposit_amount, remaining_rental_amount,
+    due_at_check_in, total_initial_obligation, quoted_at, expires_at
+) VALUES (
+    UUID_TO_BIN('99999999-9999-9999-9999-000000000001'),
+    NOW(6), NOW(6),
+    UUID_TO_BIN('99999999-9999-9999-9999-999999999999'),
+    'PKG-6M', 'v1.0', 6,
+    2500000.00, 15000000.00, 0.1000, 1500000.00,
+    13500000.00, 2500000.00, 2500000.00, 11000000.00,
+    11000000.00, 16000000.00, NOW(6), DATE_ADD(NOW(6), INTERVAL 30 DAY)
+) ON DUPLICATE KEY UPDATE net_rental_amount=VALUES(net_rental_amount);
+
 -- 9. Clean up previous demo return cases & maintenance tasks to ensure fresh demo runs
 DELETE FROM return_cases WHERE rental_id = UUID_TO_BIN('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
 DELETE FROM maintenance_tasks WHERE storage_unit_id = (SELECT id FROM storage_units WHERE code = 'Q1-U101');
