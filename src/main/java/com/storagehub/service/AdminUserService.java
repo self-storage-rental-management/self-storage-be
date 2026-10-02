@@ -58,7 +58,7 @@ public class AdminUserService {
     private static final String TEMP_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
     private static final String TEMP_LOWER = "abcdefghjkmnpqrstuvwxyz";
     private static final String TEMP_DIGITS = "23456789";
-    private static final String TEMP_SPECIAL = "@#$%!&*?";
+    private static final String TEMP_SPECIAL = "@#$%!*?";
     private static final String TEMP_ALL = TEMP_UPPER + TEMP_LOWER + TEMP_DIGITS + TEMP_SPECIAL;
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -334,7 +334,15 @@ public class AdminUserService {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
         boolean wasRequiredToChangePassword = user.isMustChangePassword();
-        user.setPasswordHash(passwordEncoder.encode(request.temporaryPassword()));
+
+        String temporaryPassword;
+        if (request.temporaryPassword() != null && !request.temporaryPassword().isBlank()) {
+            temporaryPassword = request.temporaryPassword();
+        } else {
+            temporaryPassword = generateSecureTemporaryPassword();
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         user.setMustChangePassword(true);
         User saved = userRepository.saveAndFlush(user);
         revokeSessions(saved);
@@ -346,9 +354,13 @@ public class AdminUserService {
         String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
             .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
             .format(Instant.now());
-        emailService.sendAccountChanged(
-            saved.getId(), saved.getEmail(), saved.getFullName(), changeTime, "Mật khẩu",
-            "••••••••", "••••••••", true, null, null, null
+        emailService.sendAccountCreated(
+            saved.getId(),
+            saved.getEmail(),
+            saved.getFullName(),
+            changeTime,
+            temporaryPassword,
+            null
         );
 
         return response;

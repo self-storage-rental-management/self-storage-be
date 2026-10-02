@@ -72,7 +72,7 @@ public class EmailEventListener {
         );
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @org.springframework.context.event.EventListener
     public void onSecurityAlert(SendSecurityAlertEvent event) {
         log.debug("Dispatching security-alert event for recipient={}", event.toEmail());
         transactionalEmailService.sendSecurityAlertAsync(

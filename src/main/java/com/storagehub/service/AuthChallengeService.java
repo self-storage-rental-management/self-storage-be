@@ -19,8 +19,10 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +41,7 @@ public class AuthChallengeService {
     private final com.storagehub.service.email.EmailService transactionalEmailService;
     private final ActorResponseMapper actorResponseMapper;
     private final AuditLogService auditLogService;
+    private final Environment environment;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Value("${app.auth.verification-url:http://localhost:5173/?verifyEmail=}")
@@ -165,7 +168,14 @@ public class AuthChallengeService {
         challenge.setExpiresAt(now.plus(15, ChronoUnit.MINUTES));
         challenge.setFailedAttempts(0);
         challengeRepository.saveAndFlush(challenge);
-        return new ChallengeIssue(otp, token, exposeDevelopmentCode ? otp : null);
+        boolean allowDebugCode = exposeDevelopmentCode && isDevOrLocal();
+        return new ChallengeIssue(otp, token, allowDebugCode ? otp : null);
+    }
+
+    private boolean isDevOrLocal() {
+        if (environment == null) return false;
+        return Arrays.stream(environment.getActiveProfiles())
+            .anyMatch(p -> p.equalsIgnoreCase("dev") || p.equalsIgnoreCase("local"));
     }
 
     private AuthChallenge latest(User user, AuthChallengePurpose purpose) {
