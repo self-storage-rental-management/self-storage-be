@@ -34,15 +34,15 @@ java -version
 ### 1. Clone đúng branch
 
 ```cmd
-git clone -b develop https://github.com/self-storage-rental-management/self-storage-be.git
+git clone -b auth-admin https://github.com/self-storage-rental-management/self-storage-be.git
 cd self-storage-be
 ```
 
 Nếu đã clone repository:
 
 ```cmd
-git switch develop
-git pull --ff-only origin develop
+git switch auth-admin
+git pull --ff-only origin auth-admin
 ```
 
 ### 2. Khởi động MySQL
@@ -73,7 +73,8 @@ Các biến dưới đây áp dụng cho cửa sổ CMD hiện tại. Có thể 
 set "STORAGEHUB_DB_URL=jdbc:mysql://localhost:3306/storagehub?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
 set "STORAGEHUB_DB_USERNAME=root"
 set "STORAGEHUB_DB_PASSWORD=root"
-set "STORAGEHUB_ALLOWED_ORIGIN=http://localhost:5173"
+set "STORAGEHUB_ALLOWED_ORIGIN=http://localhost:8443"
+set "STORAGEHUB_GOOGLE_CLIENT_ID=586674216860-4lqog6tpp7o0qjeqo7laf6s249foc1lq.apps.googleusercontent.com"
 set "STORAGEHUB_MAIL_ENABLED=false"
 set "STORAGEHUB_EXPOSE_DEVELOPMENT_CODE=true"
 ```
@@ -91,6 +92,27 @@ set "STORAGEHUB_JWT_SECRET=PASTE_BASE64_SECRET_HERE"
 ```
 
 `STORAGEHUB_EXPOSE_DEVELOPMENT_CODE=true` chỉ dùng local để hiển thị mã xác minh khi chưa cấu hình mail. Không dùng cấu hình này ở production.
+
+Nếu cần gửi email thật bằng Gmail, hãy bật xác minh 2 bước và tạo Gmail App Password. Không dùng mật khẩu Gmail chính:
+
+```powershell
+$env:STORAGEHUB_MAIL_ENABLED="true"
+$env:STORAGEHUB_MAIL_FROM="storagehub.sender@gmail.com"
+$env:STORAGEHUB_MAIL_HOST="smtp.gmail.com"
+$env:STORAGEHUB_MAIL_PORT="587"
+$env:STORAGEHUB_MAIL_USERNAME="storagehub.sender@gmail.com"
+$env:STORAGEHUB_MAIL_PASSWORD="APP_PASSWORD_16_KY_TU"
+$env:STORAGEHUB_MAIL_SMTP_AUTH="true"
+$env:STORAGEHUB_MAIL_SMTP_STARTTLS="true"
+$env:STORAGEHUB_EXPOSE_DEVELOPMENT_CODE="false"
+```
+
+Nếu FE chạy ở port khác, cập nhật các URL xác minh/đặt lại mật khẩu để trỏ về đúng port FE:
+
+```powershell
+$env:STORAGEHUB_VERIFICATION_URL="http://localhost:8443/?verifyEmail="
+$env:STORAGEHUB_PASSWORD_RESET_URL="http://localhost:8443/?resetPassword="
+```
 
 ### 4. Chạy backend
 
@@ -136,6 +158,7 @@ Base path: `/api/auth`
 
 - `POST /register`
 - `POST /login`
+- `POST /google`
 - `POST /refresh`
 - `POST /verify-email`
 - `POST /forgot-password`

@@ -50,6 +50,18 @@ public class ReservationPricingSnapshot extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal reservationDepositAmount;
 
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal securityDepositAmount;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal remainingRentalAmount;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal dueAtCheckIn;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal totalInitialObligation;
+
     @Column(nullable = false)
     private Instant quotedAt;
 

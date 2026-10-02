@@ -2,6 +2,7 @@ package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
+import java.util.Collection;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -15,6 +16,12 @@ public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> 
         UUID facilityId,
         UUID unitTypeId,
         StorageUnitStatus status
+    );
+
+    long countByFacility_IdAndUnitType_IdAndStatusIn(
+        UUID facilityId,
+        UUID unitTypeId,
+        Collection<StorageUnitStatus> statuses
     );
 
     @Query("""

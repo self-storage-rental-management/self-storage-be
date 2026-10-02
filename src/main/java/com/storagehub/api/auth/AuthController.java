@@ -36,6 +36,14 @@ public class AuthController {
         );
     }
 
+    @PostMapping("/google")
+    public ApiResponse<AuthResponse> googleLogin(@Valid @RequestBody GoogleLoginRequest request, HttpServletRequest httpRequest) {
+        return new ApiResponse<>(
+            authService.loginWithGoogle(request.idToken(), httpRequest.getRemoteAddr(), httpRequest.getHeader("User-Agent")),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/refresh")
     public ApiResponse<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
         return new ApiResponse<>(authService.refresh(request), CorrelationIdContext.current());
