@@ -19,4 +19,8 @@ public interface RentalRepository extends JpaRepository<Rental, UUID> {
         @Param("storageUnitId") UUID storageUnitId,
         @Param("status") RentalStatus status
     );
+
+    java.util.Optional<Rental> findByIdAndCustomer_Id(UUID id, UUID customerId);
+
+    org.springframework.data.domain.Page<Rental> findByCustomer_Id(UUID customerId, org.springframework.data.domain.Pageable pageable);
 }
