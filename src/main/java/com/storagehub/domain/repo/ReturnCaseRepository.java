@@ -42,4 +42,8 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID> {
         @Param("q") String q,
         Pageable pageable
     );
+
+    long countByFacility_IdAndStatusNotIn(UUID facilityId, Collection<ReturnCaseStatus> statuses);
+
+    long countByStatusNotIn(Collection<ReturnCaseStatus> statuses);
 }

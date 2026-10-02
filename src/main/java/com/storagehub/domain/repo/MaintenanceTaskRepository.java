@@ -44,4 +44,8 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
         @Param("q") String q,
         Pageable pageable
     );
+
+    long countByFacility_IdAndStatusIn(UUID facilityId, Collection<MaintenanceTaskStatus> statuses);
+
+    long countByStatusIn(Collection<MaintenanceTaskStatus> statuses);
 }
