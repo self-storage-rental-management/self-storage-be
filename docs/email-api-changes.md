@@ -65,11 +65,11 @@ Email hệ thống chứa các đường link nút bấm (Call-To-Action) điề
 
 | # | Chức năng Frontend | Route khuyến nghị | Biến cấu hình Backend | Giá trị mặc định Dev | Mô tả chi tiết |
 | :-: | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Xác minh Email** | `/verify-email` *(hoặc `/?verifyEmail=`)* | `app.auth.verification-url` | `http://localhost:5173/?verifyEmail=` | - Người dùng click từ nút "Xác minh email" trong thư chào mừng.<br>- Frontend trích xuất query param `token` hoặc `verifyEmail` từ URL.<br>- Frontend gửi request `POST /api/auth/verify-email` với body `{ "email": "...", "token": "..." }`.<br>- Hiển thị trạng thái thành công và chuyển hướng đến màn hình Đăng nhập. |
-| **2** | **Đặt lại Mật khẩu** | `/reset-password` *(hoặc `/?resetPassword=`)* | `app.auth.password-reset-url` | `http://localhost:5173/?resetPassword=` | - Người dùng click từ nút "Đặt lại mật khẩu" trong thư khôi phục.<br>- Frontend trích xuất query param `token` hoặc `resetPassword`.<br>- Hiển thị form nhập mật khẩu mới và xác nhận mật khẩu (kiểm tra độ mạnh theo `PasswordPolicy`).<br>- Gửi `POST /api/auth/reset-password` với body `{ "email": "...", "token": "...", "newPassword": "..." }`. |
-| **3** | **Bảo mật Tài khoản** | `/profile/security` *(hoặc `/account/security`)* | `app.mail.security-url` | `http://localhost:5173/profile/security` | - Người dùng click từ email "Đăng nhập mới" (`new-login`) khi thấy thiết bị lạ.<br>- Màn hình cung cấp các tính năng: xem danh sách thiết bị/lịch sử đăng nhập, đổi mật khẩu, và nút "Đăng xuất khỏi tất cả các thiết bị khác" (`POST /api/auth/revoke-sessions`). |
-| **4** | **Xem & Quản lý Tài khoản** | `/profile` *(hoặc `/account`)* | `app.mail.account-url` | `http://localhost:5173/profile` | - Người dùng click từ email thông báo thay đổi thông tin tài khoản (`account-changed`).<br>- Hiển thị thông tin cá nhân hiện tại (họ tên, email, số điện thoại, địa chỉ) để người dùng kiểm tra đối chiếu. |
-| **5** | **Đăng nhập** | `/login` | `app.mail.login-url` | `http://localhost:5173/login` | - Nút đăng nhập trong email thông báo tạo tài khoản bởi quản trị viên (`account-created`) hoặc email xác minh hoàn tất.<br>- Cho phép người dùng đăng nhập bằng email và mật khẩu tạm thời.<br>- Nếu cờ `mustChangePassword = true` trả về trong phản hồi đăng nhập, hiển thị modal/màn hình bắt buộc đổi mật khẩu trước khi vào Dashboard. |
+| **1** | **Xác minh Email** | `/verify-email` | `app.auth.verification-url` | `http://localhost:8443/verify-email?token=` | - Người dùng click từ nút "Xác minh email" trong thư chào mừng.<br>- Frontend trích xuất query param `token` (vẫn tương thích link cũ `verifyEmail`).<br>- Frontend gửi request `POST /api/auth/verify-email` với body `{ "email": "...", "token": "..." }`.<br>- Hiển thị trạng thái thành công và chuyển hướng đến màn hình Đăng nhập. |
+| **2** | **Đặt lại Mật khẩu** | `/reset-password` | `app.auth.password-reset-url` | `http://localhost:8443/reset-password?token=` | - Người dùng click từ nút "Đặt lại mật khẩu" trong thư khôi phục.<br>- Frontend trích xuất query param `token` (vẫn tương thích link cũ `resetPassword`).<br>- Hiển thị form nhập mật khẩu mới và xác nhận mật khẩu (kiểm tra độ mạnh theo `PasswordPolicy`).<br>- Gửi `POST /api/auth/reset-password` với body `{ "email": "...", "token": "...", "newPassword": "..." }`. |
+| **3** | **Bảo mật Tài khoản** | `/profile/security` | `app.mail.security-url` | `http://localhost:8443/profile/security` | - Người dùng click từ email "Đăng nhập mới" (`new-login`) khi thấy thiết bị lạ.<br>- Nếu chưa đăng nhập, Frontend hiển thị màn hình đăng nhập rồi trả về tab bảo mật.<br>- Màn hình cung cấp danh sách phiên đăng nhập và đổi mật khẩu cho Customer. |
+| **4** | **Xem & Quản lý Tài khoản** | `/profile` | `app.mail.account-url` | `http://localhost:8443/profile` | - Người dùng click từ email thông báo thay đổi thông tin tài khoản (`account-changed`).<br>- Nếu chưa đăng nhập, Frontend hiển thị màn hình đăng nhập rồi trả về hồ sơ.<br>- Hiển thị thông tin cá nhân hiện tại để người dùng kiểm tra đối chiếu. |
+| **5** | **Đăng nhập** | `/login` | `app.mail.login-url` | `http://localhost:8443/login` | - Nút đăng nhập trong email thông báo tạo tài khoản bởi quản trị viên (`account-created`) hoặc email xác minh hoàn tất.<br>- Cho phép người dùng đăng nhập bằng email và mật khẩu tạm thời.<br>- Nếu cờ `mustChangePassword = true` trả về trong phản hồi đăng nhập, hiển thị màn hình bắt buộc đổi mật khẩu trước khi vào Dashboard. |
 
 ---
 
@@ -82,7 +82,9 @@ Email hệ thống chứa các đường link nút bấm (Call-To-Action) điề
   2. Không có khả năng rollback khi có sự cố.
   3. Không kiểm soát được versioning và lịch sử thay đổi schema cơ sở dữ liệu.
   4. Không tự động xử lý đổi kiểu dữ liệu hay index an toàn.
-- **Khuyến nghị**: Sử dụng công cụ database migration chuyên dụng (như **Flyway** hoặc **Liquibase**), hoặc chạy script migration thủ công qua pipeline CI/CD trước khi khởi động phiên bản backend mới.
+- Backend đã tích hợp **Flyway** cho profile `staging` và `prod`. Hai profile này đặt `spring.jpa.hibernate.ddl-auto=validate`; Hibernate chỉ kiểm tra schema và không tự sửa database.
+- Migration hiện tại nằm tại `src/main/resources/db/migration/V2026100201__add_login_history_device_fingerprint.sql`. Script có kiểm tra `information_schema`, nên an toàn khi triển khai lên database cũ đã từng được Hibernate thêm cột/index.
+- Profile local/dev vẫn giữ `ddl-auto=update` và tắt Flyway để không phá quy trình phát triển hiện tại.
 
 ### 3.2. Script SQL Migration (Dành cho Production DBA)
 Trước khi deploy code mới lên production, hãy chạy script SQL sau:
@@ -165,6 +167,7 @@ STORAGEHUB_MAIL_SMTP_STARTTLS=true
 STORAGEHUB_MAIL_FROM="StorageHub <no-reply@storagehub.vn>"
 STORAGEHUB_MAIL_SUPPORT="support@storagehub.vn"
 STORAGEHUB_MAIL_COMPANY_ADDRESS="Tòa nhà StorageHub, Khu Công Nghệ Cao, TP. Thủ Đức, TP. Hồ Chí Minh"
+STORAGEHUB_MAIL_LOGO_URL="https://cdn.storagehub.vn/email/storagehub-logo.png"
 
 # URL Frontend thực tế trên Production
 STORAGEHUB_FRONTEND_BASE_URL="https://storagehub.vn"
@@ -180,10 +183,12 @@ STORAGEHUB_SECURITY_ALERT_COOLDOWN_HOURS=6
 STORAGEHUB_BACKFILL_FINGERPRINTS=true
 ```
 
+Khởi động bằng profile tương ứng: `SPRING_PROFILES_ACTIVE=staging` hoặc `SPRING_PROFILES_ACTIVE=prod`. Các profile này không có giá trị SMTP, database, domain hay logo mặc định; thiếu biến môi trường bắt buộc sẽ khiến ứng dụng dừng lúc khởi động thay vì âm thầm gửi sai cấu hình.
+
 ### 4.2. Logo Thương hiệu trong Email
-- Đặt file ảnh logo chính thức chuẩn kích thước tại:
-  `src/main/resources/static/email/storagehub-logo.png`
-- Hệ thống backend tự động nhúng logo dưới dạng inline CID (`cid:storagehubLogo`) thông qua `MimeMessageHelper.MULTIPART_MODE_MIXED_RELATED`. Cách này giúp email hiển thị logo ngay lập tức trên Gmail, Outlook, Apple Mail mà không bị trình duyệt email chặn ảnh ngoài (blocked remote images).
+- Trên Staging/Production, bắt buộc đặt `STORAGEHUB_MAIL_LOGO_URL` thành URL HTTPS công khai, ổn định và không yêu cầu đăng nhập, ví dụ `https://cdn.storagehub.vn/email/storagehub-logo.png`.
+- URL phải trả trực tiếp nội dung ảnh với đúng `Content-Type`, có cache header dài hạn và không dùng link tạm thời có chữ ký hết hạn.
+- File `src/main/resources/static/email/storagehub-logo.png` và CID `storagehubLogo` vẫn là fallback để tương thích các email client chặn ảnh ngoài; URL công khai là nguồn thương hiệu chính cho môi trường triển khai.
 
 ### 4.3. Cấu hình DNS Xác thực Tên miền (SPF, DKIM, DMARC)
 Để email hệ thống không bị phân loại vào hòm thư Rác (Spam / Junk) hoặc bị máy chủ nhận (Gmail, Yahoo, Microsoft 365) từ chối:

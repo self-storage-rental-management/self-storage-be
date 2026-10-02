@@ -198,7 +198,9 @@ public class TransactionalEmailService {
 
         try {
             Resource logoResource = new ClassPathResource(LOGO_PATH);
-            boolean hasInlineLogo = logoResource.exists();
+            boolean hasPublicLogo = emailProperties.getLogoUrl() != null
+                && !emailProperties.getLogoUrl().isBlank();
+            boolean hasInlineLogo = !hasPublicLogo && logoResource.exists();
             if (hasInlineLogo) {
                 variables.put("logoCid", LOGO_CID);
             }
