@@ -11,6 +11,9 @@ public record UpdateProfileRequest(
         regexp = "^$|^(?:\\+?[1-9]\\d{7,14}|0\\d{9,10})$",
         message = "phone must be a valid phone number"
     ) String phone,
-    @Size(max = 2048) String avatarUrl
+    @Size(max = 500) String permanentAddress,
+    @Size(max = 160) String emergencyContactName,
+    @Size(max = 30) String emergencyContactPhone,
+    @Size(max = 500_000) String avatarUrl
 ) {
 }

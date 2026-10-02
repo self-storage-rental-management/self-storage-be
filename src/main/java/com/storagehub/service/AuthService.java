@@ -7,6 +7,7 @@ import com.storagehub.api.auth.LoginRequest;
 import com.storagehub.api.auth.RegisterRequest;
 import com.storagehub.api.auth.RegisterResponse;
 import com.storagehub.api.auth.RefreshTokenRequest;
+import com.storagehub.api.auth.SessionResponse;
 import com.storagehub.api.auth.UpdateProfileRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.RoleCode;
@@ -24,10 +25,13 @@ import com.storagehub.security.JwtService;
 import com.storagehub.security.GoogleIdentityService.GoogleIdentity;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +51,7 @@ public class AuthService {
     private final AuditLogService auditLogService;
     private final AuthChallengeService authChallengeService;
     private final GoogleIdentityService googleIdentityService;
+    private final com.storagehub.service.email.EmailService transactionalEmailService;
 
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
@@ -62,6 +67,9 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setFullName(request.fullName().trim());
         user.setPhone(normalizeNullable(request.phone()));
+        user.setPermanentAddress(normalizeNullable(request.permanentAddress()));
+        user.setEmergencyContactName(normalizeNullable(request.emergencyContactName()));
+        user.setEmergencyContactPhone(normalizeNullable(request.emergencyContactPhone()));
         user.setStatus(UserStatus.PENDING_VERIFICATION);
         user.setRoles(Set.of(customerRole));
         User saved = userRepository.saveAndFlush(user);
@@ -216,6 +224,10 @@ public class AuthService {
         ActorPrincipal actor = actorContext.required();
         User user = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        boolean isCustomer = user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.CUSTOMER);
+        if (!isCustomer && !user.isMustChangePassword()) {
+            throw ApiExceptions.forbidden("Only customer accounts can change their password");
+        }
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
             throw ApiExceptions.unauthorized("The current password is incorrect");
         }
@@ -241,6 +253,24 @@ public class AuthService {
         auditLogService.recordMutation(user, "PASSWORD_CHANGED", "User", user.getId(), null,
             Map.of("mustChangePassword", wasRequiredToChangePassword), Map.of("mustChangePassword", false));
 
+        String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+            .format(Instant.now());
+        String deviceSummary = com.storagehub.service.email.UserAgentParser.parse(session.getUserAgent()).summary();
+        transactionalEmailService.sendAccountChanged(
+            user.getId(),
+            user.getEmail(),
+            user.getFullName(),
+            changeTime,
+            "Mật khẩu",
+            "••••••••",
+            "••••••••",
+            false,
+            deviceSummary,
+            session.getCreatedIp(),
+            null
+        );
+
         return new AuthResponse(
             issuedToken.value(),
             "Bearer",
@@ -259,6 +289,29 @@ public class AuthService {
         return actorResponseMapper.toResponse(user);
     }
 
+    @Transactional(readOnly = true)
+    public List<SessionResponse> currentSessions() {
+        ActorPrincipal actor = actorContext.required();
+        Instant now = Instant.now();
+        return sessionRepository.search(
+                actor.userId(),
+                PageRequest.of(0, 50, Sort.by(Sort.Direction.DESC, "createdAt"))
+            )
+            .getContent()
+            .stream()
+            .map(session -> new SessionResponse(
+                session.getId(),
+                session.getCreatedIp(),
+                session.getUserAgent(),
+                session.getCreatedAt(),
+                session.getLastSeenAt(),
+                session.getExpiresAt(),
+                session.getRevokedAt(),
+                session.isActive(now)
+            ))
+            .toList();
+    }
+
     @Transactional
     public ActorResponse updateCurrentActor(UpdateProfileRequest request) {
         ActorPrincipal actor = actorContext.required();
@@ -268,11 +321,41 @@ public class AuthService {
 
         user.setFullName(requireText(request.fullName(), "fullName"));
         user.setPhone(normalizeNullable(request.phone()));
-        user.setAvatarUrl(normalizeNullable(request.avatarUrl()));
+        if (request.permanentAddress() != null) {
+            user.setPermanentAddress(normalizeNullable(request.permanentAddress()));
+        }
+        if (request.emergencyContactName() != null) {
+            user.setEmergencyContactName(normalizeNullable(request.emergencyContactName()));
+        }
+        if (request.emergencyContactPhone() != null) {
+            user.setEmergencyContactPhone(normalizeNullable(request.emergencyContactPhone()));
+        }
+        if (request.avatarUrl() != null) {
+            user.setAvatarUrl(normalizeNullable(request.avatarUrl()));
+        }
 
         User saved = userRepository.saveAndFlush(user);
         ActorResponse response = actorResponseMapper.toResponse(saved);
         auditLogService.recordMutation(user, "USER_PROFILE_UPDATED", "User", user.getId(), null, before, response);
+
+        if (!java.util.Objects.equals(before.phone(), saved.getPhone())) {
+            String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+                .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+                .format(Instant.now());
+            transactionalEmailService.sendAccountChanged(
+                saved.getId(),
+                saved.getEmail(),
+                saved.getFullName(),
+                changeTime,
+                "Số điện thoại",
+                before.phone() != null ? before.phone() : "Chưa thiết lập",
+                saved.getPhone() != null ? saved.getPhone() : "Đã xóa",
+                false,
+                "Không xác định",
+                "Không xác định",
+                null
+            );
+        }
         return response;
     }
 

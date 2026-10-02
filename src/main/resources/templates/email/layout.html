@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="vi" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>StorageHub</title>
+</head>
+<body>
+
+  <!-- Shared Header Logo Fragment -->
+  <tr th:fragment="header">
+    <td style="background:#1F1F1F;padding:18px 28px;text-align:left">
+      <img th:src="${logoCid != null ? 'cid:' + logoCid : (logoUrl != null and !logoUrl.isBlank() ? logoUrl : 'cid:storagehubLogo')}"
+           alt="StorageHub" height="44" style="display:block;border:0;height:44px;width:auto">
+    </td>
+  </tr>
+
+  <!-- Shared Accent Bar Fragment -->
+  <tr th:fragment="accent-bar(color)">
+    <td th:style="'height:4px;background:' + ${color} + ';font-size:0;line-height:0'">&nbsp;</td>
+  </tr>
+
+  <!-- Shared Footer Fragment -->
+  <tr th:fragment="footer">
+    <td style="padding:20px 28px 28px;border-top:1px solid #ECECEC">
+      <p style="margin:0 0 6px;font:400 12px/1.6 Segoe UI,Helvetica,Arial,sans-serif;color:#888">
+        Đây là email tự động từ StorageHub, vui lòng không trả lời trực tiếp. Cần hỗ trợ? Liên hệ <a th:href="'mailto:' + ${supportEmail}" th:text="${supportEmail}" style="color:#B86E00">support@storagehub.vn</a>.
+      </p>
+      <p style="margin:0;font:400 12px/1.6 Segoe UI,Helvetica,Arial,sans-serif;color:#aaa">
+        © <span th:text="${year}">2026</span> StorageHub – Hệ thống tự lưu trữ · <span th:text="${companyAddress}">Tòa nhà StorageHub</span>
+      </p>
+    </td>
+  </tr>
+
+</body>
+</html>

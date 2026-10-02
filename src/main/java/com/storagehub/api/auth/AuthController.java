@@ -6,6 +6,7 @@ import com.storagehub.service.AuthChallengeService;
 import com.storagehub.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -83,5 +84,10 @@ public class AuthController {
     @PutMapping("/me")
     public ApiResponse<ActorResponse> updateMe(@Valid @RequestBody UpdateProfileRequest request) {
         return new ApiResponse<>(authService.updateCurrentActor(request), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/sessions")
+    public ApiResponse<List<SessionResponse>> sessions() {
+        return new ApiResponse<>(authService.currentSessions(), CorrelationIdContext.current());
     }
 }

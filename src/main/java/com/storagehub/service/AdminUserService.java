@@ -23,7 +23,10 @@ import com.storagehub.domain.repo.SessionRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
+import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +53,14 @@ public class AdminUserService {
     private final PasswordEncoder passwordEncoder;
     private final AdminAuthorizationService authorizationService;
     private final AuditLogService auditLogService;
+    private final com.storagehub.service.email.EmailService emailService;
+
+    private static final String TEMP_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    private static final String TEMP_LOWER = "abcdefghjkmnpqrstuvwxyz";
+    private static final String TEMP_DIGITS = "23456789";
+    private static final String TEMP_SPECIAL = "@#$%!&*?";
+    private static final String TEMP_ALL = TEMP_UPPER + TEMP_LOWER + TEMP_DIGITS + TEMP_SPECIAL;
+    private final SecureRandom secureRandom = new SecureRandom();
 
     @Transactional(readOnly = true)
     public PageResponse<AdminUserResponse> list(
@@ -93,20 +104,62 @@ public class AdminUserService {
         }
         Map<UUID, FacilityScopeLevel> scopes = normalizeScopes(request.facilityScopes());
         validateFacilityAssignment(roleCodes, scopes);
+
+        String temporaryPassword;
+        if (request.password() != null && !request.password().isBlank()) {
+            temporaryPassword = request.password();
+        } else {
+            temporaryPassword = generateSecureTemporaryPassword();
+        }
+
         User user = new User();
         user.setEmail(email);
-        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         user.setFullName(requireText(request.fullName(), "fullName"));
         user.setPhone(normalizeNullable(request.phone()));
         user.setStatus(UserStatus.ACTIVE);
-        user.setMustChangePassword(false);
+        user.setMustChangePassword(true);
         user.setRoles(resolveRoles(roleCodes));
         User saved = userRepository.saveAndFlush(user);
         replaceScopes(saved, scopes);
 
         AdminUserResponse response = toResponse(saved);
         auditLogService.recordMutation("ADMIN_USER_CREATED", "User", saved.getId(), null, null, response);
+
+        String createdAt = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+            .format(Instant.now());
+        emailService.sendAccountCreated(
+            saved.getId(),
+            saved.getEmail(),
+            saved.getFullName(),
+            createdAt,
+            temporaryPassword,
+            null
+        );
+
         return response;
+    }
+
+    private String generateSecureTemporaryPassword() {
+        StringBuilder sb = new StringBuilder(12);
+        sb.append(TEMP_UPPER.charAt(secureRandom.nextInt(TEMP_UPPER.length())));
+        sb.append(TEMP_LOWER.charAt(secureRandom.nextInt(TEMP_LOWER.length())));
+        sb.append(TEMP_DIGITS.charAt(secureRandom.nextInt(TEMP_DIGITS.length())));
+        sb.append(TEMP_SPECIAL.charAt(secureRandom.nextInt(TEMP_SPECIAL.length())));
+        for (int i = 4; i < 12; i++) {
+            sb.append(TEMP_ALL.charAt(secureRandom.nextInt(TEMP_ALL.length())));
+        }
+        List<Character> chars = new ArrayList<>(12);
+        for (char c : sb.toString().toCharArray()) {
+            chars.add(c);
+        }
+        Collections.shuffle(chars, secureRandom);
+        StringBuilder shuffled = new StringBuilder(12);
+        for (char c : chars) {
+            shuffled.append(c);
+        }
+        return shuffled.toString();
     }
 
     @Transactional
@@ -156,6 +209,42 @@ public class AdminUserService {
 
         AdminUserResponse response = toResponse(saved);
         auditLogService.recordMutation("ADMIN_USER_UPDATED", "User", saved.getId(), null, before, response);
+
+        String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+            .format(Instant.now());
+
+        if (request.email() != null && !saved.getEmail().equalsIgnoreCase(before.email())) {
+            emailService.sendAccountChanged(
+                saved.getId(), before.email(), saved.getFullName(), changeTime, "Email",
+                before.email(), saved.getEmail(), true, null, null, null
+            );
+            emailService.sendAccountChanged(
+                saved.getId(), saved.getEmail(), saved.getFullName(), changeTime, "Email",
+                before.email(), saved.getEmail(), true, null, null, null
+            );
+        }
+
+        if (request.phone() != null && !java.util.Objects.equals(request.phone(), before.phone())) {
+            emailService.sendAccountChanged(
+                saved.getId(), saved.getEmail(), saved.getFullName(), changeTime, "Số điện thoại",
+                before.phone() != null ? before.phone() : "Chưa thiết lập",
+                saved.getPhone() != null ? saved.getPhone() : "Đã xóa",
+                true, null, null, null
+            );
+        }
+
+        if (request.roles() != null) {
+            String oldRoles = before.roles().stream().map(Enum::name).sorted().collect(Collectors.joining(", "));
+            String newRoles = response.roles().stream().map(Enum::name).sorted().collect(Collectors.joining(", "));
+            if (!oldRoles.equals(newRoles)) {
+                emailService.sendAccountChanged(
+                    saved.getId(), saved.getEmail(), saved.getFullName(), changeTime, "Vai trò",
+                    oldRoles, newRoles, true, null, null, null
+                );
+            }
+        }
+
         return response;
     }
 
@@ -174,6 +263,19 @@ public class AdminUserService {
 
         AdminUserResponse response = toResponse(saved);
         auditLogService.recordMutation("ADMIN_USER_ROLES_UPDATED", "User", saved.getId(), null, before, response);
+
+        String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+            .format(Instant.now());
+        String oldRoles = before.roles().stream().map(Enum::name).sorted().collect(Collectors.joining(", "));
+        String newRoles = response.roles().stream().map(Enum::name).sorted().collect(Collectors.joining(", "));
+        if (!oldRoles.equals(newRoles)) {
+            emailService.sendAccountChanged(
+                saved.getId(), saved.getEmail(), saved.getFullName(), changeTime, "Vai trò",
+                oldRoles, newRoles, true, null, null, null
+            );
+        }
+
         return response;
     }
 
@@ -240,6 +342,15 @@ public class AdminUserService {
         AdminUserResponse response = toResponse(saved);
         auditLogService.recordMutation("ADMIN_USER_PASSWORD_RESET", "User", saved.getId(), null,
             Map.of("mustChangePassword", wasRequiredToChangePassword), Map.of("mustChangePassword", true));
+
+        String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+            .format(Instant.now());
+        emailService.sendAccountChanged(
+            saved.getId(), saved.getEmail(), saved.getFullName(), changeTime, "Mật khẩu",
+            "••••••••", "••••••••", true, null, null, null
+        );
+
         return response;
     }
 
