@@ -3,7 +3,10 @@ package com.storagehub.service;
 import com.storagehub.domain.model.LoginHistory;
 import com.storagehub.domain.repo.LoginHistoryRepository;
 import com.storagehub.service.email.UserAgentParser;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,19 +44,36 @@ public class LoginHistoryBackfillService implements ApplicationRunner {
     public int backfillPending() {
         int totalUpdated = 0;
         int batchNumber = 1;
+        Set<UUID> seenIds = new HashSet<>();
 
         while (true) {
+            // Always query page 0 because updated records receive a non-null fingerprint and exit the NULL set.
             Pageable pageable = PageRequest.of(0, batchSize, Sort.by("id").ascending());
             List<LoginHistory> chunk = loginHistoryRepository.findByDeviceFingerprintIsNull(pageable);
             if (chunk.isEmpty()) {
                 break;
             }
 
+            // Loop safety: abort if all items in current chunk have already been processed in a prior iteration
+            boolean allSeen = !chunk.isEmpty() && chunk.stream()
+                .allMatch(h -> h.getId() != null && seenIds.contains(h.getId()));
+            if (allSeen) {
+                log.warn("Detected backfill cycle: batch {} contains records already processed. Aborting backfill to prevent infinite loop.", batchNumber);
+                break;
+            }
+
             for (LoginHistory history : chunk) {
                 String ua = history.getUserAgent();
                 String fp = UserAgentParser.parse(ua).fingerprint();
+                if (fp == null || fp.isBlank()) {
+                    fp = "UNKNOWN|UNKNOWN";
+                }
                 history.setDeviceFingerprint(fp);
+                if (history.getId() != null) {
+                    seenIds.add(history.getId());
+                }
             }
+
             loginHistoryRepository.saveAllAndFlush(chunk);
             totalUpdated += chunk.size();
             log.info("Backfilled device fingerprints: batch {} ({} records in batch, total updated: {})",
