@@ -115,24 +115,13 @@ Protected. Filters: `page`, `pageSize`, `facilityId`, `status`, `unitTypeId`. St
 
 ## Payment contract
 
-### `POST /api/payments/intents`
+### `POST /api/customer/reservations/{reservationId}/simulated-payment`
 
-Protected. Requires `Idempotency-Key`. The server derives `initiatedBy` from JWT and never accepts it from the body.
+Protected. Requires `Idempotency-Key`. The server derives `initiatedBy` from JWT, takes the amount from the reservation pricing snapshot and never accepts amount or outcome from the body.
 
-```json
-{
-  "reservationId": "uuid",
-  "amount": 100000,
-  "currency": "VND",
-  "purpose": "RESERVATION_DEPOSIT"
-}
-```
+Không có request body.
 
-Retries with the same key and the same actor return the original intent. Reusing a key for a different request conflicts.
-
-### `POST /api/webhooks/payments/{provider}`
-
-Public transport endpoint with mandatory gateway signature verification. The webhook event id is idempotent; duplicate events return the existing payment state and are not applied twice.
+Retries with the same key and the same actor return the original result. Reusing a key for a different request conflicts. The response outcome is `SUCCESS`, `FAILED` or `NOT_RECEIVED`; there is no external gateway, redirect, IPN or webhook endpoint.
 
 ## File contract
 
@@ -152,4 +141,4 @@ Important reservation transition:
 
 ## Mutation audit contract
 
-Important mutations write `ActivityLog` with `actorId` (nullable for verified system webhooks), `occurredAt`, `entityType`, `entityId`, `facilityId`, `beforeState`, `afterState`, and `correlationId`. Authentication events additionally write `LoginHistory`.
+Important mutations write `ActivityLog` with `actorId` (nullable for scheduled system work), `occurredAt`, `entityType`, `entityId`, `facilityId`, `beforeState`, `afterState`, and `correlationId`. Authentication events additionally write `LoginHistory`.

@@ -65,7 +65,6 @@ public class SecurityConfig {
                     "/api/auth/forgot-password",
                     "/api/auth/reset-password"
                 ).permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/webhooks/payments/**").permitAll()
                 .requestMatchers(
                     "/swagger-ui.html",
                     "/swagger-ui/**",
