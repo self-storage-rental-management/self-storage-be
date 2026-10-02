@@ -23,5 +23,6 @@ public record UpdateStorageUnitStatusRequest(
 
     DamageClassification damageClassification,
 
+    @com.fasterxml.jackson.annotation.JsonFormat(pattern = "yyyy-MM-dd")
     LocalDate dueAt
 ) {}
