@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -155,20 +156,31 @@ public class BookingDocumentService {
     }
 
     private byte[] buildPdf(Reservation reservation, ReservationPricingSnapshot snapshot) {
-        List<String> lines = List.of(
-            "STORAGEHUB - BOOKING CONFIRMATION",
-            "This document confirms a reservation; it is not a signed rental contract.",
-            "Reservation: " + reservation.getReservationCode(),
-            "Customer: " + ascii(reservation.getCustomer().getFullName()),
-            "Facility: " + ascii(reservation.getFacility().getName()),
-            "Unit type: " + ascii(reservation.getUnitType().getName()),
-            "Rental period: " + reservation.getStartDate() + " to " + reservation.getEndDate(),
-            "Package: " + ascii(snapshot.getPricingPackageCode()),
-            "Net rental amount: " + money(snapshot.getNetRentalAmount()) + " VND",
-            "Reservation deposit paid: " + money(snapshot.getReservationDepositAmount()) + " VND",
-            "Security deposit due at check-in: " + money(snapshot.getSecurityDepositAmount()) + " VND",
-            "Issued at: " + Instant.now()
-        );
+        List<String> lines = new ArrayList<>();
+        lines.add("STORAGEHUB - BOOKING CONFIRMATION");
+        lines.add("This document confirms a reservation; it is not a signed rental contract.");
+        lines.add("Reservation: " + reservation.getReservationCode());
+        lines.add("Customer: " + ascii(reservation.getCustomer().getFullName()));
+        lines.add("Facility: " + ascii(reservation.getFacility().getName()));
+        lines.add("Unit type: " + ascii(reservation.getUnitType().getName()));
+        lines.add("Rental period: " + reservation.getStartDate() + " to " + reservation.getEndDate());
+        if (snapshot.getRentalMonths() > 0) {
+            lines.add("Rental duration: " + snapshot.getRentalMonths() + " month(s)");
+        }
+        if (snapshot.getGrossRentalAmount() != null) {
+            lines.add("Gross rental amount: " + money(snapshot.getGrossRentalAmount()) + " VND");
+        }
+        lines.add("Package / Discount Code: " + ascii(snapshot.getPricingPackageCode()));
+        if (snapshot.getDiscountRate() != null && snapshot.getDiscountRate().compareTo(BigDecimal.ZERO) > 0) {
+            lines.add("Discount rate applied: " + snapshot.getDiscountRate().multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString() + "%");
+        }
+        if (snapshot.getDiscountAmount() != null && snapshot.getDiscountAmount().compareTo(BigDecimal.ZERO) > 0) {
+            lines.add("Discount savings: -" + money(snapshot.getDiscountAmount()) + " VND");
+        }
+        lines.add("Net rental amount: " + money(snapshot.getNetRentalAmount()) + " VND");
+        lines.add("Reservation deposit paid: " + money(snapshot.getReservationDepositAmount()) + " VND");
+        lines.add("Security deposit due at check-in: " + money(snapshot.getSecurityDepositAmount()) + " VND");
+        lines.add("Issued at: " + Instant.now());
         return minimalPdf(lines);
     }
 

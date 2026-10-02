@@ -114,6 +114,31 @@ class CustomerReservationServiceTests {
     }
 
     @Test
+    void preservesHistoricalDiscountSnapshotDetailsWhenRetrievingReservation() {
+        snapshot.setRentalMonths(6);
+        snapshot.setPricingPackageCode("PKG-6M");
+        snapshot.setGrossRentalAmount(new BigDecimal("12000000.00"));
+        snapshot.setDiscountRate(new BigDecimal("0.0800"));
+        snapshot.setDiscountAmount(new BigDecimal("960000.00"));
+        snapshot.setNetRentalAmount(new BigDecimal("11040000.00"));
+
+        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNull(any(), any()))
+            .thenReturn(new PageImpl<>(List.of(reservation)));
+        when(snapshotRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(snapshot));
+
+        var response = service.list(actor, null, 0, 20, "correlation-id");
+
+        assertThat(response.data()).hasSize(1);
+        var item = response.data().get(0);
+        assertThat(item.getPricingPackageCode()).isEqualTo("PKG-6M");
+        assertThat(item.getRentalMonths()).isEqualTo(6);
+        assertThat(item.getGrossRentalAmount()).isEqualByComparingTo("12000000.00");
+        assertThat(item.getDiscountRate()).isEqualByComparingTo("0.0800");
+        assertThat(item.getDiscountAmount()).isEqualByComparingTo("960000.00");
+    }
+
+    @Test
     void cancelsReservationWhileItIsWaiting() {
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
