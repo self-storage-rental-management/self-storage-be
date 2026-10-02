@@ -26,7 +26,10 @@
                 <tr>
                   <td style="padding:10px 0;border-bottom:1px solid #ECECEC;font:400 14px Segoe UI,Helvetica,Arial,sans-serif;color:#777;width:38%" th:text="${fieldName}">Mật khẩu</td>
                   <td style="padding:10px 0;border-bottom:1px solid #ECECEC;font:600 14px Segoe UI,Helvetica,Arial,sans-serif;color:#1F1F1F">
-                    <span th:text="${oldValue}">••••••••</span> → <span th:text="${newValue}">••••••••</span>
+                    <span th:if="${fieldName == 'Mật khẩu' or fieldName == 'password' or fieldName == 'Password'}">Đã được thay đổi</span>
+                    <span th:unless="${fieldName == 'Mật khẩu' or fieldName == 'password' or fieldName == 'Password'}">
+                      <span th:text="${oldValue}">••••••••</span> → <span th:text="${newValue}">••••••••</span>
+                    </span>
                   </td>
                 </tr>
                 <tr>

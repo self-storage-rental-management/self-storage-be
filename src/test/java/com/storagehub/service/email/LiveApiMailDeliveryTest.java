@@ -322,7 +322,8 @@ class LiveApiMailDeliveryTest {
         DecodedEmail msg = changedEmails.get(0);
         assertTrue(msg.subject().contains("Thông tin tài khoản"));
         assertTrue(msg.bodyHtml().contains("Mật khẩu"));
-        assertTrue(msg.bodyHtml().contains("••••••••"));
+        assertTrue(msg.bodyHtml().contains("Đã được thay đổi"));
+        assertFalse(msg.bodyHtml().contains("••••••••"));
     }
 
     @Test
@@ -348,7 +349,8 @@ class LiveApiMailDeliveryTest {
         DecodedEmail msg = emails.get(0);
         assertTrue(msg.subject().contains("Thông tin tài khoản"));
         assertTrue(msg.bodyHtml().contains("Mật khẩu"));
-        assertTrue(msg.bodyHtml().contains("••••••••"));
+        assertTrue(msg.bodyHtml().contains("Đã được thay đổi"));
+        assertFalse(msg.bodyHtml().contains("••••••••"));
 
         // Update registeredUserToken with new token from change response
         registeredUserToken = objectMapper.readTree(changeResp.body()).get("data").get("accessToken").asText();
@@ -841,7 +843,7 @@ class LiveApiMailDeliveryTest {
         List<DecodedEmail> emails = waitForEmails(6, 10);
         assertThat(emails).hasSize(6);
 
-        // Verify that every email received has the inline logo CID <storagehubLogo>
+        // Verify that every email received has the inline logo CID <storagehubLogo> and matches HTML src exactly
         JsonNode data = getMailHogMessages();
         for (JsonNode item : data.get("items")) {
             String id = item.get("ID").asText();
@@ -852,9 +854,66 @@ class LiveApiMailDeliveryTest {
             HttpResponse<InputStream> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofInputStream());
             MimeMessage mime = new MimeMessage(null, resp.body());
 
-            boolean hasLogoCid = containsContentId(mime, "storagehubLogo");
-            assertTrue(hasLogoCid, "Email " + mime.getSubject() + " must have inline logo CID <storagehubLogo>");
+            // 1. Verify HTML body contains exact CID src, alt, and explicit height="44"
+            String html = extractHtmlContent(mime);
+            assertNotNull(html, "Email " + mime.getSubject() + " must have HTML body");
+            assertTrue(html.contains("src=\"cid:storagehubLogo\""),
+                "Email " + mime.getSubject() + " HTML must contain src=\"cid:storagehubLogo\" with exact case");
+            assertTrue(html.contains("alt=\"StorageHub\""),
+                "Email " + mime.getSubject() + " HTML must contain alt=\"StorageHub\"");
+            assertTrue(html.contains("height=\"44\""),
+                "Email " + mime.getSubject() + " HTML must contain explicit height=\"44\"");
+
+            // 2. Extract image Content-ID header from MIME structure
+            String imageContentId = findInlineContentId(mime, "image/png");
+            assertNotNull(imageContentId, "Email " + mime.getSubject() + " must have inline image/png part");
+
+            // Strip angle brackets: "<storagehubLogo>" -> "storagehubLogo"
+            String cleanedCid = imageContentId.replaceAll("[<>]", "").trim();
+            assertEquals("storagehubLogo", cleanedCid, "Inline image part Content-ID must match storagehubLogo");
+
+            // 3. Strict match: parse CID from HTML and assert it equals cleanedCid
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("src=[\"']cid:([^\"']+)[\"']").matcher(html);
+            assertTrue(matcher.find(), "Must find cid: in img src attribute");
+            String htmlCid = matcher.group(1);
+            assertEquals(cleanedCid, htmlCid, "HTML src CID (" + htmlCid + ") must strictly match MIME Content-ID (" + cleanedCid + ")");
         }
+    }
+
+    @Test
+    @Order(14)
+    @DisplayName("Validation: CID mismatch between HTML src and image Content-ID must fail validation")
+    void testCidMismatchFailsValidation() {
+        String htmlWithWrongCid = "<img src=\"cid:mismatchedLogo\" alt=\"StorageHub\" height=\"44\">";
+        String imageContentIdHeader = "<storagehubLogo>";
+        String cleanedHeader = imageContentIdHeader.replaceAll("[<>]", "").trim();
+
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("src=[\"']cid:([^\"']+)[\"']").matcher(htmlWithWrongCid);
+        assertTrue(matcher.find());
+        String htmlCid = matcher.group(1);
+
+        assertThrows(AssertionError.class, () -> {
+            assertEquals(cleanedHeader, htmlCid, "CID mismatch must trigger an assertion error");
+        });
+    }
+
+    private String findInlineContentId(Part part, String expectedMimeType) throws Exception {
+        if (part.isMimeType(expectedMimeType)) {
+            String[] headers = part.getHeader("Content-ID");
+            if (headers != null && headers.length > 0) {
+                return headers[0].trim();
+            }
+        }
+        if (part.isMimeType("multipart/*")) {
+            Multipart mp = (Multipart) part.getContent();
+            for (int i = 0; i < mp.getCount(); i++) {
+                String res = findInlineContentId(mp.getBodyPart(i), expectedMimeType);
+                if (res != null) {
+                    return res;
+                }
+            }
+        }
+        return null;
     }
 
     private boolean containsContentId(Part part, String contentId) throws Exception {
