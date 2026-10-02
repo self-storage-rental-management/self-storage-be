@@ -216,7 +216,9 @@ public class ReservationCreationService {
             snapshot.getReservationDepositAmount(), snapshot.getSecurityDepositAmount(),
             snapshot.getRemainingRentalAmount(), snapshot.getDueAtCheckIn(),
             snapshot.getTotalInitialObligation(), reservation.getTotalGoodsVolumeM3(),
-            reservation.getTotalGoodsWeightKg(), reservation.getHoldExpiresAt(), reservation.getCreatedAt()
+            reservation.getTotalGoodsWeightKg(), reservation.getHoldExpiresAt(), reservation.getCreatedAt(),
+            snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
+            snapshot.getDiscountRate(), snapshot.getDiscountAmount()
         );
     }
 
