@@ -13,7 +13,7 @@ import org.springframework.test.context.ActiveProfiles;
 @SpringBootTest(properties = {
     "app.bootstrap-admin.enabled=true",
     "app.bootstrap-admin.email=bootstrap-admin@storagehub.test",
-    "app.bootstrap-admin.password=bootstrap-password-123",
+    "app.bootstrap-admin.password=Bootstrap-password-123!",
     "app.bootstrap-admin.full-name=Bootstrap Administrator"
 })
 @ActiveProfiles("test")

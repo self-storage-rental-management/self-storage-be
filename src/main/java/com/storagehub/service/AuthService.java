@@ -19,7 +19,9 @@ import com.storagehub.domain.repo.SessionRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorContext;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.security.GoogleIdentityService;
 import com.storagehub.security.JwtService;
+import com.storagehub.security.GoogleIdentityService.GoogleIdentity;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
@@ -44,6 +46,7 @@ public class AuthService {
     private final LoginHistoryService loginHistoryService;
     private final AuditLogService auditLogService;
     private final AuthChallengeService authChallengeService;
+    private final GoogleIdentityService googleIdentityService;
 
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
@@ -85,6 +88,42 @@ public class AuthService {
             throw ApiExceptions.unauthorized("The account is not active");
         }
 
+        return issueSession(user, email, ipAddress, userAgent);
+    }
+
+    @Transactional
+    public AuthResponse loginWithGoogle(String idToken, String ipAddress, String userAgent) {
+        GoogleIdentity identity = googleIdentityService.verify(idToken);
+        User user = userRepository.findByEmailIgnoreCase(identity.email()).orElse(null);
+        if (user == null) {
+            Role customerRole = roleRepository.findByCode(RoleCode.CUSTOMER)
+                .orElseThrow(() -> ApiExceptions.conflict("System roles have not been initialized"));
+            user = new User();
+            user.setEmail(identity.email());
+            user.setPasswordHash(passwordEncoder.encode(UUID.randomUUID().toString()));
+            user.setFullName(limitName(identity.name(), identity.email()));
+            user.setAvatarUrl(limitAvatar(identity.picture()));
+            user.setStatus(UserStatus.ACTIVE);
+            user.setRoles(Set.of(customerRole));
+            user = userRepository.saveAndFlush(user);
+            auditLogService.recordMutation(
+                user,
+                "USER_REGISTERED_GOOGLE",
+                "User",
+                user.getId(),
+                null,
+                null,
+                actorResponseMapper.toResponse(user)
+            );
+        }
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            loginHistoryService.record(user, identity.email(), false, ipAddress, userAgent, "ACCOUNT_NOT_ACTIVE");
+            throw ApiExceptions.unauthorized("The account is not active");
+        }
+        return issueSession(user, identity.email(), ipAddress, userAgent);
+    }
+
+    private AuthResponse issueSession(User user, String email, String ipAddress, String userAgent) {
         Instant now = Instant.now();
         Session session = new Session();
         session.setUser(user);
@@ -112,6 +151,17 @@ public class AuthService {
             actorResponseMapper.toResponse(user),
             refreshToken
         );
+    }
+
+    private String limitName(String name, String email) {
+        String fallback = email.substring(0, email.indexOf('@'));
+        String value = name == null || name.isBlank() ? fallback : name.trim();
+        return value.substring(0, Math.min(value.length(), 160));
+    }
+
+    private String limitAvatar(String picture) {
+        if (picture == null || picture.isBlank() || picture.length() > 2048) return null;
+        return picture;
     }
 
     @Transactional
