@@ -1,4 +1,6 @@
 USE storagehub_local;
+SET NAMES utf8mb4;
+SET CHARACTER SET utf8mb4;
 
 -- 1. Facility
 INSERT INTO facilities (id, created_at, updated_at, code, name, address, city, status)
@@ -65,7 +67,7 @@ VALUES
     '0901112222',
     '$2a$12$Qr0pGit4MR2CN3ETGjVJuuC/V3VmJXtCzt1WYgHSHiCxwQqIi7BQC',
     'ACTIVE', 0
-) ON DUPLICATE KEY UPDATE status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
+) ON DUPLICATE KEY UPDATE full_name=VALUES(full_name), status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
 
 INSERT INTO users (id, created_at, updated_at, email, full_name, phone, password_hash, status, must_change_password)
 VALUES
@@ -77,7 +79,7 @@ VALUES
     '0903334444',
     '$2a$12$Qr0pGit4MR2CN3ETGjVJuuC/V3VmJXtCzt1WYgHSHiCxwQqIi7BQC',
     'ACTIVE', 0
-) ON DUPLICATE KEY UPDATE status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
+) ON DUPLICATE KEY UPDATE full_name=VALUES(full_name), status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
 
 INSERT INTO users (id, created_at, updated_at, email, full_name, phone, password_hash, status, must_change_password)
 VALUES
@@ -89,7 +91,7 @@ VALUES
     '0908889999',
     '$2a$12$Qr0pGit4MR2CN3ETGjVJuuC/V3VmJXtCzt1WYgHSHiCxwQqIi7BQC',
     'ACTIVE', 0
-) ON DUPLICATE KEY UPDATE status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
+) ON DUPLICATE KEY UPDATE full_name=VALUES(full_name), status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
 
 INSERT INTO users (id, created_at, updated_at, email, full_name, phone, password_hash, status, must_change_password)
 VALUES
@@ -101,7 +103,7 @@ VALUES
     '0905556666',
     '$2a$12$Qr0pGit4MR2CN3ETGjVJuuC/V3VmJXtCzt1WYgHSHiCxwQqIi7BQC',
     'ACTIVE', 0
-) ON DUPLICATE KEY UPDATE status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
+) ON DUPLICATE KEY UPDATE full_name=VALUES(full_name), status='ACTIVE', password_hash=VALUES(password_hash), must_change_password=0;
 
 -- 5. User Roles (using email mapping)
 DELETE FROM user_roles WHERE user_id IN (
