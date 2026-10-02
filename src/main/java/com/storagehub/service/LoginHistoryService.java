@@ -42,6 +42,8 @@ public class LoginHistoryService {
             history.setIpAddress(ip);
             String safeUserAgent = (userAgent != null && userAgent.length() > 512) ? userAgent.substring(0, 512) : userAgent;
             history.setUserAgent(safeUserAgent);
+            String fingerprint = com.storagehub.service.email.UserAgentParser.parse(safeUserAgent).fingerprint();
+            history.setDeviceFingerprint(fingerprint);
             history.setFailureReason(failureReason);
             history.setOccurredAt(Instant.now());
             repository.saveAndFlush(history);

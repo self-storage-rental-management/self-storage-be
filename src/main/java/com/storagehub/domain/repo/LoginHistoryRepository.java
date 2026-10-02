@@ -29,6 +29,21 @@ public interface LoginHistoryRepository extends JpaRepository<LoginHistory, UUID
         @Param("userAgent") String userAgent
     );
 
+    @Query("""
+        select count(h) > 0 from LoginHistory h
+        where h.user.id = :userId
+          and h.success = true
+          and ((:deviceFingerprint is null and h.deviceFingerprint is null) or h.deviceFingerprint = :deviceFingerprint)
+        """)
+    boolean existsByUserIdAndSuccessTrueAndDeviceFingerprint(
+        @Param("userId") UUID userId,
+        @Param("deviceFingerprint") String deviceFingerprint
+    );
+
+    List<LoginHistory> findAllByDeviceFingerprintIsNullAndUserAgentIsNotNull();
+
+    List<LoginHistory> findByUserIdAndSuccessTrueAndDeviceFingerprintIsNull(UUID userId);
+
     @EntityGraph(attributePaths = "user")
     List<LoginHistory> findTop5BySuccessFalseOrderByOccurredAtDesc();
 

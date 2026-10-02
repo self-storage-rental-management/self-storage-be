@@ -33,6 +33,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -58,6 +59,9 @@ public class AuthService {
     private final com.storagehub.service.email.EmailService transactionalEmailService;
     private final com.storagehub.domain.repo.LoginHistoryRepository loginHistoryRepository;
     private final com.storagehub.domain.repo.ActivityLogRepository activityLogRepository;
+
+    @Value("${app.security.alert-cooldown-hours:6}")
+    private int alertCooldownHours;
 
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
@@ -180,26 +184,31 @@ public class AuthService {
                 return;
             }
 
-            boolean knownDevice = loginHistoryRepository.existsByUserIdAndSuccessTrueAndUserAgent(user.getId(), userAgent);
-            if (knownDevice) {
-                return;
-            }
+            com.storagehub.service.email.UserAgentParser.ClientInfo clientInfo =
+                com.storagehub.service.email.UserAgentParser.parse(userAgent);
+            String fingerprint = clientInfo.fingerprint();
 
-            Instant sixHoursAgo = Instant.now().minus(6, ChronoUnit.HOURS);
-            boolean recentlyNotified = activityLogRepository.existsByActionAndEntityIdAndCreatedAtAfter(
-                "NEW_LOGIN_EMAIL_SENT",
-                user.getId(),
-                sixHoursAgo
-            );
-            if (recentlyNotified) {
+            boolean knownFingerprint = loginHistoryRepository.existsByUserIdAndSuccessTrueAndDeviceFingerprint(user.getId(), fingerprint);
+            if (!knownFingerprint) {
+                // Check if user has legacy successful logins with null fingerprint whose userAgent matches this fingerprint
+                List<com.storagehub.domain.model.LoginHistory> legacyLogins =
+                    loginHistoryRepository.findByUserIdAndSuccessTrueAndDeviceFingerprintIsNull(user.getId());
+                for (com.storagehub.domain.model.LoginHistory legacy : legacyLogins) {
+                    if (legacy.getUserAgent() != null && com.storagehub.service.email.UserAgentParser.parse(legacy.getUserAgent()).fingerprint().equals(fingerprint)) {
+                        knownFingerprint = true;
+                        legacy.setDeviceFingerprint(fingerprint);
+                        loginHistoryRepository.save(legacy);
+                        break;
+                    }
+                }
+            }
+            if (knownFingerprint) {
                 return;
             }
 
             String loginTime = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
                 .withZone(ZoneId.of("Asia/Ho_Chi_Minh"))
                 .format(Instant.now());
-            com.storagehub.service.email.UserAgentParser.ClientInfo clientInfo =
-                com.storagehub.service.email.UserAgentParser.parse(userAgent);
 
             transactionalEmailService.sendNewLoginNotice(
                 user.getId(),
@@ -233,10 +242,11 @@ public class AuthService {
                 return;
             }
 
+            Instant cooldownStart = Instant.now().minus(alertCooldownHours, ChronoUnit.HOURS);
             boolean alreadyAlerted = activityLogRepository.existsByActionAndEntityIdAndCreatedAtAfter(
                 "SECURITY_ALERT_EMAIL_SENT",
                 user.getId(),
-                windowStart
+                cooldownStart
             );
             if (alreadyAlerted) {
                 return;
