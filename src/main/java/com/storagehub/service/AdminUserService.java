@@ -354,7 +354,7 @@ public class AdminUserService {
         String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
             .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
             .format(Instant.now());
-        emailService.sendAccountCreated(
+        emailService.sendAccountPasswordReset(
             saved.getId(),
             saved.getEmail(),
             saved.getFullName(),

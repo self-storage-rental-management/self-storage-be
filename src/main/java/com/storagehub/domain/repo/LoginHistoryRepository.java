@@ -42,6 +42,8 @@ public interface LoginHistoryRepository extends JpaRepository<LoginHistory, UUID
 
     List<LoginHistory> findAllByDeviceFingerprintIsNullAndUserAgentIsNotNull();
 
+    List<LoginHistory> findByDeviceFingerprintIsNull(Pageable pageable);
+
     List<LoginHistory> findByUserIdAndSuccessTrueAndDeviceFingerprintIsNull(UUID userId);
 
     @EntityGraph(attributePaths = "user")

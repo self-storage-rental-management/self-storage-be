@@ -80,14 +80,35 @@ public class TransactionalEmailService {
 
     @Async
     public void sendAccountCreatedAsync(UUID userId, String toEmail, String fullName, String createdAt, String tempPassword, String loginUrl) {
+        sendAccountCreatedAsync(userId, toEmail, fullName, createdAt, tempPassword, loginUrl, false);
+    }
+
+    @Async
+    public void sendAccountCreatedAsync(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String createdAt,
+        String tempPassword,
+        String loginUrl,
+        boolean isReset
+    ) {
         Map<String, Object> vars = new HashMap<>();
         vars.put("fullName", fullName);
         vars.put("email", toEmail);
         vars.put("createdAt", createdAt);
+        vars.put("resetTime", createdAt);
         vars.put("tempPassword", tempPassword);
         vars.put("loginUrl", loginUrl != null ? loginUrl : emailProperties.getLoginUrl());
+        vars.put("isReset", isReset);
+        vars.put("resetMode", isReset);
 
-        sendInternal(userId, toEmail, "StorageHub - Tài khoản StorageHub của bạn đã được tạo", "account-created", vars, "ACCOUNT_CREATED_EMAIL_SENT");
+        String subject = isReset
+            ? "StorageHub - Mật khẩu StorageHub của bạn đã được đặt lại"
+            : "StorageHub - Tài khoản StorageHub của bạn đã được tạo";
+        String auditAction = isReset ? "ACCOUNT_PASSWORD_RESET_EMAIL_SENT" : "ACCOUNT_CREATED_EMAIL_SENT";
+
+        sendInternal(userId, toEmail, subject, "account-created", vars, auditAction);
     }
 
     @Async
