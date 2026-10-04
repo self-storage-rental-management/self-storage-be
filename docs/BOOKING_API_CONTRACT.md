@@ -185,7 +185,7 @@ Complaint hợp lệ chuyển Reservation sang `PAYMENT_REVIEW`, đặt `reviewD
 
 Ảnh complaint được upload trước bằng `POST /api/files` không gắn entity, sau đó Customer gửi `imageIds` trong request tạo complaint. BE chỉ liên kết file ảnh do đúng Customer upload và chưa thuộc entity khác. Manager queue yêu cầu role `MANAGER|BUSINESS|ADMIN`, permission `view_payments/manage_payments` và facility scope phù hợp.
 
-Ảnh được xem/tải bằng `GET /api/files/{fileId}`. API chỉ cho uploader tải file của mình; với ảnh `PAYMENT_COMPLAINT`, Manager/Admin phải có `view_payments` và đúng facility scope. Không có public file URL.
+Response Complaint vẫn trả `imageIds` để tương thích, đồng thời trả `images[]` gồm tên file, MIME, kích thước và `downloadUrl`. Ảnh được xem/tải bằng `GET /api/files/{fileId}`. API chỉ cho uploader tải file của mình; với ảnh `PAYMENT_COMPLAINT`, Manager/Business/Admin phải có `view_payments` và đúng facility scope. Không có public file URL.
 
 `review-queue` là danh sách tổng hợp: `REVIEW_OVERDUE` trước, Complaint `PENDING` theo `reviewDueAt`, Reservation `PAYMENT_GRACE`, sau đó các Reservation chưa archive theo `createdAt` mới nhất. Response trả `priority` để FE giữ đúng thứ tự nhưng không có physical unit code.
 
