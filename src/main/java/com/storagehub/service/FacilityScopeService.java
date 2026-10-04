@@ -28,8 +28,14 @@ public class FacilityScopeService {
     }
 
     private void assertCanAccess(ActorPrincipal actor, UUID facilityId, FacilityScopeLevel required) {
-        if (actor.hasAnyRole(RoleCode.ADMIN, RoleCode.BUSINESS, RoleCode.CUSTOMER)) {
+        if (actor.hasAnyRole(RoleCode.ADMIN, RoleCode.BUSINESS)) {
             return;
+        }
+        if (actor.hasRole(RoleCode.CUSTOMER)) {
+            if (required == FacilityScopeLevel.READ) {
+                return;
+            }
+            throw ApiExceptions.forbidden("The actor has no required scope for this facility");
         }
 
         FacilityScopeLevel actual = actor.facilityScopes().get(facilityId);
