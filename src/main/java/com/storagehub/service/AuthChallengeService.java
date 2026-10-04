@@ -4,6 +4,7 @@ import com.storagehub.api.auth.AuthChallengeResponse;
 import com.storagehub.api.auth.ForgotPasswordRequest;
 import com.storagehub.api.auth.PasswordResetResponse;
 import com.storagehub.api.auth.ResetPasswordRequest;
+import com.storagehub.api.auth.ResendEmailVerificationRequest;
 import com.storagehub.api.auth.VerifyEmailRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.AuthChallenge;
@@ -30,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthChallengeService {
 
     private static final int MAX_ATTEMPTS = 5;
+    private static final int RESEND_COOLDOWN_SECONDS = 60;
 
     private final AuthChallengeRepository challengeRepository;
     private final UserRepository userRepository;
@@ -49,6 +51,29 @@ public class AuthChallengeService {
         ChallengeIssue issue = issue(user, AuthChallengePurpose.EMAIL_VERIFICATION);
         emailService.sendVerification(user, issue.otp(), issue.token());
         return issue;
+    }
+
+    @Transactional
+    public AuthChallengeResponse resendEmailVerification(ResendEmailVerificationRequest request) {
+        String email = normalizeEmail(request.email());
+        User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
+        if (user == null || user.getStatus() != UserStatus.PENDING_VERIFICATION) {
+            return new AuthChallengeResponse(true, true, null);
+        }
+
+        Instant now = Instant.now();
+        challengeRepository.findTopByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(
+            user.getId(), AuthChallengePurpose.EMAIL_VERIFICATION
+        ).ifPresent(challenge -> {
+            if (challenge.getCreatedAt().plus(RESEND_COOLDOWN_SECONDS, ChronoUnit.SECONDS).isAfter(now)) {
+                throw ApiExceptions.conflict("Please wait 60 seconds before requesting another code");
+            }
+        });
+
+        ChallengeIssue issue = issueEmailVerification(user);
+        auditLogService.recordMutation(user, "EMAIL_VERIFICATION_RESENT", "User", user.getId(), null,
+            null, java.util.Map.of("verificationRequired", true));
+        return new AuthChallengeResponse(true, true, issue.debugCode());
     }
 
     @Transactional

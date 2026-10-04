@@ -62,6 +62,7 @@ public class SecurityConfig {
                     "/api/auth/google",
                     "/api/auth/refresh",
                     "/api/auth/verify-email",
+                    "/api/auth/verify-email/resend",
                     "/api/auth/forgot-password",
                     "/api/auth/reset-password"
                 ).permitAll()
