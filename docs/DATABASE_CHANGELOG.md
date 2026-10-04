@@ -162,3 +162,10 @@ Tạo bảng `payment_complaints` với quan hệ duy nhất tới Reservation, 
 Ảnh chứng minh tiếp tục dùng `file_assets`: Customer upload ảnh chưa liên kết, sau đó gửi các `imageIds`; service kiểm tra ảnh thuộc Customer, đúng MIME ảnh và chưa gắn entity trước khi liên kết `entity_type=PAYMENT_COMPLAINT`.
 
 Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuyển Payment `PAID` và Reservation `CONFIRMED`; reject hoặc Customer withdraw đặt `archived_at` và giải phóng capacity. Scheduler chỉ đánh dấu complaint quá 24 giờ là `REVIEW_OVERDUE`, không tự giải phóng capacity.
+
+## 2026-10-04 — Reservation request fingerprint cho idempotency
+
+- Thêm cột nullable `reservations.request_fingerprint` dài 64 ký tự để lưu SHA-256 của payload tạo Reservation đã chuẩn hóa.
+- Reservation mới luôn lưu fingerprint gồm quote, goods condition, notes và toàn bộ goods items theo thứ tự request.
+- Retry cùng `Idempotency-Key` và cùng payload trả lại Reservation cũ; cùng key nhưng payload khác trả `409 CONFLICT`.
+- Cột giữ nullable để Hibernate `ddl-auto=update` tương thích với dữ liệu local đã tồn tại. Khi retry bản ghi cũ chưa có fingerprint, service tái dựng fingerprint từ Reservation và goods items đã lưu để so sánh.

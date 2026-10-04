@@ -44,6 +44,9 @@ public class Reservation extends BaseEntity {
     @Column(name = "idempotency_key", nullable = false, length = 100)
     private String idempotencyKey;
 
+    @Column(name = "request_fingerprint", length = 64)
+    private String requestFingerprint;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "facility_id", nullable = false)
     private Facility facility;
