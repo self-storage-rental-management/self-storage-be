@@ -3,6 +3,7 @@ package com.storagehub.service;
 import com.storagehub.api.payment.CreatePaymentComplaintRequest;
 import com.storagehub.api.payment.PaymentComplaintDecisionRequest;
 import com.storagehub.api.payment.PaymentComplaintResponse;
+import com.storagehub.api.payment.PaymentComplaintImageResponse;
 import com.storagehub.api.payment.ManagerPaymentQueueItemResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.common.api.ApiExceptions;
@@ -267,6 +268,8 @@ public class PaymentComplaintService {
     private PaymentComplaintResponse toResponse(PaymentComplaint complaint) {
         Reservation reservation = complaint.getReservation();
         var snapshot = snapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        List<FileAsset> images = fileAssetRepository
+            .findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc(FILE_ENTITY_TYPE, complaint.getId());
         return new PaymentComplaintResponse(
             complaint.getId(), reservation.getId(), reservation.getReservationCode(),
             complaint.getCustomer().getId(), reservation.getFacility().getId(),
@@ -276,8 +279,11 @@ public class PaymentComplaintService {
                 .stream().map(this::toGoodsItemResponse).toList(),
             complaint.getStatus(), complaint.getPayment().getStatus(),
             reservation.getStatus(), complaint.getReason(),
-            fileAssetRepository.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc(
-                FILE_ENTITY_TYPE, complaint.getId()).stream().map(FileAsset::getId).toList(),
+            images.stream().map(FileAsset::getId).toList(),
+            images.stream().map(image -> new PaymentComplaintImageResponse(
+                image.getId(), image.getOriginalName(), image.getContentType(), image.getSizeBytes(),
+                "/api/files/" + image.getId()
+            )).toList(),
             complaint.getSubmittedAt(), complaint.getReviewDueAt(), complaint.getReviewedAt(),
             complaint.getWithdrawnAt(), complaint.getDecisionReason()
         );
