@@ -16,6 +16,7 @@ public record PaymentComplaintResponse(
     BigDecimal depositAmount, BigDecimal netRentalAmount,
     List<ReservationGoodsItemResponse> goodsItems, PaymentComplaintStatus status,
     PaymentStatus paymentStatus, ReservationStatus reservationStatus,
-    String reason, List<UUID> imageIds, Instant submittedAt, Instant reviewDueAt,
+    String reason, List<UUID> imageIds, List<PaymentComplaintImageResponse> images,
+    Instant submittedAt, Instant reviewDueAt,
     Instant reviewedAt, Instant withdrawnAt, String decisionReason
 ) {}
