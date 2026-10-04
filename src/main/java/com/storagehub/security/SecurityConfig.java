@@ -62,10 +62,10 @@ public class SecurityConfig {
                     "/api/auth/google",
                     "/api/auth/refresh",
                     "/api/auth/verify-email",
+                    "/api/auth/verify-email/resend",
                     "/api/auth/forgot-password",
                     "/api/auth/reset-password"
                 ).permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/webhooks/payments/**").permitAll()
                 .requestMatchers(
                     "/swagger-ui.html",
                     "/swagger-ui/**",

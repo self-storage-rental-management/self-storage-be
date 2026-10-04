@@ -55,6 +55,16 @@ public class AuthController {
         return new ApiResponse<>(authChallengeService.verifyEmail(request), CorrelationIdContext.current());
     }
 
+    @PostMapping("/verify-email/resend")
+    public ApiResponse<AuthChallengeResponse> resendEmailVerification(
+        @Valid @RequestBody ResendEmailVerificationRequest request
+    ) {
+        return new ApiResponse<>(
+            authChallengeService.resendEmailVerification(request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/forgot-password")
     public ApiResponse<AuthChallengeResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
         return new ApiResponse<>(authChallengeService.requestPasswordReset(request), CorrelationIdContext.current());

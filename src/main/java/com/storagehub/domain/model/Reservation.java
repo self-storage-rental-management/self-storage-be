@@ -8,6 +8,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -17,7 +18,13 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "reservations")
+@Table(
+    name = "reservations",
+    uniqueConstraints = @UniqueConstraint(
+        name = "uk_reservation_customer_idempotency",
+        columnNames = {"customer_id", "idempotency_key"}
+    )
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -29,6 +36,16 @@ public class Reservation extends BaseEntity {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false)
     private User customer;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "source_quote_id", nullable = false)
+    private ReservationQuote sourceQuote;
+
+    @Column(name = "idempotency_key", nullable = false, length = 100)
+    private String idempotencyKey;
+
+    @Column(name = "request_fingerprint", length = 64)
+    private String requestFingerprint;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "facility_id", nullable = false)
@@ -93,6 +110,12 @@ public class Reservation extends BaseEntity {
 
     @Column
     private Instant paymentExpiresAt;
+
+    @Column
+    private Instant complaintExpiresAt;
+
+    @Column
+    private Instant archivedAt;
 
     @Column
     private Instant confirmedAt;
