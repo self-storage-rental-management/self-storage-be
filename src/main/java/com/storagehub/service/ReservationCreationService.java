@@ -23,9 +23,13 @@ import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -54,12 +58,19 @@ public class ReservationCreationService {
     public ReservationResponse create(ActorPrincipal actor, CreateReservationRequest request,
                                       String idempotencyKey) {
         String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
+        String requestFingerprint = requestFingerprint(request);
         Reservation existing = reservationRepository
             .findByCustomer_IdAndIdempotencyKey(actor.userId(), normalizedKey)
             .orElse(null);
         if (existing != null) {
-            if (!existing.getSourceQuote().getId().equals(request.getQuoteId())) {
-                throw ApiExceptions.conflict("Idempotency-Key is already used for another quote");
+            String existingFingerprint = existing.getRequestFingerprint();
+            if (existingFingerprint == null) {
+                existingFingerprint = requestFingerprint(existing,
+                    goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(existing.getId()));
+            }
+            if (!MessageDigest.isEqual(existingFingerprint.getBytes(StandardCharsets.US_ASCII),
+                                       requestFingerprint.getBytes(StandardCharsets.US_ASCII))) {
+                throw ApiExceptions.conflict("Idempotency-Key is already used for a different request");
             }
             ReservationPricingSnapshot existingSnapshot = snapshotRepository
                 .findByReservation_Id(existing.getId())
@@ -105,6 +116,7 @@ public class ReservationCreationService {
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
         reservation.setIdempotencyKey(normalizedKey);
+        reservation.setRequestFingerprint(requestFingerprint);
         reservation.setFacility(quote.getFacility());
         reservation.setUnitType(quote.getUnitType());
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
@@ -238,5 +250,77 @@ public class ReservationCreationService {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    static String requestFingerprint(CreateReservationRequest request) {
+        StringBuilder canonical = new StringBuilder();
+        append(canonical, request.getQuoteId());
+        append(canonical, cleanValue(request.getGoodsCondition()));
+        append(canonical, cleanValue(request.getNotes()));
+        List<GoodsItemRequest> items = request.getGoodsItems();
+        append(canonical, items == null ? null : items.size());
+        if (items != null) {
+            for (GoodsItemRequest item : items) {
+                append(canonical, item.getCategory());
+                append(canonical, cleanValue(item.getCustomGoodsName()));
+                append(canonical, cleanValue(item.getMaterialName()));
+                append(canonical, cleanValue(item.getCustomMaterial()));
+                append(canonical, cleanValue(item.getDescription()));
+                append(canonical, cleanValue(item.getCustomerNote()));
+                append(canonical, item.getQuantity());
+                append(canonical, decimal(item.getLengthCm()));
+                append(canonical, decimal(item.getWidthCm()));
+                append(canonical, decimal(item.getHeightCm()));
+                append(canonical, decimal(item.getWeightPerItemKg()));
+                append(canonical, item.isFragile());
+            }
+        }
+        return sha256(canonical.toString());
+    }
+
+    private static String requestFingerprint(Reservation reservation, List<ReservationGoodsItem> items) {
+        StringBuilder canonical = new StringBuilder();
+        append(canonical, reservation.getSourceQuote().getId());
+        append(canonical, cleanValue(reservation.getGoodsCondition()));
+        append(canonical, cleanValue(reservation.getNotes()));
+        append(canonical, items.size());
+        for (ReservationGoodsItem item : items) {
+            append(canonical, item.getCategory());
+            append(canonical, cleanValue(item.getCustomGoodsName()));
+            append(canonical, cleanValue(item.getMaterialName()));
+            append(canonical, cleanValue(item.getCustomMaterial()));
+            append(canonical, cleanValue(item.getDescription()));
+            append(canonical, cleanValue(item.getCustomerNote()));
+            append(canonical, item.getQuantity());
+            append(canonical, decimal(item.getLengthCm()));
+            append(canonical, decimal(item.getWidthCm()));
+            append(canonical, decimal(item.getHeightCm()));
+            append(canonical, decimal(item.getWeightKg()));
+            append(canonical, item.isFragile());
+        }
+        return sha256(canonical.toString());
+    }
+
+    private static void append(StringBuilder target, Object value) {
+        String text = value == null ? "<null>" : value.toString();
+        target.append(text.length()).append(':').append(text).append('|');
+    }
+
+    private static String cleanValue(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static String decimal(BigDecimal value) {
+        return value == null ? null : value.stripTrailingZeros().toPlainString();
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))
+            );
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is not available", exception);
+        }
     }
 }
