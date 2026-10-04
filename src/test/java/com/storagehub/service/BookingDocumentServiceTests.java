@@ -126,6 +126,43 @@ class BookingDocumentServiceTests {
     }
 
     @Test
+    void generatesPdfWithHistoricalDiscountSnapshotEvenWhenPolicyIsChanged() throws Exception {
+        snapshot.setRentalMonths(3);
+        snapshot.setGrossRentalAmount(new BigDecimal("7500000.00"));
+        snapshot.setPricingPackageCode("PKG-3M");
+        snapshot.setDiscountRate(new BigDecimal("0.0500"));
+        snapshot.setDiscountAmount(new BigDecimal("375000.00"));
+        snapshot.setNetRentalAmount(new BigDecimal("7125000.00"));
+
+        AtomicReference<Path> storedPath = new AtomicReference<>();
+        when(documentRepository.findByReservation_IdAndReservation_Customer_Id(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.empty());
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(snapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
+        when(fileAssetRepository.saveAndFlush(any(FileAsset.class))).thenAnswer(invocation -> {
+            FileAsset asset = invocation.getArgument(0);
+            storedPath.set(Path.of(asset.getStorageKey()));
+            ReflectionTestUtils.setField(asset, "id", UUID.randomUUID());
+            ReflectionTestUtils.setField(asset, "createdAt", Instant.now());
+            return asset;
+        });
+        when(documentRepository.saveAndFlush(any(BookingDocument.class))).thenAnswer(invocation -> {
+            BookingDocument document = invocation.getArgument(0);
+            ReflectionTestUtils.setField(document, "id", UUID.randomUUID());
+            return document;
+        });
+
+        var response = service.generate(actor, reservation.getId());
+
+        assertThat(response).isNotNull();
+        String pdfContent = new String(Files.readAllBytes(storedPath.get()));
+        assertThat(pdfContent).contains("PKG-3M");
+        assertThat(pdfContent).contains("Discount rate applied: 5%");
+        assertThat(pdfContent).contains("Discount savings: -375000.00 VND");
+    }
+
+    @Test
     void returnsExistingDocumentWithoutGeneratingAnotherFile() {
         FileAsset asset = new FileAsset();
         ReflectionTestUtils.setField(asset, "id", UUID.randomUUID());
