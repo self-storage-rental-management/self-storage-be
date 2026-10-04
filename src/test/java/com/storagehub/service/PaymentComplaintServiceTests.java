@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
 
@@ -97,12 +98,17 @@ class PaymentComplaintServiceTests {
         FileAsset image = entity(new FileAsset());
         image.setUploadedBy(customer);
         image.setContentType("image/png");
+        image.setOriginalName("receipt.png");
+        image.setSizeBytes(128);
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), customer.getId()))
             .thenReturn(Optional.of(reservation));
         when(complaintRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.empty());
         when(paymentRepository.findReservationPaymentsForUpdate(reservation.getId(), PaymentType.RESERVATION_DEPOSIT))
             .thenReturn(List.of(payment));
         when(fileAssetRepository.findAllById(List.of(image.getId()))).thenReturn(List.of(image));
+        when(fileAssetRepository.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc(
+            eq("PAYMENT_COMPLAINT"), any()
+        )).thenReturn(List.of(image));
         when(complaintRepository.saveAndFlush(any())).thenAnswer(inv -> entity(inv.getArgument(0)));
 
         var response = service.submit(customerActor, reservation.getId(),
@@ -111,6 +117,10 @@ class PaymentComplaintServiceTests {
         assertThat(response.status()).isEqualTo(PaymentComplaintStatus.PENDING);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.PAYMENT_REVIEW);
         assertThat(image.getEntityType()).isEqualTo("PAYMENT_COMPLAINT");
+        assertThat(response.images()).singleElement().satisfies(item -> {
+            assertThat(item.id()).isEqualTo(image.getId());
+            assertThat(item.downloadUrl()).isEqualTo("/api/files/" + image.getId());
+        });
     }
 
     @Test
