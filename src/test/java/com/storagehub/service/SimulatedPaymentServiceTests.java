@@ -1,12 +1,15 @@
 package com.storagehub.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.config.PaymentProperties;
+import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentSimulationOutcome;
@@ -124,5 +127,18 @@ class SimulatedPaymentServiceTests {
 
         assertThat(response.paymentStatus()).isEqualTo(PaymentStatus.NOT_RECEIVED);
         assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
+    }
+
+    @Test
+    void preventsPayingReservationOwnedByAnotherCustomer() {
+        reset(paymentRepository, reservationRepository, snapshotRepository, userRepository, auditLogService);
+        ActorPrincipal otherCustomer = new ActorPrincipal(
+            UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()
+        );
+
+        assertThatThrownBy(() -> service.pay(otherCustomer, reservation.getId(), "ownership-test"))
+            .isInstanceOf(ApiException.class)
+            .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(404))
+            .hasMessage("Reservation was not found");
     }
 }

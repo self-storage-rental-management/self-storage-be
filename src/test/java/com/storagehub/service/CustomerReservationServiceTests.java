@@ -227,6 +227,19 @@ class CustomerReservationServiceTests {
             .hasMessage("Reservation was not found");
     }
 
+    @Test
+    void preventsCancellingReservationOwnedByAnotherCustomer() {
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.cancel(
+            actor, reservation.getId(), new CancelReservationRequest("Ownership security test")
+        ))
+            .isInstanceOf(ApiException.class)
+            .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(404))
+            .hasMessage("Reservation was not found");
+    }
+
     private <T> T entityWithId(T entity) {
         ReflectionTestUtils.setField(entity, "id", UUID.randomUUID());
         return entity;
