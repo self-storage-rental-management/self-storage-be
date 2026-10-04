@@ -123,9 +123,10 @@ public class ReservationQuoteService {
         return new ReservationQuoteResponse(
             quote.getId(), quote.getFacility().getId(), quote.getUnitType().getId(),
             quote.getStartDate(), quote.getEndDate(), quote.getRentalMonths(),
-            quote.getMonthlyPrice(), quote.getSubtotal(), quote.getDiscountRate(),
-            quote.getDiscountAmount(), quote.getTotalAfterDiscount(), quote.getReservationDepositAmount(),
-            quote.getSecurityDepositAmount(), quote.getRemainingRentalAmount(), quote.getDueAtCheckIn(),
+            quote.getMonthlyPrice(), quote.getSubtotal(), quote.getPricingPackageCode(),
+            quote.getDiscountRate(), quote.getDiscountAmount(), quote.getTotalAfterDiscount(),
+            quote.getReservationDepositAmount(), quote.getSecurityDepositAmount(),
+            quote.getRemainingRentalAmount(), quote.getDueAtCheckIn(),
             quote.getTotalInitialObligation(),
             quote.getPolicyVersion(), quote.getQuotedAt(), quote.getExpiresAt()
         );

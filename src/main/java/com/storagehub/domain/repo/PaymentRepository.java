@@ -39,4 +39,13 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
         @Param("reservationId") UUID reservationId,
         @Param("purpose") PaymentType purpose
     );
+
+    @Query("""
+        select p from Payment p
+        where p.status = com.storagehub.domain.model.PaymentStatus.PAID
+          and (:facilityId is null or p.reservation.facility.id = :facilityId)
+        """)
+    List<Payment> findPaidPaymentsByFacility(@Param("facilityId") UUID facilityId);
+
+    List<Payment> findByStatus(com.storagehub.domain.model.PaymentStatus status);
 }

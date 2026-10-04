@@ -40,8 +40,8 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ApiErrorResponse> handleUnreadableBody() {
-        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "Request body is malformed", null);
+    public ResponseEntity<ApiErrorResponse> handleUnreadableBody(HttpMessageNotReadableException exception) {
+        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "Request body is malformed: " + (exception.getCause() != null ? exception.getCause().getMessage() : exception.getMessage()), null);
     }
 
     @ExceptionHandler({
