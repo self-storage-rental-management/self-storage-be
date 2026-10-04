@@ -20,8 +20,10 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,10 +40,20 @@ public class AuthChallengeService {
     private final SessionRepository sessionRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
-    private final AuthEmailService emailService;
+    private final com.storagehub.service.email.EmailService transactionalEmailService;
     private final ActorResponseMapper actorResponseMapper;
     private final AuditLogService auditLogService;
+    private final Environment environment;
     private final SecureRandom secureRandom = new SecureRandom();
+
+    @Value("${app.auth.verification-url:http://localhost:5173/?verifyEmail=}")
+    private String verificationUrl;
+
+    @Value("${app.auth.password-reset-url:http://localhost:5173/?resetPassword=}")
+    private String passwordResetUrl;
+
+    @Value("${app.auth.challenge-expiry-minutes:15}")
+    private int expiryMinutes;
 
     @Value("${app.auth.expose-development-code:false}")
     private boolean exposeDevelopmentCode;
@@ -49,7 +61,13 @@ public class AuthChallengeService {
     @Transactional
     public ChallengeIssue issueEmailVerification(User user) {
         ChallengeIssue issue = issue(user, AuthChallengePurpose.EMAIL_VERIFICATION);
-        emailService.sendVerification(user, issue.otp(), issue.token());
+        transactionalEmailService.sendVerifyEmail(
+            user.getId(),
+            user.getEmail(),
+            user.getFullName(),
+            verificationUrl + issue.token(),
+            expiryMinutes
+        );
         return issue;
     }
 
@@ -84,7 +102,13 @@ public class AuthChallengeService {
             return new AuthChallengeResponse(true, true, null);
         }
         ChallengeIssue issue = issue(user, AuthChallengePurpose.PASSWORD_RESET);
-        emailService.sendPasswordReset(user, issue.otp(), issue.token());
+        transactionalEmailService.sendPasswordReset(
+            user.getId(),
+            user.getEmail(),
+            user.getFullName(),
+            passwordResetUrl + issue.token(),
+            expiryMinutes
+        );
         return new AuthChallengeResponse(true, true, issue.debugCode());
     }
 
@@ -137,6 +161,22 @@ public class AuthChallengeService {
         sessionRepository.revokeActiveByUserId(saved.getId(), Instant.now());
         auditLogService.recordMutation(saved, "PASSWORD_RESET", "User", saved.getId(), null,
             java.util.Map.of("passwordChanged", false), java.util.Map.of("passwordChanged", true));
+        String changeTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+            .format(Instant.now());
+        transactionalEmailService.sendAccountChanged(
+            saved.getId(),
+            saved.getEmail(),
+            saved.getFullName(),
+            changeTime,
+            "Mật khẩu",
+            "••••••••",
+            "••••••••",
+            false,
+            "Không xác định",
+            "Không xác định",
+            null
+        );
         return new PasswordResetResponse(true);
     }
 
@@ -153,7 +193,14 @@ public class AuthChallengeService {
         challenge.setExpiresAt(now.plus(15, ChronoUnit.MINUTES));
         challenge.setFailedAttempts(0);
         challengeRepository.saveAndFlush(challenge);
-        return new ChallengeIssue(otp, token, exposeDevelopmentCode ? otp : null);
+        boolean allowDebugCode = exposeDevelopmentCode && isDevOrLocal();
+        return new ChallengeIssue(otp, token, allowDebugCode ? otp : null);
+    }
+
+    private boolean isDevOrLocal() {
+        if (environment == null) return false;
+        return Arrays.stream(environment.getActiveProfiles())
+            .anyMatch(p -> p.equalsIgnoreCase("dev") || p.equalsIgnoreCase("local"));
     }
 
     private AuthChallenge latest(User user, AuthChallengePurpose purpose) {
