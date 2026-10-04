@@ -15,6 +15,37 @@ public interface LoginHistoryRepository extends JpaRepository<LoginHistory, UUID
 
     long countByEmailAttemptedAndSuccessFalseAndOccurredAtAfter(String emailAttempted, Instant occurredAt);
 
+    @Query("select count(h) > 0 from LoginHistory h where h.user.id = :userId and h.success = true")
+    boolean existsByUserIdAndSuccessTrue(@Param("userId") UUID userId);
+
+    @Query("""
+        select count(h) > 0 from LoginHistory h
+        where h.user.id = :userId
+          and h.success = true
+          and ((:userAgent is null and h.userAgent is null) or h.userAgent = :userAgent)
+        """)
+    boolean existsByUserIdAndSuccessTrueAndUserAgent(
+        @Param("userId") UUID userId,
+        @Param("userAgent") String userAgent
+    );
+
+    @Query("""
+        select count(h) > 0 from LoginHistory h
+        where h.user.id = :userId
+          and h.success = true
+          and ((:deviceFingerprint is null and h.deviceFingerprint is null) or h.deviceFingerprint = :deviceFingerprint)
+        """)
+    boolean existsByUserIdAndSuccessTrueAndDeviceFingerprint(
+        @Param("userId") UUID userId,
+        @Param("deviceFingerprint") String deviceFingerprint
+    );
+
+    List<LoginHistory> findAllByDeviceFingerprintIsNullAndUserAgentIsNotNull();
+
+    List<LoginHistory> findByDeviceFingerprintIsNull(Pageable pageable);
+
+    List<LoginHistory> findByUserIdAndSuccessTrueAndDeviceFingerprintIsNull(UUID userId);
+
     @EntityGraph(attributePaths = "user")
     List<LoginHistory> findTop5BySuccessFalseOrderByOccurredAtDesc();
 

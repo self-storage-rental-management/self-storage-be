@@ -51,4 +51,16 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> 
 
     @EntityGraph(attributePaths = {"actor", "facility"})
     List<ActivityLog> findByActionIn(Collection<String> actions, Pageable pageable);
+
+    @Query("""
+        select count(log) > 0 from ActivityLog log
+        where log.action = :action
+          and log.entityId = :entityId
+          and log.createdAt >= :since
+        """)
+    boolean existsByActionAndEntityIdAndCreatedAtAfter(
+        @Param("action") String action,
+        @Param("entityId") UUID entityId,
+        @Param("since") java.time.Instant since
+    );
 }

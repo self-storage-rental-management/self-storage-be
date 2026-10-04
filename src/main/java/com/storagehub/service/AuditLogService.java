@@ -67,7 +67,7 @@ public class AuditLogService {
         log.setBeforeStateJson(toJson(beforeState));
         log.setAfterStateJson(toJson(afterState));
         log.setCorrelationId(CorrelationIdContext.current());
-        return activityLogRepository.save(log);
+        return activityLogRepository.saveAndFlush(log);
     }
 
     private String toJson(Object state) {
