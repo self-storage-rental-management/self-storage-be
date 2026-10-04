@@ -31,6 +31,25 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> 
     );
 
     @EntityGraph(attributePaths = {"actor", "facility"})
+    @Query("""
+        select log from ActivityLog log
+        left join log.actor actor
+        where (:facilityId is null or log.facility.id = :facilityId)
+          and (:search is null
+            or lower(log.action) like lower(concat('%', :search, '%'))
+            or lower(log.entityType) like lower(concat('%', :search, '%'))
+            or lower(coalesce(actor.fullName, '')) like lower(concat('%', :search, '%'))
+            or lower(coalesce(actor.email, '')) like lower(concat('%', :search, '%')))
+          and (:entityType is null or log.entityType = :entityType)
+        """)
+    Page<ActivityLog> searchFacilityActivities(
+        @Param("facilityId") UUID facilityId,
+        @Param("search") String search,
+        @Param("entityType") String entityType,
+        Pageable pageable
+    );
+
+    @EntityGraph(attributePaths = {"actor", "facility"})
     List<ActivityLog> findByActionIn(Collection<String> actions, Pageable pageable);
 
     @Query("""

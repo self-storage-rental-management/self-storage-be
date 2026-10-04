@@ -2,6 +2,7 @@ package com.storagehub.service;
 
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.Reservation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.MailException;
@@ -58,6 +59,16 @@ public class AuthEmailService {
                 + "CÁCH 2 - Nhập mã thủ công:\n"
                 + "Nhập mã 6 chữ số này tại màn hình khôi phục tài khoản: " + otp + "\n\n"
                 + "Liên kết và mã hết hạn sau 15 phút. Nếu bạn không yêu cầu, hãy bỏ qua email này."
+        );
+    }
+
+    public void sendReservationVerification(Reservation reservation, String otp) {
+        send(
+            reservation.getCustomer().getEmail(),
+            "StorageHub - Xác minh đơn đặt kho " + reservation.getReservationCode(),
+            "Mã xác minh đơn đặt kho của bạn là: " + otp + "\n\n"
+                + "Mã đơn: " + reservation.getReservationCode() + "\n"
+                + "Mã hết hạn sau 10 phút. Nếu bạn không tạo đơn này, hãy liên hệ StorageHub."
         );
     }
 

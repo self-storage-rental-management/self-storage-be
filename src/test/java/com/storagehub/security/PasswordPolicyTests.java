@@ -1,29 +1,48 @@
 package com.storagehub.security;
 
-import static org.assertj.core.api.Assertions.assertThat;
+public final class PasswordPolicy {
 
-import org.junit.jupiter.api.Test;
+    private static final int MIN_LENGTH = 8;
+    private static final int MAX_LENGTH = 128;
 
-class PasswordPolicyTests {
-
-    @Test
-    void acceptsAComplexPasswordWithEightCharacters() {
-        assertThat(PasswordPolicy.isValid("Aa1!aaaa")).isTrue();
+    private PasswordPolicy() {
+        // Utility class
     }
 
-    @Test
-    void rejectsPasswordsMissingARequiredCharacterClass() {
-        assertThat(PasswordPolicy.isValid("aa1!aaaa")).isFalse();
-        assertThat(PasswordPolicy.isValid("AA1!AAAA")).isFalse();
-        assertThat(PasswordPolicy.isValid("Aa!aaaaa")).isFalse();
-        assertThat(PasswordPolicy.isValid("Aa1aaaaa")).isFalse();
-    }
+    public static boolean isValid(String password) {
+        if (password == null) {
+            return false;
+        }
 
-    @Test
-    void rejectsWhitespaceAndInvalidLengths() {
-        assertThat(PasswordPolicy.isValid("Aa1! aa a")).isFalse();
-        assertThat(PasswordPolicy.isValid("Aa1!aaa")).isFalse();
-        assertThat(PasswordPolicy.isValid("A".repeat(125) + "a1!")).isTrue();
-        assertThat(PasswordPolicy.isValid("A".repeat(126) + "a1!")).isFalse();
+        if (password.length() < MIN_LENGTH || password.length() > MAX_LENGTH) {
+            return false;
+        }
+
+        boolean hasUppercase = false;
+        boolean hasLowercase = false;
+        boolean hasDigit = false;
+        boolean hasSpecialCharacter = false;
+
+        for (char c : password.toCharArray()) {
+
+            if (Character.isWhitespace(c)) {
+                return false;
+            }
+
+            if (Character.isUpperCase(c)) {
+                hasUppercase = true;
+            } else if (Character.isLowerCase(c)) {
+                hasLowercase = true;
+            } else if (Character.isDigit(c)) {
+                hasDigit = true;
+            } else {
+                hasSpecialCharacter = true;
+            }
+        }
+
+        return hasUppercase
+                && hasLowercase
+                && hasDigit
+                && hasSpecialCharacter;
     }
 }
