@@ -126,6 +126,86 @@ class ReservationEmailVerificationServiceTests {
     }
 
     @Test
+    void rejectsExpiredCode() {
+        verification.setExpiresAt(Instant.now().minusSeconds(1));
+        mockOwnedReservation();
+        when(verificationRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(verification));
+
+        assertThatThrownBy(() -> service.verify(
+            actor, reservation.getId(), new ReservationEmailVerificationRequest("123456")
+        ))
+            .isInstanceOf(ApiException.class)
+            .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(401))
+            .hasMessageContaining("invalid or expired");
+    }
+
+    @Test
+    void rejectsCodeAfterFiveFailedAttempts() {
+        verification.setFailedAttempts(5);
+        mockOwnedReservation();
+        when(verificationRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(verification));
+
+        assertThatThrownBy(() -> service.verify(
+            actor, reservation.getId(), new ReservationEmailVerificationRequest("123456")
+        ))
+            .isInstanceOf(ApiException.class)
+            .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(401))
+            .hasMessageContaining("invalid or expired");
+    }
+
+    @Test
+    void rejectsReusingCodeAfterSuccessfulVerification() {
+        reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);
+        verification.setVerifiedAt(Instant.now().minusSeconds(1));
+        mockOwnedReservation();
+
+        assertThatThrownBy(() -> service.verify(
+            actor, reservation.getId(), new ReservationEmailVerificationRequest("123456")
+        ))
+            .isInstanceOf(ApiException.class)
+            .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(409))
+            .hasMessage("Reservation is not waiting for email verification");
+    }
+
+    @Test
+    void rejectsResendDuringCooldown() {
+        verification.setLastSentAt(Instant.now().minusSeconds(10));
+        mockOwnedReservation();
+        when(verificationRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(verification));
+
+        assertThatThrownBy(() -> service.resend(actor, reservation.getId()))
+            .isInstanceOf(ApiException.class)
+            .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(409))
+            .hasMessage("Please wait 60 seconds before requesting another code");
+    }
+
+    @Test
+    void invalidatesOldCodeAfterResend() {
+        mockOwnedReservation();
+        when(verificationRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(verification));
+        when(jwtService.hash(any())).thenAnswer(invocation -> {
+            String value = invocation.getArgument(0);
+            return "123456".equals(value) ? "old-hash" : "new-hash";
+        });
+        when(verificationRepository.saveAndFlush(any(ReservationEmailVerification.class)))
+            .thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.resend(actor, reservation.getId());
+        assertThat(verification.getOtpHash()).isEqualTo("new-hash");
+
+        assertThatThrownBy(() -> service.verify(
+            actor, reservation.getId(), new ReservationEmailVerificationRequest("123456")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("invalid or expired");
+        assertThat(verification.getFailedAttempts()).isEqualTo(1);
+    }
+
+    @Test
     void createsAndSendsNewCode() {
         mockOwnedReservation();
         when(verificationRepository.findByReservation_Id(reservation.getId()))
