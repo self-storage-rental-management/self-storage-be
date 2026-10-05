@@ -55,24 +55,6 @@ public class ReservationCapacityService {
         }
     }
 
-    public void requireNoCustomerOverlappingHold(
-        UUID customerId,
-        UUID facilityId,
-        UUID unitTypeId,
-        LocalDate startDate,
-        LocalDate endDate
-    ) {
-        long existingHolds = reservationRepository.countCustomerOverlappingCapacityHolds(
-            customerId, facilityId, unitTypeId, startDate, endDate, Instant.now(),
-            TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES
-        );
-        if (existingHolds > 0) {
-            throw ApiExceptions.conflict(
-                "You already have an active reservation for this unit type and rental period"
-            );
-        }
-    }
-
     public long availableCount(
         UUID facilityId,
         UUID unitTypeId,

@@ -104,11 +104,6 @@ public class ReservationCreationService {
             quote.getFacility().getId(), quote.getUnitType().getId(),
             quote.getStartDate(), quote.getEndDate()
         );
-        capacityService.requireNoCustomerOverlappingHold(
-            actor.userId(), quote.getFacility().getId(), quote.getUnitType().getId(),
-            quote.getStartDate(), quote.getEndDate()
-        );
-
         Instant now = Instant.now();
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
