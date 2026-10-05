@@ -14,7 +14,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import jakarta.persistence.LockModeType;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -35,9 +34,6 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         @Param("customerId") UUID customerId
     );
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select reservation from Reservation reservation where reservation.id = :id")
-    Optional<Reservation> findByIdForUpdate(@Param("id") UUID id);
     Optional<Reservation> findByCustomer_IdAndIdempotencyKey(UUID customerId, String idempotencyKey);
     long countByCustomer_IdAndCreatedAtAfter(UUID customerId, Instant createdAfter);
     List<Reservation> findAllByCustomer_IdAndStatusOrderByCreatedAtDesc(UUID customerId, ReservationStatus status);
