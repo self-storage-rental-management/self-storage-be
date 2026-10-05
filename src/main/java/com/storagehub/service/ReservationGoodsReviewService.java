@@ -33,7 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ReservationGoodsReviewService {
 
-    private static final int PAYMENT_HOLD_MINUTES = 10;
+    private static final int PAYMENT_HOLD_HOURS = 24;
 
     private final ReservationRepository reservationRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
@@ -125,7 +125,7 @@ public class ReservationGoodsReviewService {
     ) {
         reservation.setGoodsReviewStatus(GoodsReviewStatus.APPROVED);
         reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);
-        Instant paymentDueAt = now.plus(PAYMENT_HOLD_MINUTES, ChronoUnit.MINUTES);
+        Instant paymentDueAt = now.plus(PAYMENT_HOLD_HOURS, ChronoUnit.HOURS);
         reservation.setPaymentExpiresAt(paymentDueAt);
         reservation.setHoldExpiresAt(paymentDueAt);
         for (ReservationGoodsItem item : items) {
