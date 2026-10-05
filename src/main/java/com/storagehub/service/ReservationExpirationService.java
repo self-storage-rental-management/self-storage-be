@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +33,9 @@ public class ReservationExpirationService {
     private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
     private final AuditLogService auditLogService;
+
+    @Value("${app.reservation.complaint-window-minutes:30}")
+    private long complaintWindowMinutes = 30;
 
     @Transactional
     public int expireDueReservations() {
@@ -78,7 +82,9 @@ public class ReservationExpirationService {
         reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
         Instant paymentDeadline = reservation.getPaymentExpiresAt() == null
             ? now : reservation.getPaymentExpiresAt();
-        reservation.setComplaintExpiresAt(paymentDeadline.plus(java.time.Duration.ofMinutes(30)));
+        reservation.setComplaintExpiresAt(
+            paymentDeadline.plus(java.time.Duration.ofMinutes(complaintWindowMinutes))
+        );
         reservationRepository.saveAndFlush(reservation);
         auditLogService.recordMutation(
             null, "RESERVATION_PAYMENT_GRACE_STARTED", "Reservation", reservation.getId(),
