@@ -35,7 +35,6 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     );
 
     Optional<Reservation> findByCustomer_IdAndIdempotencyKey(UUID customerId, String idempotencyKey);
-    long countByCustomer_IdAndCreatedAtAfter(UUID customerId, Instant createdAfter);
     List<Reservation> findAllByCustomer_IdAndStatusOrderByCreatedAtDesc(UUID customerId, ReservationStatus status);
     Page<Reservation> findAllByCustomer_Id(UUID customerId, Pageable pageable);
     Page<Reservation> findAllByCustomer_IdAndArchivedAtIsNull(UUID customerId, Pageable pageable);
