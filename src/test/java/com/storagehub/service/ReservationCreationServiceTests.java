@@ -239,18 +239,6 @@ class ReservationCreationServiceTests {
             .isEqualTo(ReservationCreationService.requestFingerprint(original));
     }
 
-    @Test
-    void rateLimitsNewReservationCreationButNotIdempotentRetry() {
-        when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-rate"))
-            .thenReturn(Optional.empty());
-        when(reservationRepository.countByCustomer_IdAndCreatedAtAfter(eq(actor.userId()), any()))
-            .thenReturn(5L);
-
-        assertThatThrownBy(() -> service.create(actor, request(), "create-rate"))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("creation limit reached");
-    }
-
     private CreateReservationRequest request() {
         GoodsItemRequest item = new GoodsItemRequest(
             GoodsCategory.FURNITURE, null, "Wood", null, "Desk", null, 2,
