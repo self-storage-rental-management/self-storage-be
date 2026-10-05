@@ -34,7 +34,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,9 +43,6 @@ public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
-    @Value("${app.reservation.max-creations-per-hour:5}")
-    private long maxReservationsPerHour = 5;
-
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
@@ -78,12 +74,6 @@ public class ReservationCreationService {
                 .findByReservation_Id(existing.getId())
                 .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
             return toResponse(existing, existingSnapshot);
-        }
-
-        if (reservationRepository.countByCustomer_IdAndCreatedAtAfter(
-            actor.userId(), Instant.now().minus(1, ChronoUnit.HOURS)
-        ) >= maxReservationsPerHour) {
-            throw ApiExceptions.conflict("Reservation creation limit reached; please try again later");
         }
 
         ReservationQuote quote = quoteRepository.findByIdAndCustomer_Id(request.getQuoteId(), actor.userId())
