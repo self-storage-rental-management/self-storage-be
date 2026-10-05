@@ -80,39 +80,6 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     );
 
     @Query("""
-        select count(reservation) from Reservation reservation
-        where reservation.customer.id = :customerId
-          and reservation.facility.id = :facilityId
-          and reservation.unitType.id = :unitTypeId
-          and reservation.assignedUnit is null
-          and reservation.startDate < :endDate
-          and reservation.endDate > :startDate
-          and (
-            reservation.status in :permanentStatuses
-            or (
-              reservation.status in :temporaryStatuses
-              and (
-                (reservation.status = com.storagehub.domain.model.ReservationStatus.PAYMENT_GRACE
-                  and reservation.complaintExpiresAt > :now)
-                or
-                (reservation.status <> com.storagehub.domain.model.ReservationStatus.PAYMENT_GRACE
-                  and reservation.holdExpiresAt > :now)
-              )
-            )
-          )
-        """)
-    long countCustomerOverlappingCapacityHolds(
-        @Param("customerId") UUID customerId,
-        @Param("facilityId") UUID facilityId,
-        @Param("unitTypeId") UUID unitTypeId,
-        @Param("startDate") LocalDate startDate,
-        @Param("endDate") LocalDate endDate,
-        @Param("now") Instant now,
-        @Param("temporaryStatuses") java.util.Collection<ReservationStatus> temporaryStatuses,
-        @Param("permanentStatuses") java.util.Collection<ReservationStatus> permanentStatuses
-    );
-
-    @Query("""
         select reservation from Reservation reservation
         where reservation.status = com.storagehub.domain.model.ReservationStatus.AWAITING_REVIEW
           and reservation.goodsReviewStatus = com.storagehub.domain.model.GoodsReviewStatus.PENDING
