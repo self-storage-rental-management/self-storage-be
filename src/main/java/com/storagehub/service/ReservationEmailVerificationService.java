@@ -32,7 +32,6 @@ public class ReservationEmailVerificationService {
     private static final int OTP_VALID_MINUTES = 10;
     private static final int RESEND_COOLDOWN_SECONDS = 60;
     private static final int REVIEW_HOLD_HOURS = 24;
-    private static final int PAYMENT_HOLD_HOURS = 24;
 
     private final ReservationRepository reservationRepository;
     private final ReservationEmailVerificationRepository verificationRepository;
@@ -43,6 +42,9 @@ public class ReservationEmailVerificationService {
 
     @Value("${app.auth.expose-development-code:false}")
     private boolean exposeDevelopmentCode;
+
+    @Value("${app.reservation.payment-window-minutes:1440}")
+    private long paymentWindowMinutes = 1440;
 
     @Transactional
     public ReservationEmailVerificationResponse resend(
@@ -116,7 +118,7 @@ public class ReservationEmailVerificationService {
             reservation.setGoodsReviewDueAt(reviewDueAt);
             reservation.setHoldExpiresAt(reviewDueAt);
         } else {
-            Instant paymentDueAt = now.plus(PAYMENT_HOLD_HOURS, ChronoUnit.HOURS);
+            Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
             reservation.setPaymentExpiresAt(paymentDueAt);
             reservation.setHoldExpiresAt(paymentDueAt);
         }
