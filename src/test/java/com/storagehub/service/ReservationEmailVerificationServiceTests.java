@@ -20,6 +20,7 @@ import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.security.JwtService;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -91,6 +92,9 @@ class ReservationEmailVerificationServiceTests {
         assertThat(response.isVerified()).isTrue();
         assertThat(response.getReservationStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
         assertThat(verification.getVerifiedAt()).isNotNull();
+        assertThat(reservation.getPaymentExpiresAt()).isBetween(
+            Instant.now().plus(23, ChronoUnit.HOURS), Instant.now().plus(25, ChronoUnit.HOURS)
+        );
         verify(reservationRepository).saveAndFlush(reservation);
     }
 

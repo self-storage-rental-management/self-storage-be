@@ -32,6 +32,7 @@ public class ReservationEmailVerificationService {
     private static final int OTP_VALID_MINUTES = 10;
     private static final int RESEND_COOLDOWN_SECONDS = 60;
     private static final int REVIEW_HOLD_HOURS = 24;
+    private static final int PAYMENT_HOLD_HOURS = 24;
 
     private final ReservationRepository reservationRepository;
     private final ReservationEmailVerificationRepository verificationRepository;
@@ -114,6 +115,10 @@ public class ReservationEmailVerificationService {
             reservation.setGoodsReviewSubmittedAt(now);
             reservation.setGoodsReviewDueAt(reviewDueAt);
             reservation.setHoldExpiresAt(reviewDueAt);
+        } else {
+            Instant paymentDueAt = now.plus(PAYMENT_HOLD_HOURS, ChronoUnit.HOURS);
+            reservation.setPaymentExpiresAt(paymentDueAt);
+            reservation.setHoldExpiresAt(paymentDueAt);
         }
         verificationRepository.saveAndFlush(verification);
         reservationRepository.saveAndFlush(reservation);
