@@ -129,7 +129,8 @@ public class ReservationCreationService {
         reservation.setTotalGoodsVolumeM3(compatibility.getTotalGoodsVolumeM3());
         reservation.setTotalGoodsWeightKg(compatibility.getTotalGoodsWeightKg());
         reservation.setHoldExpiresAt(now.plus(HOLD_MINUTES, ChronoUnit.MINUTES));
-        reservation.setPaymentExpiresAt(now.plus(HOLD_MINUTES, ChronoUnit.MINUTES));
+        // The payment window starts only after email verification (and goods review, when required).
+        reservation.setPaymentExpiresAt(null);
         reservation.setNotes(clean(request.getNotes()));
         Reservation saved = reservationRepository.saveAndFlush(reservation);
 
