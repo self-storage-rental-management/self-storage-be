@@ -12,6 +12,7 @@ import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.PaymentComplaintRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
@@ -35,6 +36,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 class FileStorageServiceTests {
 
     @Mock FileAssetRepository fileAssetRepository;
+    @Mock CheckInRepository checkInRepository;
     @Mock ReservationGoodsItemRepository goodsItemRepository;
     @Mock UserRepository userRepository;
     @Mock PaymentComplaintRepository paymentComplaintRepository;
@@ -54,7 +56,7 @@ class FileStorageServiceTests {
         FileProperties properties = new FileProperties();
         properties.setStoragePath(temporaryDirectory.toString());
         service = new FileStorageService(
-            properties, fileAssetRepository, goodsItemRepository, userRepository,
+            properties, fileAssetRepository, checkInRepository, goodsItemRepository, userRepository,
             paymentComplaintRepository, authorizationService, facilityScopeService, auditLogService
         );
         customer = entity(new User());
