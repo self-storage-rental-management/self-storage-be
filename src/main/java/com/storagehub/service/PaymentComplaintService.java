@@ -80,6 +80,12 @@ public class PaymentComplaintService {
             saved.getId(), reservation.getFacility().getId(), null,
             Map.of("status", saved.getStatus(), "reviewDueAt", saved.getReviewDueAt())
         );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Đã gửi khiếu nại thanh toán",
+            "Khiếu nại của đơn " + reservation.getReservationCode() + " đang chờ đối soát.",
+            reservation.getId()
+        );
         return toResponse(saved);
     }
 
@@ -125,18 +131,34 @@ public class PaymentComplaintService {
             throw ApiExceptions.conflict("Payment complaint can no longer be withdrawn");
         }
         Instant now = Instant.now();
+        Payment payment = complaint.getPayment();
+        if (payment.getStatus() == PaymentStatus.PAID) {
+            throw ApiExceptions.conflict("A paid complaint can no longer be withdrawn");
+        }
         complaint.setStatus(PaymentComplaintStatus.WITHDRAWN);
         complaint.setWithdrawnAt(now);
+        payment.setStatus(PaymentStatus.CANCELLED);
+        payment.setProcessedAt(now);
+        payment.setFailureCode("COMPLAINT_WITHDRAWN");
+        payment.setFailureReason("Customer withdrew the payment complaint");
         reservation.setStatus(ReservationStatus.CANCELLED);
         reservation.setCancelledAt(now);
         reservation.setCancelReason("Customer withdrew the payment complaint");
         reservation.setArchivedAt(now);
+        paymentRepository.saveAndFlush(payment);
         reservationRepository.saveAndFlush(reservation);
         PaymentComplaint saved = complaintRepository.saveAndFlush(complaint);
         auditLogService.recordMutation(
             reservation.getCustomer(), "PAYMENT_COMPLAINT_WITHDRAWN", "PaymentComplaint",
             saved.getId(), reservation.getFacility().getId(), null,
             Map.of("status", saved.getStatus(), "reservationStatus", reservation.getStatus())
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Đã rút khiếu nại thanh toán",
+            "Khiếu nại của đơn " + reservation.getReservationCode()
+                + " đã được rút; đơn giữ kho đã bị hủy và chưa ghi nhận thanh toán.",
+            reservation.getId()
         );
         return toResponse(saved);
     }

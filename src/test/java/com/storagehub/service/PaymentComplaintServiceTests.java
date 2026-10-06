@@ -167,8 +167,10 @@ class PaymentComplaintServiceTests {
         service.withdraw(customerActor, complaint.getId());
 
         assertThat(complaint.getStatus()).isEqualTo(PaymentComplaintStatus.WITHDRAWN);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
         assertThat(reservation.getArchivedAt()).isNotNull();
+        verify(paymentRepository).saveAndFlush(payment);
     }
 
     @Test
