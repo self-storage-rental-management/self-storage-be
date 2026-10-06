@@ -80,10 +80,8 @@ public class ReservationExpirationService {
         }
         ReservationStatus previousStatus = reservation.getStatus();
         reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
-        Instant paymentDeadline = reservation.getPaymentExpiresAt() == null
-            ? now : reservation.getPaymentExpiresAt();
         reservation.setComplaintExpiresAt(
-            paymentDeadline.plus(java.time.Duration.ofMinutes(complaintWindowMinutes))
+            now.plus(java.time.Duration.ofMinutes(complaintWindowMinutes))
         );
         reservationRepository.saveAndFlush(reservation);
         auditLogService.recordMutation(

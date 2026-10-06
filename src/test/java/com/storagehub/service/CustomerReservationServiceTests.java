@@ -52,6 +52,7 @@ class CustomerReservationServiceTests {
     @Mock private ReservationPricingSnapshotRepository snapshotRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private NotificationService notificationService;
 
     private CustomerReservationService service;
     private ActorPrincipal actor;
@@ -62,7 +63,7 @@ class CustomerReservationServiceTests {
     void setUp() {
         service = new CustomerReservationService(
             reservationRepository, paymentRepository, snapshotRepository,
-            goodsItemRepository, auditLogService
+            goodsItemRepository, auditLogService, notificationService
         );
 
         User customer = entityWithId(new User());
