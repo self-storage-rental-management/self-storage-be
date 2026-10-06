@@ -24,7 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PaymentComplaintService {
     private static final String FILE_ENTITY_TYPE = "PAYMENT_COMPLAINT";
-    private static final long MAX_COMPLAINTS_PER_DAY = 5;
     private static final List<PaymentComplaintStatus> ACTIVE_STATUSES = List.of(
         PaymentComplaintStatus.REVIEW_OVERDUE, PaymentComplaintStatus.PENDING
     );
@@ -56,14 +55,9 @@ public class PaymentComplaintService {
         if (complaintRepository.findByReservation_Id(reservationId).isPresent()) {
             throw ApiExceptions.conflict("A payment complaint already exists for this reservation");
         }
-        if (complaintRepository.countByCustomer_IdAndSubmittedAtAfter(
-            actor.userId(), now.minus(24, ChronoUnit.HOURS)
-        ) >= MAX_COMPLAINTS_PER_DAY) {
-            throw ApiExceptions.conflict("Payment complaint limit reached; please try again later");
-        }
         Payment payment = paymentRepository.findReservationPaymentsForUpdate(
             reservationId, PaymentType.RESERVATION_DEPOSIT
-        ).stream().findFirst().orElseThrow(() -> ApiExceptions.conflict("Reservation payment is missing"));
+        ).stream().findFirst().orElseGet(() -> createUnreceivedPayment(reservation, now));
         List<FileAsset> images = requireOwnedImages(actor, request.imageIds());
 
         PaymentComplaint complaint = new PaymentComplaint();
@@ -87,6 +81,23 @@ public class PaymentComplaintService {
             Map.of("status", saved.getStatus(), "reviewDueAt", saved.getReviewDueAt())
         );
         return toResponse(saved);
+    }
+
+    private Payment createUnreceivedPayment(Reservation reservation, Instant now) {
+        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        Payment payment = new Payment();
+        payment.setInitiatedBy(reservation.getCustomer());
+        payment.setReservation(reservation);
+        payment.setAmount(snapshot.getReservationDepositAmount());
+        payment.setCurrency("VND");
+        payment.setPurpose(PaymentType.RESERVATION_DEPOSIT);
+        payment.setStatus(PaymentStatus.NOT_RECEIVED);
+        payment.setIdempotencyKey("payment-complaint-" + reservation.getId());
+        payment.setProcessedAt(now);
+        payment.setFailureCode("NOT_RECEIVED");
+        payment.setFailureReason("Customer reported a deducted payment that was not recorded");
+        return paymentRepository.saveAndFlush(payment);
     }
 
     @Transactional(readOnly = true)
