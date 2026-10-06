@@ -8,6 +8,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.Instant;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -37,8 +38,17 @@ public class CheckIn extends BaseEntity {
     private CheckInStatus status = CheckInStatus.scheduled;
 
     @Column
+    private Instant scheduledAt;
+
+    @Column
     private Instant checkedInAt;
 
-    @Column(length = 2000)
+    @Column(length = 8000)
     private String checklistJson;
+
+    @Column(length = 1000)
+    private String readinessNote;
+
+    @Version
+    private long version;
 }
