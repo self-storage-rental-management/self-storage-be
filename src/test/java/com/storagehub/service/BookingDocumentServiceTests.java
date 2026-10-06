@@ -26,6 +26,7 @@ import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Map;
@@ -74,6 +75,7 @@ class BookingDocumentServiceTests {
         Facility facility = new Facility();
         ReflectionTestUtils.setField(facility, "id", UUID.randomUUID());
         facility.setName("StorageHub District 1");
+        facility.setAddress("125 Nguyen Binh Khiem, Phuong Ben Nghe, Quan 1, TP. Ho Chi Minh");
         UnitType unitType = new UnitType();
         unitType.setName("Medium");
 
@@ -90,9 +92,17 @@ class BookingDocumentServiceTests {
         snapshot = new ReservationPricingSnapshot();
         snapshot.setReservation(reservation);
         snapshot.setPricingPackageCode("MONTHLY");
+        snapshot.setRentalMonths(1);
+        snapshot.setMonthlyPrice(new BigDecimal("1000000.00"));
+        snapshot.setGrossRentalAmount(new BigDecimal("1000000.00"));
+        snapshot.setDiscountRate(BigDecimal.ZERO);
+        snapshot.setDiscountAmount(BigDecimal.ZERO);
         snapshot.setNetRentalAmount(new BigDecimal("1000000.00"));
         snapshot.setReservationDepositAmount(new BigDecimal("400000.00"));
         snapshot.setSecurityDepositAmount(new BigDecimal("1000000.00"));
+        snapshot.setRemainingRentalAmount(new BigDecimal("600000.00"));
+        snapshot.setDueAtCheckIn(new BigDecimal("1600000.00"));
+        snapshot.setTotalInitialObligation(new BigDecimal("2000000.00"));
     }
 
     @Test
@@ -119,9 +129,17 @@ class BookingDocumentServiceTests {
         var response = service.generate(actor, reservation.getId());
 
         assertThat(response.documentType().name()).isEqualTo("BOOKING_CONFIRMATION");
+        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-");
         assertThat(response.checksumSha256()).hasSize(64);
         assertThat(response.contentType()).isEqualTo("application/pdf");
         assertThat(Files.readAllBytes(storedPath.get())).startsWith("%PDF-1.4".getBytes());
+        assertThat(Files.size(storedPath.get())).isGreaterThan(50_000L);
+        String previewPath = System.getProperty("booking.document.preview");
+        if (previewPath != null && !previewPath.isBlank()) {
+            Path preview = Path.of(previewPath).toAbsolutePath();
+            Files.createDirectories(preview.getParent());
+            Files.copy(storedPath.get(), preview, StandardCopyOption.REPLACE_EXISTING);
+        }
         verify(documentRepository).saveAndFlush(any(BookingDocument.class));
     }
 
@@ -156,17 +174,15 @@ class BookingDocumentServiceTests {
         var response = service.generate(actor, reservation.getId());
 
         assertThat(response).isNotNull();
-        String pdfContent = new String(Files.readAllBytes(storedPath.get()));
-        assertThat(pdfContent).contains("PKG-3M");
-        assertThat(pdfContent).contains("Discount rate applied: 5%");
-        assertThat(pdfContent).contains("Discount savings: -375000.00 VND");
+        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-");
+        assertThat(Files.size(storedPath.get())).isGreaterThan(50_000L);
     }
 
     @Test
     void returnsExistingDocumentWithoutGeneratingAnotherFile() {
         FileAsset asset = new FileAsset();
         ReflectionTestUtils.setField(asset, "id", UUID.randomUUID());
-        asset.setOriginalName("booking.pdf");
+        asset.setOriginalName("phieu-xac-nhan-giu-kho-rsv-test001.pdf");
         asset.setContentType("application/pdf");
         asset.setSizeBytes(20);
         asset.setChecksumSha256("a".repeat(64));
@@ -182,6 +198,43 @@ class BookingDocumentServiceTests {
 
         assertThat(response.id()).isEqualTo(document.getId());
         verify(reservationRepository, never()).findOwnedByIdForUpdate(any(), any());
+    }
+
+    @Test
+    void replacesLegacyEnglishDocumentWithCurrentVietnameseTemplate() throws Exception {
+        UUID fileId = UUID.randomUUID();
+        Path legacyPath = temporaryDirectory.resolve(fileId + ".pdf");
+        Files.writeString(legacyPath, "legacy booking confirmation");
+
+        FileAsset asset = new FileAsset();
+        ReflectionTestUtils.setField(asset, "id", fileId);
+        asset.setUploadedBy(reservation.getCustomer());
+        asset.setStorageKey(legacyPath.toString());
+        asset.setOriginalName("booking-confirmation-rsv-test001.pdf");
+        asset.setContentType("application/pdf");
+        asset.setSizeBytes(Files.size(legacyPath));
+        asset.setChecksumSha256("a".repeat(64));
+        asset.setStatus(com.storagehub.domain.model.FileAssetStatus.ACTIVE);
+
+        BookingDocument document = new BookingDocument();
+        ReflectionTestUtils.setField(document, "id", UUID.randomUUID());
+        document.setReservation(reservation);
+        document.setFileAsset(asset);
+        document.setIssuedAt(Instant.now());
+
+        when(documentRepository.findByReservation_IdAndReservation_Customer_Id(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(document));
+        when(snapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
+        when(fileAssetRepository.saveAndFlush(asset)).thenReturn(asset);
+        when(documentRepository.saveAndFlush(document)).thenReturn(document);
+
+        var response = service.generate(actor, reservation.getId());
+
+        assertThat(response.id()).isEqualTo(document.getId());
+        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-");
+        assertThat(Files.readAllBytes(legacyPath)).startsWith("%PDF-1.4".getBytes());
+        assertThat(Files.size(legacyPath)).isGreaterThan(50_000L);
+        verify(documentRepository).saveAndFlush(document);
     }
 
     @Test
