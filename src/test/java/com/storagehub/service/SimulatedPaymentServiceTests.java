@@ -120,13 +120,15 @@ class SimulatedPaymentServiceTests {
     }
 
     @Test
-    void notReceivedKeepsReservationAwaitingPayment() {
+    void notReceivedStartsPaymentComplaintWindow() {
         properties.setSimulationOutcome(PaymentSimulationOutcome.NOT_RECEIVED);
 
         var response = service.pay(actor, reservation.getId(), "sim-not-received");
 
         assertThat(response.paymentStatus()).isEqualTo(PaymentStatus.NOT_RECEIVED);
-        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
+        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.PAYMENT_GRACE);
+        assertThat(reservation.getComplaintExpiresAt()).isAfter(Instant.now().plusSeconds(29 * 60));
+        verify(reservationRepository).saveAndFlush(reservation);
     }
 
     @Test
