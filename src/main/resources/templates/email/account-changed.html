@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="vi" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Thông tin tài khoản của bạn đã thay đổi</title>
+</head>
+<body style="margin:0;padding:0;background:#E4E5E8;font-family:Segoe UI,Arial,sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+  <div style="display:none;font-size:1px;color:#333333;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;"
+       th:text="'Các thay đổi được ghi nhận lúc ' + ${changeTime} + '.'">
+    Thông tin tài khoản của bạn đã thay đổi.
+  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F3F5;padding:24px 12px">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#fff;border-radius:12px;overflow:hidden">
+          <th:block th:replace="~{email/layout :: header}"></th:block>
+          <th:block th:replace="~{email/layout :: accent-bar('#F59A1B')}"></th:block>
+          <tr>
+            <td style="padding:32px 28px 12px">
+              <h1 style="margin:0 0 18px;font:700 22px/1.3 Segoe UI,Helvetica,Arial,sans-serif;color:#1F1F1F">Thông tin tài khoản đã thay đổi</h1>
+              <p style="margin:0 0 14px;font:400 15px/1.6 Segoe UI,Helvetica,Arial,sans-serif;color:#444">
+                Xin chào <b th:text="${fullName}">Nguyễn Văn A</b>, các thông tin sau trên tài khoản của bạn vừa được cập nhật lúc <b th:text="${changeTime}">12:30 02/10/2026</b>:
+              </p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 20px">
+                <tr>
+                  <td style="padding:10px 0;border-bottom:1px solid #ECECEC;font:400 14px Segoe UI,Helvetica,Arial,sans-serif;color:#777;width:38%" th:text="${fieldName}">Mật khẩu</td>
+                  <td style="padding:10px 0;border-bottom:1px solid #ECECEC;font:600 14px Segoe UI,Helvetica,Arial,sans-serif;color:#1F1F1F">
+                    <span th:if="${fieldName == 'Mật khẩu' or fieldName == 'password' or fieldName == 'Password'}">Đã được thay đổi</span>
+                    <span th:unless="${fieldName == 'Mật khẩu' or fieldName == 'password' or fieldName == 'Password'}">
+                      <span th:text="${oldValue}">••••••••</span> → <span th:text="${newValue}">••••••••</span>
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0;border-bottom:1px solid #ECECEC;font:400 14px Segoe UI,Helvetica,Arial,sans-serif;color:#777;width:38%">Thực hiện bởi</td>
+                  <td style="padding:10px 0;border-bottom:1px solid #ECECEC;font:600 14px Segoe UI,Helvetica,Arial,sans-serif;color:#1F1F1F">
+                    <span th:if="${performedByAdmin == true}">Quản trị viên</span>
+                    <span th:unless="${performedByAdmin == true}" th:text="${device != null and !device.isBlank() ? (ipAddress != null and !ipAddress.isBlank() ? device + ' · ' + ipAddress : device) : (ipAddress != null and !ipAddress.isBlank() ? ipAddress : 'Không xác định')}">Chrome trên Windows · 192.168.1.1</span>
+                  </td>
+                </tr>
+              </table>
+              <div style="margin:0 0 20px;padding:14px 16px;background:#FFF6E5;border-left:4px solid #F59A1B;border-radius:4px;font:400 14px/1.6 Segoe UI,Helvetica,Arial,sans-serif;color:#1F1F1F">
+                Không phải bạn thực hiện? Hãy đổi mật khẩu ngay và liên hệ hỗ trợ để khóa các thay đổi.
+              </div>
+              <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0">
+                <tr>
+                  <td style="background:#F59A1B;border-radius:8px">
+                    <a th:href="${accountUrl}" style="display:inline-block;padding:14px 28px;font:600 15px Segoe UI,Helvetica,Arial,sans-serif;color:#1F1F1F;text-decoration:none">Xem tài khoản</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <th:block th:replace="~{email/layout :: footer}"></th:block>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

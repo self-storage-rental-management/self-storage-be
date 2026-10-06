@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.api.reservation.CompatibilityCheckResponse;
@@ -14,6 +15,7 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Reservation;
+import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
@@ -124,6 +126,7 @@ class ReservationCreationServiceTests {
             .thenReturn(Optional.of(policy));
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
             Reservation reservation = invocation.getArgument(0);
+            assertThat(reservation.getRequestFingerprint()).hasSize(64);
             ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
             ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
             return reservation;
@@ -172,6 +175,19 @@ class ReservationCreationServiceTests {
         existing.setTotalGoodsVolumeM3(new BigDecimal("0.180000"));
         existing.setTotalGoodsWeightKg(new BigDecimal("36.00"));
         existing.setHoldExpiresAt(Instant.now().plusSeconds(600));
+        existing.setGoodsCondition("Packed");
+        existing.setNotes("Handle with care");
+
+        ReservationGoodsItem storedItem = new ReservationGoodsItem();
+        storedItem.setReservation(existing);
+        storedItem.setCategory(GoodsCategory.FURNITURE);
+        storedItem.setMaterialName("Wood");
+        storedItem.setDescription("Desk");
+        storedItem.setQuantity(2);
+        storedItem.setLengthCm(new BigDecimal("100.00"));
+        storedItem.setWidthCm(new BigDecimal("60.0"));
+        storedItem.setHeightCm(new BigDecimal("15"));
+        storedItem.setWeightKg(new BigDecimal("18.000"));
 
         ReservationPricingSnapshot snapshot = new ReservationPricingSnapshot();
         snapshot.setNetRentalAmount(quote.getTotalAfterDiscount());
@@ -183,12 +199,44 @@ class ReservationCreationServiceTests {
 
         when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-retry"))
             .thenReturn(Optional.of(existing));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(existing.getId()))
+            .thenReturn(List.of(storedItem));
         when(snapshotRepository.findByReservation_Id(existing.getId())).thenReturn(Optional.of(snapshot));
 
         var response = service.create(actor, request(), "create-retry");
 
         assertThat(response.getId()).isEqualTo(existing.getId());
         assertThat(response.getReservationCode()).isEqualTo("RSV-EXISTING001");
+    }
+
+    @Test
+    void rejectsIdempotencyKeyWhenPayloadChanges() {
+        Reservation existing = new Reservation();
+        ReflectionTestUtils.setField(existing, "id", UUID.randomUUID());
+        existing.setSourceQuote(quote);
+        existing.setRequestFingerprint(ReservationCreationService.requestFingerprint(request()));
+
+        when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-conflict"))
+            .thenReturn(Optional.of(existing));
+
+        CreateReservationRequest changed = request();
+        changed.setNotes("Different notes");
+
+        assertThatThrownBy(() -> service.create(actor, changed, "create-conflict"))
+            .isInstanceOf(ApiException.class)
+            .hasMessage("Idempotency-Key is already used for a different request");
+    }
+
+    @Test
+    void normalizesWhitespaceAndDecimalScaleForIdempotentRetry() {
+        CreateReservationRequest original = request();
+        CreateReservationRequest equivalent = request();
+        equivalent.setGoodsCondition("  Packed  ");
+        equivalent.setNotes("  Handle with care  ");
+        equivalent.getGoodsItems().get(0).setLengthCm(new BigDecimal("100.0"));
+
+        assertThat(ReservationCreationService.requestFingerprint(equivalent))
+            .isEqualTo(ReservationCreationService.requestFingerprint(original));
     }
 
     private CreateReservationRequest request() {
