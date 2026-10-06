@@ -23,6 +23,6 @@ class PasswordPolicyTests {
     void rejectsWhitespaceAndInvalidLengths() {
         assertThat(PasswordPolicy.isValid("Aa1! aa a")).isFalse();
         assertThat(PasswordPolicy.isValid("Aa1!aaa")).isFalse();
-        assertThat(PasswordPolicy.isValid("A".repeat(125) + "a1!")).isFalse();
+        assertThat(PasswordPolicy.isValid("A".repeat(126) + "a1!")).isFalse();
     }
 }

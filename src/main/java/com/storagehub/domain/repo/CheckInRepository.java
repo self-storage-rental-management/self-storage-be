@@ -13,9 +13,16 @@ import org.springframework.data.repository.query.Param;
 public interface CheckInRepository extends JpaRepository<CheckIn, UUID> {
     boolean existsByReservation_IdAndStatus(UUID reservationId, CheckInStatus status);
 
-    Optional<CheckIn> findByReservation_Id(UUID reservationId);
+    long countByReservation_Facility_IdAndStatusAndCheckedInAtBetween(
+        UUID facilityId,
+        CheckInStatus status,
+        java.time.Instant start,
+        java.time.Instant end
+    );
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select c from CheckIn c where c.id = :id")
-    Optional<CheckIn> findByIdForUpdate(@Param("id") UUID id);
+    long countByStatusAndCheckedInAtBetween(
+        CheckInStatus status,
+        java.time.Instant start,
+        java.time.Instant end
+    );
 }

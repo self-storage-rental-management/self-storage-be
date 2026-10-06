@@ -15,7 +15,6 @@ import java.util.UUID;
 
 public record AdminCreateUserRequest(
     @NotBlank @Email @Size(max = 320) String email,
-    @NotBlank
     @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH)
     @Pattern(regexp = PasswordPolicy.REGEX, message = PasswordPolicy.MESSAGE)
     String password,

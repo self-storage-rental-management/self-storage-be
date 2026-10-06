@@ -7,6 +7,7 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.security.ActorPrincipal;
@@ -41,9 +42,21 @@ public class FacilityQueryService {
         List<UUID> facilityIds = actor.facilityScopes().isEmpty()
             ? List.of(EMPTY_SCOPE)
             : actor.facilityScopes().keySet().stream().toList();
-        Page<FacilityResponse> page = facilityRepository.search(status, clean(city), clean(query), scoped, facilityIds, pageable)
+        FacilityStatus effectiveStatus = actor.hasRole(RoleCode.CUSTOMER) ? FacilityStatus.active : status;
+        Page<FacilityResponse> page = facilityRepository.search(effectiveStatus, clean(city), clean(query), scoped, facilityIds, pageable)
             .map(this::toFacilityResponse);
         return PageResponse.from(page, correlationId);
+    }
+
+    @Transactional(readOnly = true)
+    public FacilityResponse getFacility(ActorPrincipal actor, UUID facilityId) {
+        Facility facility = facilityRepository.findById(facilityId)
+            .orElseThrow(() -> com.storagehub.common.api.ApiExceptions.notFound("Facility was not found"));
+        facilityScopeService.assertCanRead(actor, facilityId);
+        if (actor.hasRole(RoleCode.CUSTOMER) && facility.getStatus() != FacilityStatus.active) {
+            throw com.storagehub.common.api.ApiExceptions.notFound("Facility was not found");
+        }
+        return toFacilityResponse(facility);
     }
 
     @Transactional(readOnly = true)

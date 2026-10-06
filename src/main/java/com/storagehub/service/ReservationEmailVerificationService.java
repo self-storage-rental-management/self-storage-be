@@ -43,6 +43,9 @@ public class ReservationEmailVerificationService {
     @Value("${app.auth.expose-development-code:false}")
     private boolean exposeDevelopmentCode;
 
+    @Value("${app.reservation.payment-window-minutes:1440}")
+    private long paymentWindowMinutes = 1440;
+
     @Transactional
     public ReservationEmailVerificationResponse resend(
         ActorPrincipal actor,
@@ -114,6 +117,10 @@ public class ReservationEmailVerificationService {
             reservation.setGoodsReviewSubmittedAt(now);
             reservation.setGoodsReviewDueAt(reviewDueAt);
             reservation.setHoldExpiresAt(reviewDueAt);
+        } else {
+            Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
+            reservation.setPaymentExpiresAt(paymentDueAt);
+            reservation.setHoldExpiresAt(paymentDueAt);
         }
         verificationRepository.saveAndFlush(verification);
         reservationRepository.saveAndFlush(reservation);

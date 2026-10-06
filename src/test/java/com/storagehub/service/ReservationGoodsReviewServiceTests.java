@@ -23,6 +23,7 @@ import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -104,6 +105,8 @@ class ReservationGoodsReviewServiceTests {
         assertThat(response.getGoodsReviewStatus()).isEqualTo(GoodsReviewStatus.APPROVED);
         assertThat(goodsItem.getReviewStatus()).isEqualTo(GoodsReviewStatus.APPROVED);
         assertThat(reservation.getPaymentExpiresAt()).isAfter(Instant.now());
+        assertThat(reservation.getPaymentExpiresAt()).isBefore(Instant.now().plus(25, ChronoUnit.HOURS));
+        assertThat(reservation.getPaymentExpiresAt()).isAfter(Instant.now().plus(23, ChronoUnit.HOURS));
     }
 
     @Test

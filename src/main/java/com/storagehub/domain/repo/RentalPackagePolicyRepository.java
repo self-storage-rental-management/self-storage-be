@@ -14,4 +14,8 @@ public interface RentalPackagePolicyRepository extends JpaRepository<RentalPacka
         UUID facilityId,
         LocalDate date
     );
+
+    List<RentalPackagePolicy> findByFacility_IdOrderByRentalMonthsAsc(UUID facilityId);
+
+    List<RentalPackagePolicy> findAllByOrderByRentalMonthsAsc();
 }

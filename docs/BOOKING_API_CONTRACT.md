@@ -124,6 +124,10 @@ Create yêu cầu `Idempotency-Key`, nhận `quoteId`, thông tin lịch check-i
 
 Customer chỉ đọc hoặc hủy reservation của chính mình. Customer không được tự chuyển status.
 
+Customer được hủy reservation ở `AWAITING_EMAIL`, `AWAITING_REVIEW`, `AWAITING_PAYMENT`, `PAYMENT_GRACE`, `CONFIRMED`, `UNIT_RESERVED` hoặc `READY_FOR_CHECKIN`. Ba trạng thái cuối chỉ được hủy trước check-in. Nếu cọc đã được ghi nhận, Payment giữ `PAID` và cọc 40% không hoàn lại; không tạo quy trình refund provider. Payment `PENDING` được chuyển `CANCELLED`. Nếu Payment đang `PROCESSING`, service phải hoàn tất hoặc thất bại thao tác mô phỏng trước khi cho hủy.
+
+Ranh giới module: booking service không xóa `assignedUnit` và không cập nhật `StorageUnit.status`. Nếu đã phân unit, module Assignment/Check-in của Trâm nhận trách nhiệm hủy assignment và chỉ đưa physical unit về `AVAILABLE` sau khi xác nhận chưa check-in, chưa có Rental `ACTIVE` và không có inspection/cleaning/maintenance đang chặn.
+
 ## 6. Xác minh email và duyệt OTHER
 
 ```http
@@ -158,42 +162,60 @@ Request xử lý review:
 
 Trong phạm vi đồ án, Reservation chỉ lưu kết quả duyệt hiện tại và người/thời điểm duyệt; không tạo bảng lịch sử review riêng. Khi Staff xử lý, service kiểm tra `goodsReviewStatus = PENDING` bằng điều kiện `if` trước khi cập nhật.
 
-## 7. Payment
+## 7. Payment mô phỏng và khiếu nại
 
 ```http
-POST /api/customer/reservations/{reservationId}/payment-intent
+POST /api/customer/reservations/{reservationId}/simulated-payment
 GET  /api/customer/reservations/{reservationId}/payment
-POST /api/webhooks/payments/{provider}
+POST /api/customer/reservations/{reservationId}/payment-complaints
+GET  /api/customer/reservations/{reservationId}/payment-complaint
+POST /api/customer/payment-complaints/{complaintId}/withdraw
+GET  /api/manager/payment-complaints
+GET  /api/manager/payment-complaints/review-queue
+POST /api/manager/payment-complaints/{complaintId}/decision
 ```
 
-Booking chỉ dùng:
+Quyết định 2026-10-02 bỏ MoMo Sandbox, gateway, redirect, IPN, query và refund. Payment mô phỏng chỉ được tạo khi reservation là `AWAITING_PAYMENT`; amount luôn lấy từ pricing snapshot, FE không gửi amount hoặc tự đặt `PAID`.
 
-```text
-method   = ONLINE_GATEWAY
-provider = MOMO
-purpose  = RESERVATION_DEPOSIT
+Customer UI chỉ có nút `Thanh toán`. Nút gọi endpoint mô phỏng, bị disable trong lúc xử lý và không cho Customer chọn outcome. Response trả `SUCCESS`, `FAILED` hoặc `NOT_RECEIVED`; FE hiển thị thông báo rồi refetch Payment/Reservation. Outcome được cấu hình có kiểm soát tại BE cho local/demo, không chọn ngẫu nhiên và không nhận từ request Customer.
+
+Khi đến `paymentExpiresAt`, Reservation chuyển `PAYMENT_GRACE`, đặt `complaintExpiresAt = paymentExpiresAt + 30 phút` và vẫn giữ capacity. Trong cửa sổ này Customer có thể `Hủy đơn` để chuyển `CANCELLED` và giải phóng ngay, hoặc gửi một Complaint đang hoạt động với reason và ít nhất một ảnh. Hết 30 phút không có Complaint thì chuyển `EXPIRED`, giải phóng capacity và archive.
+
+Complaint hợp lệ chuyển Reservation sang `PAYMENT_REVIEW`, đặt `reviewDueAt = submittedAt + 24h` và tiếp tục giữ capacity. Customer có thể rút Complaint chỉ khi `PENDING/REVIEW_OVERDUE`; transition là Complaint `WITHDRAWN` + Reservation `CANCELLED`. Manager approve chuyển Complaint `APPROVED`, Payment `PAID`, Reservation `CONFIRMED`; reject bắt buộc reason, chuyển Complaint `REJECTED`, Payment `NOT_RECEIVED`, Reservation `REJECTED`, notification và archive.
+
+Ảnh complaint được upload trước bằng `POST /api/files` không gắn entity, sau đó Customer gửi `imageIds` trong request tạo complaint. BE chỉ liên kết file ảnh do đúng Customer upload và chưa thuộc entity khác. Manager queue yêu cầu role `MANAGER|BUSINESS|ADMIN`, permission `view_payments/manage_payments` và facility scope phù hợp.
+
+Response Complaint vẫn trả `imageIds` để tương thích, đồng thời trả `images[]` gồm tên file, MIME, kích thước và `downloadUrl`. Ảnh được xem/tải bằng `GET /api/files/{fileId}`. API chỉ cho uploader tải file của mình; với ảnh `PAYMENT_COMPLAINT`, Manager/Business/Admin phải có `view_payments` và đúng facility scope. Không có public file URL.
+
+`review-queue` là danh sách tổng hợp: `REVIEW_OVERDUE` trước, Complaint `PENDING` theo `reviewDueAt`, Reservation `PAYMENT_GRACE`, sau đó các Reservation chưa archive theo `createdAt` mới nhất. Response trả `priority` để FE giữ đúng thứ tự nhưng không có physical unit code.
+
+Không dùng HTTP DELETE cho nghiệp vụ này. Mọi thao tác dùng lock, `@Version`, conditional transition, audit và trả `409` khi Customer/Manager xử lý cạnh tranh.
+
+Một Customer không được tạo thêm reservation trùng Facility, Unit Type và kỳ thuê khi đã có hold còn giữ capacity. Kiểm tra này chạy sau khi lock Unit Type và trước insert để hạn chế giữ kho giả; request lặp đúng `Idempotency-Key` vẫn trả reservation đã tạo. Ngoài ra, mỗi Customer được tạo tối đa 5 reservation mới mỗi giờ và 5 payment complaint mỗi 24 giờ; idempotent retry không bị tính như request mới.
+
+## 8. Booking confirmation document
+
+```http
+POST /api/customer/reservations/{reservationId}/booking-document
+GET  /api/customer/reservations/{reservationId}/booking-document
+GET  /api/customer/reservations/{reservationId}/booking-document/download
 ```
 
-Payment intent chỉ được tạo khi reservation là `AWAITING_PAYMENT`, email đã xác minh, review hợp lệ và hold chưa hết hạn. Amount lấy từ pricing snapshot; FE không gửi amount chính thức.
+Chỉ Customer sở hữu reservation đã `CONFIRMED` hoặc đã đi vào state downstream mới được tạo/xem/tải. `POST` là idempotent: nếu đã có document thì trả lại cùng record. Nội dung lấy từ Reservation và immutable pricing snapshot, lưu PDF vào storage, đồng thời lưu `FileAsset` với SHA-256 và `BookingDocument(type=BOOKING_CONFIRMATION)`. Tài liệu ghi rõ đây là xác nhận booking, không phải hợp đồng thuê đã ký và không chứa physical unit trước khi Trâm phân kho.
 
-Webhook hợp lệ và idempotent chuyển payment sang `PAID`. Khi reservation vẫn confirmable:
-
-```text
-Payment PAID + Reservation AWAITING_PAYMENT
-→ Reservation CONFIRMED
-```
-
-Nếu tiền đã thu nhưng reservation không thể xác nhận thì payment chuyển `REFUND_PENDING` hoặc `RECONCILIATION_REQUIRED`; không tự động phục hồi reservation trái quy tắc.
-
-## 8. State contract
+## 9. State contract
 
 Luồng booking:
 
 ```text
 AWAITING_EMAIL → AWAITING_PAYMENT → CONFIRMED
 AWAITING_EMAIL → AWAITING_REVIEW → AWAITING_PAYMENT → CONFIRMED
+AWAITING_PAYMENT → PAYMENT_GRACE → PAYMENT_REVIEW → CONFIRMED/REJECTED
+PAYMENT_GRACE → CANCELLED/EXPIRED
+PAYMENT_REVIEW → CANCELLED khi Customer rút Complaint
 AWAITING_REVIEW → REJECTED
 AWAITING_EMAIL/REVIEW/PAYMENT → CANCELLED hoặc EXPIRED
+CONFIRMED/UNIT_RESERVED/READY_FOR_CHECKIN → CANCELLED trước check-in, không hoàn cọc
 ```
 
 Ranh giới bàn giao module tiếp theo:
@@ -205,7 +227,7 @@ CONFIRMED → UNIT_RESERVED → READY_FOR_CHECKIN
 
 Các transition khác bị từ chối bằng `409 CONFLICT`. Khi triển khai từng chức năng, service phụ trách phải kiểm tra trạng thái hiện tại bằng điều kiện rõ ràng trước khi cập nhật.
 
-Scheduler kiểm tra reservation quá hạn mỗi 60 giây. Các trạng thái `AWAITING_EMAIL`, `AWAITING_REVIEW`, `AWAITING_PAYMENT` có `holdExpiresAt` đã qua sẽ chuyển sang `EXPIRED`. Payment còn `PENDING` hoặc `PROCESSING` của reservation đó cũng chuyển `EXPIRED`, đồng thời hệ thống ghi audit log và tạo notification cho khách hàng.
+Scheduler kiểm tra reservation quá hạn mỗi 60 giây. `AWAITING_EMAIL` và review chưa hoàn tất có thể chuyển `EXPIRED` theo deadline riêng. `AWAITING_PAYMENT` đến `paymentExpiresAt` phải chuyển `PAYMENT_GRACE`; chỉ khi hết thêm 30 phút mà không có Complaint mới chuyển `EXPIRED`, archive và giải phóng capacity. Complaint `PENDING` quá `reviewDueAt` chuyển `REVIEW_OVERDUE`, tiếp tục giữ capacity và lên đầu hàng đợi cho đến khi Manager quyết định hoặc Customer rút. Job dùng lock/conditional update để không tranh chấp với cancel, withdraw hoặc decision.
 
 Ví dụ khi xác nhận thanh toán:
 
@@ -219,7 +241,7 @@ reservation.setStatus(ReservationStatus.CONFIRMED);
 
 Cách này giữ kiến trúc ở mức cơ bản `Controller → Service → Repository → Entity`, dễ theo dõi và trình bày. Test chuyển trạng thái sẽ được viết cùng service nghiệp vụ tương ứng, thay vì tạo một state-machine abstraction riêng.
 
-## 9. HTTP status tối thiểu
+## 10. HTTP status tối thiểu
 
 | Trường hợp | HTTP |
 |---|---:|
@@ -231,7 +253,7 @@ Cách này giữ kiến trúc ở mức cơ bản `Controller → Service → Re
 | Không tìm thấy | `404` |
 | Hết capacity, transition sai, idempotency conflict | `409` |
 
-## 10. Ngoài phạm vi contract này
+## 11. Ngoài phạm vi contract này
 
 - BO tạo Facility, Unit Type, physical unit và pricing package.
 - Manager phân physical unit sau `CONFIRMED`.
