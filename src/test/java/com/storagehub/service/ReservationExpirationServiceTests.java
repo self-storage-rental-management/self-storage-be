@@ -122,7 +122,7 @@ class ReservationExpirationServiceTests {
     }
 
     @Test
-    void paymentGraceWindowStartsWhenStatusActuallyChanges() {
+    void expiresWithoutComplaintWhenCustomerNeverStartedPayment() {
         reservation.setPaymentExpiresAt(Instant.now().minusSeconds(5));
         when(reservationRepository
             .findTop100ByStatusAndPaymentExpiresAtLessThanEqualOrderByPaymentExpiresAtAsc(
@@ -131,10 +131,11 @@ class ReservationExpirationServiceTests {
         when(paymentRepository.findAllByReservation_IdAndStatusIn(any(), anyCollection()))
             .thenReturn(List.of());
 
-        Instant before = Instant.now();
         service.expireDueReservations();
 
-        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.PAYMENT_GRACE);
-        assertThat(reservation.getComplaintExpiresAt()).isAfterOrEqualTo(before.plusSeconds(30 * 60));
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.EXPIRED);
+        assertThat(reservation.getComplaintExpiresAt()).isNull();
+        assertThat(reservation.getArchivedAt()).isNotNull();
+        verify(notificationService).createNotification(any(), any(), any(), any(), any());
     }
 }

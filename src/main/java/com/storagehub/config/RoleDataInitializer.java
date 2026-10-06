@@ -82,6 +82,7 @@ public class RoleDataInitializer {
                 permissions.get(SystemPermission.VIEW_FACILITIES),
                 permissions.get(SystemPermission.VIEW_UNITS),
                 permissions.get(SystemPermission.VIEW_RESERVATIONS),
+                permissions.get(SystemPermission.APPROVE_RESERVATIONS),
                 permissions.get(SystemPermission.VIEW_CONTRACTS),
                 permissions.get(SystemPermission.VIEW_CHECKINS),
                 permissions.get(SystemPermission.PERFORM_CHECKIN),
