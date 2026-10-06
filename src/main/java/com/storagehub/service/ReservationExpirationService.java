@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,8 +21,7 @@ public class ReservationExpirationService {
 
     private static final List<ReservationStatus> EXPIRABLE_STATUSES = List.of(
         ReservationStatus.AWAITING_EMAIL,
-        ReservationStatus.AWAITING_REVIEW,
-        ReservationStatus.AWAITING_PAYMENT
+        ReservationStatus.AWAITING_REVIEW
     );
 
     private static final List<PaymentStatus> EXPIRABLE_PAYMENT_STATUSES = List.of(
@@ -34,6 +34,9 @@ public class ReservationExpirationService {
     private final NotificationService notificationService;
     private final AuditLogService auditLogService;
 
+    @Value("${app.reservation.complaint-window-minutes:30}")
+    private long complaintWindowMinutes = 30;
+
     @Transactional
     public int expireDueReservations() {
         Instant now = Instant.now();
@@ -41,23 +44,80 @@ public class ReservationExpirationService {
             .findTop100ByStatusInAndHoldExpiresAtLessThanEqualOrderByHoldExpiresAtAsc(
                 EXPIRABLE_STATUSES, now
             );
+        int expiredCount = 0;
         for (Reservation reservation : reservations) {
-            expireReservation(reservation, now);
+            if (expireReservation(reservation, now)) {
+                expiredCount++;
+            }
         }
-        return reservations.size();
+        List<Reservation> paymentDue = reservationRepository
+            .findTop100ByStatusAndPaymentExpiresAtLessThanEqualOrderByPaymentExpiresAtAsc(
+                ReservationStatus.AWAITING_PAYMENT, now
+            );
+        for (Reservation reservation : paymentDue) {
+            if (moveToPaymentGrace(reservation, now)) {
+                expiredCount++;
+            }
+        }
+        List<Reservation> graceDue = reservationRepository
+            .findTop100ByStatusAndComplaintExpiresAtLessThanEqualOrderByComplaintExpiresAtAsc(
+                ReservationStatus.PAYMENT_GRACE, now
+            );
+        for (Reservation reservation : graceDue) {
+            if (expireReservation(reservation, now)) {
+                expiredCount++;
+            }
+        }
+        return expiredCount;
     }
 
-    private void expireReservation(Reservation reservation, Instant now) {
-        ReservationStatus previousStatus = reservation.getStatus();
-        reservation.setStatus(ReservationStatus.EXPIRED);
-        reservation.setExpiredAt(now);
-        reservationRepository.saveAndFlush(reservation);
-
+    private boolean moveToPaymentGrace(Reservation reservation, Instant now) {
         List<Payment> payments = paymentRepository.findAllByReservation_IdAndStatusIn(
             reservation.getId(), EXPIRABLE_PAYMENT_STATUSES
         );
+        if (payments.stream().anyMatch(payment -> payment.getStatus() == PaymentStatus.PROCESSING)) {
+            return false;
+        }
+        ReservationStatus previousStatus = reservation.getStatus();
+        reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
+        reservation.setComplaintExpiresAt(
+            now.plus(java.time.Duration.ofMinutes(complaintWindowMinutes))
+        );
+        reservationRepository.saveAndFlush(reservation);
+        auditLogService.recordMutation(
+            null, "RESERVATION_PAYMENT_GRACE_STARTED", "Reservation", reservation.getId(),
+            reservation.getFacility().getId(), Map.of("status", previousStatus),
+            Map.of("status", ReservationStatus.PAYMENT_GRACE,
+                "complaintExpiresAt", reservation.getComplaintExpiresAt())
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.RESERVATION,
+            "Chưa ghi nhận thanh toán",
+            "Đơn " + reservation.getReservationCode()
+                + " được giữ thêm 30 phút để bạn khiếu nại hoặc chủ động hủy.",
+            reservation.getId()
+        );
+        return true;
+    }
+
+    private boolean expireReservation(Reservation reservation, Instant now) {
+        List<Payment> payments = paymentRepository.findAllByReservation_IdAndStatusIn(
+            reservation.getId(), EXPIRABLE_PAYMENT_STATUSES
+        );
+        boolean paymentIsProcessing = payments.stream()
+            .anyMatch(payment -> payment.getStatus() == PaymentStatus.PROCESSING);
+        if (paymentIsProcessing) {
+            return false;
+        }
+
+        ReservationStatus previousStatus = reservation.getStatus();
+        reservation.setStatus(ReservationStatus.EXPIRED);
+        reservation.setExpiredAt(now);
+        reservation.setArchivedAt(now);
+        reservationRepository.saveAndFlush(reservation);
+
         for (Payment payment : payments) {
-            payment.setStatus(PaymentStatus.EXPIRED);
+            payment.setStatus(PaymentStatus.CANCELLED);
         }
         if (!payments.isEmpty()) {
             paymentRepository.saveAll(payments);
@@ -76,5 +136,6 @@ public class ReservationExpirationService {
                 + " đã hết thời gian giữ chỗ. Bạn có thể tạo một đơn mới.",
             reservation.getId()
         );
+        return true;
     }
 }

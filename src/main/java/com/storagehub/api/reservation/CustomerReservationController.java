@@ -8,8 +8,11 @@ import com.storagehub.security.ActorContext;
 import com.storagehub.service.CustomerReservationService;
 import com.storagehub.service.ReservationCompatibilityService;
 import com.storagehub.service.ReservationEmailVerificationService;
-import com.storagehub.service.PaymentService;
-import com.storagehub.api.payment.PaymentIntentResponse;
+import com.storagehub.service.SimulatedPaymentService;
+import com.storagehub.api.payment.SimulatedPaymentResponse;
+import com.storagehub.api.payment.CreatePaymentComplaintRequest;
+import com.storagehub.api.payment.PaymentComplaintResponse;
+import com.storagehub.service.PaymentComplaintService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import java.util.UUID;
@@ -33,7 +36,8 @@ public class CustomerReservationController {
     private final com.storagehub.service.ReservationCreationService creationService;
     private final CustomerReservationService customerReservationService;
     private final ReservationEmailVerificationService emailVerificationService;
-    private final PaymentService paymentService;
+    private final SimulatedPaymentService simulatedPaymentService;
+    private final PaymentComplaintService paymentComplaintService;
 
     @PostMapping("/compatibility-check")
     public ApiResponse<CompatibilityCheckResponse> checkCompatibility(
@@ -119,26 +123,46 @@ public class CustomerReservationController {
         );
     }
 
-    @PostMapping("/{reservationId}/payment-intent")
-    public ApiResponse<PaymentIntentResponse> createPaymentIntent(
-        @PathVariable UUID reservationId,
-        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey
+    @GetMapping("/{reservationId}/payment")
+    public ApiResponse<SimulatedPaymentResponse> getPayment(
+        @PathVariable UUID reservationId
     ) {
         return new ApiResponse<>(
-            paymentService.createReservationDepositIntent(
-                actorContext.required(), reservationId, idempotencyKey
-            ),
+            simulatedPaymentService.getPayment(actorContext.required(), reservationId),
             CorrelationIdContext.current()
         );
     }
 
-    @GetMapping("/{reservationId}/payment")
-    public ApiResponse<PaymentIntentResponse> getPayment(
-        @PathVariable UUID reservationId
+    @PostMapping("/{reservationId}/simulated-payment")
+    public ApiResponse<SimulatedPaymentResponse> simulatePayment(
+        @PathVariable UUID reservationId,
+        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey
     ) {
         return new ApiResponse<>(
-            paymentService.getReservationDeposit(actorContext.required(), reservationId),
+            simulatedPaymentService.pay(actorContext.required(), reservationId, idempotencyKey),
             CorrelationIdContext.current()
         );
     }
+
+    @PostMapping("/{reservationId}/payment-complaints")
+    public ApiResponse<PaymentComplaintResponse> submitPaymentComplaint(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody CreatePaymentComplaintRequest request
+    ) {
+        return new ApiResponse<>(
+            paymentComplaintService.submit(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @GetMapping("/{reservationId}/payment-complaint")
+    public ApiResponse<PaymentComplaintResponse> getPaymentComplaint(
+        @PathVariable UUID reservationId
+    ) {
+        return new ApiResponse<>(
+            paymentComplaintService.getForCustomer(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
 }

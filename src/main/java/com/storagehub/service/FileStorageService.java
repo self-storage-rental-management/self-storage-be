@@ -6,10 +6,13 @@ import com.storagehub.config.FileProperties;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.FileAsset;
 import com.storagehub.domain.model.ReservationGoodsItem;
+import com.storagehub.domain.model.PaymentComplaint;
+import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
+import com.storagehub.domain.repo.PaymentComplaintRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
@@ -24,6 +27,8 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -44,6 +49,7 @@ public class FileStorageService {
     private final CheckInRepository checkInRepository;
     private final ReservationGoodsItemRepository reservationGoodsItemRepository;
     private final UserRepository userRepository;
+    private final PaymentComplaintRepository paymentComplaintRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
@@ -97,6 +103,45 @@ public class FileStorageService {
             deleteQuietly(target);
             throw exception;
         }
+    }
+
+    @Transactional(readOnly = true)
+    public DownloadedFile download(ActorPrincipal actor, UUID fileId) {
+        FileAsset asset = fileAssetRepository.findById(fileId)
+            .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+        requireDownloadAccess(actor, asset);
+        try {
+            Path path = Path.of(asset.getStorageKey()).toAbsolutePath().normalize();
+            Resource resource = new UrlResource(path.toUri());
+            if (!resource.exists() || !resource.isReadable()) {
+                throw ApiExceptions.notFound("File was not found");
+            }
+            return new DownloadedFile(
+                resource, asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
+                asset.getChecksumSha256()
+            );
+        } catch (java.net.MalformedURLException exception) {
+            throw ApiExceptions.notFound("File was not found");
+        }
+    }
+
+    private void requireDownloadAccess(ActorPrincipal actor, FileAsset asset) {
+        if (asset.getUploadedBy().getId().equals(actor.userId())) {
+            return;
+        }
+        if ("PAYMENT_COMPLAINT".equals(asset.getEntityType()) && asset.getEntityId() != null) {
+            PaymentComplaint complaint = paymentComplaintRepository.findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            boolean manager = actor.roles().contains(RoleCode.MANAGER)
+                || actor.roles().contains(RoleCode.BUSINESS)
+                || actor.roles().contains(RoleCode.ADMIN);
+            if (manager) {
+                authorizationService.require(actor, SystemPermission.VIEW_PAYMENTS);
+                facilityScopeService.assertCanRead(actor, complaint.getReservation().getFacility().getId());
+                return;
+            }
+        }
+        throw ApiExceptions.notFound("File was not found");
     }
 
     private void validate(MultipartFile file) {
@@ -213,5 +258,14 @@ public class FileStorageService {
             asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
             asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(), asset.getStatus(), asset.getCreatedAt()
         );
+    }
+
+    public record DownloadedFile(
+        Resource resource,
+        String fileName,
+        String contentType,
+        long sizeBytes,
+        String checksumSha256
+    ) {
     }
 }

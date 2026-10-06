@@ -13,6 +13,9 @@ public record RegisterRequest(
     @Pattern(regexp = PasswordPolicy.REGEX, message = PasswordPolicy.MESSAGE)
     String password,
     @NotBlank @Size(max = 160) String fullName,
-    @Size(max = 30) String phone
+    @Size(max = 30) String phone,
+    @NotBlank @Size(max = 500) String permanentAddress,
+    @NotBlank @Size(max = 160) String emergencyContactName,
+    @NotBlank @Size(max = 30) String emergencyContactPhone
 ) {
 }

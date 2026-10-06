@@ -12,11 +12,9 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.RoleCode;
-import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
 import com.storagehub.domain.repo.FacilityRepository;
-import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
@@ -43,7 +41,7 @@ class ReservationCompatibilityServiceTests {
     private UnitTypeRepository unitTypeRepository;
 
     @Mock
-    private StorageUnitRepository storageUnitRepository;
+    private ReservationCapacityService capacityService;
 
     private ReservationCompatibilityService service;
     private Facility facility;
@@ -52,7 +50,9 @@ class ReservationCompatibilityServiceTests {
 
     @BeforeEach
     void setUp() {
-        service = new ReservationCompatibilityService(facilityRepository, unitTypeRepository, storageUnitRepository);
+        service = new ReservationCompatibilityService(
+            facilityRepository, unitTypeRepository, capacityService
+        );
         facility = new Facility();
         ReflectionTestUtils.setField(facility, "id", UUID.randomUUID());
         facility.setStatus(FacilityStatus.active);
@@ -109,8 +109,9 @@ class ReservationCompatibilityServiceTests {
     private void stubAvailableUnitType(long availableCount) {
         when(facilityRepository.findById(facility.getId())).thenReturn(Optional.of(facility));
         when(unitTypeRepository.findById(unitType.getId())).thenReturn(Optional.of(unitType));
-        when(storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(
-            facility.getId(), unitType.getId(), StorageUnitStatus.available
+        when(capacityService.availableCount(
+            facility.getId(), unitType.getId(),
+            LocalDate.now().plusDays(1), LocalDate.now().plusMonths(3)
         )).thenReturn(availableCount);
     }
 

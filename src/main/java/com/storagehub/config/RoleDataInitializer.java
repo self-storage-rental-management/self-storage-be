@@ -47,37 +47,65 @@ public class RoleDataInitializer {
             );
 
             Role admin = roleRepository.findByCode(RoleCode.ADMIN).orElseThrow();
-            admin.getPermissions().addAll(Arrays.asList(
-                permissions.get(SystemPermission.VIEW_DASHBOARD),
-                permissions.get(SystemPermission.VIEW_RESERVATIONS),
-                permissions.get(SystemPermission.VIEW_UNITS),
-                permissions.get(SystemPermission.ASSIGN_UNITS),
-                permissions.get(SystemPermission.VIEW_CHECKINS),
-                permissions.get(SystemPermission.PERFORM_CHECKIN),
-                permissions.get(SystemPermission.MANAGE_USERS),
-                permissions.get(SystemPermission.MANAGE_ROLES),
-                permissions.get(SystemPermission.VIEW_AUDIT_LOGS),
-                permissions.get(SystemPermission.MANAGE_SETTINGS)
-            ));
+            admin.getPermissions().addAll(permissions.values());
             roleRepository.save(admin);
 
             Role manager = roleRepository.findByCode(RoleCode.MANAGER).orElseThrow();
             manager.getPermissions().addAll(Arrays.asList(
-                permissions.get(SystemPermission.VIEW_RESERVATIONS),
+                permissions.get(SystemPermission.VIEW_DASHBOARD),
+                permissions.get(SystemPermission.VIEW_FACILITIES),
                 permissions.get(SystemPermission.VIEW_UNITS),
+                permissions.get(SystemPermission.VIEW_RESERVATIONS),
+                permissions.get(SystemPermission.APPROVE_RESERVATIONS),
                 permissions.get(SystemPermission.ASSIGN_UNITS),
-                permissions.get(SystemPermission.VIEW_CHECKINS)
+                permissions.get(SystemPermission.VIEW_CONTRACTS),
+                permissions.get(SystemPermission.VIEW_CHECKINS),
+                permissions.get(SystemPermission.PERFORM_CHECKIN),
+                permissions.get(SystemPermission.VIEW_RENTALS),
+                permissions.get(SystemPermission.MANAGE_RENTALS),
+                permissions.get(SystemPermission.VIEW_RETURNS),
+                permissions.get(SystemPermission.PROCESS_RETURNS),
+                permissions.get(SystemPermission.VIEW_PAYMENTS),
+                permissions.get(SystemPermission.MANAGE_PAYMENTS),
+                permissions.get(SystemPermission.VIEW_SUPPORT),
+                permissions.get(SystemPermission.MANAGE_SUPPORT),
+                permissions.get(SystemPermission.MANAGE_INVENTORY),
+                permissions.get(SystemPermission.MANAGE_STAFF_TASKS),
+                permissions.get(SystemPermission.VIEW_REPORTS),
+                permissions.get(SystemPermission.VIEW_POLICIES)
             ));
             roleRepository.save(manager);
 
             Role staff = roleRepository.findByCode(RoleCode.STAFF).orElseThrow();
             staff.getPermissions().addAll(Arrays.asList(
-                permissions.get(SystemPermission.VIEW_RESERVATIONS),
+                permissions.get(SystemPermission.VIEW_DASHBOARD),
+                permissions.get(SystemPermission.VIEW_FACILITIES),
                 permissions.get(SystemPermission.VIEW_UNITS),
+                permissions.get(SystemPermission.VIEW_RESERVATIONS),
+                permissions.get(SystemPermission.VIEW_CONTRACTS),
                 permissions.get(SystemPermission.VIEW_CHECKINS),
-                permissions.get(SystemPermission.PERFORM_CHECKIN)
+                permissions.get(SystemPermission.PERFORM_CHECKIN),
+                permissions.get(SystemPermission.VIEW_RENTALS),
+                permissions.get(SystemPermission.VIEW_RETURNS),
+                permissions.get(SystemPermission.PROCESS_RETURNS),
+                permissions.get(SystemPermission.VIEW_PAYMENTS),
+                permissions.get(SystemPermission.VIEW_SUPPORT),
+                permissions.get(SystemPermission.MANAGE_STAFF_TASKS)
             ));
             roleRepository.save(staff);
+
+            Role business = roleRepository.findByCode(RoleCode.BUSINESS).orElseThrow();
+            business.getPermissions().addAll(Arrays.asList(
+                permissions.get(SystemPermission.VIEW_DASHBOARD),
+                permissions.get(SystemPermission.VIEW_REPORTS),
+                permissions.get(SystemPermission.VIEW_POLICIES),
+                permissions.get(SystemPermission.MANAGE_POLICIES),
+                permissions.get(SystemPermission.MANAGE_SETTINGS),
+                permissions.get(SystemPermission.VIEW_FACILITIES),
+                permissions.get(SystemPermission.VIEW_UNITS),
+                permissions.get(SystemPermission.VIEW_RENTALS)
+            ));
+            roleRepository.save(business);
         };
     }
 }

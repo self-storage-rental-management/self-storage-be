@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -33,14 +34,15 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ReservationGoodsReviewService {
 
-    private static final int PAYMENT_HOLD_MINUTES = 10;
-
     private final ReservationRepository reservationRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
+
+    @Value("${app.reservation.payment-window-minutes:1440}")
+    private long paymentWindowMinutes = 1440;
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationReviewResponse> listPending(
@@ -125,7 +127,7 @@ public class ReservationGoodsReviewService {
     ) {
         reservation.setGoodsReviewStatus(GoodsReviewStatus.APPROVED);
         reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);
-        Instant paymentDueAt = now.plus(PAYMENT_HOLD_MINUTES, ChronoUnit.MINUTES);
+        Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
         reservation.setPaymentExpiresAt(paymentDueAt);
         reservation.setHoldExpiresAt(paymentDueAt);
         for (ReservationGoodsItem item : items) {

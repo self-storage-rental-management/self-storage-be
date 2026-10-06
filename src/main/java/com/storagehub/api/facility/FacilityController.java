@@ -10,9 +10,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import com.storagehub.common.api.ApiResponse;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/facilities")
@@ -31,6 +34,14 @@ public class FacilityController {
     ) {
         return facilityQueryService.searchFacilities(
             actorContext.required(), status, city, query, pageable, CorrelationIdContext.current()
+        );
+    }
+
+    @GetMapping("/{facilityId}")
+    public ApiResponse<FacilityResponse> get(@PathVariable UUID facilityId) {
+        return new ApiResponse<>(
+            facilityQueryService.getFacility(actorContext.required(), facilityId),
+            CorrelationIdContext.current()
         );
     }
 }
