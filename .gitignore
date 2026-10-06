@@ -41,3 +41,7 @@ src/main/resources/application-local.yml
 start-dev.*
 uploads/
 *.log
+
+### Generated QA artifacts ###
+/output/
+/tmp/
