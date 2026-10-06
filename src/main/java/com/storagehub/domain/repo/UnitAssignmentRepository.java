@@ -21,6 +21,8 @@ public interface UnitAssignmentRepository extends JpaRepository<UnitAssignment, 
 
     Optional<UnitAssignment> findByReservation_IdAndStatus(UUID reservationId, UnitAssignmentStatus status);
 
+    boolean existsByStorageUnit_IdAndStatus(UUID storageUnitId, UnitAssignmentStatus status);
+
     Optional<UnitAssignment> findByCancelledBy_IdAndCancellationIdempotencyKey(
         UUID cancelledById,
         String cancellationIdempotencyKey
