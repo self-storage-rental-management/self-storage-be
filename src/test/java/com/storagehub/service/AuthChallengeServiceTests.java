@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -18,6 +19,7 @@ import com.storagehub.domain.repo.AuthChallengeRepository;
 import com.storagehub.domain.repo.SessionRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.JwtService;
+import com.storagehub.service.email.EmailService;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -37,9 +40,10 @@ class AuthChallengeServiceTests {
     @Mock private SessionRepository sessionRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private JwtService jwtService;
-    @Mock private AuthEmailService emailService;
+    @Mock private EmailService emailService;
     @Mock private ActorResponseMapper actorResponseMapper;
     @Mock private AuditLogService auditLogService;
+    @Mock private Environment environment;
 
     private AuthChallengeService service;
     private User pendingUser;
@@ -48,9 +52,11 @@ class AuthChallengeServiceTests {
     void setUp() {
         service = new AuthChallengeService(
             challengeRepository, userRepository, sessionRepository, passwordEncoder, jwtService,
-            emailService, actorResponseMapper, auditLogService
+            emailService, actorResponseMapper, auditLogService, environment
         );
         ReflectionTestUtils.setField(service, "exposeDevelopmentCode", true);
+        ReflectionTestUtils.setField(service, "verificationUrl", "http://localhost:5173/?verifyEmail=");
+        ReflectionTestUtils.setField(service, "expiryMinutes", 15);
         pendingUser = new User();
         ReflectionTestUtils.setField(pendingUser, "id", UUID.randomUUID());
         pendingUser.setEmail("pending@storagehub.test");
@@ -79,7 +85,9 @@ class AuthChallengeServiceTests {
         verify(challengeRepository).consumeActiveByUserAndPurpose(
             eq(pendingUser.getId()), eq(AuthChallengePurpose.EMAIL_VERIFICATION), any(Instant.class)
         );
-        verify(emailService).sendVerification(pendingUser, response.debugCode(), "new-token");
+        verify(emailService).sendVerifyEmail(
+            eq(pendingUser.getId()), eq("pending@storagehub.test"), any(), any(), eq(15)
+        );
     }
 
     @Test
@@ -98,7 +106,7 @@ class AuthChallengeServiceTests {
             .isInstanceOf(ApiException.class)
             .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(409))
             .hasMessage("Please wait 60 seconds before requesting another code");
-        verify(emailService, never()).sendVerification(any(), any(), any());
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -112,7 +120,7 @@ class AuthChallengeServiceTests {
 
         assertThat(response.accepted()).isTrue();
         assertThat(response.debugCode()).isNull();
-        verify(emailService, never()).sendVerification(any(), any(), any());
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -127,6 +135,6 @@ class AuthChallengeServiceTests {
 
         assertThat(response.accepted()).isTrue();
         assertThat(response.debugCode()).isNull();
-        verify(emailService, never()).sendVerification(any(), any(), any());
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
     }
 }
