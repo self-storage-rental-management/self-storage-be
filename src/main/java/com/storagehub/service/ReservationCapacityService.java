@@ -17,21 +17,16 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class ReservationCapacityService {
 
-    private static final List<StorageUnitStatus> BOOKABLE_UNIT_STATUSES = List.of(
-        StorageUnitStatus.available,
-        StorageUnitStatus.held,
-        StorageUnitStatus.reserved,
-        StorageUnitStatus.assigned
-    );
-
     private static final List<ReservationStatus> TEMPORARY_HOLD_STATUSES = List.of(
         ReservationStatus.AWAITING_EMAIL,
         ReservationStatus.AWAITING_REVIEW,
-        ReservationStatus.AWAITING_PAYMENT
+        ReservationStatus.AWAITING_PAYMENT,
+        ReservationStatus.PAYMENT_GRACE
     );
 
     private static final List<ReservationStatus> PERMANENT_HOLD_STATUSES = List.of(
         ReservationStatus.CONFIRMED,
+        ReservationStatus.PAYMENT_REVIEW,
         ReservationStatus.UNIT_RESERVED,
         ReservationStatus.READY_FOR_CHECKIN,
         ReservationStatus.AWAITING_CUSTOMER_RECEIPT
@@ -53,18 +48,34 @@ public class ReservationCapacityService {
             throw ApiExceptions.validation("Unit type does not belong to the selected facility", null);
         }
 
-        long physicalCapacity = storageUnitRepository
-            .countByFacility_IdAndUnitType_IdAndStatusIn(
-                facilityId, unitTypeId, BOOKABLE_UNIT_STATUSES
-            );
-        long heldCapacity = reservationRepository.countCapacityHoldingReservations(
-            facilityId, unitTypeId, startDate, endDate, Instant.now(),
-            TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES
-        );
-        if (physicalCapacity - heldCapacity < 1) {
+        if (availableCount(facilityId, unitTypeId, startDate, endDate) < 1) {
             throw ApiExceptions.conflict(
                 "No storage unit is available for the selected rental period"
             );
         }
+    }
+
+    public long availableCount(
+        UUID facilityId,
+        UUID unitTypeId,
+        LocalDate startDate,
+        LocalDate endDate
+    ) {
+        if (startDate == null || endDate == null || !endDate.isAfter(startDate)) {
+            throw ApiExceptions.validation("A valid startDate and endDate are required", null);
+        }
+        // A physical unit is sellable only while operations explicitly keep it AVAILABLE.
+        // Assignment, occupancy, return, cleaning and maintenance must move it out of that
+        // state; a contract/reservation end date never makes it available automatically.
+        long operationalAvailableUnits = storageUnitRepository
+            .countByFacility_IdAndUnitType_IdAndStatus(
+                facilityId, unitTypeId, StorageUnitStatus.available
+            );
+        Instant now = Instant.now();
+        long unassignedActiveHolds = reservationRepository.countCapacityHoldingReservations(
+            facilityId, unitTypeId, startDate, endDate, now,
+            TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES
+        );
+        return Math.max(0, operationalAvailableUnits - unassignedActiveHolds);
     }
 }

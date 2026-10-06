@@ -1,5 +1,6 @@
 package com.storagehub.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -47,7 +48,9 @@ class ReservationCapacityServiceTests {
         UnitType unitType = new UnitType();
         ReflectionTestUtils.setField(unitType, "id", unitTypeId);
         unitType.setFacility(facility);
-        when(unitTypeRepository.findByIdForUpdate(unitTypeId)).thenReturn(Optional.of(unitType));
+        org.mockito.Mockito.lenient()
+            .when(unitTypeRepository.findByIdForUpdate(unitTypeId))
+            .thenReturn(Optional.of(unitType));
     }
 
     @Test
@@ -82,9 +85,31 @@ class ReservationCapacityServiceTests {
             .hasMessageContaining("does not belong");
     }
 
+    @Test
+    void reportsDateAwareAvailableCapacityWithoutReturningNegativeCounts() {
+        mockCapacity(2, 5);
+
+        long available = service.availableCount(
+            facilityId, unitTypeId,
+            LocalDate.of(2026, 10, 10), LocalDate.of(2026, 11, 10)
+        );
+
+        assertThat(available).isZero();
+    }
+
+    @Test
+    void rejectsInvalidAvailabilityDateRange() {
+        assertThatThrownBy(() -> service.availableCount(
+            facilityId, unitTypeId,
+            LocalDate.of(2026, 11, 10), LocalDate.of(2026, 10, 10)
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("valid startDate and endDate");
+    }
+
     private void mockCapacity(long physicalUnits, long heldReservations) {
-        when(storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatusIn(
-            eq(facilityId), eq(unitTypeId), anyCollection()
+        when(storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(
+            eq(facilityId), eq(unitTypeId), eq(com.storagehub.domain.model.StorageUnitStatus.available)
         )).thenReturn(physicalUnits);
         when(reservationRepository.countCapacityHoldingReservations(
             eq(facilityId), eq(unitTypeId), any(), any(), any(), anyCollection(), anyCollection()

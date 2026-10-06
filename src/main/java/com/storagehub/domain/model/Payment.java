@@ -47,32 +47,17 @@ public class Payment extends BaseEntity {
     @Column(nullable = false, unique = true, length = 100)
     private String idempotencyKey;
 
-    @Column(nullable = false, unique = true, length = 100)
-    private String gatewayIntentId;
-
-    @Column(length = 64)
-    private String provider;
-
-    @Column(length = 100)
-    private String providerRequestId;
-
-    @Column(length = 100)
-    private String transactionReference;
+    @Column
+    private Instant processedAt;
 
     @Column
-    private Instant providerPaidAt;
+    private Instant paidAt;
 
     @Column(length = 100)
     private String failureCode;
 
     @Column(length = 1000)
     private String failureReason;
-
-    @Column(length = 100)
-    private String refundReference;
-
-    @Column
-    private Instant refundedAt;
 
     @Version
     private long version;

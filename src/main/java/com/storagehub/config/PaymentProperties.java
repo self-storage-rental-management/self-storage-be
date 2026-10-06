@@ -8,5 +8,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @Setter
 @ConfigurationProperties(prefix = "app.payment")
 public class PaymentProperties {
-    private String webhookSecret;
+    private com.storagehub.domain.model.PaymentSimulationOutcome simulationOutcome =
+        com.storagehub.domain.model.PaymentSimulationOutcome.SUCCESS;
 }
