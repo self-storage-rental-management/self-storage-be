@@ -69,6 +69,32 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         Pageable pageable
     );
 
+    @Query("""
+        select reservation from Reservation reservation
+        where reservation.status = com.storagehub.domain.model.ReservationStatus.CONFIRMED
+          and reservation.assignedUnit is null
+          and (:facilityId is null or reservation.facility.id = :facilityId)
+          and (:unitTypeId is null or reservation.unitType.id = :unitTypeId)
+          and (:scoped = false or reservation.facility.id in :facilityIds)
+          and (:q is null
+               or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
+               or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
+               or lower(reservation.customer.fullName) like lower(concat('%', :q, '%')))
+          and not exists (
+            select assignment.id from UnitAssignment assignment
+            where assignment.reservation.id = reservation.id
+              and assignment.status = com.storagehub.domain.model.UnitAssignmentStatus.ACTIVE
+          )
+        """)
+    Page<Reservation> findUnitAssignmentCandidates(
+        @Param("facilityId") UUID facilityId,
+        @Param("unitTypeId") UUID unitTypeId,
+        @Param("q") String q,
+        @Param("scoped") boolean scoped,
+        @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    );
+
     List<Reservation> findTop100ByStatusInAndHoldExpiresAtLessThanEqualOrderByHoldExpiresAtAsc(
         java.util.Collection<ReservationStatus> statuses,
         Instant now

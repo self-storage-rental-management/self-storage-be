@@ -42,4 +42,18 @@ public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> 
         @Param("unitTypeId") UUID unitTypeId,
         Pageable pageable
     );
+
+    @Query("""
+        select u from StorageUnit u
+        where u.facility.id = :facilityId
+          and u.unitType.id = :unitTypeId
+          and u.status = com.storagehub.domain.model.StorageUnitStatus.available
+          and (:q is null or lower(u.code) like lower(concat('%', :q, '%')))
+        """)
+    Page<StorageUnit> findAssignableUnits(
+        @Param("facilityId") UUID facilityId,
+        @Param("unitTypeId") UUID unitTypeId,
+        @Param("q") String q,
+        Pageable pageable
+    );
 }
