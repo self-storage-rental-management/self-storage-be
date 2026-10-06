@@ -7,6 +7,7 @@ import com.storagehub.api.reservation.ReservationReviewResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.GoodsReviewStatus;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationStatus;
@@ -40,6 +41,7 @@ public class ReservationGoodsReviewService {
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
 
     @Value("${app.reservation.payment-window-minutes:1440}")
     private long paymentWindowMinutes = 1440;
@@ -116,7 +118,28 @@ public class ReservationGoodsReviewService {
             Map.of("status", previousStatus, "goodsReviewStatus", GoodsReviewStatus.PENDING),
             Map.of("status", saved.getStatus(), "goodsReviewStatus", saved.getGoodsReviewStatus())
         );
+        notifyCustomer(saved, request.getDecision(), note);
         return response;
+    }
+
+    private void notifyCustomer(
+        Reservation reservation,
+        ReservationReviewDecision decision,
+        String note
+    ) {
+        boolean approved = decision == ReservationReviewDecision.APPROVE;
+        String content = approved
+            ? "Hàng hóa trong đơn " + reservation.getReservationCode()
+                + " đã được chấp thuận. Vui lòng thanh toán cọc trước thời hạn hiển thị trên đơn."
+            : "Hàng hóa trong đơn " + reservation.getReservationCode()
+                + " không được chấp thuận. Suất kho đã được giải phóng. Lý do: " + note;
+        notificationService.createNotification(
+            reservation.getCustomer().getId(),
+            NotificationType.RESERVATION,
+            approved ? "Hàng hóa đã được chấp thuận" : "Hàng hóa không được chấp thuận",
+            content,
+            reservation.getId()
+        );
     }
 
     private void approve(
@@ -147,7 +170,11 @@ public class ReservationGoodsReviewService {
         reservation.setGoodsReviewStatus(GoodsReviewStatus.REJECTED);
         reservation.setStatus(ReservationStatus.REJECTED);
         reservation.setRejectedAt(now);
+        reservation.setArchivedAt(now);
         reservation.setRejectionReason(note);
+        reservation.setHoldExpiresAt(now);
+        reservation.setPaymentExpiresAt(null);
+        reservation.setComplaintExpiresAt(null);
         for (ReservationGoodsItem item : items) {
             if (item.isRequiresStaffReview()) {
                 item.setReviewStatus(GoodsReviewStatus.REJECTED);
