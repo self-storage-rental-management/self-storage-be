@@ -16,8 +16,11 @@ public class ActorResponseMapper {
     private final UserFacilityScopeRepository scopeRepository;
 
     public ActorResponse toResponse(User user) {
-        Map<java.util.UUID, FacilityScopeLevel> scopes = scopeRepository.findByUserId(user.getId()).stream()
+        var assignedScopes = scopeRepository.findByUserId(user.getId());
+        Map<java.util.UUID, FacilityScopeLevel> scopes = assignedScopes.stream()
             .collect(Collectors.toMap(scope -> scope.getFacility().getId(), scope -> scope.getScopeLevel()));
+        Map<java.util.UUID, String> facilityNames = assignedScopes.stream()
+            .collect(Collectors.toMap(scope -> scope.getFacility().getId(), scope -> scope.getFacility().getName()));
         return new ActorResponse(
             user.getId(),
             user.getEmail(),
@@ -30,6 +33,7 @@ public class ActorResponseMapper {
             user.getStatus(),
             user.getRoles().stream().map(role -> role.getCode()).collect(Collectors.toUnmodifiableSet()),
             Map.copyOf(scopes),
+            Map.copyOf(facilityNames),
             user.isMustChangePassword(),
             user.getRoles().stream()
                 .flatMap(role -> role.getPermissions().stream())
