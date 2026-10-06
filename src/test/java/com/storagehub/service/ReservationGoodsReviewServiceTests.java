@@ -3,11 +3,15 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 
 import com.storagehub.api.reservation.ReservationReviewDecision;
 import com.storagehub.api.reservation.ReservationReviewRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.Facility;
+import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.Reservation;
@@ -35,6 +39,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.data.domain.PageImpl;
 
 @ExtendWith(MockitoExtension.class)
 class ReservationGoodsReviewServiceTests {
@@ -43,12 +48,13 @@ class ReservationGoodsReviewServiceTests {
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private UserRepository userRepository;
     @Mock private AdminAuthorizationService authorizationService;
-    @Mock private FacilityScopeService facilityScopeService;
     @Mock private AuditLogService auditLogService;
+    @Mock private NotificationService notificationService;
 
     private ReservationGoodsReviewService service;
     private ActorPrincipal staff;
     private User reviewer;
+    private Facility facility;
     private Reservation reservation;
     private ReservationGoodsItem goodsItem;
 
@@ -56,15 +62,16 @@ class ReservationGoodsReviewServiceTests {
     void setUp() {
         service = new ReservationGoodsReviewService(
             reservationRepository, goodsItemRepository, userRepository,
-            authorizationService, facilityScopeService, auditLogService
+            authorizationService, new FacilityScopeService(), auditLogService, notificationService
         );
         reviewer = entityWithId(new User());
+        facility = entityWithId(new Facility());
         staff = new ActorPrincipal(
             reviewer.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
-            Set.of("view_reservations", "approve_reservations"), Map.of()
+            Set.of("view_reservations", "approve_reservations"),
+            Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         );
 
-        Facility facility = entityWithId(new Facility());
         UnitType unitType = entityWithId(new UnitType());
         User customer = entityWithId(new User());
         customer.setEmail("customer@example.com");
@@ -107,6 +114,13 @@ class ReservationGoodsReviewServiceTests {
         assertThat(reservation.getPaymentExpiresAt()).isAfter(Instant.now());
         assertThat(reservation.getPaymentExpiresAt()).isBefore(Instant.now().plus(25, ChronoUnit.HOURS));
         assertThat(reservation.getPaymentExpiresAt()).isAfter(Instant.now().plus(23, ChronoUnit.HOURS));
+        verify(notificationService).createNotification(
+            reservation.getCustomer().getId(),
+            com.storagehub.domain.model.NotificationType.RESERVATION,
+            "Hàng hóa đã được chấp thuận",
+            "Hàng hóa trong đơn RSV-REVIEW001 đã được chấp thuận. Vui lòng thanh toán cọc trước thời hạn hiển thị trên đơn.",
+            reservation.getId()
+        );
     }
 
     @Test
@@ -120,7 +134,18 @@ class ReservationGoodsReviewServiceTests {
 
         assertThat(response.getReservationStatus()).isEqualTo(ReservationStatus.REJECTED);
         assertThat(reservation.getRejectionReason()).isEqualTo("Vật liệu dễ cháy");
+        assertThat(reservation.getArchivedAt()).isNotNull();
         assertThat(goodsItem.getReviewStatus()).isEqualTo(GoodsReviewStatus.REJECTED);
+        assertThat(reservation.getHoldExpiresAt()).isNotNull().isBeforeOrEqualTo(Instant.now());
+        assertThat(reservation.getPaymentExpiresAt()).isNull();
+        assertThat(reservation.getComplaintExpiresAt()).isNull();
+        verify(notificationService).createNotification(
+            reservation.getCustomer().getId(),
+            com.storagehub.domain.model.NotificationType.RESERVATION,
+            "Hàng hóa không được chấp thuận",
+            "Hàng hóa trong đơn RSV-REVIEW001 không được chấp thuận. Suất kho đã được giải phóng. Lý do: Vật liệu dễ cháy",
+            reservation.getId()
+        );
     }
 
     @Test
@@ -148,6 +173,35 @@ class ReservationGoodsReviewServiceTests {
         ))
             .isInstanceOf(ApiException.class)
             .hasMessage("Only staff can review reservation goods");
+    }
+
+    @Test
+    void staffOnlySeesPendingReviewsFromAssignedFacility() {
+        when(reservationRepository.findPendingGoodsReviews(
+            eq(null), eq(true), eq(List.of(facility.getId())), any()
+        )).thenReturn(new PageImpl<>(List.of(reservation)));
+
+        var response = service.listPending(staff, null, 0, 20, "correlation-id");
+
+        assertThat(response.data()).hasSize(1);
+        verify(reservationRepository).findPendingGoodsReviews(
+            eq(null), eq(true), eq(List.of(facility.getId())), any()
+        );
+    }
+
+    @Test
+    void staffCannotReviewReservationFromAnotherFacility() {
+        Facility otherFacility = entityWithId(new Facility());
+        reservation.setFacility(otherFacility);
+        when(reservationRepository.findById(reservation.getId()))
+            .thenReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> service.review(
+            staff, reservation.getId(),
+            new ReservationReviewRequest(ReservationReviewDecision.APPROVE, null)
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessage("The actor has no required scope for this facility");
     }
 
     @Test

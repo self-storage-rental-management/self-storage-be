@@ -38,6 +38,9 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     List<Reservation> findAllByCustomer_IdAndStatusOrderByCreatedAtDesc(UUID customerId, ReservationStatus status);
     Page<Reservation> findAllByCustomer_Id(UUID customerId, Pageable pageable);
     Page<Reservation> findAllByCustomer_IdAndArchivedAtIsNull(UUID customerId, Pageable pageable);
+    Page<Reservation> findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
+        UUID customerId, ReservationStatus excludedStatus, Pageable pageable
+    );
     Page<Reservation> findAllByCustomer_IdAndStatus(
         UUID customerId,
         ReservationStatus status,

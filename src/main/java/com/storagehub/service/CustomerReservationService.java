@@ -52,7 +52,9 @@ public class CustomerReservationService {
         PageRequest pageable = createPageRequest(page, size);
         Page<Reservation> reservations;
         if (status == null) {
-            reservations = reservationRepository.findAllByCustomer_IdAndArchivedAtIsNull(actor.userId(), pageable);
+            reservations = reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
+                actor.userId(), ReservationStatus.REJECTED, pageable
+            );
         } else {
             reservations = reservationRepository.findAllByCustomer_IdAndStatusAndArchivedAtIsNull(
                 actor.userId(), status, pageable
