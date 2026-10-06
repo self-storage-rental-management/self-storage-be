@@ -1,0 +1,21 @@
+package com.storagehub.api.rental;
+
+import com.storagehub.domain.model.RentalStatus;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.UUID;
+import io.swagger.v3.oas.annotations.media.Schema;
+
+@Schema(description = "Rental detail; financial/access integrations are explicitly UNKNOWN in D1. No raw credential is exposed.")
+public record RentalDetailResponse(UUID id, RentalSummaryResponse.Customer customer,
+    RentalSummaryResponse.Facility facility, RentalSummaryResponse.Unit storageUnit,
+    RentalSummaryResponse.UnitType unitType, RentalStatus status, LocalDate startDate,
+    LocalDate contractEndDate, BigDecimal monthlyPrice, String currency,
+    List<RentalSummaryResponse.Warning> dataWarnings, UUID reservationId,
+    Instant actualReturnedAt, Instant completedAt, Financial financialSummary, Access access) {
+    public record Financial(String completeness, String currency, BigDecimal outstandingAmount,
+        BigDecimal overdueAmount, LocalDate nextDueDate, String reason) {}
+    public record Access(String completeness, String status, String reason) {}
+}
