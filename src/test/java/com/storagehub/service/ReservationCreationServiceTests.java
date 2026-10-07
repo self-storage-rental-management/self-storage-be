@@ -253,7 +253,8 @@ class ReservationCreationServiceTests {
             quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
             quote.getEndDate(), CompatibilityResult.COMPATIBLE, new BigDecimal("0.180000"),
             new BigDecimal("36.00"), new BigDecimal("15.000000"),
-            new BigDecimal("1000.00"), 2, false, List.of()
+            new BigDecimal("1000.00"), new BigDecimal("0.80"),
+            new BigDecimal("28.800000"), 1, 4, 2, false, List.of()
         );
     }
 }
