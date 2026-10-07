@@ -11,6 +11,7 @@ import java.util.List;
 public record CompleteCheckInRequest(
     @NotNull @Valid CheckInChecklist checklist,
     @NotNull @Valid CheckInMeasurements actualMeasurements,
+    @Size(max = 1000) String varianceReason,
     @NotBlank @Size(max = 1000) String initialUnitCondition,
     @NotBlank @Size(max = 1000) String goodsCondition,
     @Min(1) int packageCount,

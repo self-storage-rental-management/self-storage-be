@@ -12,6 +12,7 @@ import com.storagehub.api.checkin.CheckInChecklist;
 import com.storagehub.api.checkin.CheckInMeasurements;
 import com.storagehub.api.checkin.CompleteCheckInRequest;
 import com.storagehub.api.checkin.MarkNoShowRequest;
+import com.storagehub.api.checkin.RejectCheckInRequest;
 import com.storagehub.api.checkin.ScheduleCheckInRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.CheckIn;
@@ -28,6 +29,7 @@ import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignment;
 import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.UnitType;
+import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
@@ -65,6 +67,7 @@ class CheckInHandoverServiceTests {
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private FacilityScopeService facilityScopeService;
     @Mock private AuditLogService auditLogService;
+    @Mock private NotificationService notificationService;
 
     private CheckInHandoverService service;
     private ActorPrincipal actor;
@@ -79,7 +82,7 @@ class CheckInHandoverServiceTests {
         service = new CheckInHandoverService(
             reservationRepository, storageUnitRepository, assignmentRepository,
             checkInRepository, fileAssetRepository, rentalRepository, userRepository, authorizationService,
-            facilityScopeService, auditLogService, new ObjectMapper()
+            facilityScopeService, auditLogService, notificationService, new ObjectMapper()
         );
         staff = entityWithId(new User());
         staff.setFullName("Staff A");
@@ -114,6 +117,8 @@ class CheckInHandoverServiceTests {
         reservation.setStatus(ReservationStatus.UNIT_RESERVED);
         reservation.setStartDate(LocalDate.now());
         reservation.setEndDate(LocalDate.now().plusMonths(1));
+        reservation.setTotalGoodsWeightKg(new BigDecimal("100"));
+        reservation.setTotalGoodsVolumeM3(BigDecimal.ONE);
 
         assignment = entityWithId(new UnitAssignment());
         assignment.setReservation(reservation);
@@ -183,7 +188,7 @@ class CheckInHandoverServiceTests {
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("1001"), BigDecimal.ONE, false
             ),
-            base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
+            base.varianceReason(), base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
             base.goodsCategory(), base.evidenceReferences(), base.handedOverItems(), base.notes()
         );
 
@@ -213,6 +218,56 @@ class CheckInHandoverServiceTests {
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.no_show);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
+    }
+
+    @Test
+    void requiresAcceptedAndExplainedVariance() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+        CompleteCheckInRequest base = validCompletionRequest();
+        CompleteCheckInRequest changed = new CompleteCheckInRequest(
+            base.checklist(),
+            new CheckInMeasurements(
+                new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
+                new BigDecimal("120"), new BigDecimal("1.2"), false
+            ),
+            null, base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
+            base.goodsCategory(), base.evidenceReferences(), base.handedOverItems(), base.notes()
+        );
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), changed))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("variance is not accepted");
+    }
+
+    @Test
+    void rejectsCheckInAndReleasesUnitWithoutCreatingRental() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+        UUID evidenceId = UUID.fromString("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0");
+        FileAsset evidence = entityWithId(new FileAsset());
+        ReflectionTestUtils.setField(evidence, "id", evidenceId);
+        evidence.setEntityType("CHECK_IN");
+        evidence.setEntityId(checkIn.getId());
+        when(fileAssetRepository.findAllById(List.of(evidenceId))).thenReturn(List.of(evidence));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.saveAndFlush(assignment)).thenReturn(assignment);
+
+        var response = service.reject(
+            actor, checkIn.getId(),
+            new RejectCheckInRequest(
+                "Hàng thực tế không đúng khai báo", UnitReleaseDisposition.MAINTENANCE,
+                List.of(evidenceId.toString())
+            )
+        );
+
+        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.rejected);
+        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.REJECTED);
+        assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.maintenance);
+        assertThat(reservation.getAssignedUnit()).isNull();
+        verify(rentalRepository, never()).save(any());
     }
 
     private void mockCompletionChecks(boolean includeMutationStubs) {
@@ -246,6 +301,7 @@ class CheckInHandoverServiceTests {
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, true
             ),
+            null,
             "Kho sạch, không hư hại", "Hàng nguyên vẹn", 3, "Đồ gia dụng",
             List.of("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"), List.of("PIN", "Biên nhận"), "Đã bàn giao"
         );

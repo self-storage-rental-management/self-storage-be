@@ -69,4 +69,15 @@ public class CheckInController {
             CorrelationIdContext.current()
         );
     }
+
+    @PostMapping("/{checkInId}/reject")
+    public ApiResponse<CheckInResponse> reject(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody RejectCheckInRequest request
+    ) {
+        return new ApiResponse<>(
+            service.reject(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
 }
