@@ -4,8 +4,10 @@ import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignmentStatus;
+import com.storagehub.domain.model.UnitReleaseDisposition;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 public record CheckInResponse(
@@ -14,6 +16,8 @@ public record CheckInResponse(
     Instant scheduledAt,
     Instant checkedInAt,
     String readinessNote,
+    String rejectionReason,
+    UnitReleaseDisposition rejectionDisposition,
     UUID performedBy,
     String performedByName,
     UUID reservationId,
@@ -31,6 +35,8 @@ public record CheckInResponse(
     UnitAssignmentStatus assignmentStatus,
     LocalDate startDate,
     LocalDate endDate,
+    BigDecimal declaredGoodsWeightKg,
+    BigDecimal declaredGoodsVolumeM3,
     CompleteCheckInRequest handover
 ) {
 }
