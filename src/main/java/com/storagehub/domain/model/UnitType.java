@@ -50,6 +50,9 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal monthlyPrice;
 
+    @Column(length = 1000)
+    private String imageUrl;
+
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal maxLoadKg;
 

@@ -6,6 +6,7 @@ import com.storagehub.service.AuthChallengeService;
 import com.storagehub.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -54,6 +55,16 @@ public class AuthController {
         return new ApiResponse<>(authChallengeService.verifyEmail(request), CorrelationIdContext.current());
     }
 
+    @PostMapping("/verify-email/resend")
+    public ApiResponse<AuthChallengeResponse> resendEmailVerification(
+        @Valid @RequestBody ResendEmailVerificationRequest request
+    ) {
+        return new ApiResponse<>(
+            authChallengeService.resendEmailVerification(request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/forgot-password")
     public ApiResponse<AuthChallengeResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
         return new ApiResponse<>(authChallengeService.requestPasswordReset(request), CorrelationIdContext.current());
@@ -83,5 +94,10 @@ public class AuthController {
     @PutMapping("/me")
     public ApiResponse<ActorResponse> updateMe(@Valid @RequestBody UpdateProfileRequest request) {
         return new ApiResponse<>(authService.updateCurrentActor(request), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/sessions")
+    public ApiResponse<List<SessionResponse>> sessions() {
+        return new ApiResponse<>(authService.currentSessions(), CorrelationIdContext.current());
     }
 }

@@ -40,7 +40,7 @@ public class AuditLogService {
             ActorPrincipal principal = actorContext.required();
             actor = userRepository.getReferenceById(principal.userId());
         } catch (RuntimeException ignored) {
-            // Verified system webhooks have no user actor; the correlation id still identifies the mutation.
+            // Scheduled system mutations have no user actor; the correlation id still identifies the mutation.
         }
         return recordMutation(actor, action, entityType, entityId, facilityId, beforeState, afterState);
     }
@@ -67,7 +67,7 @@ public class AuditLogService {
         log.setBeforeStateJson(toJson(beforeState));
         log.setAfterStateJson(toJson(afterState));
         log.setCorrelationId(CorrelationIdContext.current());
-        return activityLogRepository.save(log);
+        return activityLogRepository.saveAndFlush(log);
     }
 
     private String toJson(Object state) {

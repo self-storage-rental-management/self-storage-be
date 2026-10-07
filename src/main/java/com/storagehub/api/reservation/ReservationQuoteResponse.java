@@ -15,6 +15,7 @@ public class ReservationQuoteResponse {
     private int rentalMonths;
     private BigDecimal monthlyPrice;
     private BigDecimal subtotal;
+    private String pricingPackageCode;
     private BigDecimal discountRate;
     private BigDecimal discountAmount;
     private BigDecimal totalAfterDiscount;
@@ -38,6 +39,21 @@ public class ReservationQuoteResponse {
                                     BigDecimal securityDepositAmount, BigDecimal remainingRentalAmount,
                                     BigDecimal dueAtCheckIn, BigDecimal totalInitialObligation,
                                     String policyVersion, Instant quotedAt, Instant expiresAt) {
+        this(quoteId, facilityId, unitTypeId, startDate, endDate, rentalMonths, monthlyPrice, subtotal,
+             null, discountRate, discountAmount, totalAfterDiscount, reservationDepositAmount,
+             securityDepositAmount, remainingRentalAmount, dueAtCheckIn, totalInitialObligation,
+             policyVersion, quotedAt, expiresAt);
+    }
+
+    public ReservationQuoteResponse(UUID quoteId, UUID facilityId, UUID unitTypeId,
+                                    LocalDate startDate, LocalDate endDate, int rentalMonths,
+                                    BigDecimal monthlyPrice, BigDecimal subtotal,
+                                    String pricingPackageCode,
+                                    BigDecimal discountRate, BigDecimal discountAmount,
+                                    BigDecimal totalAfterDiscount, BigDecimal reservationDepositAmount,
+                                    BigDecimal securityDepositAmount, BigDecimal remainingRentalAmount,
+                                    BigDecimal dueAtCheckIn, BigDecimal totalInitialObligation,
+                                    String policyVersion, Instant quotedAt, Instant expiresAt) {
         this.quoteId = quoteId;
         this.facilityId = facilityId;
         this.unitTypeId = unitTypeId;
@@ -46,6 +62,7 @@ public class ReservationQuoteResponse {
         this.rentalMonths = rentalMonths;
         this.monthlyPrice = monthlyPrice;
         this.subtotal = subtotal;
+        this.pricingPackageCode = pricingPackageCode;
         this.discountRate = discountRate;
         this.discountAmount = discountAmount;
         this.totalAfterDiscount = totalAfterDiscount;
@@ -67,6 +84,7 @@ public class ReservationQuoteResponse {
     public int getRentalMonths() { return rentalMonths; }
     public BigDecimal getMonthlyPrice() { return monthlyPrice; }
     public BigDecimal getSubtotal() { return subtotal; }
+    public String getPricingPackageCode() { return pricingPackageCode; }
     public BigDecimal getDiscountRate() { return discountRate; }
     public BigDecimal getDiscountAmount() { return discountAmount; }
     public BigDecimal getTotalAfterDiscount() { return totalAfterDiscount; }

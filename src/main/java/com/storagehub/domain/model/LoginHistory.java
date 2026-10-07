@@ -34,6 +34,9 @@ public class LoginHistory extends BaseEntity {
     @Column(length = 512)
     private String userAgent;
 
+    @Column(name = "device_fingerprint", length = 64)
+    private String deviceFingerprint;
+
     @Column(length = 200)
     private String failureReason;
 
