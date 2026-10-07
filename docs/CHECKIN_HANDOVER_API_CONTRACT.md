@@ -22,7 +22,7 @@ CheckIn completed
 ## Quyền
 
 - Xem danh sách: `VIEW_CHECKINS`.
-- Lên lịch, no-show và hoàn tất bàn giao: `PERFORM_CHECKIN`.
+- Lên lịch, no-show, từ chối và hoàn tất bàn giao: `PERFORM_CHECKIN`.
 - Dữ liệu luôn bị giới hạn theo facility của actor, trừ actor có quyền truy cập toàn hệ thống.
 
 ## 1. Danh sách hồ sơ check-in
@@ -58,6 +58,8 @@ CheckIn completed
 
 Kết quả: tạo/cập nhật `CheckIn scheduled` và chuyển reservation sang `READY_FOR_CHECKIN`.
 
+Hai cờ `contractVerified` và `paymentVerified` là xác nhận nghiệp vụ của nhân viên tại thời điểm lên lịch. Module này không thay đổi trạng thái hợp đồng hoặc thanh toán của các module khác.
+
 ## 3. Upload bằng chứng bàn giao
 
 `POST /api/files` với `multipart/form-data`:
@@ -67,6 +69,8 @@ Kết quả: tạo/cập nhật `CheckIn scheduled` và chuyển reservation san
 - `entityId`: ID của check-in.
 
 Lấy `data.id` từ response để đưa vào `evidenceReferences` khi hoàn tất bàn giao.
+
+Nhân viên có `VIEW_CHECKINS` và quyền đọc facility của check-in có thể tải lại bằng chứng qua `GET /api/files/{assetId}`; quyền tải không chỉ giới hạn ở người upload.
 
 ## 4. Hoàn tất check-in và bàn giao
 
@@ -92,6 +96,7 @@ Lấy `data.id` từ response để đưa vào `evidenceReferences` khi hoàn t�
     "actualVolumeM3": 0.48,
     "varianceAccepted": true
   },
+  "varianceReason": "Khách mang thêm một kiện và đã xác nhận số đo thực tế",
   "initialUnitCondition": "Kho sạch, khóa và đèn hoạt động bình thường",
   "goodsCondition": "Hàng nguyên vẹn khi tiếp nhận",
   "packageCount": 3,
@@ -110,6 +115,7 @@ Lấy `data.id` từ response để đưa vào `evidenceReferences` khi hoàn t�
 - Chưa có Rental `ACTIVE`.
 - Tất cả 8 mục checklist phải hoàn tất.
 - Kích thước, thể tích và khối lượng thực tế không vượt sức chứa của unit; thứ tự dài/rộng/cao được so theo bộ kích thước đã sắp xếp để không phụ thuộc hướng đặt hàng.
+- Nếu khối lượng hoặc thể tích lệch quá 5% so với reservation (tối thiểu tương ứng `0.10 kg` hoặc `0.000100 m³`), `varianceAccepted` phải là `true` và `varianceReason` bắt buộc có nội dung.
 - Có ít nhất một bằng chứng và một vật dụng/quyền truy cập đã bàn giao.
 
 Kết quả được thực hiện trong một transaction:
@@ -135,8 +141,40 @@ Kết quả được thực hiện trong một transaction:
 - Không hủy assignment, không nhả unit và không đổi trạng thái reservation.
 - Có thể lên lịch lại trên cùng hồ sơ check-in.
 
+## 6. Từ chối nhận kho
+
+`POST /api/staff/check-ins/{checkInId}/reject`
+
+```json
+{
+  "reason": "Hàng hóa thực tế không đúng loại đã khai báo",
+  "disposition": "MAINTENANCE",
+  "evidenceReferences": ["0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"]
+}
+```
+
+Điều kiện:
+
+- Check-in đang `scheduled`, reservation đang `READY_FOR_CHECKIN`.
+- Assignment còn `ACTIVE`, unit khớp reservation và đang `reserved`.
+- Chưa có Rental `ACTIVE`.
+- Có ít nhất một bằng chứng đang `ACTIVE` và được gắn đúng check-in.
+- `disposition` chỉ nhận `AVAILABLE` hoặc `MAINTENANCE`.
+
+Kết quả trong một transaction:
+
+- `CheckIn -> rejected`, lưu lý do, quyết định xử lý unit, thời điểm và người thực hiện.
+- `Reservation -> REJECTED`, bỏ liên kết unit đã gán.
+- `UnitAssignment -> CANCELLED`, lưu actor, thời điểm, lý do và quyết định release.
+- Unit chuyển sang `available` khi disposition là `AVAILABLE`; nếu cần kiểm tra/vệ sinh/sửa chữa thì chuyển sang `maintenance`, không được trả thẳng về available.
+- Không tạo Rental và không thay đổi dữ liệu thanh toán/hợp đồng.
+
 Nếu reservation bị hủy trước khi hoàn tất handover, luồng release unit của Trâm sẽ đồng thời chuyển check-in còn `scheduled` sang `cancelled`; check-in `completed` tiếp tục là điều kiện chặn release.
+
+## Thông báo
+
+Khách hàng nhận thông báo loại `CHECKIN` khi lịch nhận kho được xác nhận, khi bị ghi nhận no-show, khi check-in bị từ chối và khi biên bản bàn giao đang chờ khách xác nhận.
 
 ## Audit
 
-Các mutation phát sinh audit event: `CHECKIN_SCHEDULED`, `CHECKIN_NO_SHOW`, `CHECKIN_HANDOVER_COMPLETED`. Mỗi event ghi actor, entity, dữ liệu trước/sau và correlation ID theo cơ chế audit chung.
+Các mutation phát sinh audit event: `CHECKIN_SCHEDULED`, `CHECKIN_NO_SHOW`, `CHECKIN_REJECTED`, `CHECKIN_HANDOVER_COMPLETED`. Mỗi event ghi actor, entity, dữ liệu trước/sau và correlation ID theo cơ chế audit chung.
