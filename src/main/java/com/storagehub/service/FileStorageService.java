@@ -129,6 +129,13 @@ public class FileStorageService {
         if (asset.getUploadedBy().getId().equals(actor.userId())) {
             return;
         }
+        if ("CHECK_IN".equals(asset.getEntityType()) && asset.getEntityId() != null) {
+            var checkIn = checkInRepository.findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
+            facilityScopeService.assertCanRead(actor, checkIn.getReservation().getFacility().getId());
+            return;
+        }
         if ("PAYMENT_COMPLAINT".equals(asset.getEntityType()) && asset.getEntityId() != null) {
             PaymentComplaint complaint = paymentComplaintRepository.findById(asset.getEntityId())
                 .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
