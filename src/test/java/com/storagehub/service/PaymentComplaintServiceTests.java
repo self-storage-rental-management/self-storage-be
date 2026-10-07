@@ -1,11 +1,13 @@
 package com.storagehub.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 
 import com.storagehub.api.payment.CreatePaymentComplaintRequest;
 import com.storagehub.api.payment.PaymentComplaintDecisionRequest;
@@ -124,6 +126,22 @@ class PaymentComplaintServiceTests {
     }
 
     @Test
+    void submitRejectsComplaintWhenCustomerNeverAttemptedPayment() {
+        reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
+        reservation.setComplaintExpiresAt(Instant.now().plusSeconds(600));
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), customer.getId()))
+            .thenReturn(Optional.of(reservation));
+        when(complaintRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.empty());
+        when(paymentRepository.findReservationPaymentsForUpdate(reservation.getId(), PaymentType.RESERVATION_DEPOSIT))
+            .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.submit(customerActor, reservation.getId(),
+            new CreatePaymentComplaintRequest("Tài khoản đã bị trừ tiền", List.of(UUID.randomUUID()))))
+            .hasMessage("A payment complaint requires a payment attempt that was not received");
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.PAYMENT_GRACE);
+    }
+
+    @Test
     void withdrawCancelsAndArchivesReservation() {
         reservation.setStatus(ReservationStatus.PAYMENT_REVIEW);
         when(complaintRepository.findById(complaint.getId())).thenReturn(Optional.of(complaint));
@@ -135,8 +153,10 @@ class PaymentComplaintServiceTests {
         service.withdraw(customerActor, complaint.getId());
 
         assertThat(complaint.getStatus()).isEqualTo(PaymentComplaintStatus.WITHDRAWN);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
         assertThat(reservation.getArchivedAt()).isNotNull();
+        verify(paymentRepository).saveAndFlush(payment);
     }
 
     @Test

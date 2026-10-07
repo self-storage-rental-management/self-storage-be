@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +34,9 @@ public class SimulatedPaymentService {
     private final UserRepository userRepository;
     private final PaymentProperties paymentProperties;
     private final AuditLogService auditLogService;
+
+    @Value("${app.reservation.complaint-window-minutes:30}")
+    private long complaintWindowMinutes = 30;
 
     @Transactional(readOnly = true)
     public SimulatedPaymentResponse getPayment(ActorPrincipal actor, UUID reservationId) {
@@ -111,6 +115,9 @@ public class SimulatedPaymentService {
             payment.setStatus(PaymentStatus.NOT_RECEIVED);
             payment.setFailureCode("NOT_RECEIVED");
             payment.setFailureReason("The simulated payment was not recorded by the system");
+            reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
+            reservation.setComplaintExpiresAt(now.plus(java.time.Duration.ofMinutes(complaintWindowMinutes)));
+            reservationRepository.saveAndFlush(reservation);
             message = "Payment has not been recorded; keep the receipt if money was deducted";
         } else {
             payment.setStatus(PaymentStatus.FAILED);
