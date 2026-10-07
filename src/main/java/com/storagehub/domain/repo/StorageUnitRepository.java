@@ -7,10 +7,16 @@ import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 
 public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from StorageUnit u where u.id = :id")
+    java.util.Optional<StorageUnit> findByIdForUpdate(@Param("id") UUID id);
 
     long countByFacility_IdAndUnitType_IdAndStatus(
         UUID facilityId,
@@ -24,6 +30,14 @@ public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> 
         Collection<StorageUnitStatus> statuses
     );
 
+    java.util.List<StorageUnit> findByFacility_Id(UUID facilityId);
+
+    long countByFacility_Id(UUID facilityId);
+
+    long countByFacility_IdAndStatus(UUID facilityId, StorageUnitStatus status);
+
+    long countByStatus(StorageUnitStatus status);
+
     @Query("""
         select u from StorageUnit u
         where (:facilityId is null or u.facility.id = :facilityId)
@@ -34,6 +48,20 @@ public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> 
         @Param("facilityId") UUID facilityId,
         @Param("status") StorageUnitStatus status,
         @Param("unitTypeId") UUID unitTypeId,
+        Pageable pageable
+    );
+
+    @Query("""
+        select u from StorageUnit u
+        where u.facility.id = :facilityId
+          and u.unitType.id = :unitTypeId
+          and u.status = com.storagehub.domain.model.StorageUnitStatus.available
+          and (:q is null or lower(u.code) like lower(concat('%', :q, '%')))
+        """)
+    Page<StorageUnit> findAssignableUnits(
+        @Param("facilityId") UUID facilityId,
+        @Param("unitTypeId") UUID unitTypeId,
+        @Param("q") String q,
         Pageable pageable
     );
 }

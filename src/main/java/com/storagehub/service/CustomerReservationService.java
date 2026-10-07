@@ -10,6 +10,11 @@ import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.Payment;
+import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.PaymentType;
+import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -30,9 +35,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerReservationService {
 
     private final ReservationRepository reservationRepository;
+    private final PaymentRepository paymentRepository;
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationResponse> list(
@@ -45,9 +52,11 @@ public class CustomerReservationService {
         PageRequest pageable = createPageRequest(page, size);
         Page<Reservation> reservations;
         if (status == null) {
-            reservations = reservationRepository.findAllByCustomer_Id(actor.userId(), pageable);
+            reservations = reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
+                actor.userId(), ReservationStatus.REJECTED, pageable
+            );
         } else {
-            reservations = reservationRepository.findAllByCustomer_IdAndStatus(
+            reservations = reservationRepository.findAllByCustomer_IdAndStatusAndArchivedAtIsNull(
                 actor.userId(), status, pageable
             );
         }
@@ -66,7 +75,9 @@ public class CustomerReservationService {
         UUID reservationId,
         CancelReservationRequest request
     ) {
-        Reservation reservation = findOwnedReservation(actor, reservationId);
+        Reservation reservation = reservationRepository
+            .findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         ReservationStatus previousStatus = reservation.getStatus();
         if (!canBeCancelled(previousStatus)) {
             throw ApiExceptions.conflict(
@@ -74,8 +85,26 @@ public class CustomerReservationService {
             );
         }
 
+        List<Payment> payments = paymentRepository.findReservationPaymentsForUpdate(
+            reservationId, PaymentType.RESERVATION_DEPOSIT
+        );
+        if (payments.stream().anyMatch(this::isPaymentBeingFinalized)) {
+            throw ApiExceptions.conflict(
+                "Reservation cannot be cancelled while payment is processing"
+            );
+        }
+
+        payments.stream()
+            .filter(payment -> payment.getStatus() == PaymentStatus.PENDING)
+            .forEach(payment -> payment.setStatus(PaymentStatus.CANCELLED));
+
+        // A paid deposit is intentionally non-refundable when the customer cancels
+        // before check-in. Assignment/unit release belongs to the operations flow;
+        // this service does not clear assignedUnit or change StorageUnit status.
+        Instant cancelledAt = Instant.now();
         reservation.setStatus(ReservationStatus.CANCELLED);
-        reservation.setCancelledAt(Instant.now());
+        reservation.setCancelledAt(cancelledAt);
+        reservation.setArchivedAt(cancelledAt);
         reservation.setCancelReason(request.getReason().trim());
         Reservation saved = reservationRepository.saveAndFlush(reservation);
         ReservationDetailResponse response = toDetailResponse(saved);
@@ -85,6 +114,12 @@ public class CustomerReservationService {
             saved.getFacility().getId(),
             Map.of("status", previousStatus),
             Map.of("status", saved.getStatus(), "reason", saved.getCancelReason())
+        );
+        notificationService.createNotification(
+            saved.getCustomer().getId(), NotificationType.RESERVATION,
+            "Đơn giữ kho đã được hủy",
+            "Đơn " + saved.getReservationCode() + " đã được hủy theo yêu cầu của bạn.",
+            saved.getId()
         );
         return response;
     }
@@ -97,7 +132,15 @@ public class CustomerReservationService {
     private boolean canBeCancelled(ReservationStatus status) {
         return status == ReservationStatus.AWAITING_EMAIL
             || status == ReservationStatus.AWAITING_REVIEW
-            || status == ReservationStatus.AWAITING_PAYMENT;
+            || status == ReservationStatus.AWAITING_PAYMENT
+            || status == ReservationStatus.PAYMENT_GRACE
+            || status == ReservationStatus.CONFIRMED
+            || status == ReservationStatus.UNIT_RESERVED
+            || status == ReservationStatus.READY_FOR_CHECKIN;
+    }
+
+    private boolean isPaymentBeingFinalized(Payment payment) {
+        return payment.getStatus() == PaymentStatus.PROCESSING;
     }
 
     private PageRequest createPageRequest(int page, int size) {
@@ -121,7 +164,9 @@ public class CustomerReservationService {
             snapshot.getReservationDepositAmount(), snapshot.getSecurityDepositAmount(),
             snapshot.getRemainingRentalAmount(), snapshot.getDueAtCheckIn(),
             snapshot.getTotalInitialObligation(), reservation.getTotalGoodsVolumeM3(),
-            reservation.getTotalGoodsWeightKg(), reservation.getHoldExpiresAt(), reservation.getCreatedAt()
+            reservation.getTotalGoodsWeightKg(), reservation.getHoldExpiresAt(), reservation.getCreatedAt(),
+            snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
+            snapshot.getDiscountRate(), snapshot.getDiscountAmount()
         );
     }
 
@@ -137,6 +182,8 @@ public class CustomerReservationService {
         response.setGoodsCondition(reservation.getGoodsCondition());
         response.setNotes(reservation.getNotes());
         response.setPaymentExpiresAt(reservation.getPaymentExpiresAt());
+        response.setComplaintExpiresAt(reservation.getComplaintExpiresAt());
+        response.setArchivedAt(reservation.getArchivedAt());
         response.setConfirmedAt(reservation.getConfirmedAt());
         response.setCancelledAt(reservation.getCancelledAt());
         response.setCancelReason(reservation.getCancelReason());

@@ -9,11 +9,9 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.RoleCode;
-import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
 import com.storagehub.domain.repo.FacilityRepository;
-import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
@@ -31,10 +29,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class ReservationCompatibilityService {
 
     private static final BigDecimal CUBIC_CENTIMETERS_PER_CUBIC_METER = new BigDecimal("1000000");
+    private static final BigDecimal RACK_UTILIZATION_RATE = new BigDecimal("0.80");
 
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
-    private final StorageUnitRepository storageUnitRepository;
+    private final ReservationCapacityService capacityService;
 
     @Transactional(readOnly = true)
     public CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request) {
@@ -58,8 +57,8 @@ public class ReservationCompatibilityService {
             throw ApiExceptions.conflict("Unit type is not available for reservations");
         }
 
-        long availableCount = storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(
-            facility.getId(), unitType.getId(), StorageUnitStatus.available
+        long availableCount = capacityService.availableCount(
+            facility.getId(), unitType.getId(), request.getStartDate(), request.getEndDate()
         );
         BigDecimal totalVolume = BigDecimal.ZERO;
         BigDecimal totalWeight = BigDecimal.ZERO;
@@ -77,15 +76,22 @@ public class ReservationCompatibilityService {
                 .multiply(quantity);
             totalVolume = totalVolume.add(itemVolume);
             totalWeight = totalWeight.add(item.getWeightPerItemKg().multiply(quantity));
-            if (!fitsInsideUnit(item, unitType)) {
-                issues.add("goodsItems[" + index + "] does not fit inside the selected unit type");
+            if (!fitsInsideRack(item, unitType)) {
+                issues.add("goodsItems[" + index + "] does not fit inside one rack in any orientation");
             }
             reviewRequired = reviewRequired || item.getCategory() == GoodsCategory.OTHER;
         }
 
         BigDecimal unitVolume = unitType.getVolumeM3();
-        if (totalVolume.compareTo(unitVolume) > 0) {
-            issues.add("Total goods volume exceeds the selected unit type capacity");
+        BigDecimal usableVolumePerRack = unitType.getRackLengthM()
+            .multiply(unitType.getRackWidthM())
+            .multiply(unitType.getRackHeightM())
+            .multiply(RACK_UTILIZATION_RATE);
+        int requiredRackCount = usableVolumePerRack.signum() > 0
+            ? totalVolume.divide(usableVolumePerRack, 0, RoundingMode.CEILING).intValueExact()
+            : Integer.MAX_VALUE;
+        if (unitType.getRackCount() <= 0 || requiredRackCount > unitType.getRackCount()) {
+            issues.add("Total goods volume requires more racks than the selected unit type provides");
         }
         if (totalWeight.compareTo(unitType.getMaxLoadKg()) > 0) {
             issues.add("Total goods weight exceeds the selected unit type capacity");
@@ -104,6 +110,10 @@ public class ReservationCompatibilityService {
             totalWeight.setScale(2, RoundingMode.HALF_UP),
             unitVolume.setScale(6, RoundingMode.HALF_UP),
             unitType.getMaxLoadKg().setScale(2, RoundingMode.HALF_UP),
+            RACK_UTILIZATION_RATE,
+            usableVolumePerRack.setScale(6, RoundingMode.HALF_UP),
+            requiredRackCount,
+            unitType.getRackCount(),
             availableCount, reviewRequired, List.copyOf(issues)
         );
     }
@@ -126,19 +136,19 @@ public class ReservationCompatibilityService {
         }
     }
 
-    private boolean fitsInsideUnit(GoodsItemRequest item, UnitType unitType) {
+    private boolean fitsInsideRack(GoodsItemRequest item, UnitType unitType) {
         List<BigDecimal> itemDimensions = new ArrayList<>(List.of(
             item.getLengthCm(), item.getWidthCm(), item.getHeightCm()
         ));
-        List<BigDecimal> unitDimensions = new ArrayList<>(List.of(
-            unitType.getLengthM().movePointRight(2),
-            unitType.getWidthM().movePointRight(2),
-            unitType.getHeightM().movePointRight(2)
+        List<BigDecimal> rackDimensions = new ArrayList<>(List.of(
+            unitType.getRackLengthM().movePointRight(2),
+            unitType.getRackWidthM().movePointRight(2),
+            unitType.getRackHeightM().movePointRight(2)
         ));
         itemDimensions.sort(Comparator.naturalOrder());
-        unitDimensions.sort(Comparator.naturalOrder());
+        rackDimensions.sort(Comparator.naturalOrder());
         for (int index = 0; index < itemDimensions.size(); index++) {
-            if (itemDimensions.get(index).compareTo(unitDimensions.get(index)) > 0) {
+            if (itemDimensions.get(index).compareTo(rackDimensions.get(index)) > 0) {
                 return false;
             }
         }
