@@ -39,6 +39,7 @@ build/
 src/main/resources/application-local.properties
 src/main/resources/application-local.yml
 start-dev.*
+start-all.*
 uploads/
 *.log
 

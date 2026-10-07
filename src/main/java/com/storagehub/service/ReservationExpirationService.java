@@ -11,7 +11,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,9 +33,6 @@ public class ReservationExpirationService {
     private final NotificationService notificationService;
     private final AuditLogService auditLogService;
 
-    @Value("${app.reservation.complaint-window-minutes:30}")
-    private long complaintWindowMinutes = 30;
-
     @Transactional
     public int expireDueReservations() {
         Instant now = Instant.now();
@@ -55,7 +51,7 @@ public class ReservationExpirationService {
                 ReservationStatus.AWAITING_PAYMENT, now
             );
         for (Reservation reservation : paymentDue) {
-            if (moveToPaymentGrace(reservation, now)) {
+            if (expireReservation(reservation, now)) {
                 expiredCount++;
             }
         }
@@ -69,35 +65,6 @@ public class ReservationExpirationService {
             }
         }
         return expiredCount;
-    }
-
-    private boolean moveToPaymentGrace(Reservation reservation, Instant now) {
-        List<Payment> payments = paymentRepository.findAllByReservation_IdAndStatusIn(
-            reservation.getId(), EXPIRABLE_PAYMENT_STATUSES
-        );
-        if (payments.stream().anyMatch(payment -> payment.getStatus() == PaymentStatus.PROCESSING)) {
-            return false;
-        }
-        ReservationStatus previousStatus = reservation.getStatus();
-        reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
-        reservation.setComplaintExpiresAt(
-            now.plus(java.time.Duration.ofMinutes(complaintWindowMinutes))
-        );
-        reservationRepository.saveAndFlush(reservation);
-        auditLogService.recordMutation(
-            null, "RESERVATION_PAYMENT_GRACE_STARTED", "Reservation", reservation.getId(),
-            reservation.getFacility().getId(), Map.of("status", previousStatus),
-            Map.of("status", ReservationStatus.PAYMENT_GRACE,
-                "complaintExpiresAt", reservation.getComplaintExpiresAt())
-        );
-        notificationService.createNotification(
-            reservation.getCustomer().getId(), NotificationType.RESERVATION,
-            "Chưa ghi nhận thanh toán",
-            "Đơn " + reservation.getReservationCode()
-                + " được giữ thêm 30 phút để bạn khiếu nại hoặc chủ động hủy.",
-            reservation.getId()
-        );
-        return true;
     }
 
     private boolean expireReservation(Reservation reservation, Instant now) {
