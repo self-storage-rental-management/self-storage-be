@@ -3,12 +3,14 @@ package com.storagehub.service;
 import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.config.FileProperties;
+import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.FileAsset;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.PaymentComplaint;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.PaymentComplaintRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
@@ -44,6 +46,7 @@ public class FileStorageService {
 
     private final FileProperties properties;
     private final FileAssetRepository fileAssetRepository;
+    private final CheckInRepository checkInRepository;
     private final ReservationGoodsItemRepository reservationGoodsItemRepository;
     private final UserRepository userRepository;
     private final PaymentComplaintRepository paymentComplaintRepository;
@@ -178,6 +181,19 @@ public class FileStorageService {
         UUID entityId,
         String contentType
     ) {
+        if ("CHECK_IN".equals(entityType)) {
+            if (entityId == null) {
+                throw ApiExceptions.validation("entityId is required for check-in evidence", null);
+            }
+            authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+            var checkIn = checkInRepository.findById(entityId)
+                .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
+            facilityScopeService.assertCanOperate(actor, checkIn.getReservation().getFacility().getId());
+            if (checkIn.getStatus() != CheckInStatus.scheduled) {
+                throw ApiExceptions.conflict("Evidence can only be uploaded for a scheduled check-in");
+            }
+            return;
+        }
         if (!"RESERVATION_GOODS_ITEM".equals(entityType)) {
             return;
         }

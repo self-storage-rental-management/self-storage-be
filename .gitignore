@@ -42,3 +42,7 @@ start-dev.*
 start-all.*
 uploads/
 *.log
+
+### Generated QA artifacts ###
+/output/
+/tmp/

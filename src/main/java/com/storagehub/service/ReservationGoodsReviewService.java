@@ -7,6 +7,7 @@ import com.storagehub.api.reservation.ReservationReviewResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.GoodsReviewStatus;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationStatus;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -33,14 +35,16 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ReservationGoodsReviewService {
 
-    private static final int PAYMENT_HOLD_MINUTES = 10;
-
     private final ReservationRepository reservationRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
+
+    @Value("${app.reservation.payment-window-minutes:1440}")
+    private long paymentWindowMinutes = 1440;
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationReviewResponse> listPending(
@@ -114,7 +118,28 @@ public class ReservationGoodsReviewService {
             Map.of("status", previousStatus, "goodsReviewStatus", GoodsReviewStatus.PENDING),
             Map.of("status", saved.getStatus(), "goodsReviewStatus", saved.getGoodsReviewStatus())
         );
+        notifyCustomer(saved, request.getDecision(), note);
         return response;
+    }
+
+    private void notifyCustomer(
+        Reservation reservation,
+        ReservationReviewDecision decision,
+        String note
+    ) {
+        boolean approved = decision == ReservationReviewDecision.APPROVE;
+        String content = approved
+            ? "Hàng hóa trong đơn " + reservation.getReservationCode()
+                + " đã được chấp thuận. Vui lòng thanh toán cọc trước thời hạn hiển thị trên đơn."
+            : "Hàng hóa trong đơn " + reservation.getReservationCode()
+                + " không được chấp thuận. Suất kho đã được giải phóng. Lý do: " + note;
+        notificationService.createNotification(
+            reservation.getCustomer().getId(),
+            NotificationType.RESERVATION,
+            approved ? "Hàng hóa đã được chấp thuận" : "Hàng hóa không được chấp thuận",
+            content,
+            reservation.getId()
+        );
     }
 
     private void approve(
@@ -125,7 +150,7 @@ public class ReservationGoodsReviewService {
     ) {
         reservation.setGoodsReviewStatus(GoodsReviewStatus.APPROVED);
         reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);
-        Instant paymentDueAt = now.plus(PAYMENT_HOLD_MINUTES, ChronoUnit.MINUTES);
+        Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
         reservation.setPaymentExpiresAt(paymentDueAt);
         reservation.setHoldExpiresAt(paymentDueAt);
         for (ReservationGoodsItem item : items) {
@@ -145,7 +170,11 @@ public class ReservationGoodsReviewService {
         reservation.setGoodsReviewStatus(GoodsReviewStatus.REJECTED);
         reservation.setStatus(ReservationStatus.REJECTED);
         reservation.setRejectedAt(now);
+        reservation.setArchivedAt(now);
         reservation.setRejectionReason(note);
+        reservation.setHoldExpiresAt(now);
+        reservation.setPaymentExpiresAt(null);
+        reservation.setComplaintExpiresAt(null);
         for (ReservationGoodsItem item : items) {
             if (item.isRequiresStaffReview()) {
                 item.setReviewStatus(GoodsReviewStatus.REJECTED);

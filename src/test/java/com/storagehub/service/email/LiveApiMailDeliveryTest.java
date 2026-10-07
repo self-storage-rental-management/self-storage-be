@@ -12,6 +12,7 @@ import jakarta.mail.Multipart;
 import jakarta.mail.Part;
 import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -44,6 +45,7 @@ import static org.junit.jupiter.api.Assertions.*;
     "app.bootstrap-admin.full-name=Test Administrator"
 })
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@EnabledIfEnvironmentVariable(named = "STORAGEHUB_RUN_LIVE_EMAIL_TESTS", matches = "(?i)true")
 class LiveApiMailDeliveryTest {
 
     private static final String MAILHOG_BASE = "http://localhost:8025";

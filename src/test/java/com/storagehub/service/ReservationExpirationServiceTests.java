@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -118,5 +119,23 @@ class ReservationExpirationServiceTests {
         verify(notificationService, never()).createNotification(
             any(), any(), any(), any(), any()
         );
+    }
+
+    @Test
+    void expiresWithoutComplaintWhenCustomerNeverStartedPayment() {
+        reservation.setPaymentExpiresAt(Instant.now().minusSeconds(5));
+        when(reservationRepository
+            .findTop100ByStatusAndPaymentExpiresAtLessThanEqualOrderByPaymentExpiresAtAsc(
+                eq(ReservationStatus.AWAITING_PAYMENT), any()
+            )).thenReturn(List.of(reservation));
+        when(paymentRepository.findAllByReservation_IdAndStatusIn(any(), anyCollection()))
+            .thenReturn(List.of());
+
+        service.expireDueReservations();
+
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.EXPIRED);
+        assertThat(reservation.getComplaintExpiresAt()).isNull();
+        assertThat(reservation.getArchivedAt()).isNotNull();
+        verify(notificationService).createNotification(any(), any(), any(), any(), any());
     }
 }

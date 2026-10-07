@@ -13,6 +13,7 @@ import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
@@ -38,6 +39,7 @@ public class CustomerReservationService {
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationResponse> list(
@@ -50,7 +52,9 @@ public class CustomerReservationService {
         PageRequest pageable = createPageRequest(page, size);
         Page<Reservation> reservations;
         if (status == null) {
-            reservations = reservationRepository.findAllByCustomer_IdAndArchivedAtIsNull(actor.userId(), pageable);
+            reservations = reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
+                actor.userId(), ReservationStatus.REJECTED, pageable
+            );
         } else {
             reservations = reservationRepository.findAllByCustomer_IdAndStatusAndArchivedAtIsNull(
                 actor.userId(), status, pageable
@@ -110,6 +114,12 @@ public class CustomerReservationService {
             saved.getFacility().getId(),
             Map.of("status", previousStatus),
             Map.of("status", saved.getStatus(), "reason", saved.getCancelReason())
+        );
+        notificationService.createNotification(
+            saved.getCustomer().getId(), NotificationType.RESERVATION,
+            "Đơn giữ kho đã được hủy",
+            "Đơn " + saved.getReservationCode() + " đã được hủy theo yêu cầu của bạn.",
+            saved.getId()
         );
         return response;
     }

@@ -5,6 +5,7 @@ import com.storagehub.api.unitrelease.UnitReleaseCaseResponse;
 import com.storagehub.api.unitrelease.UnitReleaseResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
+import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
@@ -146,7 +147,8 @@ public class CancelledReservationUnitReleaseService {
             || !reservation.getAssignedUnit().getId().equals(unit.getId())) {
             throw ApiExceptions.conflict("Reservation and active unit assignment do not match");
         }
-        if (checkInRepository.existsByReservation_IdAndStatus(reservationId, CheckInStatus.completed)) {
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
+        if (checkIn != null && checkIn.getStatus() == CheckInStatus.completed) {
             throw ApiExceptions.conflict("The assigned unit cannot be released because check-in is completed");
         }
         if (rentalRepository.existsActiveRental(reservationId, unit.getId(), RentalStatus.active)) {
@@ -178,6 +180,10 @@ public class CancelledReservationUnitReleaseService {
         assignment.setReleaseDisposition(request.disposition());
         assignment.setPreviousStorageUnitStatus(previousStatus);
         reservation.setAssignedUnit(null);
+        if (checkIn != null && checkIn.getStatus() == CheckInStatus.scheduled) {
+            checkIn.setStatus(CheckInStatus.cancelled);
+            checkInRepository.saveAndFlush(checkIn);
+        }
 
         storageUnitRepository.saveAndFlush(unit);
         reservationRepository.saveAndFlush(reservation);
