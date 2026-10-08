@@ -87,8 +87,11 @@ class AuthChallengeServiceTests {
             eq(pendingUser.getId()), eq(AuthChallengePurpose.EMAIL_VERIFICATION), any(Instant.class)
         );
         verify(emailService).sendVerifyEmail(
-            eq(pendingUser.getId()), eq(pendingUser.getEmail()), eq(pendingUser.getFullName()),
-            eq("http://localhost:5173/?verifyEmail=new-token"), eq(15)
+            eq(pendingUser.getId()),
+            eq(pendingUser.getEmail()),
+            eq(pendingUser.getFullName()),
+            eq("http://localhost:5173/?verifyEmail=new-token"),
+            eq(15)
         );
     }
 
@@ -108,7 +111,7 @@ class AuthChallengeServiceTests {
             .isInstanceOf(ApiException.class)
             .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(409))
             .hasMessage("Please wait 60 seconds before requesting another code");
-        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), any(Integer.class));
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -122,7 +125,7 @@ class AuthChallengeServiceTests {
 
         assertThat(response.accepted()).isTrue();
         assertThat(response.debugCode()).isNull();
-        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), any(Integer.class));
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -137,6 +140,6 @@ class AuthChallengeServiceTests {
 
         assertThat(response.accepted()).isTrue();
         assertThat(response.debugCode()).isNull();
-        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), any(Integer.class));
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
     }
 }

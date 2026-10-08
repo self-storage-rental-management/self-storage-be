@@ -13,6 +13,8 @@ import org.springframework.data.repository.query.Param;
 
 public interface UnitTypeRepository extends JpaRepository<UnitType, UUID> {
 
+    java.util.Optional<UnitType> findByFacility_IdAndCode(UUID facilityId, String code);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select unitType from UnitType unitType where unitType.id = :id")
     java.util.Optional<UnitType> findByIdForUpdate(@Param("id") UUID id);

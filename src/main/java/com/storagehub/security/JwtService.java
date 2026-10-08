@@ -43,7 +43,7 @@ public class JwtService {
         Instant expiresAt = now.plus(properties.getExpiration(), ChronoUnit.SECONDS);
         List<String> roles = user.getRoles().stream().map(role -> role.getCode().name()).sorted().toList();
         List<String> permissions = user.getRoles().stream()
-            .flatMap(role -> role.getPermissions().stream())
+            .flatMap(role -> role.getEffectivePermissions().stream())
             .map(permission -> permission.getCode())
             .distinct()
             .sorted()

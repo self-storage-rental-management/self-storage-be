@@ -71,7 +71,7 @@ class BusinessPolicyServiceTests {
             UUID.randomUUID(),
             UUID.randomUUID(),
             Set.of(RoleCode.BUSINESS),
-            Set.of("manage_policies", "view_policies"),
+            Set.of("policies:update", "policies:read"),
             Map.of(facilityId, com.storagehub.domain.model.FacilityScopeLevel.MANAGE)
         );
     }
