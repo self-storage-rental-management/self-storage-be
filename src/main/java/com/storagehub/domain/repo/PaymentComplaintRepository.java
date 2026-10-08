@@ -16,7 +16,6 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PaymentComplaintRepository extends JpaRepository<PaymentComplaint, UUID> {
-    long countByCustomer_IdAndSubmittedAtAfter(UUID customerId, java.time.Instant submittedAfter);
     Optional<PaymentComplaint> findByReservation_Id(UUID reservationId);
     Optional<PaymentComplaint> findByReservation_IdAndCustomer_Id(UUID reservationId, UUID customerId);
 

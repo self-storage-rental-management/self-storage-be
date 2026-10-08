@@ -124,7 +124,8 @@ class ReservationQuoteServiceTests {
         CompatibilityCheckResponse response = new CompatibilityCheckResponse(
             facility.getId(), unitType.getId(), request.getStartDate(), request.getEndDate(),
             CompatibilityResult.COMPATIBLE, new BigDecimal("0.18"), new BigDecimal("36"),
-            new BigDecimal("15"), new BigDecimal("1000"), 2, false, List.of()
+            new BigDecimal("15"), new BigDecimal("1000"), new BigDecimal("0.80"),
+            new BigDecimal("28.8"), 1, 4, 2, false, List.of()
         );
         when(compatibilityService.check(any(), any())).thenReturn(response);
     }

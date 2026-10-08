@@ -72,6 +72,11 @@ Quy tắc:
 - Sau khi Reservation và dòng hàng đã được tạo, ảnh được upload bằng `POST /api/files` với `entityType=RESERVATION_GOODS_ITEM` và `entityId` là ID của dòng hàng.
 - BE tự tính tổng thể tích và tổng khối lượng.
 - Compatibility dùng kích thước và số khung do Unit Type quản lý; không dùng door-fit hoặc giá theo mét khối.
+- Mỗi kiện phải lọt vào một khung theo ít nhất một trong 6 hướng xoay.
+- Các dòng hàng được gộp chung theo tổng thể tích, không mặc định mỗi loại hàng chiếm một khung riêng.
+- `usableVolumePerRackM3 = rackLengthM × rackWidthM × rackHeightM × 0.80`.
+- `requiredRackCount = ceil(totalGoodsVolumeM3 / usableVolumePerRackM3)` và phải không vượt quá `unitRackCount`.
+- Compatibility response trả thêm `rackUtilizationRate`, `usableVolumePerRackM3`, `requiredRackCount` và `unitRackCount`; FE chỉ preview, kết quả BE là chính thức.
 - Preview không giữ capacity và không được dùng thay validation lúc tạo reservation.
 
 ## 4. Quote

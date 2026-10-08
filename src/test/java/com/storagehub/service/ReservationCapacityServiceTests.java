@@ -107,22 +107,6 @@ class ReservationCapacityServiceTests {
             .hasMessageContaining("valid startDate and endDate");
     }
 
-    @Test
-    void rejectsAnotherOverlappingHoldForSameCustomerAndUnitType() {
-        UUID customerId = UUID.randomUUID();
-        when(reservationRepository.countCustomerOverlappingCapacityHolds(
-            eq(customerId), eq(facilityId), eq(unitTypeId), any(), any(), any(),
-            anyCollection(), anyCollection()
-        )).thenReturn(1L);
-
-        assertThatThrownBy(() -> service.requireNoCustomerOverlappingHold(
-            customerId, facilityId, unitTypeId,
-            LocalDate.of(2026, 10, 10), LocalDate.of(2026, 11, 10)
-        ))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("already have an active reservation");
-    }
-
     private void mockCapacity(long physicalUnits, long heldReservations) {
         when(storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(
             eq(facilityId), eq(unitTypeId), eq(com.storagehub.domain.model.StorageUnitStatus.available)

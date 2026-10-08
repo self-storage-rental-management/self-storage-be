@@ -65,6 +65,7 @@ class AuthChallengeServiceTests {
 
     @Test
     void resendsVerificationForPendingAccountAndInvalidatesOldChallenge() {
+        when(environment.getActiveProfiles()).thenReturn(new String[] {"local"});
         when(userRepository.findByEmailIgnoreCase("pending@storagehub.test"))
             .thenReturn(Optional.of(pendingUser));
         when(challengeRepository.findTopByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(

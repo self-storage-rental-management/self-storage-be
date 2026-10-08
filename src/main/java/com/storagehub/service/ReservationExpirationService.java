@@ -51,7 +51,7 @@ public class ReservationExpirationService {
                 ReservationStatus.AWAITING_PAYMENT, now
             );
         for (Reservation reservation : paymentDue) {
-            if (moveToPaymentGrace(reservation, now)) {
+            if (expireReservation(reservation, now)) {
                 expiredCount++;
             }
         }
@@ -65,35 +65,6 @@ public class ReservationExpirationService {
             }
         }
         return expiredCount;
-    }
-
-    private boolean moveToPaymentGrace(Reservation reservation, Instant now) {
-        List<Payment> payments = paymentRepository.findAllByReservation_IdAndStatusIn(
-            reservation.getId(), EXPIRABLE_PAYMENT_STATUSES
-        );
-        if (payments.stream().anyMatch(payment -> payment.getStatus() == PaymentStatus.PROCESSING)) {
-            return false;
-        }
-        ReservationStatus previousStatus = reservation.getStatus();
-        reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
-        Instant paymentDeadline = reservation.getPaymentExpiresAt() == null
-            ? now : reservation.getPaymentExpiresAt();
-        reservation.setComplaintExpiresAt(paymentDeadline.plus(java.time.Duration.ofMinutes(30)));
-        reservationRepository.saveAndFlush(reservation);
-        auditLogService.recordMutation(
-            null, "RESERVATION_PAYMENT_GRACE_STARTED", "Reservation", reservation.getId(),
-            reservation.getFacility().getId(), Map.of("status", previousStatus),
-            Map.of("status", ReservationStatus.PAYMENT_GRACE,
-                "complaintExpiresAt", reservation.getComplaintExpiresAt())
-        );
-        notificationService.createNotification(
-            reservation.getCustomer().getId(), NotificationType.RESERVATION,
-            "Chưa ghi nhận thanh toán",
-            "Đơn " + reservation.getReservationCode()
-                + " được giữ thêm 30 phút để bạn khiếu nại hoặc chủ động hủy.",
-            reservation.getId()
-        );
-        return true;
     }
 
     private boolean expireReservation(Reservation reservation, Instant now) {
