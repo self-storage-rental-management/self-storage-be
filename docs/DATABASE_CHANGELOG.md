@@ -178,3 +178,13 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - Runtime uses actual owner policy/accounting/calendar/assignment/evidence/hold/Recovery adapters. Until installed, related operations fail closed; no fake paid/balance/capacity/payout state.
 - `ddl-auto=update` can create additive tables on startup. Do not start against team/shared DB until schema/lock/permission owners approve. H2 test schema creation is isolated and not production migration evidence.
 - Contracts: `RENEWAL_OPERATIONS_API_CONTRACT.md`, `OVERDUE_API_CONTRACT.md`.
+
+## 2026-10-08 — D5 Support workflow (rollout pending)
+
+- Five additive tables: `support_workflow_states`, `support_messages`, `support_workflow_events`, `support_escalations`, `support_command_receipts`.
+- Reuse existing `support_tickets` / `SupportTicketStatus` unchanged; no shared table ALTER, policy/permission seed, delete, rewrite or legacy backfill.
+- Workflow metadata holds version/reassignment revision, timestamps and follow-up references; messages explicitly distinguish PUBLIC/INTERNAL; command receipts enforce actor/operation/key idempotency.
+- Review-only DDL: `docs/sql/support-workflow-schema.sql`; NOT an enabled migration and NOT executed by this task.
+- File authorization/binding, SLA/calendar/close policy and trusted module results require owner adapters. Default STAFF lacks `MANAGE_SUPPORT`; no implicit grant in D5.
+- `ddl-auto=update` may create additive tables on startup. Shared DB startup remains subject to schema/permission owner approval; isolated H2 tests are not MySQL/TiDB migration evidence.
+- API contract: `SUPPORT_API_CONTRACT.md`. No public auto-close endpoint or automatically enabled scheduler.
