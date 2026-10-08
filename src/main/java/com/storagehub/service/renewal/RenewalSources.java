@@ -15,7 +15,15 @@ public final class RenewalSources {
     public record Financial(Instant checkedAt, List<UUID> dueObligations, boolean unresolvedDispute) {}
     public interface PolicySource { Optional<Policy> read(Rental rental, LocalDate extensionStart); }
     public interface EligibilitySource { Optional<Eligibility> read(Rental rental, Instant now); }
-    public interface FinancialSource { Optional<Financial> read(Rental rental); }
+    public interface FinancialSource {
+        Optional<Financial> read(Rental rental);
+        /** Owner guarantees debt/dispute cannot change unnoticed until approval commits (shared locks/version protocol). */
+        default boolean consistentThroughApproval() { return false; }
+    }
+    /** Owner provides expiry/payment/signing handoff; a mere runtime flag is not an implementation. */
+    public interface ApprovalLifecycleSource {
+        boolean ready(Rental rental);
+    }
     public record Price(UUID packageId,String packageCode,String packageVersion,UUID unitTypeId,
         int months,BigDecimal monthlyPrice,BigDecimal discountRate,String currency,int moneyScale) {}
     /** Authoritative pricing + agreed currency/rounding. No adapter is provided until the owner publishes it. */

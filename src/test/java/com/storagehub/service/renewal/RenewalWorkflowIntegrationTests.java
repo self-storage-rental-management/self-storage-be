@@ -36,14 +36,20 @@ class RenewalWorkflowIntegrationTests {
         @Bean TestPrice prices(){return new TestPrice();}
         @Bean TestFinance finance(){return new TestFinance();}
         @Bean TestHold hold(){return new TestHold();}
+        @Bean TestLifecycle lifecycle(){return new TestLifecycle();}
     }
     static class TestPrice implements RenewalSources.PricingSource {
         BigDecimal rate=new BigDecimal("100");
         public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,BigDecimal.ZERO,"VND",2)));}
     }
     static class TestFinance implements RenewalSources.FinancialSource {
-        boolean unknown=false;boolean debt=false;
+        boolean unknown=false;boolean debt=false;boolean consistent=true;
+        public boolean consistentThroughApproval(){return consistent;}
         public Optional<RenewalSources.Financial> read(Rental r){return unknown?Optional.empty():Optional.of(new RenewalSources.Financial(NOW,debt?List.of(PACKAGE):List.of(),false));}
+    }
+    static class TestLifecycle implements RenewalSources.ApprovalLifecycleSource {
+        boolean available=true;
+        public boolean ready(Rental rental){return available;}
     }
     static class TestClock extends Clock {
         Instant time=NOW;public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId zone){return Clock.fixed(time,zone);}public Instant instant(){return time;}
@@ -59,6 +65,7 @@ class RenewalWorkflowIntegrationTests {
     }
     @Autowired EntityManager em;@Autowired RenewalWorkflowService commands;@Autowired RenewalReadService reads;
     @Autowired TestPrice pricing;@Autowired TestFinance finance;@Autowired TestHold hold;
+    @Autowired TestLifecycle lifecycle;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired TestClock clock;
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
@@ -77,7 +84,37 @@ class RenewalWorkflowIntegrationTests {
         mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","http").contentType("application/json").content(body)).andExpect(status().isCreated());
         assertThat(em.createQuery("select count(x) from Renewal x",Long.class).getSingleResult()).isEqualTo(1);
     }
-    @BeforeEach void resetSources(){pricing.rate=new BigDecimal("100");finance.unknown=false;finance.debt=false;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;}
+    @BeforeEach void resetSources(){pricing.rate=new BigDecimal("100");finance.unknown=false;finance.debt=false;finance.consistent=true;lifecycle.available=true;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;}
+    @Test void approvalRequiresFinanceConsistencyAndDownstreamLifecycle(){
+        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
+        finance.consistent=false;
+        assertThat(reads.detail(manager(r),n.id(),true).allowedActions()).contains("REJECT").doesNotContain("APPROVE");
+        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"finance-unsafe")).isInstanceOf(ApiException.class);
+        finance.consistent=true;lifecycle.available=false;
+        assertThat(reads.detail(manager(r),n.id(),true).disabledReasons()).anyMatch(reason->reason.contains("lifecycle"));
+        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"no-lifecycle")).isInstanceOf(ApiException.class);
+        assertThat(hold.calls).isZero();assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.pending);
+    }
+    @Test void acceptedTermsSurviveReloadAndCurrentPriceChange(){
+        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
+        pricing.rate=new BigDecimal("200");em.clear();
+        var detail=reads.detail(a,n.id(),false);
+        assertThat(detail.acceptedTerms()).usingRecursiveComparison()
+            .withComparatorForType(BigDecimal::compareTo,BigDecimal.class).isEqualTo(q.terms());
+        assertThat(detail.acceptedTerms().monthlyPrice()).isEqualByComparingTo("100");
+        assertThat(detail.acceptedTerms().renewalDepositAmount()).isEqualByComparingTo("20");
+        assertThat(detail.acceptedTerms().remainingRentalAmount()).isEqualByComparingTo("80");
+        assertThat(detail.reviewState()).isEqualTo("AWAITING_CUSTOMER_CONFIRMATION");
+    }
+    @Test void mismatchedPersistedAmountFailsReadWithoutRepair(){
+        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
+        em.find(Renewal.class,n.id()).setAmount(new BigDecimal("999"));em.flush();
+        assertThatThrownBy(()->reads.detail(a,n.id(),false)).isInstanceOf(ApiException.class);
+        assertThat(em.find(Renewal.class,n.id()).getAmount()).isEqualByComparingTo("999");
+    }
     @Test void acceptedPendingDoesNotExpireWithQuoteTtl(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
         clock.time=NOW.plusSeconds(1801);
@@ -152,6 +189,7 @@ class RenewalWorkflowIntegrationTests {
         var body=new RenewalCommands.Cancel("test cancel",n.version());var cancelled=commands.cancel(a,n.id(),body,"cancel");
         assertThat(cancelled.status()).isEqualTo(RenewalStatus.cancelled);assertThat(commands.cancel(a,n.id(),body,"cancel")).isEqualTo(cancelled);
         assertThat(cancelled.reviewerId()).isNull();assertThat(cancelled.reviewedAt()).isNull();assertThat(em.find(RenewalWorkflow.class,n.id()).getCancellationReason()).isEqualTo("test cancel");
+        em.flush();em.clear();assertThat(reads.detail(a,n.id(),false).cancellationReason()).isEqualTo("test cancel");
         assertThat(em.find(RenewalOpenSlot.class,r.getId())).isNull();assertThat(em.find(Renewal.class,n.id())).isNotNull();assertThat(hold.calls).isZero();
     }
     @Test void rejectPersistsActorReasonAndNoHold(){

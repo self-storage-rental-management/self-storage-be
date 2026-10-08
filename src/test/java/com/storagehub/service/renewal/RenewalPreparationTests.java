@@ -74,7 +74,7 @@ class RenewalPreparationTests {
         var store=mock(com.storagehub.service.renewal.persistence.RenewalPersistence.class);
         when(store.lockRental(any())).thenReturn(rental);
         return new RenewalWorkflowService(repo,mock(RenewalReadService.class),store,mock(jakarta.persistence.EntityManager.class),
-            new com.fasterxml.jackson.databind.ObjectMapper(),mock(com.storagehub.service.AuditLogService.class),provider(),provider(),provider(),provider(),provider(),provider());
+            new com.fasterxml.jackson.databind.ObjectMapper(),mock(com.storagehub.service.AuditLogService.class),provider(),provider(),provider(),provider(),provider(),provider(),provider());
     }
     private ActorPrincipal actor(RoleCode role,Set<String> permissions,Map<UUID,FacilityScopeLevel> scopes){return new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(role),permissions,scopes);}
     private ActorPrincipal customer(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());}
