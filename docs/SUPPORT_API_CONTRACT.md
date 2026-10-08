@@ -1,134 +1,137 @@
-# D5 — Support API contract
+# D5 — Đặc tả API hỗ trợ
 
-Status: additive backend implementation, 08/10/2026. Shared-source integrations and schema rollout remain gated. This document describes implemented behavior, not a claim that every dependency is deployed.
+Trạng thái: triển khai BE theo hướng bổ sung, 08/10/2026. Tích hợp nguồn dùng chung và triển khai schema vẫn phải đáp ứng các điều kiện kiểm soát. Tài liệu mô tả hành vi đã triển khai, không khẳng định mọi phụ thuộc đã được đưa vào vận hành.
 
-## Ownership and boundary
+## Trách nhiệm và ranh giới
 
-- Customer owns creation/public conversation, explicit reopen and resolution confirmation.
-- Facility Manager owns facility-scoped assignment/reassignment and escalation coordination only.
-- The currently assigned, active Facility Staff owns acceptance, processing, request for information and resolution.
-- Business Operations owns SLA/close policy and working calendar. Support consumes policy; it does not create a separate policy or edit BO data.
-- Shared module owners own payment/refund/return/maintenance/account/renewal/overdue results. A Support message is not proof that those operations succeeded.
-- Existing `SupportTicket`, `SupportTicketStatus`, `User`, permissions, facility scopes and file service are reused unchanged. No parallel task assignment source, new backend, external API or seeded business records.
+- Customer phụ trách tạo yêu cầu/trao đổi công khai, chủ động mở lại và xác nhận kết quả xử lý.
+- Facility Manager chỉ phụ trách phân công/giao lại trong phạm vi cơ sở và điều phối yêu cầu chuyển module xử lý (escalation).
+- Facility Staff đang hoạt động, hiện được phân công phụ trách việc nhận, xử lý, yêu cầu bổ sung và báo kết quả.
+- Business Operations sở hữu policy SLA/đóng yêu cầu và lịch làm việc. Support áp dụng policy; không tạo policy riêng hoặc sửa dữ liệu BO.
+- Chủ các module dùng chung sở hữu kết quả thanh toán/hoàn tiền/trả kho/bảo trì/tài khoản/gia hạn/quá hạn. Tin nhắn Support không phải bằng chứng các thao tác đó đã thành công.
+- Tái sử dụng nguyên trạng `SupportTicket`, `SupportTicketStatus`, `User`, quyền, phạm vi cơ sở và dịch vụ file hiện có. Không có nguồn phân công nhiệm vụ song song, backend mới, API bên ngoài hoặc bản ghi nghiệp vụ tạo sẵn.
 
-## Authentication and scope
+## Xác thực và phạm vi
 
-All routes use the existing Bearer authentication and response envelopes (`ApiResponse`, `PageResponse`, `ApiErrorResponse`, correlation ID).
+Mọi đường dẫn sử dụng xác thực Bearer và cấu trúc bao phản hồi hiện có (`ApiResponse`, `PageResponse`, `ApiErrorResponse`, correlation ID).
 
-Current persisted user status/roles/permissions/facility scopes are rechecked, not just token claims. Customer must own the ticket and every linked record. Manager reads require `VIEW_SUPPORT` + READ scope; commands require `MANAGE_SUPPORT` + MANAGE scope. Staff must be current assignee, have `VIEW_SUPPORT` and `MANAGE_SUPPORT`, and OPERATE/MANAGE scope. Reassignment revokes the old Staff's reads, commands and cached command replay.
+Kiểm tra lại trạng thái/role/quyền/phạm vi cơ sở hiện được lưu của người dùng, không chỉ dựa vào thông tin trong token. Customer phải sở hữu ticket và mọi hồ sơ liên kết. Manager đọc cần `VIEW_SUPPORT` + phạm vi READ; lệnh cần `MANAGE_SUPPORT` + phạm vi MANAGE. Staff phải là người đang được phân công, có `VIEW_SUPPORT` và `MANAGE_SUPPORT`, cùng phạm vi OPERATE/MANAGE. Giao lại thu hồi quyền đọc, thực thi lệnh và nhận lại kết quả lệnh đã lưu của Staff cũ.
 
-**Deployment gate:** current `RoleDataInitializer` does not grant `MANAGE_SUPPORT` to STAFF. This task intentionally does not change it. The permission owner must approve/grant that permission through the existing role mechanism before Staff can operate D5; absent the grant, API rejects access and Staff options exclude ineligible users. Do not use a manager token to bypass this.
+**Điều kiện triển khai:** `RoleDataInitializer` hiện không cấp `MANAGE_SUPPORT` cho STAFF. Tác vụ này chủ ý không thay đổi điều đó. Chủ phần phân quyền phải duyệt/cấp quyền qua cơ chế role hiện có trước khi Staff vận hành D5; nếu chưa cấp, API từ chối truy cập và danh sách Staff loại người không đủ điều kiện. Không dùng token Manager để vượt chặn.
 
-Legacy null-facility tickets are excluded from scoped lists and return 404; there is no implied global triage permission. Scoped legacy tickets without verified workflow metadata can be read with `workflowReady=false` but not mutated. No automatic backfill.
+Ticket cũ không có cơ sở bị loại khỏi danh sách theo phạm vi và trả 404; không ngầm có quyền phân loại/xử lý toàn hệ thống. Ticket cũ có cơ sở trong phạm vi nhưng chưa có metadata workflow đã xác minh được đọc với `workflowReady=false`, không được thay đổi. Không tự bổ sung ngược dữ liệu.
 
-## Routes
+## Đường dẫn API
 
-Prefix `C = /api/customer/support-tickets`, `M = /api/manager/support-tickets`, `S = /api/staff/support-tickets`.
+Tiền tố `C = /api/customer/support-tickets`, `M = /api/manager/support-tickets`, `S = /api/staff/support-tickets`.
 
-| Method / route | Behavior |
+| Phương thức / đường dẫn | Hành vi |
 | --- | --- |
-| POST C | Create owned ticket; 201 |
-| GET C, GET C/{id} | Owned list/detail |
-| GET C/{id}/messages | PUBLIC messages only; exclude internal rows before count/pagination |
-| POST C/{id}/messages | Public reply; 201 |
-| POST C/{id}/close | Customer confirms resolved ticket, shared policy required |
-| POST C/{id}/reopen | Explicit resolved → in_progress/open |
-| POST C/{id}/follow-ups | New linked ticket for closed parent; 201 |
-| GET M, GET M/{id} | Scoped list/detail |
-| GET M/staff-options?facilityId=UUID | Eligible Staff IDs in managed facility; page/size |
-| POST M/{id}/assignment | Assign/reassign by ID and reason |
-| GET M/{id}/messages, /events, /escalations | Scoped internal/public views |
-| POST M/{id}/escalations/{escalationId}/decision | ROUTE/REJECT only |
-| GET S, GET S/{id} | Current assigned list/detail |
+| POST C | Tạo ticket thuộc Customer; 201 |
+| GET C, GET C/{id} | Danh sách/chi tiết thuộc Customer |
+| GET C/{id}/messages | Chỉ tin nhắn PUBLIC; loại dòng nội bộ trước đếm/phân trang |
+| POST C/{id}/messages | Phản hồi công khai; 201 |
+| POST C/{id}/close | Customer xác nhận ticket đã xử lý; cần policy chung |
+| POST C/{id}/reopen | Chủ động chuyển resolved → in_progress/open |
+| POST C/{id}/follow-ups | Ticket mới liên kết ticket cha đã đóng; 201 |
+| GET M, GET M/{id} | Danh sách/chi tiết trong phạm vi |
+| GET M/staff-options?facilityId=UUID | ID Staff đủ điều kiện trong cơ sở quản lý; page/size |
+| POST M/{id}/assignment | Phân công/giao lại bằng ID và lý do |
+| GET M/{id}/messages, /events, /escalations | Dữ liệu nội bộ/công khai trong phạm vi |
+| POST M/{id}/escalations/{escalationId}/decision | Chỉ ROUTE/REJECT |
+| GET S, GET S/{id} | Danh sách/chi tiết hiện được phân công |
 | POST S/{id}/accept | open → in_progress |
-| GET S/{id}/messages, /events, /escalations | Current assignment views |
-| POST S/{id}/messages | PUBLIC reply or INTERNAL note; 201 |
+| GET S/{id}/messages, /events, /escalations | Dữ liệu thuộc phân công hiện tại |
+| POST S/{id}/messages | Phản hồi PUBLIC hoặc ghi chú INTERNAL; 201 |
 | POST S/{id}/request-information | in_progress → waiting_customer |
-| POST S/{id}/resolution | in_progress → resolved, verified outcome |
-| POST S/{id}/escalations | Request authorized module coordination; 201 |
+| POST S/{id}/resolution | in_progress → resolved, kết quả đã xác minh |
+| POST S/{id}/escalations | Đề nghị điều phối tới module được phép; 201 |
 
-There is no Manager resolution endpoint, Customer internal timeline, arbitrary recipient endpoint, client ACK/result endpoint, or public auto-close endpoint.
+Không có endpoint Manager báo xử lý xong, dòng thời gian nội bộ cho Customer, endpoint chọn người nhận tùy ý, endpoint client ghi ACK/kết quả, hoặc endpoint công khai tự đóng.
 
-## Payload and retry rules
+## Quy tắc payload và thử lại
 
-All POST commands require `Idempotency-Key` (1–100 nonblank characters). Scope: actor + command operation + key; resource ID and normalized request payload are fingerprinted. Identical retry returns the stored result, not a second mutation/notification. Different payload for the same key returns 409. Authorization is rechecked before replay; replay precedes fresh state/version checks. Keys are hashed in receipts. Retain receipts while retry guarantees are required; do not silently expire them.
+Mọi lệnh POST yêu cầu `Idempotency-Key` (1–100 ký tự, không chỉ chứa khoảng trắng). Phạm vi: người thao tác + thao tác lệnh + key; tạo dấu nhận diện từ ID tài nguyên và payload yêu cầu đã chuẩn hóa. Thử lại giống hệt trả kết quả đã lưu, không thay đổi dữ liệu/gửi thông báo lần hai. Cùng key nhưng payload khác trả 409. Kiểm tra lại quyền trước khi trả kết quả đã lưu; trả kết quả đã lưu trước khi kiểm tra trạng thái/phiên bản mới. Key được băm trong bản ghi xác nhận lệnh. Giữ các bản ghi xác nhận chừng nào còn cần bảo đảm thử lại; không âm thầm cho hết hạn.
 
-Transitions/assignment/coordination require nonnegative `expectedVersion` from the latest ticket detail. Customer reply requires it specifically when resuming `waiting_customer`. Ordinary message appends do not require an expected version. Ticket pessimistic locks serialize append/transition/reassignment/auto-close; separate workflow `@Version` detects stale transitions, without adding a version column to the shared entity. Assignment revision increments on reassignment and acceptance is reset.
+Chuyển trạng thái/phân công/điều phối cần `expectedVersion` không âm lấy từ chi tiết ticket mới nhất. Phản hồi Customer bắt buộc trường này khi tiếp tục từ `waiting_customer`. Thêm tin nhắn thông thường không cần phiên bản dự kiến. Khóa bi quan trên ticket tuần tự hóa thêm tin/chuyển trạng thái/giao lại/tự đóng; `@Version` trên workflow riêng phát hiện chuyển trạng thái theo phiên bản cũ, không thêm cột version vào entity dùng chung. Phiên bản phân công tăng khi giao lại và việc đã nhận bị đặt lại.
 
-Unknown/repeated query parameters, unknown JSON properties, duplicate JSON keys, trailing JSON and bodies over 64 KiB are rejected only for D5 controllers. Existing modules' Jackson settings are not changed.
+Tham số truy vấn không hỗ trợ/lặp, thuộc tính JSON không hỗ trợ, khóa JSON trùng, JSON thừa phía sau và body trên 64 KiB chỉ bị từ chối trong controller D5. Không thay cấu hình Jackson của module hiện có.
 
-Technical transport limits (not BO policy): subject 1–200, description/message/summary 1–4000, reason 1–2000, optional feedback up to 2000 characters; max 10 distinct, non-null file UUIDs. No raw URLs. Customer cannot submit priority, visibility, arbitrary actor/assignee or result status.
+Giới hạn kỹ thuật truyền dữ liệu (không phải policy BO): subject 1–200, description/message/summary 1–4000, reason 1–2000, feedback tùy chọn tối đa 2000 ký tự; tối đa 10 UUID file khác nhau và không null. Không nhận URL nguyên văn. Customer không được gửi priority, visibility, actor/assignee tùy ý hoặc trạng thái kết quả.
 
-Example creation without a link:
+Ví dụ tạo không liên kết hồ sơ:
 
 ```json
 {"subject":"Access question","description":"Please help","facilityId":"<active-facility-uuid>","evidenceFileIds":[]}
 ```
 
-Example with an owned record (facility is derived; if supplied it must match):
+Ví dụ liên kết hồ sơ thuộc Customer (cơ sở được suy ra; nếu gửi thêm cơ sở thì phải khớp):
 
 ```json
 {"subject":"Rental question","description":"Please check this record","linkedRecord":{"type":"RENTAL","id":"<owned-rental-uuid>"}}
 ```
 
-Link types: `RENTAL`, `RESERVATION`, `PAYMENT`, `STORAGE_UNIT`. Payment ownership follows its Reservation's Customer, not the payment initiator alone. Unit links require a Rental association with the Customer, not knowledge of a unit UUID. No link requires an active facility ID.
+Loại liên kết: `RENTAL`, `RESERVATION`, `PAYMENT`, `STORAGE_UNIT`. Quyền sở hữu Payment theo Customer của Reservation tương ứng, không chỉ theo người khởi tạo thanh toán. Liên kết gian kho yêu cầu quan hệ Rental với Customer, không chỉ biết UUID gian kho. Khi không liên kết hồ sơ, cần ID cơ sở đang hoạt động.
 
-Assignment: `{"assignedStaffId":"<eligible-uuid>","expectedVersion":0,"reason":"Shift allocation"}`. The version above is illustrative; always use the actual current value.
+Phân công: `{"assignedStaffId":"<eligible-uuid>","expectedVersion":0,"reason":"Shift allocation"}`. Phiên bản trên chỉ để minh họa; luôn dùng giá trị hiện tại thực tế.
 
-Accept: `{"expectedVersion":1}`. Staff message: `{"body":"Progress update","visibility":"PUBLIC","evidenceFileIds":[]}`. Customer message: `{"body":"Requested details","expectedVersion":2}`. Request information: `{"message":"Please provide details","expectedVersion":2}`. Resolution: `{"summary":"Outcome and explanation","expectedVersion":3}`. Reopen: `{"reason":"Issue persists","expectedVersion":4}`. Close: `{"expectedVersion":4,"feedback":"Confirmed"}`.
+Nhận việc: `{"expectedVersion":1}`. Tin nhắn Staff: `{"body":"Progress update","visibility":"PUBLIC","evidenceFileIds":[]}`. Tin nhắn Customer: `{"body":"Requested details","expectedVersion":2}`. Yêu cầu bổ sung: `{"message":"Please provide details","expectedVersion":2}`. Báo kết quả: `{"summary":"Outcome and explanation","expectedVersion":3}`. Mở lại: `{"reason":"Issue persists","expectedVersion":4}`. Đóng: `{"expectedVersion":4,"feedback":"Confirmed"}`.
 
-## Lifecycle
+## Vòng đời
 
-- New ticket: `open`, unassigned Manager queue. Manager assignment still leaves `open` until Staff accepts.
-- Reassign nonterminal only: new Staff ID, required reason, increment revision, clear acceptance, preserve immutable events/messages, state `open`.
-- Staff must accept current assignment before messaging/processing/resolving. No Manager completion-as-Staff path.
-- `request-information` creates a PUBLIC question and enters `waiting_customer`; an INTERNAL note does not change state or notify Customer. A versioned Customer PUBLIC reply resumes `in_progress`.
-- PUBLIC Staff replies notify Customer and record first/last public reply timestamps. Internal notes do neither.
-- Resolve requires current accepted Staff, `in_progress`, summary, verified linked-objective result if applicable, and no unresolved escalation. Generic unlinked informational tickets may be resolved with a Staff explanation.
-- A reply to `resolved` does not silently reopen. Explicit reopen returns to eligible accepted Staff (`in_progress`) or clears ineligible assignment and returns to Manager queue (`open`).
-- `closed` cannot be replied to/reopened/reassigned. Customer creates a same-facility linked follow-up; no internal content or files are cloned.
-- Closing a ticket does not clear debt, mark a refund paid, release a unit, close a Return case or complete another module's task.
+- Ticket mới: `open`, chưa phân công, nằm trong hàng đợi Manager. Manager phân công vẫn giữ `open` cho đến khi Staff nhận.
+- Chỉ giao lại khi chưa ở trạng thái kết thúc: ID Staff mới, bắt buộc lý do, tăng phiên bản phân công, xóa xác nhận đã nhận, giữ sự kiện/tin nhắn bất biến, trạng thái `open`.
+- Staff phải nhận phân công hiện tại trước khi nhắn/xử lý/báo kết quả. Không có luồng Manager hoàn thành thay Staff.
+- `request-information` tạo câu hỏi PUBLIC và chuyển `waiting_customer`; ghi chú INTERNAL không đổi trạng thái hoặc thông báo Customer. Phản hồi PUBLIC của Customer kèm phiên bản tiếp tục `in_progress`.
+- Phản hồi PUBLIC của Staff thông báo Customer và ghi thời điểm phản hồi công khai đầu/cuối. Ghi chú nội bộ không thực hiện hai việc này.
+- Báo kết quả cần Staff hiện tại đã nhận, trạng thái `in_progress`, nội dung kết quả, kết quả mục tiêu liên kết đã xác minh nếu có, và không còn escalation chưa giải quyết. Ticket hỏi thông tin chung không liên kết có thể được xử lý xong bằng giải thích của Staff.
+- Trả lời ticket `resolved` không âm thầm mở lại. Chủ động mở lại trả cho Staff đủ điều kiện đã nhận (`in_progress`), hoặc xóa phân công không còn đủ điều kiện và trả về hàng đợi Manager (`open`).
+- Ticket `closed` không thể được trả lời/mở lại/giao lại. Customer tạo yêu cầu tiếp nối liên kết cùng cơ sở; không sao chép nội dung hoặc file nội bộ.
+- Đóng ticket không xóa nợ, đánh dấu hoàn tiền đã chi, giải phóng gian kho, đóng hồ sơ Return hoặc hoàn thành nhiệm vụ của module khác.
 
-## Shared sources / fail-closed integration
+## Nguồn chung / tích hợp theo nguyên tắc thiếu điều kiện thì chặn
 
-Extension interfaces live in `SupportSources`; **no fabricated runtime implementations are installed**. Test adapters are confined to `src/test`.
+Các giao diện mở rộng nằm trong `SupportSources`; **không cài đặt lớp triển khai giả chạy thực tế**. Bộ kết nối kiểm thử chỉ nằm trong `src/test`.
 
-| Shared source | Integration / behavior when absent |
+| Nguồn dùng chung | Tích hợp / hành vi khi thiếu |
 | --- | --- |
-| EvidenceSource | Must implement current attach/read authorization and atomic binding of file ownership/visibility in the same transaction or a durable outbox. Missing/non-atomic source: nonempty attachment commands return 409 `DEFERRED_SOURCE`; text-only commands remain usable. Missing read source: return UNKNOWN and no file IDs. Continue using the shared download authorization, not a new endpoint. |
-| SlaSource | BO priority/policy/version + calendar-derived first reply/next daily update deadlines. Missing: `slaCompleteness=UNKNOWN`, SLA null, explicit missing reason. Never infer zero/healthy or let Customer set priority. Processing pause must reflect `waiting_customer` only. |
-| ClosePolicySource | BO policy/version, Customer-close permission and authoritative auto-close deadline. Missing: close/auto-close blocked. Deadline cannot precede resolved+7 calendar days. |
-| ResolutionSource | Verify actual linked objective outcome. Missing: linked ticket resolution and final close blocked; note/refund-pending does not count as result. |
-| EscalationSource | Must advertise supported modules + transactional/durable routing. Missing: reject escalation before creating an unresolved dead end. Trusted ACK/result is read from receiver and must match ticket/escalation/receiver refs. |
+| EvidenceSource | Phải triển khai quyền đính kèm/đọc hiện tại và ràng buộc nguyên tử quyền sở hữu/phạm vi hiển thị file trong cùng giao dịch hoặc qua outbox bền vững. Thiếu nguồn/nguồn không nguyên tử: lệnh có file đính kèm trả 409 `DEFERRED_SOURCE`; lệnh chỉ văn bản vẫn dùng được. Thiếu nguồn đọc: trả UNKNOWN, không trả ID file. Tiếp tục dùng quyền tải file chung, không tạo endpoint mới. |
+| SlaSource | Priority/policy/phiên bản BO + hạn phản hồi đầu/cập nhật hằng ngày tiếp theo tính theo lịch. Thiếu: `slaCompleteness=UNKNOWN`, SLA null, lý do thiếu rõ ràng. Không suy số 0/đang đúng hạn hoặc cho Customer đặt priority. Tạm dừng xử lý chỉ được phản ánh `waiting_customer`. |
+| ClosePolicySource | Policy/phiên bản BO, quyền Customer đóng và hạn tự đóng có thẩm quyền. Thiếu: chặn đóng/tự đóng. Hạn không được trước thời điểm resolved + 7 ngày lịch. |
+| NotificationSource | Bằng chứng delivery của thông báo kết quả/thời gian xem xét, gắn đúng ticket, Customer, RESOLVED event hiện tại và policy/version. `consistentThroughClose()` mặc định false; chưa có authoritative adapter thì auto-close bị chặn. Không dùng notification queued/persisted làm delivery proof. |
+| ResolutionSource | Xác minh kết quả mục tiêu liên kết thực tế. Thiếu: chặn báo xử lý xong ticket liên kết và đóng cuối cùng; ghi chú/đang chờ hoàn tiền không được tính là kết quả. |
+| EscalationSource | Phải công bố module hỗ trợ + chuyển tiếp trong giao dịch/bền vững. Thiếu: từ chối escalation trước khi tạo yêu cầu chưa giải quyết không có đường xử lý tiếp. ACK/kết quả đáng tin cậy đọc từ bên nhận và phải khớp tham chiếu ticket/escalation/bên nhận. |
 
-Approved SLA target: HIGH 1 / MEDIUM 4 / LOW 8 working hours for first response; unresolved daily working-day updates. `waiting_customer` pauses active processing, not historical first response/update obligations. Internal waiting is not Customer waiting. Adapter owns calendar arithmetic and historical pause accounting; raw wall-clock fallback is prohibited. Core stores assignment/reply timestamps and event history for this integration. Missing-source mode does **not** claim that SLA monitoring/alerts are live.
+Mục tiêu SLA đã duyệt: HIGH 1 / MEDIUM 4 / LOW 8 giờ làm việc để phản hồi đầu tiên; yêu cầu chưa giải quyết phải cập nhật mỗi ngày làm việc. `waiting_customer` tạm dừng xử lý chủ động, không xóa nghĩa vụ phản hồi đầu/cập nhật đã phát sinh. Chờ nội bộ không phải chờ Customer. Bộ kết nối phụ trách tính lịch và hạch toán lịch sử tạm dừng; cấm thay bằng cách tính thời gian thực trôi qua không xét lịch. Phần lõi lưu thời điểm phân công/phản hồi và lịch sử sự kiện để tích hợp. Chế độ thiếu nguồn **không** khẳng định giám sát/cảnh báo SLA đang hoạt động.
 
-System-only `SupportService.autoClose(id)` locks and rechecks resolved state, 7-day minimum review deadline, trusted linked/escalation results, then writes notification + closure + audit in one transaction. Resolution notification is created in the resolution transaction. A reopened ticket is not subsequently auto-closed. The notification used here is the existing in-app notification service, not proof of email delivery.
+`SupportService.autoClose(id)` chỉ dành cho hệ thống: khóa và kiểm tra lại trạng thái đã xử lý, hạn xem xét tối thiểu 7 ngày, kết quả liên kết/escalation đáng tin cậy và delivery proof từ `NotificationSource`, rồi ghi thông báo đóng + đóng + audit trong một giao dịch. Proof cần reference thật, đúng ticket/recipient/RESOLVED event của lần xử lý hiện tại và policy/version; deliveredAt phải từ lúc resolved tới serverNow. Không tìm được duy nhất event hiện tại hoặc thiếu nguồn/proof trả 409 DEFERRED_SOURCE; proof không khớp trả 409. Bằng chứng từ lần resolved trước không dùng lại sau reopen/resolve. Owner phải chứng minh consistency tới commit; không bật cờ bằng adapter giả. Không có endpoint nhận proof từ client.
 
-`SupportAutoCloseCoordinator` is opt-in only (`app.support.auto-close.enabled=true`; absent/false means no bean/job). It scans verified resolved metadata in bounded keyset batches, with an independent locked transaction per ticket; unavailable sources never imply successful closure and do not starve later tickets. Settings: batch-size default100, allowed1..500; initial-delay-ms/fixed-delay-ms default60000. No property was enabled or added to shared configuration. The policy/calendar/schema owner must supply the source and approve activation/scan limits before use. Multi-instance races are handled by ticket locks and resolved-state recheck, not by assuming a single scheduler instance.
+Thông báo được tạo trong giao dịch resolve/auto-close vẫn dùng `NotificationService` hiện có; việc ghi bản ghi không chứng minh email/delivery thành công. Tác vụ không sửa service này, không gửi email thật và không tự bật job. Customer chủ động đóng theo policy là nhánh khác, không bị yêu cầu auto-close delivery proof. FE không suy ngày tự đóng từ resolvedAt hoặc SLA và không hứa tự đóng khi chưa có nguồn.
 
-## Escalation
+`SupportAutoCloseCoordinator` chỉ được bật chủ động (`app.support.auto-close.enabled=true`; không có/false thì không tạo bean/job). Thành phần quét metadata đã xử lý được xác minh theo từng lô có giới hạn bằng phân trang theo khóa, với giao dịch khóa độc lập cho từng ticket; thiếu nguồn không đồng nghĩa đóng thành công và không làm các ticket phía sau bị bỏ đói. Cấu hình: batch-size mặc định 100, cho phép 1..500; initial-delay-ms/fixed-delay-ms mặc định 60000. Không bật hoặc thêm thuộc tính nào vào cấu hình chung. Chủ policy/lịch/schema phải cung cấp nguồn và duyệt kích hoạt/giới hạn quét trước khi dùng. Cạnh tranh giữa nhiều instance được xử lý bằng khóa ticket và kiểm tra lại trạng thái resolved, không giả định chỉ có một instance lập lịch.
 
-Request: `{"targetModule":"PAYMENT","reason":"Owner verification needed","expectedVersion":3}`.
+## Điều phối sang module khác (escalation)
 
-Allowed modules: PAYMENT, RETURN_SETTLEMENT, MAINTENANCE, HANDOVER, ACCOUNT, RENEWAL, OVERDUE. Receiver routing uses module authorization/scope, never developer names or arbitrary recipient IDs. Evidence is INTERNAL.
+Yêu cầu: `{"targetModule":"PAYMENT","reason":"Owner verification needed","expectedVersion":3}`.
 
-Manager decision: `{"action":"ROUTE","reason":"Route to authorized owner","expectedVersion":4}` (or REJECT).
+Module được phép: PAYMENT, RETURN_SETTLEMENT, MAINTENANCE, HANDOVER, ACCOUNT, RENEWAL, OVERDUE. Chuyển tiếp tới bên nhận theo quyền/phạm vi module, không theo tên lập trình viên hoặc ID người nhận tùy ý. Bằng chứng là INTERNAL.
 
-Persisted coordination statuses: REQUESTED, ROUTED, REJECTED. ROUTED means a durable receiving/outbox reference, **not** ACK or successful work. Verified receiver states are separately projected as ACKNOWLEDGED, REJECTED, COMPLETED; COMPLETED requires a real result reference. Outstanding/unknown receiver result blocks resolution. Manager may reject coordination with reason without manufacturing owner completion. No direct changes to module-owned records.
+Quyết định Manager: `{"action":"ROUTE","reason":"Route to authorized owner","expectedVersion":4}` (hoặc REJECT).
 
-## Query / response semantics
+Trạng thái điều phối được lưu: REQUESTED, ROUTED, REJECTED. ROUTED có nghĩa có tham chiếu tiếp nhận/outbox bền vững, **không** phải ACK hoặc công việc thành công. Trạng thái bên nhận đã xác minh được tổng hợp riêng thành ACKNOWLEDGED, REJECTED, COMPLETED; COMPLETED cần tham chiếu kết quả thật. Kết quả bên nhận còn chờ/chưa xác định chặn báo xử lý xong. Manager có thể từ chối điều phối kèm lý do, không giả kết quả hoàn tất của chủ module. Không thay đổi trực tiếp bản ghi do module khác sở hữu.
 
-List query: page (0-based, default 0), size (default20, max100), status (existing lowercase enum), search (subject/description, trimmed max200, literal wildcard escaping), sort (`createdAt|updatedAt|id|subject,asc|desc`, default createdAt,desc). Manager adds facilityId/staffId. Scope/ownership/filter precede count and pagination; ID is a stable tie-breaker. Timeline routes accept only page/size and order by timestamp then ID. Detail has no query parameters. No priority/SLA filter is advertised without authoritative data.
+## Ý nghĩa truy vấn / phản hồi
 
-Ticket detail returns IDs, business status, subject/description, assignment/acceptance/resolution/closure timestamps, version, assignmentRevision, follow-up/link references, workflowReady and explicit SLA completeness. Entities and raw access credentials are not serialized. Internal events/escalations are separate staff/manager-only endpoints. Message file IDs require read authorization.
+Truy vấn danh sách: page (bắt đầu từ 0, mặc định 0), size (mặc định 20, tối đa 100), status (enum chữ thường hiện có), search (subject/description, bỏ khoảng trắng đầu/cuối, tối đa 200 ký tự, xử lý ký tự đại diện thành ký tự tìm kiếm nguyên văn), sort (`createdAt|updatedAt|id|subject,asc|desc`, mặc định createdAt,desc). Manager thêm facilityId/staffId. Áp dụng phạm vi/quyền sở hữu/bộ lọc trước đếm và phân trang; ID dùng phân định ổn định khi bằng giá trị. Đường dẫn dòng thời gian chỉ nhận page/size và sắp xếp theo thời điểm rồi ID. Chi tiết không có tham số truy vấn. Không công bố bộ lọc priority/SLA khi chưa có dữ liệu có thẩm quyền.
 
-Errors: 400 invalid input/query/header, 401 unauthenticated, 403 role/permission/scope denial, 404 unavailable/foreign object, 409 stale version, wrong lifecycle, key conflict, inconsistent authoritative data or `DEFERRED_SOURCE`. Retry 409 only after understanding the reason; never assume missing-source is temporary success.
+Chi tiết ticket trả các ID, trạng thái nghiệp vụ, subject/description, thời điểm phân công/nhận/xử lý xong/đóng, version, assignmentRevision, tham chiếu tiếp nối/liên kết, workflowReady và mức đầy đủ SLA rõ ràng. Không tuần tự hóa entity hoặc thông tin truy cập nguyên văn. Sự kiện/escalation nội bộ là endpoint riêng chỉ Staff/Manager được dùng. ID file tin nhắn cần quyền đọc.
 
-## Persistence / rollout
+Lỗi: 400 đầu vào/truy vấn/header không hợp lệ; 401 chưa xác thực; 403 thiếu role/quyền/phạm vi; 404 đối tượng không có sẵn/thuộc người khác; 409 phiên bản cũ, vòng đời không cho phép, key xung đột, dữ liệu có thẩm quyền không nhất quán hoặc `DEFERRED_SOURCE`. Chỉ thử lại 409 sau khi hiểu lý do; không xem thiếu nguồn là thành công tạm thời.
 
-Five additive tables: support_workflow_states, support_messages, support_workflow_events, support_escalations, support_command_receipts. No shared table ALTER, record delete/rewrite, automatic legacy migration or policy seed. Review-only DDL: `docs/sql/support-workflow-schema.sql`.
+## Lưu trữ / triển khai
 
-Current app uses Hibernate `ddl-auto=update`, which may create these tables on startup. Do not start this build against shared/team DB until schema and permission owners review. H2 tests create a separate disposable schema; this is not MySQL/TiDB migration verification.
+Bổ sung năm bảng: support_workflow_states, support_messages, support_workflow_events, support_escalations, support_command_receipts. Không ALTER bảng chung, xóa/viết lại bản ghi, tự chuyển đổi dữ liệu cũ hoặc tạo sẵn policy. DDL chỉ để rà soát: `docs/sql/support-workflow-schema.sql`.
 
-Swagger: existing `/swagger-ui/index.html`, `/v3/api-docs`; tags `D5 - Customer Support`, `D5 - Manager Support`, `D5 - Assigned Staff Support`. Use real role tokens/fixture ownership and latest versions; missing-source guards are expected 409, not bypass instructions.
+Ứng dụng hiện dùng Hibernate `ddl-auto=update`, có thể tạo các bảng này khi khởi động. Không chạy bản build này trên DB chung của team trước khi chủ schema và phân quyền rà soát. Test H2 tạo schema riêng có thể xóa sau kiểm thử; đây không phải xác minh migration MySQL/TiDB.
+
+Swagger: `/swagger-ui/index.html`, `/v3/api-docs` hiện có; các thẻ `D5 - Customer Support`, `D5 - Manager Support`, `D5 - Assigned Staff Support`. Dùng token role thật/quyền sở hữu dữ liệu kiểm thử đúng và phiên bản mới nhất; chặn thiếu nguồn bằng 409 là hành vi dự kiến, không phải hướng dẫn vượt chặn.

@@ -29,6 +29,7 @@ public class SupportService {
     private final ObjectProvider<EvidenceSource> evidence;
     private final ObjectProvider<SlaSource> slas;
     private final ObjectProvider<ClosePolicySource> closePolicies;
+    private final ObjectProvider<NotificationSource> reviewNotifications;
     private final ObjectProvider<ResolutionSource> resolutions;
     private final ObjectProvider<EscalationSource> receivers;
 
@@ -48,7 +49,10 @@ public class SupportService {
         if(q.staffId()!=null){where.append(" and t.assignedTo.id=:staff");params.put("staff",q.staffId());}
         if(q.status()!=null){where.append(" and t.status=:status");params.put("status",q.status());}
         if(!q.search().isEmpty()){where.append(" and (lower(t.subject) like :search escape '!' or lower(t.description) like :search escape '!')");params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");}
-        var rows=em.createQuery("select t from SupportTicket t"+where+" order by t."+q.sort()+(q.descending()?" desc":" asc")+(q.sort().equals("id")?"":", t.id asc"),SupportTicket.class);
+        boolean activitySort=q.sort().equals("updatedAt");
+        String activityJoin=activitySort?" left join SupportState w on w.id=t.id":"";
+        String sortExpression=activitySort?"coalesce(w.changedAt,t.updatedAt)":"t."+q.sort();
+        var rows=em.createQuery("select t from SupportTicket t"+activityJoin+where+" order by "+sortExpression+(q.descending()?" desc":" asc")+(q.sort().equals("id")?"":", t.id asc"),SupportTicket.class);
         var count=em.createQuery("select count(t) from SupportTicket t"+where,Long.class);params.forEach((k,v)->{rows.setParameter(k,v);count.setParameter(k,v);});
         return page(rows.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList().stream().map(this::response).toList(),q,count.getSingleResult(),correlation);
     }
@@ -209,6 +213,7 @@ public class SupportService {
         var state=em.find(SupportState.class,id,LockModeType.PESSIMISTIC_WRITE);if(state==null)return false;
         var rule=closeRule(ticket,state);if(rule.autoCloseAt()==null||now().isBefore(rule.autoCloseAt()))return false;requireEscalationsResolved(ticket);
         if(state.getLinkedId()!=null){var source=resolutions.getIfAvailable();if(source==null)throw deferred("Linked resolution result unavailable");source.requireResult(ticket,state);}
+        requireReviewNotice(ticket,state,rule);
         notify(ticket.getCustomer().getId(),ticket,"Support automatically closed after review period",ticket.getSubject());
         ticket.setStatus(SupportTicketStatus.closed);state.close(now());em.persist(new SupportEvent(ticket,"AUTO_CLOSED",null,state.getAssignmentRevision(),"Shared close policy elapsed",now()));em.flush();
         audit.recordMutation((User)null,"support_auto_close","SupportTicket",id,ticket.getFacility().getId(),null,Map.of("status","closed","policyRef",rule.policyRef(),"policyVersion",rule.policyVersion()));return true;
@@ -265,7 +270,9 @@ public class SupportService {
     }
     private SupportMessage append(ActorPrincipal actor,SupportTicket ticket,SupportState state,String role,Visibility visibility,String body,List<UUID> requested) {
         var files=files(requested);attach(actor,ticket,visibility,files);var message=new SupportMessage(ticket,actor.userId(),role,visibility.name(),text(body,4000),receipts.json(files),now());em.persist(message);
-        if(role.equals("STAFF")&&visibility==Visibility.PUBLIC)state.reply(now());return message;
+        if(role.equals("STAFF")&&visibility==Visibility.PUBLIC)state.reply(now());
+        else state.touch(now());
+        return message;
     }
     private List<UUID> files(List<UUID> requested){if(requested==null)return List.of();if(requested.size()>10||requested.stream().anyMatch(Objects::isNull)||new HashSet<>(requested).size()!=requested.size())throw ApiExceptions.validation("Use at most 10 distinct evidence file IDs",null);return List.copyOf(requested);}
     private void attach(ActorPrincipal actor,SupportTicket ticket,Visibility visibility,List<UUID> files){if(files.isEmpty())return;var source=evidence.getIfAvailable();if(source==null||!source.atomic())throw deferred("Shared Support file attach/read authorization unavailable");source.requireAttach(actor,ticket,visibility,files);}
@@ -288,6 +295,21 @@ public class SupportService {
     private SupportResponse.Escalation escalationResponse(SupportEscalation e,EscalationSource source){var r=result(e,source);return new SupportResponse.Escalation(e.getId(),e.getTicket().getId(),e.getTargetModule(),e.getStatus(),e.getReason(),e.getDecisionReason(),e.getReceiverRef(),r==null?null:r.status(),r==null?null:r.resultRef(),e.getStatus().equals("REJECTED")||r!=null?"COMPLETE":"UNKNOWN",e.getRequestedAt(),e.getDecidedAt());}
     private void requireEscalationsResolved(SupportTicket ticket){for(var e:em.createQuery("select e from SupportEscalation e where e.ticket.id=:id and e.status<>'REJECTED'",SupportEscalation.class).setParameter("id",ticket.getId()).getResultList()){var r=result(e,receivers.getIfAvailable());if(r==null)throw deferred("Trusted escalation result unavailable");if(!Set.of("COMPLETED","REJECTED").contains(r.status()))throw ApiExceptions.conflict("Escalation is still unresolved");}}
     private CloseRule closeRule(SupportTicket ticket,SupportState state){var source=closePolicies.getIfAvailable();var rule=source==null?null:source.read(ticket,state,now()).orElse(null);if(rule==null)throw deferred("Shared Support close policy unavailable");if(rule.policyRef()==null||rule.policyRef().isBlank()||rule.policyVersion()==null||rule.policyVersion().isBlank()||rule.autoCloseAt()!=null&&(state.getResolvedAt()==null||rule.autoCloseAt().isBefore(state.getResolvedAt().plus(Duration.ofDays(7)))))throw ApiExceptions.conflict("Support close policy inconsistent with approved review period");return rule;}
+    private void requireReviewNotice(SupportTicket ticket,SupportState state,CloseRule rule) {
+        var source=reviewNotifications.getIfAvailable();
+        if(source==null||!source.consistentThroughClose())throw deferred("Verified Support review notification delivery unavailable");
+        var events=em.createQuery("select e from SupportEvent e where e.ticket.id=:ticket and e.type='RESOLVED' and e.recordedAt=:resolvedAt and e.actorId=:staff and e.assignmentRevision=:revision",SupportEvent.class)
+            .setParameter("ticket",ticket.getId()).setParameter("resolvedAt",state.getResolvedAt())
+            .setParameter("staff",state.getResolvedBy()).setParameter("revision",state.getAssignmentRevision()).setMaxResults(2).getResultList();
+        if(events.size()!=1)throw deferred("Current Support resolution notice identity unavailable or ambiguous");
+        UUID resolutionEvent=events.getFirst().getId();Instant checkedAt=now();
+        var proof=source.reviewNotice(ticket,resolutionEvent,rule,checkedAt).orElse(null);
+        if(proof==null)throw deferred("Verified Support review notification delivery unavailable");
+        if(proof.reference()==null||!ticket.getId().equals(proof.ticketId())||!ticket.getCustomer().getId().equals(proof.customerId())
+            ||!resolutionEvent.equals(proof.resolutionEventId())||!rule.policyRef().equals(proof.policyRef())||!rule.policyVersion().equals(proof.policyVersion())
+            ||proof.deliveredAt()==null||proof.deliveredAt().isBefore(state.getResolvedAt())||proof.deliveredAt().isAfter(checkedAt))
+            throw ApiExceptions.conflict("Support review notification proof is inconsistent");
+    }
     private void event(ActorPrincipal actor,SupportTicket ticket,SupportState state,String type,String reason){state.touch(now());em.persist(new SupportEvent(ticket,type,actor.userId(),state.getAssignmentRevision(),text(reason,2000),now()));}
     private SupportResponse finish(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket){em.flush();var result=response(ticket);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private SupportResponse.Message finishMessage(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket,SupportMessage message){em.flush();var result=messageResponse(actor,ticket,message);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
