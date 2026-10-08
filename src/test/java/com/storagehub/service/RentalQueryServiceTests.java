@@ -88,6 +88,25 @@ class RentalQueryServiceTests {
         provider("financialSources", (RentalReadSources.FinancialSource) rental -> Optional.of(new RentalReadSources.Financial(rental.getId(),now,"VND",BigDecimal.ZERO,BigDecimal.ONE,null,null,RentalReadSources.BillingMode.PREPAID_FULL_PERIOD)));
         assertThat(service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false).financialSummary().completeness()).isEqualTo("UNKNOWN");
     }
+    @Test void missingSecurityDepositKeepsVerifiedBalancesButIsOnlyPartial() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        Instant now=Instant.parse("2026-10-08T00:00:00Z");provider("clocks",Clock.fixed(now,ZoneOffset.UTC));
+        provider("financialSources", (RentalReadSources.FinancialSource) rental -> Optional.of(new RentalReadSources.Financial(
+            rental.getId(),now,"VND",new BigDecimal("1000"),new BigDecimal("200"),null,null,RentalReadSources.BillingMode.PREPAID_FULL_PERIOD)));
+        var f=service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false).financialSummary();
+        assertThat(f.completeness()).isEqualTo("PARTIAL");assertThat(f.securityDepositAmount()).isNull();
+        assertThat(f.outstandingAmount()).isEqualByComparingTo("1000");assertThat(f.overdueAmount()).isEqualByComparingTo("200");
+        assertThat(f.billingMode()).isEqualTo("PREPAID_FULL_PERIOD");assertThat(f.nextDueDate()).isNull();assertThat(f.reason()).isNotBlank();
+        verify(repo,never()).save(any());
+    }
+    @Test void explicitZeroSecurityDepositIsKnownAndMayBeComplete() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        Instant now=Instant.parse("2026-10-08T00:00:00Z");provider("clocks",Clock.fixed(now,ZoneOffset.UTC));
+        provider("financialSources", (RentalReadSources.FinancialSource) rental -> Optional.of(new RentalReadSources.Financial(
+            rental.getId(),now,"VND",BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,RentalReadSources.BillingMode.PREPAID_FULL_PERIOD)));
+        var f=service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false).financialSummary();
+        assertThat(f.completeness()).isEqualTo("COMPLETE");assertThat(f.securityDepositAmount()).isEqualByComparingTo("0");
+    }
     <T> void provider(String field,T value) {
         var factory=new org.springframework.beans.factory.support.DefaultListableBeanFactory();factory.registerSingleton("source",value);
         ReflectionTestUtils.setField(service,field,factory.getBeanProvider((Class<T>)value.getClass()));

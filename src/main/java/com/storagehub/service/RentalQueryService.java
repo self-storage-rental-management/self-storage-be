@@ -61,8 +61,10 @@ public class RentalQueryService {
                 && (f.securityDepositAmount() == null || nonnegative(f.securityDepositAmount()))
                 && f.billingMode() != null
                 && (f.billingMode() != RentalReadSources.BillingMode.PREPAID_FULL_PERIOD || f.nextDueDate() == null))
-                return new RentalDetailResponse.Financial("COMPLETE", f.currency(), f.outstandingAmount(),
-                    f.overdueAmount(), f.nextDueDate(), null, f.securityDepositAmount(), f.billingMode().name());
+                return new RentalDetailResponse.Financial(f.securityDepositAmount() == null ? "PARTIAL" : "COMPLETE",
+                    f.currency(), f.outstandingAmount(), f.overdueAmount(), f.nextDueDate(),
+                    f.securityDepositAmount() == null ? "Chưa có nguồn xác thực tiền bảo đảm kho; các tổng thanh toán đã được xác minh" : null,
+                    f.securityDepositAmount(), f.billingMode().name());
         }
         return new RentalDetailResponse.Financial("UNKNOWN", "VND", null, null, null,
             "Nguồn tài chính chưa được kết nối hoặc chưa đủ dữ liệu xác thực", null, null);
