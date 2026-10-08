@@ -2,6 +2,7 @@ package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.ActivityLog;
 import java.util.Collection;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -23,10 +24,16 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> 
             or lower(coalesce(actor.fullName, '')) like lower(concat('%', :search, '%'))
             or lower(coalesce(actor.email, '')) like lower(concat('%', :search, '%')))
           and (:entityType is null or log.entityType = :entityType)
+          and (:actorId is null or actor.id = :actorId)
+          and (:from is null or log.createdAt >= :from)
+          and (:to is null or log.createdAt < :to)
         """)
     Page<ActivityLog> search(
         @Param("search") String search,
         @Param("entityType") String entityType,
+        @Param("actorId") UUID actorId,
+        @Param("from") Instant from,
+        @Param("to") Instant to,
         Pageable pageable
     );
 

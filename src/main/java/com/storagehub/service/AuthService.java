@@ -436,7 +436,9 @@ public class AuthService {
         ActorResponse before = actorResponseMapper.toResponse(user);
 
         user.setFullName(requireText(request.fullName(), "fullName"));
-        user.setPhone(normalizeNullable(request.phone()));
+        if (request.phone() != null) {
+            user.setPhone(normalizeNullable(request.phone()));
+        }
         if (request.permanentAddress() != null) {
             user.setPermanentAddress(normalizeNullable(request.permanentAddress()));
         }

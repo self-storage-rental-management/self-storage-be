@@ -73,7 +73,7 @@ class CancelledReservationUnitReleaseServiceTests {
         staff = entityWithId(new User());
         actor = new ActorPrincipal(
             staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
-            Set.of("assign_units"),
+            Set.of("storage_units:assign"),
             Map.of(UUID.randomUUID(), FacilityScopeLevel.OPERATE)
         );
         Facility facility = entityWithId(new Facility());
