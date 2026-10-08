@@ -20,7 +20,9 @@ class RenewalSwaggerTests {
         var client=HttpClient.newHttpClient();
         var response=client.send(HttpRequest.newBuilder(URI.create(base+"/v3/api-docs")).GET().build(),HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
-        var paths=mapper.readTree(response.body()).path("paths");
+        var json=mapper.readTree(response.body());var paths=json.path("paths");
+        assertThat(json.path("components").path("schemas").path("RenewalResponse").path("properties").has("acceptedTerms")).isTrue();
+        assertThat(json.path("components").path("schemas").path("RenewalResponse").path("properties").has("cancellationReason")).isTrue();
         for(String role:new String[]{"customer","manager"}) {
             var list=paths.path("/api/"+role+"/renewals").path("get");
             assertThat(list.path("parameters").toString()).contains("page","size","status","rentalId","sort");

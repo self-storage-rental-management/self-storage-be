@@ -20,6 +20,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class RentalQueryService {
     private final RentalRepository repository;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RentalReadSources.FinancialSource> financialSources;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RentalReadSources.AccessSource> accessSources;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RentalReadSources.DateSource> dateSources;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<java.time.Clock> clocks;
 
     public PageResponse<RentalSummaryResponse> list(ActorPrincipal actor, RentalQuery query, boolean manager, String correlationId) {
         Set<UUID> facilities = authorize(actor, manager, query.facilityId());
@@ -35,9 +43,47 @@ public class RentalQueryService {
         return new RentalDetailResponse(s.id(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
-            new RentalDetailResponse.Financial("UNKNOWN", "VND", null, null, null,
-                "Nguồn nghĩa vụ thanh toán và phân bổ chưa được tích hợp trong D1"),
-            new RentalDetailResponse.Access("UNKNOWN", null, "Nguồn trạng thái truy cập chưa được tích hợp trong D1"));
+            financial(r), access(r));
+    }
+
+    private java.time.Instant now() {
+        var clock = clocks == null ? null : clocks.getIfAvailable();
+        return (clock == null ? java.time.Clock.systemUTC() : clock).instant();
+    }
+    private RentalDetailResponse.Financial financial(Rental r) {
+        var source = financialSources == null ? null : financialSources.getIfAvailable();
+        var value = source == null ? Optional.<RentalReadSources.Financial>empty() : source.read(r);
+        if (value.isPresent()) {
+            var f = value.get();
+            if (Objects.equals(r.getId(), f.rentalId()) && validTime(f.checkedAt()) && "VND".equals(f.currency())
+                && nonnegative(f.outstandingAmount()) && nonnegative(f.overdueAmount())
+                && f.overdueAmount().compareTo(f.outstandingAmount()) <= 0
+                && (f.securityDepositAmount() == null || nonnegative(f.securityDepositAmount()))
+                && f.billingMode() != null
+                && (f.billingMode() != RentalReadSources.BillingMode.PREPAID_FULL_PERIOD || f.nextDueDate() == null))
+                return new RentalDetailResponse.Financial("COMPLETE", f.currency(), f.outstandingAmount(),
+                    f.overdueAmount(), f.nextDueDate(), null, f.securityDepositAmount(), f.billingMode().name());
+        }
+        return new RentalDetailResponse.Financial("UNKNOWN", "VND", null, null, null,
+            "Nguồn tài chính chưa được kết nối hoặc chưa đủ dữ liệu xác thực", null, null);
+    }
+    private RentalDetailResponse.Access access(Rental r) {
+        var source = accessSources == null ? null : accessSources.getIfAvailable();
+        var value = source == null ? Optional.<RentalReadSources.Access>empty() : source.read(r);
+        if (value.isPresent()) {
+            var a = value.get();
+            if (Objects.equals(r.getId(), a.rentalId()) && validTime(a.checkedAt()) && a.status() != null)
+                return new RentalDetailResponse.Access("COMPLETE", a.status().name(), null);
+        }
+        return new RentalDetailResponse.Access("UNKNOWN", null, "Nguồn trạng thái truy cập chưa được xác thực");
+    }
+    private boolean validTime(java.time.Instant time) { return time != null && !time.isAfter(now()); }
+    private boolean nonnegative(java.math.BigDecimal value) { return value != null && value.signum() >= 0; }
+    private boolean verifiedDates(Rental r) {
+        var source = dateSources == null ? null : dateSources.getIfAvailable();
+        var value = source == null ? Optional.<RentalReadSources.Dates>empty() : source.read(r);
+        return value.filter(d -> Objects.equals(r.getId(), d.rentalId()) && Objects.equals(r.getStartDate(), d.startDate())
+            && Objects.equals(r.getContractEndDate(), d.inclusiveEndDate()) && d.reference() != null && !d.reference().isBlank()).isPresent();
     }
 
     private Set<UUID> authorize(ActorPrincipal actor, boolean manager, UUID requested) {
@@ -97,7 +143,7 @@ public class RentalQueryService {
         integrity(r);
         var unit = r.getStorageUnit(); var type = unit.getUnitType();
         // No record-level activation provenance currently exists: do not pretend legacy date semantics were verified.
-        var warnings = List.of(new RentalSummaryResponse.Warning("contractEndDate",
+        var warnings = verifiedDates(r) ? List.<RentalSummaryResponse.Warning>of() : List.of(new RentalSummaryResponse.Warning("contractEndDate",
             "Giá trị ngày được lưu; nguồn xác minh semantics ngày của hồ sơ chưa được tích hợp trong D1"));
         return new RentalSummaryResponse(r.getId(), new RentalSummaryResponse.Customer(r.getCustomer().getId(), r.getCustomer().getFullName()),
             new RentalSummaryResponse.Facility(r.getFacility().getId(), r.getFacility().getCode(), r.getFacility().getName()),

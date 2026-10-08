@@ -10,6 +10,9 @@ import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Instant;
+import java.time.Clock;
+import java.time.ZoneOffset;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -55,6 +58,39 @@ class RentalQueryServiceTests {
             .isInstanceOfSatisfying(ApiException.class, ex -> {
                 assertThat(ex.getStatus().value()).isEqualTo(409); assertThat(ex.getDetails()).isNull(); });
         verify(repo,never()).save(any());
+    }
+    @Test void authoritativeSourcesAreReadOnlyAndDoNotRepriceRental() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        Instant checked=Instant.parse("2026-10-06T00:00:00Z");
+        provider("clocks", Clock.fixed(checked,ZoneOffset.UTC));
+        provider("financialSources", (RentalReadSources.FinancialSource) rental -> Optional.of(new RentalReadSources.Financial(
+            rental.getId(),checked,"VND",BigDecimal.ZERO,BigDecimal.ZERO,new BigDecimal("100"),null,RentalReadSources.BillingMode.PREPAID_FULL_PERIOD)));
+        provider("accessSources", (RentalReadSources.AccessSource) rental -> Optional.of(new RentalReadSources.Access(rental.getId(),checked,RentalReadSources.AccessStatus.ACTIVE)));
+        provider("dateSources", (RentalReadSources.DateSource) rental -> Optional.of(new RentalReadSources.Dates(rental.getId(),rental.getStartDate(),rental.getContractEndDate(),"activation-evidence")));
+        var dto=service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false);
+        assertThat(dto.monthlyPrice()).isEqualByComparingTo("9500000");assertThat(dto.financialSummary().securityDepositAmount()).isEqualByComparingTo("100");
+        assertThat(dto.financialSummary().billingMode()).isEqualTo("PREPAID_FULL_PERIOD");assertThat(dto.financialSummary().nextDueDate()).isNull();
+        assertThat(dto.access().status()).isEqualTo("ACTIVE");assertThat(dto.dataWarnings()).isEmpty();verify(repo,never()).save(any());
+    }
+    @Test void foreignOrFutureSourcesStayUnknownAndWrongDateEvidenceKeepsWarning() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        Instant now=Instant.parse("2026-10-06T00:00:00Z");provider("clocks",Clock.fixed(now,ZoneOffset.UTC));
+        provider("financialSources", (RentalReadSources.FinancialSource) rental -> Optional.of(new RentalReadSources.Financial(UUID.randomUUID(),now,"VND",BigDecimal.ZERO,BigDecimal.ZERO,null,null,RentalReadSources.BillingMode.PREPAID_FULL_PERIOD)));
+        provider("accessSources", (RentalReadSources.AccessSource) rental -> Optional.of(new RentalReadSources.Access(rental.getId(),now.plusSeconds(1),RentalReadSources.AccessStatus.ACTIVE)));
+        provider("dateSources", (RentalReadSources.DateSource) rental -> Optional.of(new RentalReadSources.Dates(rental.getId(),rental.getStartDate(),rental.getContractEndDate().minusDays(1),"wrong-evidence")));
+        var dto=service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false);
+        assertThat(dto.financialSummary().completeness()).isEqualTo("UNKNOWN");assertThat(dto.financialSummary().outstandingAmount()).isNull();
+        assertThat(dto.access().completeness()).isEqualTo("UNKNOWN");assertThat(dto.dataWarnings()).hasSize(1);
+    }
+    @Test void invalidFinancialTotalsAreNotDisplayedAsComplete() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        Instant now=Instant.parse("2026-10-06T00:00:00Z");provider("clocks",Clock.fixed(now,ZoneOffset.UTC));
+        provider("financialSources", (RentalReadSources.FinancialSource) rental -> Optional.of(new RentalReadSources.Financial(rental.getId(),now,"VND",BigDecimal.ZERO,BigDecimal.ONE,null,null,RentalReadSources.BillingMode.PREPAID_FULL_PERIOD)));
+        assertThat(service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false).financialSummary().completeness()).isEqualTo("UNKNOWN");
+    }
+    <T> void provider(String field,T value) {
+        var factory=new org.springframework.beans.factory.support.DefaultListableBeanFactory();factory.registerSingleton("source",value);
+        ReflectionTestUtils.setField(service,field,factory.getBeanProvider((Class<T>)value.getClass()));
     }
     Rental rental() {
         Facility f=entity(new Facility(),facility); f.setCode("F1"); f.setName("Facility");

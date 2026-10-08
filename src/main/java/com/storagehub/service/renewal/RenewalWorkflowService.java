@@ -25,6 +25,7 @@ public class RenewalWorkflowService {
     private final ObjectProvider<RenewalSources.EligibilitySource> eligibility;
     private final ObjectProvider<RenewalSources.FinancialSource> finance;
     private final ObjectProvider<RenewalSources.ExtensionHoldSource> holds;
+    private final ObjectProvider<RenewalSources.ApprovalLifecycleSource> lifecycles;
     private final ObjectProvider<Clock> clocks;
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}
     public List<RenewalCommands.Option> options(ActorPrincipal a,UUID rentalId){
@@ -74,10 +75,11 @@ public class RenewalWorkflowService {
         }else{
             var g=gate(r,now);var accepted=decode(wf.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);requireSnapshot(r,accepted);
             if(!store.canonical(accepted).equals(store.canonical(terms(r,g,accepted.pricingPackageCode()))))throw ApiExceptions.conflict("Terms changed: new quote and Customer confirmation required");
-            var f=finance.getIfAvailable();if(f==null)throw deferred("Financial source missing");var state=f.read(r).orElseThrow(()->deferred("Financial state UNKNOWN"));
+            var f=finance.getIfAvailable();if(f==null||!f.consistentThroughApproval())throw deferred("Consistent financial source missing");var state=f.read(r).orElseThrow(()->deferred("Financial state UNKNOWN"));
             if(state.checkedAt()==null||state.checkedAt().isAfter(now)||state.dueObligations()==null)throw deferred("Financial state incomplete");
             if(state.unresolvedDispute()||!state.dueObligations().isEmpty())throw ApiExceptions.conflict("Due obligations or dispute block approval");
             var h=holds.getIfAvailable();if(h==null||!h.participatesInTransaction())throw deferred("Atomic shared extension hold unavailable");
+            var lifecycle=lifecycles.getIfAvailable();if(lifecycle==null||!lifecycle.ready(r))throw deferred("Approval expiry/payment/hold lifecycle unavailable");
             Instant deadline=min(now.plus(g.policy.paymentWindow()),g.eligibility.recoveryCutoff());
             UUID hold=h.acquire(r,id,accepted.extensionStartDate(),accepted.extensionEndExclusive(),deadline);
             if(hold==null)throw deferred("Shared hold returned no authoritative reference");
@@ -98,6 +100,12 @@ public class RenewalWorkflowService {
         var legacy=reads.baseProjection(n);
         var wf=em.find(RenewalWorkflow.class,n.getId());if(wf==null)return legacy;
         var rev=wf.getAcceptedRevision();var t=decode(rev.getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
+        if (!Objects.equals(rev.getRenewal().getId(), n.getId())
+            || !Objects.equals(rev.getQuote().getRental().getId(), n.getRental().getId())
+            || !Objects.equals(rev.getQuote().getCustomer().getId(), n.getRequestedBy().getId())
+            || t.totalAfterDiscount()==null || n.getAmount().compareTo(t.totalAfterDiscount())!=0
+            || !Objects.equals(n.getNewEndDate(),t.newEndDate()))
+            throw ApiExceptions.conflict("Accepted Renewal terms do not match persisted request");
         String review="UNKNOWN";
         if(n.getStatus()==RenewalStatus.pending){try{var current=terms(n.getRental(),gate(n.getRental(),now()),t.pricingPackageCode());review=store.canonical(t).equals(store.canonical(current))?"READY":"AWAITING_CUSTOMER_CONFIRMATION";}catch(com.storagehub.common.api.ApiException ignored){}}
         var financial=legacy.financialCheck();var fs=finance.getIfAvailable();
@@ -108,10 +116,21 @@ public class RenewalWorkflowService {
             var scope=actor.facilityScopes().get(n.getRental().getFacility().getId());
             if(manager&&actor.hasRole(RoleCode.MANAGER)&&actor.hasPermission(SystemPermission.MANAGE_RENTALS)&&scope!=null&&scope.includes(FacilityScopeLevel.MANAGE)){
                 actions.add("REJECT");var h=holds.getIfAvailable();
-                if(review.equals("READY")&&financial.completeness().equals("COMPLETE")&&Boolean.FALSE.equals(financial.hasUnresolvedDispute())&&financial.blockingObligationRefs().isEmpty()&&h!=null&&h.participatesInTransaction())actions.add("APPROVE");
+                var f=finance.getIfAvailable();var lifecycle=lifecycles.getIfAvailable();
+                if(review.equals("READY")&&financial.completeness().equals("COMPLETE")&&Boolean.FALSE.equals(financial.hasUnresolvedDispute())&&financial.blockingObligationRefs().isEmpty()&&h!=null&&h.participatesInTransaction()&&f!=null&&f.consistentThroughApproval()&&lifecycle!=null&&lifecycle.ready(n.getRental()))actions.add("APPROVE");
             }
         }
-        return new RenewalResponse(legacy.id(),legacy.rentalId(),legacy.customer(),legacy.facility(),legacy.storageUnit(),legacy.status(),review,t.oldEndDate(),legacy.newEndDate(),legacy.amount(),t.currency(),legacy.createdAt(),wf.getVersion(),legacy.requestedBy(),rev.getQuote().getId(),rev.getRevisionNumber(),wf.getReviewer()==null?null:wf.getReviewer().getId(),wf.getReviewedAt(),wf.getReviewReason(),wf.getPaymentDeadline(),wf.getExtensionHoldRef(),financial,actions,review.equals("UNKNOWN")?List.of("Shared policy/pricing/eligibility is unavailable or operational eligibility blocks review"):List.of());
+        var reasons=new ArrayList<String>();
+        if(n.getStatus()==RenewalStatus.pending){
+            if(review.equals("UNKNOWN"))reasons.add("Shared policy/pricing/eligibility is unavailable or operational eligibility blocks review");
+            if(review.equals("AWAITING_CUSTOMER_CONFIRMATION"))reasons.add("Terms changed: Customer must accept a new quote");
+            if(!financial.completeness().equals("COMPLETE"))reasons.add("Financial obligations/dispute source is UNKNOWN");
+            else if(Boolean.TRUE.equals(financial.hasUnresolvedDispute())||!financial.blockingObligationRefs().isEmpty())reasons.add("Due obligations or unresolved dispute block approval");
+            var f=finance.getIfAvailable();if(f==null||!f.consistentThroughApproval())reasons.add("Financial consistency through approval is unavailable");
+            var h=holds.getIfAvailable();if(h==null||!h.participatesInTransaction())reasons.add("Atomic extension hold is unavailable");
+            var lifecycle=lifecycles.getIfAvailable();if(lifecycle==null||!lifecycle.ready(n.getRental()))reasons.add("Approval expiry/payment/hold lifecycle is unavailable");
+        }
+        return new RenewalResponse(legacy.id(),legacy.rentalId(),legacy.customer(),legacy.facility(),legacy.storageUnit(),legacy.status(),review,t.oldEndDate(),legacy.newEndDate(),legacy.amount(),t.currency(),legacy.createdAt(),wf.getVersion(),legacy.requestedBy(),rev.getQuote().getId(),rev.getRevisionNumber(),wf.getReviewer()==null?null:wf.getReviewer().getId(),wf.getReviewedAt(),wf.getReviewReason(),wf.getPaymentDeadline(),wf.getExtensionHoldRef(),financial,actions,reasons,t,wf.getCancellationReason());
     }
     private Rental owned(ActorPrincipal a,UUID id){RenewalReadService.authorize(a,false,false);return rentals.findByIdAndCustomer_Id(id,a.userId()).orElseThrow(()->ApiExceptions.notFound("Rental was not found"));}
     private static void checkOwner(ActorPrincipal a,Rental r){if(r.getCustomer()==null||!a.userId().equals(r.getCustomer().getId()))throw ApiExceptions.notFound("Rental was not found");}

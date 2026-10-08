@@ -85,6 +85,6 @@ public class RenewalReadService {
             new RenewalResponse.Unit(r.getStorageUnit().getId(),r.getStorageUnit().getCode()),n.getStatus(),"UNKNOWN",
             null,n.getNewEndDate(),n.getAmount(),"VND",n.getCreatedAt(),null,n.getRequestedBy().getId(),
             null,null,null,null,null,null,null,new RenewalResponse.FinancialCheck("UNKNOWN",null,null,null),
-            List.of(),List.of("Accepted snapshot, version and shared renewal integrations are not connected"));
+            List.of(),List.of("Accepted snapshot, version and shared renewal integrations are not connected"),null,null);
     }
 }

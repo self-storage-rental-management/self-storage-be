@@ -15,6 +15,18 @@ Unknown/repeated parameters (including needsAttention) return400. Detail accepts
 
 ## Integration gates
 
+### Read-only owner adapters (06/10/2026)
+
+`RentalReadSources` provides optional Spring ports: `FinancialSource`, `AccessSource`, `DateSource`. No runtime implementation/default records are installed. Missing sources still return UNKNOWN and stored-date warnings.
+
+- Financial owner supplies rentalId, checkedAt, VND totals, optional **security deposit** amount, nextDueDate and billingMode. This is not Booking advance or Renewal deposit. Totals require nonnegative values, overdue <= outstanding, matching Rental ID and nonfuture checkedAt. Invalid/incomplete projections are not exposed as COMPLETE.
+- Financial DTO adds `securityDepositAmount` and `billingMode` (nullable). PREPAID_FULL_PERIOD has no recurring nextDueDate; it does not by itself prove there are no official outstanding obligations. Null deposit remains unknown even when other financial totals are complete.
+- Access owner supplies typed status only (ACTIVE/INACTIVE/SUSPENDED/REVOKED/EXPIRED), matching Rental ID and nonfuture checkedAt. Never return PIN/credential text through this port.
+- Date owner supplies record-specific provenance reference plus exact stored startDate/inclusiveEndDate. Only matching evidence removes the warning. No date conversion/backfill occurs in GET.
+- Sources must be read-only and authoritative with complete coverage/freshness appropriate to their owner contract. Exceptions are not silently replaced by demo/zero. Do not register multiple competing implementations of the same port.
+
+Swagger detail schema exposes the additive financial fields. Historical applied price remains Rental.monthlyPrice. Adapters do not create Rental or rewrite shared Booking/Payment/credential records.
+
 Rental activation/applied-rate handoff and legacy date semantics require verified integration sources. The API returns stored dates with an explicit warning because no record-level provenance source currently exists; it never backfills dates. Manager role grants/scopes must be configured through the existing authorization workflow. No seed/business records are created for Swagger. An empty authorized query does not prove Booking→Rental activation works. Financial/access integrations and obligations/needsAttention are deferred; unit tests alone do not complete runtime E2E acceptance.
 
 ## Manual checks

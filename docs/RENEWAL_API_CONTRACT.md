@@ -1,5 +1,17 @@
 # Renewal API (D2)
 
+## Additive completion patch — 06/10/2026
+
+- Renewal responses add nullable `acceptedTerms` (nested `RenewalQuoteResponse.Terms`, not flattened) and `cancellationReason`. Terms come only from persisted customer-accepted revision/quote; no current-price recalculation. Legacy without workflow returns null. List/detail/command schemas are consistent; no separate public quote lookup is introduced.
+- Projection checks accepted quote Rental/customer binding and persisted request amount/newEndDate consistency. Corruption yields409 without repairing records or exposing unrelated resources.
+- Cancellation reason is the existing persisted workflow reason. No cancelledBy/cancelledAt is inferred from requestedBy/reviewer/updatedAt; those fields are not added without authoritative evidence.
+- `FinancialSource.consistentThroughApproval()` defaults false. An owner must implement a shared lock/version consistency protocol before opting in; checkedAt alone is not a concurrency guarantee. Read projections may show COMPLETE while approval remains blocked due to missing consistency protocol.
+- Optional `ApprovalLifecycleSource.ready(Rental)` is required for APPROVE and APPROVE allowedActions, in addition to policy/pricing/eligibility/complete finance/atomic hold. No runtime implementation is installed. Owner readiness means payment linkage, deadline/expiry reconciliation and matching hold/open-slot handoff have actually been implemented; it is not a frontend/environment toggle.
+- Missing approval dependencies appear in disabledReasons; rejection and verified pending cancellation remain independent. Approval does not extend Rental dates. Already-approved records are not rewritten by this patch.
+- User-facing accepted price/deposit/remainder are obligations, not evidence of payment. FE displays historical accepted terms and preserves honest null/UNKNOWN states.
+
+Shared policy publication, pricing/package eligibility/rounding, date/calendar/Recovery sources, finance, cross-writer hold protocol, D3 lifecycle and owner-approved MySQL migration remain external integration dependencies. This patch does not choose an expired-request lifecycle or rounding policy for other owners.
+
 Base `/api`; bearer JWT; standard ApiResponse/PageResponse/correlationId. No runtime seed/default policy, fake financial source or imaginary HTTP endpoint.
 
 ## Operations

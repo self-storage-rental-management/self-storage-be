@@ -21,6 +21,7 @@ class RentalSwaggerTests {
         var response=client.send(HttpRequest.newBuilder(URI.create(base+"/v3/api-docs")).GET().build(),HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
         var json=mapper.readTree(response.body());
+        assertThat(json.path("components").path("schemas").toString()).contains("securityDepositAmount","billingMode");
         for(String role:new String[]{"customer","manager"}) {
             var list=json.path("paths").path("/api/"+role+"/rentals").path("get");
             var detail=json.path("paths").path("/api/"+role+"/rentals/{id}").path("get");

@@ -12,7 +12,10 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
     BigDecimal amount, String currency, Instant createdAt, Long version, UUID requestedBy,
     UUID acceptedQuoteId, Integer acceptedRevision, UUID reviewerId, Instant reviewedAt,
     String reviewReason, Instant approvedPaymentDeadline, UUID extensionHoldRef,
-    FinancialCheck financialCheck, List<String> allowedActions, List<String> disabledReasons) {
+    FinancialCheck financialCheck, List<String> allowedActions, List<String> disabledReasons,
+    @Schema(description="Immutable customer-accepted quote terms; null for legacy records. Not current catalog prices.")
+    RenewalQuoteResponse.Terms acceptedTerms,
+    @Schema(description="Persisted cancellation reason only; no inferred actor/time.") String cancellationReason) {
     public record Customer(UUID id, String fullName) {}
     public record Facility(UUID id, String code, String name) {}
     public record Unit(UUID id, String code) {}
