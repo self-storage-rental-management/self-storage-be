@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -102,7 +103,7 @@ class CustomerReservationServiceTests {
 
     @Test
     void listsOnlyReservationsOwnedByCustomer() {
-        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNull(any(), any()))
+        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));
@@ -111,7 +112,9 @@ class CustomerReservationServiceTests {
 
         assertThat(response.data()).hasSize(1);
         assertThat(response.data().get(0).getId()).isEqualTo(reservation.getId());
-        verify(reservationRepository).findAllByCustomer_IdAndArchivedAtIsNull(any(), any());
+        verify(reservationRepository).findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
+            eq(actor.userId()), eq(ReservationStatus.REJECTED), any()
+        );
     }
 
     @Test
@@ -123,7 +126,7 @@ class CustomerReservationServiceTests {
         snapshot.setDiscountAmount(new BigDecimal("960000.00"));
         snapshot.setNetRentalAmount(new BigDecimal("11040000.00"));
 
-        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNull(any(), any()))
+        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));

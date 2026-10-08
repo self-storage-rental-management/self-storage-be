@@ -1,6 +1,7 @@
 package com.storagehub.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -125,34 +126,19 @@ class PaymentComplaintServiceTests {
     }
 
     @Test
-    void submitCreatesUnreceivedPaymentWhenGraceStartedWithoutATransaction() {
+    void submitRejectsComplaintWhenCustomerNeverAttemptedPayment() {
         reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
         reservation.setComplaintExpiresAt(Instant.now().plusSeconds(600));
-        ReservationPricingSnapshot snapshot = entity(new ReservationPricingSnapshot());
-        snapshot.setReservation(reservation);
-        snapshot.setReservationDepositAmount(new BigDecimal("400000.00"));
-        FileAsset image = entity(new FileAsset());
-        image.setUploadedBy(customer);
-        image.setContentType("image/png");
-        image.setOriginalName("receipt.png");
-        image.setSizeBytes(128);
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), customer.getId()))
             .thenReturn(Optional.of(reservation));
         when(complaintRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.empty());
         when(paymentRepository.findReservationPaymentsForUpdate(reservation.getId(), PaymentType.RESERVATION_DEPOSIT))
             .thenReturn(List.of());
-        when(snapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
-        when(paymentRepository.saveAndFlush(any(Payment.class))).thenAnswer(inv -> entity(inv.getArgument(0)));
-        when(fileAssetRepository.findAllById(List.of(image.getId()))).thenReturn(List.of(image));
-        when(complaintRepository.saveAndFlush(any())).thenAnswer(inv -> entity(inv.getArgument(0)));
 
-        var response = service.submit(customerActor, reservation.getId(),
-            new CreatePaymentComplaintRequest("Tài khoản đã bị trừ tiền", List.of(image.getId())));
-
-        assertThat(response.status()).isEqualTo(PaymentComplaintStatus.PENDING);
-        assertThat(response.depositAmount()).isEqualByComparingTo("400000.00");
-        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.PAYMENT_REVIEW);
-        verify(paymentRepository).saveAndFlush(any(Payment.class));
+        assertThatThrownBy(() -> service.submit(customerActor, reservation.getId(),
+            new CreatePaymentComplaintRequest("Tài khoản đã bị trừ tiền", List.of(UUID.randomUUID()))))
+            .hasMessage("A payment complaint requires a payment attempt that was not received");
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.PAYMENT_GRACE);
     }
 
     @Test
