@@ -57,7 +57,12 @@ public class PaymentComplaintService {
         }
         Payment payment = paymentRepository.findReservationPaymentsForUpdate(
             reservationId, PaymentType.RESERVATION_DEPOSIT
-        ).stream().findFirst().orElseGet(() -> createUnreceivedPayment(reservation, now));
+        ).stream()
+            .filter(item -> item.getStatus() == PaymentStatus.NOT_RECEIVED)
+            .findFirst()
+            .orElseThrow(() -> ApiExceptions.conflict(
+                "A payment complaint requires a payment attempt that was not received"
+            ));
         List<FileAsset> images = requireOwnedImages(actor, request.imageIds());
 
         PaymentComplaint complaint = new PaymentComplaint();
@@ -87,23 +92,6 @@ public class PaymentComplaintService {
             reservation.getId()
         );
         return toResponse(saved);
-    }
-
-    private Payment createUnreceivedPayment(Reservation reservation, Instant now) {
-        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
-            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-        Payment payment = new Payment();
-        payment.setInitiatedBy(reservation.getCustomer());
-        payment.setReservation(reservation);
-        payment.setAmount(snapshot.getReservationDepositAmount());
-        payment.setCurrency("VND");
-        payment.setPurpose(PaymentType.RESERVATION_DEPOSIT);
-        payment.setStatus(PaymentStatus.NOT_RECEIVED);
-        payment.setIdempotencyKey("payment-complaint-" + reservation.getId());
-        payment.setProcessedAt(now);
-        payment.setFailureCode("NOT_RECEIVED");
-        payment.setFailureReason("Customer reported a deducted payment that was not recorded");
-        return paymentRepository.saveAndFlush(payment);
     }
 
     @Transactional(readOnly = true)
