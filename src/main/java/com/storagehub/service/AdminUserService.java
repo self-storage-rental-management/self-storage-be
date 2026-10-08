@@ -170,6 +170,7 @@ public class AdminUserService {
         }
 
         User user = requiredUser(id);
+        assertEditableTarget(user);
         AdminUserResponse before = toResponse(user);
         if (request.roles() != null || request.facilityScopes() != null) {
             assertNotCustomerSelfMutation(actor, user);
@@ -253,6 +254,7 @@ public class AdminUserService {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         authorizationService.require(actor, SystemPermission.MANAGE_ROLES);
         User user = requiredUser(id);
+        assertEditableTarget(user);
         AdminUserResponse before = toResponse(user);
         assertNotCustomerSelfMutation(actor, user);
         Set<RoleCode> roleCodes = validateRoleAssignment(actor, user, request.roles());
@@ -284,6 +286,7 @@ public class AdminUserService {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         authorizationService.require(actor, SystemPermission.MANAGE_ROLES);
         User user = requiredUser(id);
+        assertEditableTarget(user);
         AdminUserResponse before = toResponse(user);
         assertNotCustomerSelfMutation(actor, user);
         Map<UUID, FacilityScopeLevel> scopes = normalizeScopes(request.facilityScopes());
@@ -301,6 +304,7 @@ public class AdminUserService {
     public AdminUserResponse updateStatus(ActorPrincipal actor, UUID id, AdminStatusUpdateRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
+        assertEditableTarget(user);
         AdminUserResponse before = toResponse(user);
         user.setStatus(request.status());
         User saved = userRepository.saveAndFlush(user);
@@ -315,6 +319,7 @@ public class AdminUserService {
     public AdminUserResponse unlock(ActorPrincipal actor, UUID id) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
+        assertEditableTarget(user);
         if (user.getStatus() != UserStatus.LOCKED) {
             throw ApiExceptions.conflict("Only LOCKED accounts can be unlocked");
         }
@@ -333,6 +338,7 @@ public class AdminUserService {
     public AdminUserResponse resetPassword(ActorPrincipal actor, UUID id, AdminPasswordResetRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
+        assertEditableTarget(user);
         boolean wasRequiredToChangePassword = user.isMustChangePassword();
 
         String temporaryPassword;
@@ -369,6 +375,12 @@ public class AdminUserService {
     private User requiredUser(UUID id) {
         return userRepository.findById(id)
             .orElseThrow(() -> ApiExceptions.notFound("User was not found"));
+    }
+
+    private void assertEditableTarget(User user) {
+        if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Administrator accounts are protected and cannot be modified");
+        }
     }
 
     private Set<RoleCode> normalizeRoles(Set<RoleCode> roles) {

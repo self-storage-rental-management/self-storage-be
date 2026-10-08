@@ -18,12 +18,6 @@ public interface CheckInRepository extends JpaRepository<CheckIn, UUID> {
     @Query("select checkIn from CheckIn checkIn where checkIn.id = :id")
     Optional<CheckIn> findByIdForUpdate(@Param("id") UUID id);
 
-    Optional<CheckIn> findByReservation_Id(UUID reservationId);
-
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select c from CheckIn c where c.id = :id")
-    Optional<CheckIn> findByIdForUpdate(@Param("id") UUID id);
-
     long countByReservation_Facility_IdAndStatusAndCheckedInAtBetween(
         UUID facilityId,
         CheckInStatus status,

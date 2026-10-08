@@ -45,11 +45,24 @@ public class TransactionalEmailService {
 
     @Async
     public void sendPasswordResetAsync(UUID userId, String toEmail, String fullName, String resetUrl, int expiryMinutes) {
+        sendPasswordResetAsync(userId, toEmail, fullName, resetUrl, expiryMinutes, null);
+    }
+
+    @Async
+    public void sendPasswordResetAsync(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String resetUrl,
+        int expiryMinutes,
+        String otp
+    ) {
         Map<String, Object> vars = new HashMap<>();
         vars.put("fullName", fullName);
         vars.put("email", toEmail);
         vars.put("resetUrl", resetUrl);
         vars.put("expiryMinutes", expiryMinutes);
+        vars.put("otp", otp);
 
         sendInternal(userId, toEmail, "StorageHub - Đặt lại mật khẩu", "reset-password", vars, "PASSWORD_RESET_EMAIL_SENT");
     }
