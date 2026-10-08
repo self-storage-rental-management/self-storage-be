@@ -27,6 +27,15 @@ public final class SupportSources {
     public interface ClosePolicySource {
         Optional<CloseRule> read(SupportTicket ticket,SupportState state,Instant now);
     }
+    /** Verified delivery of the resolution/review notice, not a queued or merely persisted notification. */
+    public record ReviewNotice(UUID reference,UUID ticketId,UUID customerId,UUID resolutionEventId,
+                               String policyRef,String policyVersion,Instant deliveredAt) {}
+    public interface NotificationSource {
+        /** Owner guarantees proof is authoritative for this resolution cycle until close commits. */
+        default boolean consistentThroughClose() {return false;}
+        /** Read only. Bind recipient, ticket, current RESOLVED event and published policy; never send here. */
+        Optional<ReviewNotice> reviewNotice(SupportTicket ticket,UUID resolutionEventId,CloseRule rule,Instant now);
+    }
     public interface ResolutionSource {
         /** Objective-specific verified result; a note is not proof of refund/payment/maintenance completion. */
         void requireResult(SupportTicket ticket,SupportState state);

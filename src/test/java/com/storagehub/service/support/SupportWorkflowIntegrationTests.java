@@ -37,6 +37,7 @@ class SupportWorkflowIntegrationTests {
         @Bean TestClock clock(){return new TestClock();}
         @Bean TestClose closePolicy(){return new TestClose();}
         @Bean TestReceiver receiver(){return new TestReceiver();}
+        @Bean TestNotice reviewNotices(EntityManager em){return new TestNotice(em);}
     }
     static class TestClock extends Clock {
         Instant time=NOW;
@@ -59,6 +60,22 @@ class SupportWorkflowIntegrationTests {
             return status==null?Optional.empty():Optional.of(new ReceiverResult(forged?UUID.randomUUID():t.getId(),e.getId(),reference,status,status.equals("COMPLETED")?reference:null));
         }
     }
+    static class TestNotice implements NotificationSource {
+        final EntityManager em;boolean available;String mode="";ReviewNotice supplied;int reads;
+        TestNotice(EntityManager em){this.em=em;}
+        public boolean consistentThroughClose(){return available&&!mode.equals("NON_ATOMIC");}
+        public Optional<ReviewNotice> reviewNotice(SupportTicket t,UUID resolutionEventId,CloseRule rule,Instant now){
+            reads++;if(mode.equals("MISSING"))return Optional.empty();
+            if(mode.equals("ERROR"))throw new IllegalStateException("Test-only delivery adapter failed");
+            if(supplied!=null)return Optional.of(supplied);
+            var resolvedAt=em.find(SupportState.class,t.getId()).getResolvedAt();
+            return Optional.of(new ReviewNotice(mode.equals("NO_REFERENCE")?null:UUID.randomUUID(),
+                mode.equals("WRONG_TICKET")?UUID.randomUUID():t.getId(),mode.equals("WRONG_CUSTOMER")?UUID.randomUUID():t.getCustomer().getId(),
+                mode.equals("WRONG_RESOLUTION")?UUID.randomUUID():resolutionEventId,
+                mode.equals("WRONG_POLICY")?"different-policy":rule.policyRef(),mode.equals("WRONG_VERSION")?"different-version":rule.policyVersion(),
+                mode.equals("NO_TIME")?null:mode.equals("FUTURE")?now.plusSeconds(1):mode.equals("BEFORE_RESOLUTION")?resolvedAt.minusSeconds(1):resolvedAt));
+        }
+    }
     @Autowired EntityManager em;
     @Autowired SupportService service;
     @Autowired SupportPersistence receipts;
@@ -66,6 +83,7 @@ class SupportWorkflowIntegrationTests {
     @Autowired TestClock clock;
     @Autowired TestClose close;
     @Autowired TestReceiver receiver;
+    @Autowired TestNotice notice;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     Facility facility,otherFacility;
     User customer,otherCustomer,manager,staff,otherStaff,foreignStaff;
@@ -77,6 +95,7 @@ class SupportWorkflowIntegrationTests {
             new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(tx->fixture());return;
         }
         reset(notifications);clock.time=NOW;close.available=false;close.days=7;receiver.enabled=false;receiver.forged=false;receiver.status=null;receiver.routes=0;
+        notice.available=false;notice.mode="";notice.supplied=null;notice.reads=0;
         var view=permission(SystemPermission.VIEW_SUPPORT);var manage=permission(SystemPermission.MANAGE_SUPPORT);
         var cr=role(RoleCode.CUSTOMER,Set.of());var mr=role(RoleCode.MANAGER,Set.of(view,manage));var sr=role(RoleCode.STAFF,Set.of(view,manage));
         facility=facility("TEST-A");otherFacility=facility("TEST-B");
@@ -191,15 +210,18 @@ class SupportWorkflowIntegrationTests {
         service.staffMessage(s,t.id(),new StaffMessage("Internal check",List.of(),Visibility.INTERNAL),"internal");
         assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.waiting_customer);
         assertThatThrownBy(()->service.customerMessage(c,t.id(),new CustomerMessage("Details",List.of(),null),"no-version")).isInstanceOf(ApiException.class);
-        var reply=service.customerMessage(c,t.id(),new CustomerMessage("Details",List.of(),waiting.version()),"details");
-        assertThat(service.customerMessage(c,t.id(),new CustomerMessage("Details",List.of(),waiting.version()),"details").id()).isEqualTo(reply.id());
+        assertThatThrownBy(()->service.customerMessage(c,t.id(),new CustomerMessage("Details",List.of(),waiting.version()),"stale-version")).isInstanceOf(ApiException.class);
+        var replyVersion=service.detail(c,CUSTOMER,t.id()).version();
+        var reply=service.customerMessage(c,t.id(),new CustomerMessage("Details",List.of(),replyVersion),"details");
+        assertThat(service.customerMessage(c,t.id(),new CustomerMessage("Details",List.of(),replyVersion),"details").id()).isEqualTo(reply.id());
         var current=service.detail(c,CUSTOMER,t.id());assertThat(current.status()).isEqualTo(SupportTicketStatus.in_progress);
         assertThat(current.version()).isGreaterThan(waiting.version());
     }
     @Test void resolvedReplyDoesNotImplicitlyReopen(){
         var t=resolved();service.customerMessage(c,t.id(),new CustomerMessage("Thanks",List.of(),null),"thanks");
         assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.resolved);
-        var reopened=service.reopen(c,t.id(),new Reopen("Still broken",t.version()),"reopen");
+        assertThatThrownBy(()->service.reopen(c,t.id(),new Reopen("Still broken",t.version()),"stale-reopen")).isInstanceOf(ApiException.class);
+        var reopened=service.reopen(c,t.id(),new Reopen("Still broken",service.detail(c,CUSTOMER,t.id()).version()),"reopen");
         assertThat(reopened.status()).isEqualTo(SupportTicketStatus.in_progress);assertThat(reopened.resolvedAt()).isNull();
     }
     @Test void reopenWithIneligiblePreviousStaffReturnsToManagerQueue(){
@@ -223,11 +245,41 @@ class SupportWorkflowIntegrationTests {
         assertThatThrownBy(()->service.followUp(c,t.id(),new Create("Wrong","Issue",otherFacility.getId(),null,List.of()),"wrong-follow")).isInstanceOf(ApiException.class);
     }
     @Test void autoCloseRechecksSevenDayDeadlineAndNeverClosesWaitingCustomer(){
-        var t=resolved();close.available=true;
+        var t=resolved();close.available=true;notice.available=true;
         clock.time=NOW.plus(Duration.ofDays(7)).minusSeconds(1);assertThat(service.autoClose(t.id())).isFalse();
         clock.time=NOW.plus(Duration.ofDays(7));assertThat(service.autoClose(t.id())).isTrue();assertThat(service.autoClose(t.id())).isFalse();
         var another=active();var waiting=service.requestInformation(s,another.id(),new Information("Need details",List.of(),another.version()),"ask");
         clock.time=clock.time.plus(Duration.ofDays(30));assertThat(service.autoClose(waiting.id())).isFalse();
+    }
+    @Test void autoCloseCannotUseQueuedNotificationAsVerifiedReviewNotice(){
+        var t=resolved();close.available=true;clock.time=NOW.plus(Duration.ofDays(7));reset(notifications);
+        assertThatThrownBy(()->service.autoClose(t.id())).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
+        var current=service.detail(c,CUSTOMER,t.id());assertThat(current.status()).isEqualTo(SupportTicketStatus.resolved);assertThat(current.closedAt()).isNull();
+        verifyNoInteractions(notifications);
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"MISSING","NON_ATOMIC","NO_REFERENCE","WRONG_TICKET","WRONG_CUSTOMER","WRONG_RESOLUTION","WRONG_POLICY","WRONG_VERSION","NO_TIME","FUTURE","BEFORE_RESOLUTION"})
+    void autoCloseRejectsMissingOrUnboundNotificationProofWithoutSideEffects(String mode){
+        var t=resolved();close.available=true;notice.available=true;notice.mode=mode;clock.time=NOW.plus(Duration.ofDays(7));reset(notifications);
+        long events=count("SupportEvent");
+        assertThatThrownBy(()->service.autoClose(t.id())).isInstanceOf(ApiException.class);
+        var current=service.detail(c,CUSTOMER,t.id());assertThat(current.status()).isEqualTo(SupportTicketStatus.resolved);
+        assertThat(current.closedAt()).isNull();assertThat(count("SupportEvent")).isEqualTo(events);verifyNoInteractions(notifications);
+    }
+    @Test void autoCloseDoesNotReuseDeliveryProofFromPreviousResolution(){
+        var t=resolved();close.available=true;notice.available=true;
+        var oldEvent=em.createQuery("select e from SupportEvent e where e.ticket.id=:id and e.type='RESOLVED'",SupportEvent.class).setParameter("id",t.id()).getSingleResult();
+        notice.supplied=new ReviewNotice(UUID.randomUUID(),t.id(),customer.getId(),oldEvent.getId(),"test-only-policy","v1",NOW);
+        clock.time=NOW.plusSeconds(1);var reopened=service.reopen(c,t.id(),new Reopen("Still broken",t.version()),"reopen-for-notice");
+        service.resolve(s,t.id(),new Resolution("New answer",List.of(),reopened.version()),"resolve-again");
+        clock.time=clock.time.plus(Duration.ofDays(7));reset(notifications);
+        assertThatThrownBy(()->service.autoClose(t.id())).isInstanceOf(ApiException.class).hasMessageContaining("proof is inconsistent");
+        assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.resolved);verifyNoInteractions(notifications);
+    }
+    @Test void autoCloseAdapterErrorLeavesResolutionUntouched(){
+        var t=resolved();close.available=true;notice.available=true;notice.mode="ERROR";clock.time=NOW.plus(Duration.ofDays(7));reset(notifications);
+        assertThatThrownBy(()->service.autoClose(t.id())).isInstanceOf(IllegalStateException.class);
+        assertThat(service.detail(c,CUSTOMER,t.id()).closedAt()).isNull();verifyNoInteractions(notifications);
     }
     @Test void invalidShortAutoClosePolicyIsRejected(){
         var t=resolved();close.available=true;close.days=1;clock.time=NOW.plus(Duration.ofDays(8));
@@ -323,7 +375,7 @@ class SupportWorkflowIntegrationTests {
             var unchanged=service.detail(c,CUSTOMER,created.id());assertThat(unchanged.status()).isEqualTo(SupportTicketStatus.in_progress);assertThat(unchanged.resolvedAt()).isNull();
             tx.executeWithoutResult(st->{assertThat(count("SupportMessage")).isEqualTo(1);assertThat(em.createQuery("select count(r) from SupportCommandReceipt r where r.operation='support_resolve'",Long.class).getSingleResult()).isZero();});
             reset(notifications);var resolved=service.resolve(assignedActor,created.id(),new Resolution("Answer",List.of(),accepted.version()),"successful-resolution");
-            close.available=true;clock.time=NOW.plus(Duration.ofDays(7));var race=new java.util.concurrent.CountDownLatch(1);
+            close.available=true;notice.available=true;clock.time=NOW.plus(Duration.ofDays(7));var race=new java.util.concurrent.CountDownLatch(1);
             var closed=pool.submit(()->{race.await();return service.autoClose(created.id());});
             var reopened=pool.submit(()->{race.await();try{service.reopen(c,created.id(),new Reopen("Still broken",resolved.version()),"race-reopen");return true;}catch(ApiException e){assertThat(e.getStatus().value()).isEqualTo(409);return false;}});
             race.countDown();var closeWon=closed.get(30,java.util.concurrent.TimeUnit.SECONDS);var reopenWon=reopened.get(30,java.util.concurrent.TimeUnit.SECONDS);
@@ -345,6 +397,56 @@ class SupportWorkflowIntegrationTests {
         var params=new LinkedMultiValueMap<String,String>();params.add("search","%");params.add("size","1");
         var result=service.list(c,CUSTOMER,SupportQuery.parse(params,false,false),"test");
         assertThat(result.pagination().totalItems()).isEqualTo(1);assertThat(result.data()).extracting(SupportResponse::subject).containsExactly("100% question");
+    }
+    @Test void recentActivitySortIncludesCustomerReplyWithoutRewritingSharedTicket(){
+        var older=active();clock.time=NOW.plusSeconds(60);var newer=active();clock.time=NOW.plusSeconds(120);
+        em.flush();em.clear();
+        var sharedUpdatedAt=em.find(SupportTicket.class,older.id()).getUpdatedAt();
+        service.customerMessage(c,older.id(),new CustomerMessage("New information",List.of(),null),"recent-customer");
+        assertRecentActivityOrder(older.id(),newer.id());
+        assertThat(em.find(SupportTicket.class,older.id()).getUpdatedAt()).isEqualTo(sharedUpdatedAt);
+        assertThat(em.find(SupportState.class,older.id()).getChangedAt()).isEqualTo(clock.time);
+    }
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.EnumSource(Visibility.class)
+    void recentActivitySortIncludesStaffPublicReplyAndInternalNote(Visibility visibility){
+        var older=active();clock.time=NOW.plusSeconds(60);var newer=active();clock.time=NOW.plusSeconds(120);
+        em.flush();em.clear();
+        var sharedUpdatedAt=em.find(SupportTicket.class,older.id()).getUpdatedAt();
+        service.staffMessage(s,older.id(),new StaffMessage("Progress",List.of(),visibility),"recent-staff");
+        assertRecentActivityOrder(older.id(),newer.id());
+        assertThat(em.find(SupportTicket.class,older.id()).getUpdatedAt()).isEqualTo(sharedUpdatedAt);
+        assertThat(em.find(SupportState.class,older.id()).getChangedAt()).isEqualTo(clock.time);
+    }
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.EnumSource(Decision.class)
+    void recentActivitySortIncludesEscalationDecisionWithoutRewritingSharedTicket(Decision decision){
+        receiver.enabled=true;var older=active();
+        var escalation=service.escalate(s,older.id(),new Escalate(SupportCommands.Module.PAYMENT,"Owner review",List.of(),older.version()),"recent-escalate");
+        clock.time=NOW.plusSeconds(60);var newer=active();clock.time=NOW.plusSeconds(120);
+        em.flush();em.clear();
+        var sharedUpdatedAt=em.find(SupportTicket.class,older.id()).getUpdatedAt();
+        service.decideEscalation(m,older.id(),escalation.id(),new EscalationDecision(decision,"Coordinate",service.detail(m,MANAGER,older.id()).version()),"recent-decision");
+        assertRecentActivityOrder(older.id(),newer.id());
+        assertThat(em.find(SupportTicket.class,older.id()).getUpdatedAt()).isEqualTo(sharedUpdatedAt);
+    }
+    @Test void recentActivitySortKeepsLegacyRowsWithoutInventingWorkflowMetadata(){
+        var legacy=new SupportTicket();legacy.setCustomer(customer);legacy.setFacility(facility);legacy.setSubject("Legacy");legacy.setDescription("Read only");em.persist(legacy);em.flush();
+        clock.time=legacy.getUpdatedAt().plusSeconds(60);var current=create();
+        assertRecentActivityOrder(current.id(),legacy.getId());
+        assertThat(em.find(SupportState.class,legacy.getId())).isNull();
+    }
+    private void assertRecentActivityOrder(UUID latest,UUID earlier){
+        for(var audience:List.of(CUSTOMER,MANAGER)){
+            var actor=audience==CUSTOMER?c:m;
+            for(String direction:List.of("asc","desc")){
+                var filters=new LinkedMultiValueMap<String,String>();filters.add("sort","updatedAt,"+direction);filters.add("size","1");
+                var first=service.list(actor,audience,SupportQuery.parse(filters,audience==MANAGER,false),"test");
+                assertThat(first.pagination().totalItems()).isEqualTo(2);
+                assertThat(first.data()).extracting(SupportResponse::id).containsExactly(direction.equals("desc")?latest:earlier);
+                filters.add("page","1");
+                var second=service.list(actor,audience,SupportQuery.parse(filters,audience==MANAGER,false),"test");
+                assertThat(second.data()).extracting(SupportResponse::id).containsExactly(direction.equals("desc")?earlier:latest);
+            }
+        }
     }
     @Test void httpRejectsInjectedPriorityVisibilityAndMissingKeyBeforeMutation() throws Exception {
         var actors=mock(ActorContext.class);when(actors.required()).thenReturn(c);
