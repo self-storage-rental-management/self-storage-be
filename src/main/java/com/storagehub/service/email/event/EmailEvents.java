@@ -21,8 +21,18 @@ public final class EmailEvents {
         String toEmail,
         String fullName,
         String resetUrl,
-        int expiryMinutes
+        int expiryMinutes,
+        String otp
     ) {
+        public SendPasswordResetEvent(
+            UUID userId,
+            String toEmail,
+            String fullName,
+            String resetUrl,
+            int expiryMinutes
+        ) {
+            this(userId, toEmail, fullName, resetUrl, expiryMinutes, null);
+        }
     }
 
     public record SendNewLoginEvent(
