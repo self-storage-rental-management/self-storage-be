@@ -68,8 +68,8 @@ class ReservationGoodsReviewServiceTests {
         facility = entityWithId(new Facility());
         staff = new ActorPrincipal(
             reviewer.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
-            Set.of("view_reservations", "approve_reservations"),
-            Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
+Set.of("reservations:read", "reservations:approve"),
+Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         );
 
         UnitType unitType = entityWithId(new UnitType());
