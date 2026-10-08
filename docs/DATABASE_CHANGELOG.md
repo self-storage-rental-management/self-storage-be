@@ -169,3 +169,12 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - Reservation mới luôn lưu fingerprint gồm quote, goods condition, notes và toàn bộ goods items theo thứ tự request.
 - Retry cùng `Idempotency-Key` và cùng payload trả lại Reservation cũ; cùng key nhưng payload khác trả `409 CONFLICT`.
 - Cột giữ nullable để Hibernate `ddl-auto=update` tương thích với dữ liệu local đã tồn tại. Khi retry bản ghi cũ chưa có fingerprint, service tái dựng fingerprint từ Reservation và goods items đã lưu để so sánh.
+
+## 2026-10-08 — Renewal operations / overdue coordination (rollout pending)
+
+- Additive entities: `renewal_operation_states`, `renewal_operation_events`, `overdue_follow_up_states`, `overdue_follow_ups`.
+- Shared Rental/Reservation/Payment/Refund/policy/permission table structures unchanged; no seed, rewrite or backfill.
+- Review-only DDL: `docs/sql/renewal-operations-overdue-schema.sql`; NOT an enabled migration and NOT executed by this task.
+- Runtime uses actual owner policy/accounting/calendar/assignment/evidence/hold/Recovery adapters. Until installed, related operations fail closed; no fake paid/balance/capacity/payout state.
+- `ddl-auto=update` can create additive tables on startup. Do not start against team/shared DB until schema/lock/permission owners approve. H2 test schema creation is isolated and not production migration evidence.
+- Contracts: `RENEWAL_OPERATIONS_API_CONTRACT.md`, `OVERDUE_API_CONTRACT.md`.
