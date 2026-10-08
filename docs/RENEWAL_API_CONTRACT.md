@@ -1,61 +1,61 @@
-# Renewal API (D2)
+# Đặc tả API gia hạn (D2)
 
-## Additive completion patch — 06/10/2026
+## Bổ sung hoàn thiện theo hướng mở rộng — 06/10/2026
 
-- Renewal responses add nullable `acceptedTerms` (nested `RenewalQuoteResponse.Terms`, not flattened) and `cancellationReason`. Terms come only from persisted customer-accepted revision/quote; no current-price recalculation. Legacy without workflow returns null. List/detail/command schemas are consistent; no separate public quote lookup is introduced.
-- Projection checks accepted quote Rental/customer binding and persisted request amount/newEndDate consistency. Corruption yields409 without repairing records or exposing unrelated resources.
-- Cancellation reason is the existing persisted workflow reason. No cancelledBy/cancelledAt is inferred from requestedBy/reviewer/updatedAt; those fields are not added without authoritative evidence.
-- `FinancialSource.consistentThroughApproval()` defaults false. An owner must implement a shared lock/version consistency protocol before opting in; checkedAt alone is not a concurrency guarantee. Read projections may show COMPLETE while approval remains blocked due to missing consistency protocol.
-- Optional `ApprovalLifecycleSource.ready(Rental)` is required for APPROVE and APPROVE allowedActions, in addition to policy/pricing/eligibility/complete finance/atomic hold. No runtime implementation is installed. Owner readiness means payment linkage, deadline/expiry reconciliation and matching hold/open-slot handoff have actually been implemented; it is not a frontend/environment toggle.
-- Missing approval dependencies appear in disabledReasons; rejection and verified pending cancellation remain independent. Approval does not extend Rental dates. Already-approved records are not rewritten by this patch.
-- User-facing accepted price/deposit/remainder are obligations, not evidence of payment. FE displays historical accepted terms and preserves honest null/UNKNOWN states.
+- Phản hồi Renewal bổ sung `acceptedTerms` có thể null (đối tượng lồng `RenewalQuoteResponse.Terms`, không dàn phẳng) và `cancellationReason`. Điều khoản chỉ lấy từ phiên bản điều chỉnh/báo giá đã lưu và được Customer chấp nhận; không tính lại theo giá hiện tại. Bản ghi cũ không có workflow trả null. Lược đồ danh sách/chi tiết/lệnh nhất quán; không bổ sung API tra cứu báo giá công khai riêng.
+- Dữ liệu tổng hợp kiểm tra liên kết Rental/Customer của báo giá đã chấp nhận và tính nhất quán giữa amount/newEndDate của yêu cầu đã lưu. Dữ liệu sai lệch trả 409, không sửa bản ghi hoặc làm lộ tài nguyên không liên quan.
+- Lý do hủy lấy từ lý do đã được lưu trong workflow hiện có. Không suy ra cancelledBy/cancelledAt từ requestedBy/người duyệt/updatedAt; không thêm các trường này khi chưa có bằng chứng có thẩm quyền.
+- `FinancialSource.consistentThroughApproval()` mặc định false. Chủ nguồn phải triển khai giao thức nhất quán dùng chung bằng khóa/phiên bản trước khi bật hỗ trợ; chỉ checkedAt không bảo đảm an toàn đồng thời. Phản hồi đọc có thể là COMPLETE trong khi duyệt vẫn bị chặn do thiếu giao thức nhất quán.
+- Giao diện tích hợp tùy chọn `ApprovalLifecycleSource.ready(Rental)` là điều kiện bắt buộc cho APPROVE và APPROVE trong allowedActions, bên cạnh policy/pricing/eligibility/tài chính đầy đủ/giữ chỗ nguyên tử. Không cài đặt lớp triển khai chạy thực tế. Trạng thái sẵn sàng do chủ nguồn xác nhận có nghĩa là liên kết thanh toán, đối soát hạn thanh toán/hết hạn và chuyển giao hold/open-slot tương ứng đã thực sự được triển khai; đây không phải công tắc FE hoặc môi trường.
+- Phụ thuộc duyệt còn thiếu xuất hiện trong disabledReasons; từ chối và hủy yêu cầu đang chờ có workflow đã xác minh vẫn độc lập. Duyệt không kéo dài ngày Rental. Bản ghi đã duyệt không bị viết lại bởi bổ sung này.
+- Giá/cọc/phần còn lại đã chấp nhận hiển thị cho người dùng là nghĩa vụ phải trả, không phải bằng chứng đã thanh toán. FE hiển thị điều khoản lịch sử đã chấp nhận và giữ đúng trạng thái null/UNKNOWN khi chưa có dữ liệu.
 
-Shared policy publication, pricing/package eligibility/rounding, date/calendar/Recovery sources, finance, cross-writer hold protocol, D3 lifecycle and owner-approved MySQL migration remain external integration dependencies. This patch does not choose an expired-request lifecycle or rounding policy for other owners.
+Việc công bố policy chung, giá/điều kiện gói thuê/làm tròn, nguồn ngày/lịch/Recovery, tài chính, giao thức giữ chỗ giữa các bên cùng ghi, vòng đời D3 và migration MySQL được chủ nguồn duyệt vẫn là các phụ thuộc tích hợp bên ngoài. Bổ sung này không tự chọn vòng đời yêu cầu hết hạn hoặc chính sách làm tròn thay cho chủ nguồn khác.
 
-Base `/api`; bearer JWT; standard ApiResponse/PageResponse/correlationId. No runtime seed/default policy, fake financial source or imaginary HTTP endpoint.
+Đường dẫn gốc `/api`; JWT Bearer; dùng ApiResponse/PageResponse/correlationId chuẩn. Không có dữ liệu mẫu chạy thực tế/policy mặc định, nguồn tài chính giả hoặc endpoint HTTP không tồn tại.
 
-## Operations
+## Thao tác
 
-| Method/path | Result | Prerequisites |
+| Phương thức/đường dẫn | Kết quả | Điều kiện tiên quyết |
 |---|---|---|
-| GET /customer/rentals/{id}/renewal-options |200 eligible options | Owned active Rental, policy/eligibility/pricing |
-| POST /customer/rentals/{id}/renewal-quote |200 immutable quote | pricingPackageCode; authoritative sources; no hold/extension |
-| POST /customer/rentals/{id}/renewal-requests |201 Renewal | renewalQuoteId,note; Idempotency-Key; unexpired owned quote, eligibility, one open request |
-| PATCH /customer/renewals/{id} |200 revision | renewalQuoteId,note,expectedVersion; Idempotency-Key; pending |
-| POST /customer/renewals/{id}/cancel |200 cancelled | reason,expectedVersion; Idempotency-Key; verified pending workflow; no policy required |
-| GET /{customer,manager}/renewals and /{id} |200 scoped records | Customer ownership; Manager VIEW_RENTALS + READ |
-| POST /manager/renewals/{id}/decision |200 decision | APPROVE/REJECT,reason,expectedVersion; Idempotency-Key; MANAGE_RENTALS + MANAGE |
+| GET /customer/rentals/{id}/renewal-options | 200 các lựa chọn đủ điều kiện | Rental đang hoạt động, thuộc Customer; có policy/eligibility/pricing |
+| POST /customer/rentals/{id}/renewal-quote | 200 báo giá bất biến | pricingPackageCode; nguồn có thẩm quyền; không giữ chỗ/kéo dài kỳ thuê |
+| POST /customer/rentals/{id}/renewal-requests | 201 Renewal | renewalQuoteId,note; Idempotency-Key; báo giá thuộc Customer còn hạn, đủ điều kiện, chỉ một yêu cầu đang mở |
+| PATCH /customer/renewals/{id} | 200 phiên bản điều chỉnh | renewalQuoteId,note,expectedVersion; Idempotency-Key; đang pending |
+| POST /customer/renewals/{id}/cancel | 200 đã hủy | reason,expectedVersion; Idempotency-Key; workflow pending đã xác minh; không cần policy |
+| GET /{customer,manager}/renewals và /{id} | 200 bản ghi trong phạm vi | Customer có quyền sở hữu; Manager có VIEW_RENTALS + READ |
+| POST /manager/renewals/{id}/decision | 200 quyết định | APPROVE/REJECT,reason,expectedVersion; Idempotency-Key; MANAGE_RENTALS + MANAGE |
 
-REJECT requires reason, not policy/finance/hold. APPROVE revalidates active Rental, dates/physical allocation, pricing/policy, due obligations/disputes and atomic hold. Approval does not extend Rental or change its old rate/unit state. Financial UNKNOWN blocks approval, not request creation. Approved/payment cancellation and completion require D3 coordination, outside this slice.
+REJECT cần lý do, không cần policy/tài chính/hold. APPROVE kiểm tra lại Rental đang hoạt động, ngày/phân bổ gian vật lý, giá/policy, nghĩa vụ đến hạn/tranh chấp và giữ chỗ nguyên tử. Duyệt không kéo dài Rental hoặc thay giá cũ/trạng thái gian kho. Tài chính UNKNOWN chặn duyệt, không chặn tạo yêu cầu. Hủy sau khi duyệt/thanh toán và hoàn tất cần phối hợp D3, ngoài phạm vi phần này.
 
-Commands reject unknown body fields. note/reason max2000; version>=0; key1–100. Reauthorize before replay, bind resource and canonical payload hash, return original status/data without duplicate audit/hold; no cached correlationId. Scoped RenewalRequestAdvice maps missing headers to400 without changing shared handler/other role behavior.
+Lệnh từ chối trường body không được hỗ trợ. note/reason tối đa 2000 ký tự; version>=0; key dài 1–100 ký tự. Kiểm tra lại quyền trước khi trả kết quả đã lưu; ràng buộc tài nguyên và mã băm payload chuẩn hóa; trả trạng thái/dữ liệu gốc mà không lặp audit/hold; không lưu correlationId vào kết quả dùng lại. RenewalRequestAdvice giới hạn trong module ánh xạ thiếu header thành 400, không thay bộ xử lý dùng chung hoặc hành vi role khác.
 
-## Queries/projection
+## Truy vấn/dữ liệu tổng hợp
 
-page0,size20 max100; status exact enum,rentalId; Manager adds facilityId/search. Search literal case-insensitive unit/customer name or exact Rental/Renewal UUID. Sort createdAt,newEndDate,amount,id; default createdAt desc + id asc. Unknown/repeated query400, detail no query; scope/filter before database pagination.
+page0,size20 tối đa 100; status đúng enum,rentalId; Manager thêm facilityId/search. Tìm kiếm không phân biệt hoa thường, không diễn giải ký tự đại diện, theo mã gian/tên Customer hoặc UUID Rental/Renewal chính xác. Sắp xếp theo createdAt,newEndDate,amount,id; mặc định createdAt desc + id asc. Tham số không hỗ trợ/lặp trả 400; chi tiết không nhận truy vấn; áp dụng phạm vi/bộ lọc trước phân trang tại cơ sở dữ liệu.
 
-Quote JSON fields flattened: id,rentalId,customerId,quotedAt,expiresAt plus oldEnd, half-open period/newEnd, physical unit/facility/type, package/version, rate/subtotal/discount/net/deposit/remainder and BO policy ref/version. No PIN/debug/legal contract record. Detail reads actual workflow version/accepted revision/reviewer/time/reason/deadline/hold. Legacy without workflow remains null/UNKNOWN, not fake version0/history.
+Các trường JSON báo giá được dàn phẳng: id,rentalId,customerId,quotedAt,expiresAt cùng oldEnd, khoảng thời gian nửa mở/newEnd, gian vật lý/cơ sở/loại gian, gói thuê/phiên bản, rate/subtotal/discount/net/deposit/remainder và tham chiếu/phiên bản policy BO. Không có PIN/thông tin gỡ lỗi/bản ghi hợp đồng pháp lý. Chi tiết đọc version workflow/phiên bản đã chấp nhận/người duyệt/thời điểm/lý do/hạn/hold thực tế. Bản ghi cũ không có workflow vẫn là null/UNKNOWN, không giả version0 hoặc lịch sử.
 
-GET computes reviewState and actor-specific allowedActions without writes. Finance UNKNOWN/null when source incomplete; never zero debt. Changed pricing/policy before approval ->409, new quote + Customer PATCH confirmation. Pending does not expire just because accepted quote TTL elapsed. Non-active or unavailable sources are not reported READY.
+GET tính reviewState và allowedActions theo từng người dùng, không ghi dữ liệu. Tài chính UNKNOWN/null khi nguồn chưa đầy đủ; không bao giờ suy thành nợ bằng 0. Giá/policy thay đổi trước khi duyệt → 409; cần báo giá mới và Customer xác nhận bằng PATCH. Yêu cầu pending không hết hạn chỉ vì TTL của báo giá đã chấp nhận đã hết. Rental không hoạt động hoặc thiếu nguồn không được báo READY.
 
-## Required authoritative sources (no runtime implementations here)
+## Nguồn có thẩm quyền bắt buộc (không có lớp triển khai chạy thực tế tại đây)
 
-PolicySource: BO reference/version, TTL, payment/request window, deposit rate, eligible package IDs. PricingSource: effective package/rate/discount/version and unit-type mapping. Calculator is VND scale2 HALF_UP: adapter must explicitly publish moneyScale2; scale0/other currencies blocked, not converted. Owner must confirm rounding publication.
+PolicySource: tham chiếu/phiên bản BO, TTL, cửa sổ thanh toán/gửi yêu cầu, tỷ lệ cọc, ID gói đủ điều kiện. PricingSource: gói/giá/giảm giá/phiên bản có hiệu lực và ánh xạ loại gian. Bộ tính dùng VND với scale2 HALF_UP: bộ kết nối phải công bố rõ moneyScale2; scale0/tiền tệ khác bị chặn, không chuyển đổi. Chủ nguồn phải xác nhận việc công bố quy tắc làm tròn.
 
-EligibilitySource: verified date provenance/recovery cutoff/feasibility. FinancialSource: due obligation refs/disputes with checkedAt; authoritative read freshness is adapter responsibility. ExtensionHoldSource: occupied-extension shared capacity/lock protocol; default participatesInTransaction=false blocks approval. Reviewed local transactional implementation must opt in and guarantee rollback together with caller; no remote non-atomic side effect. Test implementations exist only in H2 fixtures.
+EligibilitySource: nguồn gốc ngày đã xác minh/mốc giới hạn Recovery/tính khả thi. FinancialSource: tham chiếu nghĩa vụ đến hạn/tranh chấp với checkedAt; độ mới của dữ liệu đọc có thẩm quyền là trách nhiệm bộ kết nối. ExtensionHoldSource: giao thức dung lượng/khóa dùng chung cho phần kéo dài gian đang chiếm; mặc định participatesInTransaction=false nên chặn duyệt. Lớp triển khai giao dịch local đã được rà soát phải chủ động xác nhận hỗ trợ và bảo đảm rollback cùng bên gọi; không tạo tác động bên ngoài từ xa thiếu tính nguyên tử. Lớp triển khai kiểm thử chỉ có trong dữ liệu H2 của test.
 
-## Persistence/transaction
+## Lưu trữ/giao dịch
 
-Additive renewal_quotes, renewal_accepted_revisions, renewal_workflows, renewal_open_slots, renewal_idempotency. Existing shared Rental/Renewal/ReservationQuote structure unchanged. Immutable snapshot/revisions, unique accepted quote/revision, @Version workflow. No deletion of history.
+Bổ sung renewal_quotes, renewal_accepted_revisions, renewal_workflows, renewal_open_slots, renewal_idempotency. Giữ nguyên cấu trúc Rental/Renewal/ReservationQuote dùng chung hiện có. Bản chụp/phiên bản điều chỉnh bất biến, ràng buộc duy nhất cho báo giá/phiên bản đã chấp nhận, workflow dùng @Version. Không xóa lịch sử.
 
-READ_COMMITTED commands; lock order actor User -> Rental -> workflow -> shared hold; quote only locks Rental. Actor lock serializes same-actor idempotency; Rental lock + slot PK guard one open request. Recheck ownership/allocation/version after locking. Legacy unresolved requests also block submission. Accepted quote cannot be reused after cancellation. Only rejected/cancelled/completed release matching slot; payment_expired not guessed terminal.
+Lệnh dùng READ_COMMITTED; thứ tự khóa actor User → Rental → workflow → shared hold; tạo báo giá chỉ khóa Rental. Khóa actor tuần tự hóa xử lý idempotency cùng người dùng; khóa Rental + khóa chính slot bảo đảm một yêu cầu đang mở. Kiểm tra lại quyền sở hữu/phân bổ/phiên bản sau khi khóa. Yêu cầu cũ chưa giải quyết cũng chặn gửi mới. Báo giá đã chấp nhận không được dùng lại sau hủy. Chỉ rejected/cancelled/completed mới giải phóng slot khớp; không tự suy payment_expired là trạng thái kết thúc.
 
-Idempotency uniqueness actor/operation/SHA-256(exact UTF-8 key) avoids MySQL collation case/padding ambiguity. Canonical hash sorts object keys recursively, preserves arrays; result data preserves monetary representation. No purge.
+Tính duy nhất của idempotency theo actor/operation/SHA-256(key UTF-8 nguyên văn) tránh nhập nhằng hoa thường/khoảng trắng đệm của collation MySQL. Mã băm chuẩn hóa sắp xếp khóa đối tượng đệ quy, giữ thứ tự mảng; dữ liệu kết quả giữ cách biểu diễn tiền. Không dọn xóa.
 
-Audit reuses existing AuditLogService with real actor in transaction. Hold/deadline/status/audit/idempotency commit together; failure rolls back. Local locking does not prove Booking/Return/Assignment capacity safety; shared owner lock protocol and MySQL regression still required.
+Audit tái sử dụng AuditLogService hiện có với người dùng thực trong giao dịch. Hold/hạn/status/audit/idempotency cùng commit; lỗi thì rollback. Khóa local không chứng minh an toàn dung lượng giữa Booking/Return/Assignment; vẫn cần giao thức khóa chung được chủ nguồn thống nhất và kiểm thử hồi quy MySQL.
 
-## Rollout/errors
+## Triển khai/lỗi
 
-docs/sql/renewal-persistence-schema.sql is review-only DDL, not enabled Flyway. No runtime MySQL migration/data change in this task. Existing dev ddl-auto=update can create tables on startup: do not start against team/shared MySQL before owner review. Staging/prod validate need approved migration; no legacy backfill.
+docs/sql/renewal-persistence-schema.sql là DDL chỉ để rà soát, chưa bật Flyway. Tác vụ này không chạy migration MySQL hoặc thay đổi dữ liệu thực tế. Cấu hình dev ddl-auto=update hiện có có thể tạo bảng khi khởi động: không chạy trên MySQL chung của team trước khi chủ nguồn duyệt. Staging/prod dùng validate cần migration được duyệt; không bổ sung ngược dữ liệu cũ.
 
-400 invalid/unknown fields/query/header;401 invalid session;403 missing grant;404 invisible resource/quote;409 stale terms/version, duplicate-open, expiry, phase/move-out/debt/capacity/source conflict. Missing source uses existing CONFLICT + DEFERRED_SOURCE message; no global enum change. Full cross-role D2 rollout needs actual sources, schema/lock approval, D3 coordination and MySQL/E2E verification.
+400 trường/truy vấn/header sai hoặc không hỗ trợ; 401 phiên đăng nhập không hợp lệ; 403 thiếu quyền; 404 tài nguyên/báo giá ngoài quyền xem; 409 điều khoản/phiên bản cũ, trùng yêu cầu đang mở, hết hạn, xung đột giai đoạn/trả kho/nợ/dung lượng/nguồn. Thiếu nguồn dùng CONFLICT hiện có + thông điệp DEFERRED_SOURCE; không thay enum toàn cục. Triển khai D2 đầy đủ xuyên role cần nguồn thật, duyệt schema/khóa, phối hợp D3 và xác minh MySQL/E2E.
