@@ -60,7 +60,7 @@ class ReservationGoodsReviewServiceTests {
         reviewer = entityWithId(new User());
         staff = new ActorPrincipal(
             reviewer.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
-            Set.of("view_reservations", "approve_reservations"), Map.of()
+            Set.of("reservations:read", "reservations:approve"), Map.of()
         );
 
         Facility facility = entityWithId(new Facility());

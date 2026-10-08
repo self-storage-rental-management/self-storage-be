@@ -1,12 +1,12 @@
 # Database changelog
 
-Tài liệu này ghi các thay đổi schema trong môi trường local/demo. Dự án hiện dùng:
+Tài liệu này ghi các thay đổi schema trong môi trường local/demo. Local dùng Hibernate `ddl-auto=update` kết hợp Flyway cho các migration tương thích; staging/production dùng Flyway và Hibernate `ddl-auto=validate`:
 
 ```properties
 spring.jpa.hibernate.ddl-auto=update
 ```
 
-Không dùng Flyway trong phạm vi đồ án hiện tại. Trước production, các thay đổi tại đây phải được chuyển thành migration SQL có version và kiểm thử trên bản sao dữ liệu.
+Các thay đổi schema cần được ghi nhận bằng migration SQL có version và kiểm thử trên bản sao dữ liệu.
 
 ## 2026-09-30 — Chuẩn hóa trạng thái Reservation và Payment
 
