@@ -24,7 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PaymentComplaintService {
     private static final String FILE_ENTITY_TYPE = "PAYMENT_COMPLAINT";
-    private static final long MAX_COMPLAINTS_PER_DAY = 5;
     private static final List<PaymentComplaintStatus> ACTIVE_STATUSES = List.of(
         PaymentComplaintStatus.REVIEW_OVERDUE, PaymentComplaintStatus.PENDING
     );
@@ -56,14 +55,14 @@ public class PaymentComplaintService {
         if (complaintRepository.findByReservation_Id(reservationId).isPresent()) {
             throw ApiExceptions.conflict("A payment complaint already exists for this reservation");
         }
-        if (complaintRepository.countByCustomer_IdAndSubmittedAtAfter(
-            actor.userId(), now.minus(24, ChronoUnit.HOURS)
-        ) >= MAX_COMPLAINTS_PER_DAY) {
-            throw ApiExceptions.conflict("Payment complaint limit reached; please try again later");
-        }
         Payment payment = paymentRepository.findReservationPaymentsForUpdate(
             reservationId, PaymentType.RESERVATION_DEPOSIT
-        ).stream().findFirst().orElseThrow(() -> ApiExceptions.conflict("Reservation payment is missing"));
+        ).stream()
+            .filter(item -> item.getStatus() == PaymentStatus.NOT_RECEIVED)
+            .findFirst()
+            .orElseThrow(() -> ApiExceptions.conflict(
+                "A payment complaint requires a payment attempt that was not received"
+            ));
         List<FileAsset> images = requireOwnedImages(actor, request.imageIds());
 
         PaymentComplaint complaint = new PaymentComplaint();
@@ -85,6 +84,12 @@ public class PaymentComplaintService {
             reservation.getCustomer(), "PAYMENT_COMPLAINT_SUBMITTED", "PaymentComplaint",
             saved.getId(), reservation.getFacility().getId(), null,
             Map.of("status", saved.getStatus(), "reviewDueAt", saved.getReviewDueAt())
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Đã gửi khiếu nại thanh toán",
+            "Khiếu nại của đơn " + reservation.getReservationCode() + " đang chờ đối soát.",
+            reservation.getId()
         );
         return toResponse(saved);
     }
@@ -114,18 +119,34 @@ public class PaymentComplaintService {
             throw ApiExceptions.conflict("Payment complaint can no longer be withdrawn");
         }
         Instant now = Instant.now();
+        Payment payment = complaint.getPayment();
+        if (payment.getStatus() == PaymentStatus.PAID) {
+            throw ApiExceptions.conflict("A paid complaint can no longer be withdrawn");
+        }
         complaint.setStatus(PaymentComplaintStatus.WITHDRAWN);
         complaint.setWithdrawnAt(now);
+        payment.setStatus(PaymentStatus.CANCELLED);
+        payment.setProcessedAt(now);
+        payment.setFailureCode("COMPLAINT_WITHDRAWN");
+        payment.setFailureReason("Customer withdrew the payment complaint");
         reservation.setStatus(ReservationStatus.CANCELLED);
         reservation.setCancelledAt(now);
         reservation.setCancelReason("Customer withdrew the payment complaint");
         reservation.setArchivedAt(now);
+        paymentRepository.saveAndFlush(payment);
         reservationRepository.saveAndFlush(reservation);
         PaymentComplaint saved = complaintRepository.saveAndFlush(complaint);
         auditLogService.recordMutation(
             reservation.getCustomer(), "PAYMENT_COMPLAINT_WITHDRAWN", "PaymentComplaint",
             saved.getId(), reservation.getFacility().getId(), null,
             Map.of("status", saved.getStatus(), "reservationStatus", reservation.getStatus())
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Đã rút khiếu nại thanh toán",
+            "Khiếu nại của đơn " + reservation.getReservationCode()
+                + " đã được rút; đơn giữ kho đã bị hủy và chưa ghi nhận thanh toán.",
+            reservation.getId()
         );
         return toResponse(saved);
     }

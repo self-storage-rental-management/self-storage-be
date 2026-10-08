@@ -239,18 +239,6 @@ class ReservationCreationServiceTests {
             .isEqualTo(ReservationCreationService.requestFingerprint(original));
     }
 
-    @Test
-    void rateLimitsNewReservationCreationButNotIdempotentRetry() {
-        when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-rate"))
-            .thenReturn(Optional.empty());
-        when(reservationRepository.countByCustomer_IdAndCreatedAtAfter(eq(actor.userId()), any()))
-            .thenReturn(5L);
-
-        assertThatThrownBy(() -> service.create(actor, request(), "create-rate"))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("creation limit reached");
-    }
-
     private CreateReservationRequest request() {
         GoodsItemRequest item = new GoodsItemRequest(
             GoodsCategory.FURNITURE, null, "Wood", null, "Desk", null, 2,
@@ -265,7 +253,8 @@ class ReservationCreationServiceTests {
             quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
             quote.getEndDate(), CompatibilityResult.COMPATIBLE, new BigDecimal("0.180000"),
             new BigDecimal("36.00"), new BigDecimal("15.000000"),
-            new BigDecimal("1000.00"), 2, false, List.of()
+            new BigDecimal("1000.00"), new BigDecimal("0.80"),
+            new BigDecimal("28.800000"), 1, 4, 2, false, List.of()
         );
     }
 }

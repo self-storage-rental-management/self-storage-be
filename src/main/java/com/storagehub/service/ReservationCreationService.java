@@ -43,8 +43,6 @@ public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
-    private static final long MAX_RESERVATIONS_PER_HOUR = 5;
-
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
@@ -78,12 +76,6 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
-        if (reservationRepository.countByCustomer_IdAndCreatedAtAfter(
-            actor.userId(), Instant.now().minus(1, ChronoUnit.HOURS)
-        ) >= MAX_RESERVATIONS_PER_HOUR) {
-            throw ApiExceptions.conflict("Reservation creation limit reached; please try again later");
-        }
-
         ReservationQuote quote = quoteRepository.findByIdAndCustomer_Id(request.getQuoteId(), actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Quote was not found"));
         if (!quote.getExpiresAt().isAfter(Instant.now())) {
@@ -104,11 +96,6 @@ public class ReservationCreationService {
             quote.getFacility().getId(), quote.getUnitType().getId(),
             quote.getStartDate(), quote.getEndDate()
         );
-        capacityService.requireNoCustomerOverlappingHold(
-            actor.userId(), quote.getFacility().getId(), quote.getUnitType().getId(),
-            quote.getStartDate(), quote.getEndDate()
-        );
-
         Instant now = Instant.now();
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
@@ -129,7 +116,8 @@ public class ReservationCreationService {
         reservation.setTotalGoodsVolumeM3(compatibility.getTotalGoodsVolumeM3());
         reservation.setTotalGoodsWeightKg(compatibility.getTotalGoodsWeightKg());
         reservation.setHoldExpiresAt(now.plus(HOLD_MINUTES, ChronoUnit.MINUTES));
-        reservation.setPaymentExpiresAt(now.plus(HOLD_MINUTES, ChronoUnit.MINUTES));
+        // The payment window starts only after email verification (and goods review, when required).
+        reservation.setPaymentExpiresAt(null);
         reservation.setNotes(clean(request.getNotes()));
         Reservation saved = reservationRepository.saveAndFlush(reservation);
 

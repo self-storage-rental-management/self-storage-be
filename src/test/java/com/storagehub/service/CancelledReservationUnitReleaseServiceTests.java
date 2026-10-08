@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import com.storagehub.api.unitrelease.ReleaseAssignedUnitRequest;
 import com.storagehub.common.api.ApiException;
+import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
@@ -131,7 +132,33 @@ class CancelledReservationUnitReleaseServiceTests {
     }
 
     @Test
+    void cancelsScheduledCheckInWhenCancelledReservationReleasesUnit() {
+        CheckIn checkIn = entityWithId(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setPerformedBy(staff);
+        checkIn.setStatus(CheckInStatus.scheduled);
+        mockReleaseChecks();
+        when(checkInRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(checkIn));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+
+        service.release(
+            actor, reservation.getId(), "release-key-scheduled-checkin",
+            new ReleaseAssignedUnitRequest(
+                assignment.getId(), UnitReleaseDisposition.AVAILABLE, "Reservation cancelled"
+            )
+        );
+
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.cancelled);
+        verify(checkInRepository).saveAndFlush(checkIn);
+    }
+
+    @Test
     void rejectsReleaseAfterCompletedCheckIn() {
+        CheckIn completedCheckIn = entityWithId(new CheckIn());
+        completedCheckIn.setReservation(reservation);
+        completedCheckIn.setPerformedBy(staff);
+        completedCheckIn.setStatus(CheckInStatus.completed);
         when(assignmentRepository.findByCancelledBy_IdAndCancellationIdempotencyKey(any(), any()))
             .thenReturn(Optional.empty());
         when(reservationRepository.findByIdForUpdate(reservation.getId()))
@@ -139,9 +166,9 @@ class CancelledReservationUnitReleaseServiceTests {
         when(assignmentRepository.findByIdForUpdate(assignment.getId()))
             .thenReturn(Optional.of(assignment));
         when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
-        when(checkInRepository.existsByReservation_IdAndStatus(
-            reservation.getId(), CheckInStatus.completed
-        )).thenReturn(true);
+        when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.empty());
+        when(checkInRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(completedCheckIn));
 
         assertThatThrownBy(() -> service.release(
             actor, reservation.getId(), "release-key-3",

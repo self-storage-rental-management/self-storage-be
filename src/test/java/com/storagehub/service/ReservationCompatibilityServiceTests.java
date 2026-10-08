@@ -65,6 +65,10 @@ class ReservationCompatibilityServiceTests {
         unitType.setWidthM(new BigDecimal("2"));
         unitType.setHeightM(new BigDecimal("2.5"));
         unitType.setMaxLoadKg(new BigDecimal("1000"));
+        unitType.setRackCount(4);
+        unitType.setRackLengthM(new BigDecimal("2"));
+        unitType.setRackWidthM(new BigDecimal("4"));
+        unitType.setRackHeightM(new BigDecimal("4.5"));
 
         customer = new ActorPrincipal(
             UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()
@@ -81,6 +85,10 @@ class ReservationCompatibilityServiceTests {
         assertThat(response.getResult()).isEqualTo(CompatibilityResult.COMPATIBLE);
         assertThat(response.getTotalGoodsVolumeM3()).isEqualByComparingTo("0.180000");
         assertThat(response.getTotalGoodsWeightKg()).isEqualByComparingTo("36.00");
+        assertThat(response.getRackUtilizationRate()).isEqualByComparingTo("0.80");
+        assertThat(response.getUsableVolumePerRackM3()).isEqualByComparingTo("28.800000");
+        assertThat(response.getRequiredRackCount()).isEqualTo(1);
+        assertThat(response.getUnitRackCount()).isEqualTo(4);
         assertThat(response.getAvailableUnitCount()).isEqualTo(2);
         assertThat(response.getIssues()).isEmpty();
     }
@@ -106,6 +114,25 @@ class ReservationCompatibilityServiceTests {
             .hasMessageContaining("customGoodsName and customMaterial");
     }
 
+    @Test
+    void combinesDifferentGoodsTypesIntoSharedRackCapacity() {
+        stubAvailableUnitType(1);
+        GoodsItemRequest first = goodsItem(GoodsCategory.FURNITURE, "Desk", 1,
+            new BigDecimal("100"), new BigDecimal("60"), new BigDecimal("50"));
+        GoodsItemRequest second = goodsItem(GoodsCategory.ELECTRONICS, "Television", 1,
+            new BigDecimal("100"), new BigDecimal("60"), new BigDecimal("50"));
+        CompatibilityCheckRequest request = new CompatibilityCheckRequest(
+            facility.getId(), unitType.getId(), LocalDate.now().plusDays(1),
+            LocalDate.now().plusMonths(3), "Packed", List.of(first, second)
+        );
+
+        var response = service.check(customer, request);
+
+        assertThat(response.getTotalGoodsVolumeM3()).isEqualByComparingTo("0.600000");
+        assertThat(response.getRequiredRackCount()).isEqualTo(1);
+        assertThat(response.getResult()).isEqualTo(CompatibilityResult.COMPATIBLE);
+    }
+
     private void stubAvailableUnitType(long availableCount) {
         when(facilityRepository.findById(facility.getId())).thenReturn(Optional.of(facility));
         when(unitTypeRepository.findById(unitType.getId())).thenReturn(Optional.of(unitType));
@@ -128,6 +155,20 @@ class ReservationCompatibilityServiceTests {
         return new CompatibilityCheckRequest(
             facility.getId(), unitType.getId(), LocalDate.now().plusDays(1),
             LocalDate.now().plusMonths(3), "Packed", List.of(item)
+        );
+    }
+
+    private GoodsItemRequest goodsItem(
+        GoodsCategory category,
+        String description,
+        int quantity,
+        BigDecimal lengthCm,
+        BigDecimal widthCm,
+        BigDecimal heightCm
+    ) {
+        return new GoodsItemRequest(
+            category, null, "Mixed", null, description, null, quantity,
+            lengthCm, widthCm, heightCm, new BigDecimal("10"), false
         );
     }
 }
