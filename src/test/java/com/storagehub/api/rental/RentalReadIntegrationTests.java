@@ -59,21 +59,26 @@ class RentalReadIntegrationTests {
     @Test void httpEnvelopeValidationUnknownAndReadOnly() throws Exception {
         Rental r=fixture("HTTP","S-1","Customer",LocalDate.of(2026,10,31)); em.flush(); em.clear();
         ActorContext context=mock(ActorContext.class); when(context.required()).thenReturn(actor(r,false,Map.of()));
-        var mvc=MockMvcBuilders.standaloneSetup(new CustomerRentalController(context,service),new ManagerRentalController(context,service))
+        var mvc=MockMvcBuilders.standaloneSetup(new CustomerRentalReadController(context,service),new ManagerRentalController(context,service))
             .setControllerAdvice(new GlobalExceptionHandler()).build();
-        mvc.perform(get("/api/customer/rentals")).andExpect(status().isOk()).andExpect(jsonPath("pagination.totalItems").value(1));
-        mvc.perform(get("/api/customer/rentals/"+r.getId())).andExpect(status().isOk())
+        mvc.perform(get("/api/customer/rental-records")).andExpect(status().isOk()).andExpect(jsonPath("pagination.totalItems").value(1));
+        mvc.perform(get("/api/customer/rental-records/"+r.getId())).andExpect(status().isOk())
             .andExpect(jsonPath("data.monthlyPrice").value(9500000)).andExpect(jsonPath("data.unitType.name").value("Medium"))
             .andExpect(jsonPath("data.financialSummary.completeness").value("UNKNOWN"))
             .andExpect(jsonPath("data.access.completeness").value("UNKNOWN"))
             .andExpect(jsonPath("data.accessPin").doesNotExist());
-        mvc.perform(get("/api/customer/rentals").param("needsAttention","false")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/customer/rentals").param("page","0","1")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/customer/rentals/not-uuid")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/customer/rentals/"+UUID.randomUUID())).andExpect(status().isNotFound());
+        mvc.perform(get("/api/customer/rental-records").param("needsAttention","false")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/customer/rental-records").param("page","0","1")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/customer/rental-records").param("facilityId",r.getFacility().getId().toString())).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/customer/rental-records/"+r.getId()).param("search","Customer")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/customer/rental-records/not-uuid")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/customer/rental-records/"+UUID.randomUUID())).andExpect(status().isNotFound());
         mvc.perform(get("/api/manager/rentals")).andExpect(status().isForbidden());
+        when(context.required()).thenReturn(actor(r,true,Map.of(r.getFacility().getId(),FacilityScopeLevel.READ)));
+        mvc.perform(get("/api/customer/rental-records")).andExpect(status().isForbidden());
+        mvc.perform(get("/api/customer/rental-records/"+r.getId())).andExpect(status().isForbidden());
         when(context.required()).thenThrow(ApiExceptions.unauthorized("No valid session"));
-        mvc.perform(get("/api/customer/rentals")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/customer/rental-records")).andExpect(status().isUnauthorized());
         em.flush(); em.clear(); assertThat(repo.count()).isEqualTo(1);
         assertThat(repo.findById(r.getId()).orElseThrow().getMonthlyPrice()).isEqualByComparingTo("9500000");
     }

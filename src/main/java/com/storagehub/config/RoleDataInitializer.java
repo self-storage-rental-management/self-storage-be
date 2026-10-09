@@ -22,6 +22,7 @@ import org.springframework.core.annotation.Order;
 public class RoleDataInitializer {
 
     private static final int INTERNAL_POLICY_VERSION = 3;
+    private static final int POLICY_OWNERSHIP_VERSION = 4;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -53,7 +54,7 @@ public class RoleDataInitializer {
             });
 
             // A manager is a staff member with additional approval,
-            // coordination, policy and reporting responsibilities.
+            // coordination and reporting responsibilities; BO owns policy edits.
             roles.get(RoleCode.MANAGER).setParentRole(roles.get(RoleCode.STAFF));
             roles.get(RoleCode.STAFF).setParentRole(null);
             roles.values().stream()
@@ -67,6 +68,20 @@ public class RoleDataInitializer {
                     || role.getPermissionsPolicyVersion() < INTERNAL_POLICY_VERSION) {
                     role.setPermissions(defaultPermissions(code, permissions));
                     role.setPermissionsPolicyVersion(INTERNAL_POLICY_VERSION);
+                }
+                // Upgrade only policy ownership: preserve all other customized grants.
+                if (role.getPermissionsPolicyVersion() < POLICY_OWNERSHIP_VERSION) {
+                    if (code == RoleCode.MANAGER || code == RoleCode.BUSINESS) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.VIEW_POLICIES));
+                        if (code == RoleCode.MANAGER) {
+                            updated.removeIf(permission -> SystemPermission.MANAGE_POLICIES.code().equals(permission.getCode()));
+                        } else {
+                            updated.add(permissions.get(SystemPermission.MANAGE_POLICIES));
+                        }
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(POLICY_OWNERSHIP_VERSION);
                 }
             });
             roleRepository.saveAll(roles.values());
@@ -91,7 +106,6 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_POLICIES,
                 SystemPermission.MANAGE_PAYMENTS,
                 SystemPermission.MANAGE_INVENTORY,
-                SystemPermission.MANAGE_POLICIES,
                 SystemPermission.MANAGE_STAFF_TASKS,
                 SystemPermission.VIEW_REPORTS
             );
@@ -110,6 +124,7 @@ public class RoleDataInitializer {
                 SystemPermission.MANAGE_SUPPORT
             );
             case BUSINESS -> permissionSet(permissions,
+                SystemPermission.MANAGE_POLICIES,
                 SystemPermission.VIEW_DASHBOARD,
                 SystemPermission.VIEW_FACILITIES,
                 SystemPermission.VIEW_UNITS,
