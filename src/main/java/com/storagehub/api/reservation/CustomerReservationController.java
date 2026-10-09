@@ -15,6 +15,8 @@ import com.storagehub.api.payment.PaymentComplaintResponse;
 import com.storagehub.service.PaymentComplaintService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,6 +57,17 @@ public class CustomerReservationController {
     ) {
         return new ApiResponse<>(
             quoteService.createQuote(actorContext.required(), request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @GetMapping("/rental-packages")
+    public ApiResponse<List<ReservationRentalPackageResponse>> listRentalPackages(
+        @RequestParam UUID facilityId,
+        @RequestParam(required = false) LocalDate startDate
+    ) {
+        return new ApiResponse<>(
+            quoteService.listAvailablePackages(actorContext.required(), facilityId, startDate),
             CorrelationIdContext.current()
         );
     }
