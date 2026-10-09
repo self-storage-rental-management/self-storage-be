@@ -38,13 +38,13 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false, length = 100)
     private String name;
 
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "length_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal lengthM;
 
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "width_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal widthM;
 
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "height_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal heightM;
 
     @Column(nullable = false, precision = 14, scale = 2)
@@ -59,13 +59,13 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false)
     private int rackCount;
 
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "rack_length_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal rackLengthM;
 
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "rack_width_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal rackWidthM;
 
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(name = "rack_height_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal rackHeightM;
 
     @Enumerated(EnumType.STRING)
