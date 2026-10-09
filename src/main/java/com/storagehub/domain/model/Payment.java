@@ -47,6 +47,9 @@ public class Payment extends BaseEntity {
     @Column(nullable = false, unique = true, length = 100)
     private String idempotencyKey;
 
+    @Column(nullable = false, unique = true, length = 100)
+    private String gatewayIntentId;
+
     @Column
     private Instant processedAt;
 
