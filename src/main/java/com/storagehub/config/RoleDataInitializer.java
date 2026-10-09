@@ -107,6 +107,8 @@ public class RoleDataInitializer {
                 SystemPermission.MANAGE_PAYMENTS,
                 SystemPermission.MANAGE_INVENTORY,
                 SystemPermission.MANAGE_STAFF_TASKS,
+                SystemPermission.VIEW_SUPPORT,
+                SystemPermission.MANAGE_SUPPORT,
                 SystemPermission.VIEW_REPORTS
             );
             case STAFF -> permissionSet(permissions,
