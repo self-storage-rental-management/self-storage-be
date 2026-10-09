@@ -68,7 +68,7 @@ class ReservationQuoteServiceTests {
 
         policy = new RentalPackagePolicy();
         policy.setFacility(facility);
-        policy.setCode("THREE_MONTHS");
+        policy.setCode("PKG-3M");
         policy.setPolicyVersion("2026-01");
         policy.setRentalMonths(3);
         policy.setDiscountRate(new BigDecimal("0.0300"));
@@ -86,7 +86,7 @@ class ReservationQuoteServiceTests {
     void calculatesAndStoresQuoteUsingServerPrices() {
         ReservationQuoteRequest request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 10));
         stubCompatible(request);
-        when(policyRepository.findByFacility_IdAndCode(facility.getId(), "THREE_MONTHS"))
+        when(policyRepository.findByFacility_IdAndCode(facility.getId(), "PKG-3M"))
             .thenReturn(Optional.of(policy));
         when(unitTypeRepository.findById(unitType.getId())).thenReturn(Optional.of(unitType));
         when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
@@ -108,6 +108,23 @@ class ReservationQuoteServiceTests {
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("15103000.00");
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("21505000.00");
         assertThat(response.getQuoteId()).isNotNull();
+    }
+
+    @Test
+    void listsEffectivePackagesUsingTheirPersistedCodes() {
+        LocalDate startDate = LocalDate.of(2026, 10, 10);
+        when(policyRepository
+            .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(
+                facility.getId(), startDate
+            ))
+            .thenReturn(List.of(policy));
+
+        var packages = service.listAvailablePackages(actor, facility.getId(), startDate);
+
+        assertThat(packages).singleElement().satisfies(item -> {
+            assertThat(item.code()).isEqualTo("PKG-3M");
+            assertThat(item.rentalMonths()).isEqualTo(3);
+        });
     }
 
     @Test
@@ -137,7 +154,7 @@ class ReservationQuoteServiceTests {
             new BigDecimal("18"), false
         );
         return new ReservationQuoteRequest(
-            facility.getId(), unitType.getId(), "THREE_MONTHS", startDate, endDate,
+            facility.getId(), unitType.getId(), "PKG-3M", startDate, endDate,
             "Packed", List.of(item)
         );
     }
