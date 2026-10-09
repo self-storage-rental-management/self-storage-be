@@ -136,6 +136,28 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
                or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
                or lower(reservation.assignedUnit.code) like lower(concat('%', :q, '%')))
+          and (
+            :statusFilter = false
+            or (:unscheduled = true and not exists (
+              select checkIn.id from CheckIn checkIn
+              where checkIn.reservation.id = reservation.id
+            ))
+            or (:unscheduled = false and exists (
+              select checkIn.id from CheckIn checkIn
+              where checkIn.reservation.id = reservation.id
+                and checkIn.status = :checkInStatus
+            ))
+          )
+          and (:scheduledFrom is null or exists (
+            select checkIn.id from CheckIn checkIn
+            where checkIn.reservation.id = reservation.id
+              and checkIn.scheduledAt >= :scheduledFrom
+          ))
+          and (:scheduledTo is null or exists (
+            select checkIn.id from CheckIn checkIn
+            where checkIn.reservation.id = reservation.id
+              and checkIn.scheduledAt < :scheduledTo
+          ))
           and exists (
             select assignment.id from UnitAssignment assignment
             where assignment.reservation.id = reservation.id
@@ -148,6 +170,11 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     Page<Reservation> findCheckInWork(
         @Param("facilityId") UUID facilityId,
         @Param("q") String q,
+        @Param("statusFilter") boolean statusFilter,
+        @Param("unscheduled") boolean unscheduled,
+        @Param("checkInStatus") com.storagehub.domain.model.CheckInStatus checkInStatus,
+        @Param("scheduledFrom") Instant scheduledFrom,
+        @Param("scheduledTo") Instant scheduledTo,
         @Param("scoped") boolean scoped,
         @Param("facilityIds") java.util.Collection<UUID> facilityIds,
         Pageable pageable
