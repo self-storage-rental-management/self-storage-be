@@ -13,4 +13,6 @@ WORKDIR /app
 COPY --from=build /app/target/storagehub-0.0.1-SNAPSHOT.jar app.jar
 
 EXPOSE 10000
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+# Leave 40% of container memory for metaspace, threads and native buffers.
+# Exit promptly on heap exhaustion instead of hanging until the port scan times out.
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=60.0", "-XX:+ExitOnOutOfMemoryError", "-jar", "/app/app.jar"]
