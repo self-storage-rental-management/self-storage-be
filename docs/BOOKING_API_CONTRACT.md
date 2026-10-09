@@ -77,8 +77,11 @@ Quy tắc:
 ## 4. Quote
 
 ```http
+GET  /api/customer/reservations/rental-packages?facilityId={uuid}&startDate={date}
 POST /api/customer/reservations/quote
 ```
+
+Customer lấy danh sách gói đang hoạt động và còn hiệu lực theo cơ sở/ngày bắt đầu, sau đó gửi nguyên `code` của gói đã chọn vào `pricingPackageCode`. Frontend không tự suy đoán mã policy từ số tháng.
 
 Request dùng cùng kỳ thuê và `goodsItems` của compatibility. Response tối thiểu:
 
