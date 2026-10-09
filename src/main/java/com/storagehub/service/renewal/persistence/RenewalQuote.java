@@ -14,7 +14,7 @@ public class RenewalQuote extends BaseEntity {
     private Rental rental;
     @ManyToOne(fetch=FetchType.LAZY,optional=false) @JoinColumn(nullable=false,updatable=false)
     private User customer;
-    @Lob @Column(nullable=false,updatable=false) private String termsJson;
+    @Lob @Column(columnDefinition="LONGTEXT",nullable=false,updatable=false) private String termsJson;
     @Column(nullable=false,updatable=false,length=64) private String termsHash;
     @Column(nullable=false,updatable=false) private Instant quotedAt;
     @Column(nullable=false,updatable=false) private Instant expiresAt;
