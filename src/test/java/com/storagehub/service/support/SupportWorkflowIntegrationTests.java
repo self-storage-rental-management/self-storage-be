@@ -452,7 +452,7 @@ class SupportWorkflowIntegrationTests {
         var actors=mock(ActorContext.class);when(actors.required()).thenReturn(c);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerSupportController(actors,service))
             .setControllerAdvice(new SupportRequestAdvice(new ObjectMapper()),new com.storagehub.common.api.GlobalExceptionHandler()).build();
-        var path="/api/customer/support-tickets";
+        var path="/api/customer/support-workflows";
         var json="{\"subject\":\"Question\",\"description\":\"Help\",\"facilityId\":\""+facility.getId()+"\"}";
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).contentType("application/json").content(json))
             .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());

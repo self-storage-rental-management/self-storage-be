@@ -125,12 +125,15 @@ public class AdminRoleService {
         if (roleCode == RoleCode.MANAGER) {
             Set<String> required = Set.of(
                 SystemPermission.APPROVE_RESERVATIONS.code(),
-                SystemPermission.MANAGE_POLICIES.code(),
+                SystemPermission.VIEW_POLICIES.code(),
                 SystemPermission.MANAGE_STAFF_TASKS.code(),
                 SystemPermission.VIEW_REPORTS.code()
             );
             if (!permissions.containsAll(required)) {
-                throw ApiExceptions.conflict("Manager must retain approval, policy, task and reporting permissions");
+                throw ApiExceptions.conflict("Manager must retain approval, policy-read, task and reporting permissions");
+            }
+            if (permissions.contains(SystemPermission.MANAGE_POLICIES.code())) {
+                throw ApiExceptions.conflict("Manager may read policies; only Business Operations may edit them");
             }
         }
 
@@ -143,13 +146,17 @@ public class AdminRoleService {
             throw ApiExceptions.conflict("Staff cannot approve requests, manage fees, collect payments or coordinate staff tasks");
         }
 
+        if (roleCode == RoleCode.BUSINESS && !permissions.containsAll(Set.of(
+            SystemPermission.VIEW_POLICIES.code(), SystemPermission.MANAGE_POLICIES.code()
+        ))) {
+            throw ApiExceptions.conflict("Business Operations must retain policy read and edit permissions");
+        }
         if (roleCode == RoleCode.BUSINESS && intersects(permissions, Set.of(
-            SystemPermission.MANAGE_POLICIES.code(),
             SystemPermission.MANAGE_SETTINGS.code(),
             SystemPermission.MANAGE_PAYMENTS.code(),
             SystemPermission.APPROVE_RESERVATIONS.code()
         ))) {
-            throw ApiExceptions.conflict("Sales can view commercial information but cannot change policies, settings, payments or approvals");
+            throw ApiExceptions.conflict("Business Operations cannot manage system settings, collect payments or approve reservations");
         }
     }
 

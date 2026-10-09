@@ -14,7 +14,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
 import static com.storagehub.service.support.SupportService.Audience.STAFF;
 
-@RestController @RequestMapping("/api/staff/support-tickets") @RequiredArgsConstructor
+@RestController @RequestMapping("/api/staff/support-workflows") @RequiredArgsConstructor
 @Tag(name="D5 - Assigned Staff Support",description="Current assignment, active STAFF, actual Support permission and OPERATE scope required. Default STAFF role is not silently granted MANAGE_SUPPORT.")
 @SecurityRequirement(name="bearerAuth")
 @io.swagger.v3.oas.annotations.responses.ApiResponses({
