@@ -30,11 +30,20 @@ import org.springframework.util.LinkedMultiValueMap;
 class RenewalOperationIntegrationTests {
     static final Instant NOW=Instant.parse("2026-10-08T02:00:00Z");
     @TestConfiguration static class Sources {
+        @Bean TestDateEvidence dateEvidence(){return new TestDateEvidence();}
+        @Bean com.storagehub.service.rental.period.RentalPeriodResolver periods(org.springframework.beans.factory.ObjectProvider<com.storagehub.service.RentalReadSources.DateSource> sources){return new com.storagehub.service.rental.period.RentalPeriodResolver(sources);}
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
         @Bean ActorContext actors(){return mock(ActorContext.class);}
         @Bean TestClock clock(){return new TestClock();}
         @Bean TestOps ops(TestClock clock){return new TestOps(clock);}
         @Bean TestOverdue overdue(TestClock clock){return new TestOverdue(clock);}
+    }
+    static class TestDateEvidence implements com.storagehub.service.RentalReadSources.DateSource {
+        final Set<UUID> exclusive=java.util.concurrent.ConcurrentHashMap.newKeySet();
+        public Optional<com.storagehub.service.RentalReadSources.Dates> read(Rental r){
+            boolean e=exclusive.contains(r.getId());
+            return Optional.of(new com.storagehub.service.RentalReadSources.Dates(r.getId(),r.getStartDate(),e?r.getContractEndDate().minusDays(1):r.getContractEndDate(),"TEST-ONLY-period",r.getContractEndDate(),e?com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE:com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE));
+        }
     }
     static class TestClock extends Clock {
         Instant time=NOW;public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId z){return Clock.fixed(time,z);}public Instant instant(){return time;}
@@ -76,6 +85,7 @@ class RenewalOperationIntegrationTests {
     @Autowired EntityManager em;@Autowired RenewalOperationService service;@Autowired OverdueService overdue;
     @Autowired RenewalPersistence store;@Autowired TestClock clock;@Autowired TestOps ops;@Autowired TestOverdue sources;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    @Autowired TestDateEvidence dateEvidence;
     @BeforeEach void reset(){clock.time=NOW;ops.atomic=true;ops.authorized=true;ops.fullyPaid=true;ops.policyKnown=true;ops.slotKnown=true;ops.unsafeEvidence=false;ops.failConsume=false;ops.advanceDeposit=false;ops.advanceCompletion=false;ops.assignedIds=Set.of();ops.deposits=ops.cashes=ops.consumes=ops.releases=0;ops.outcome=RenewalOperationSources.Outcome.SUCCESS;sources.financeKnown=sources.termKnown=sources.atomic=true;sources.enqueues=sources.handoffs=0;}
     @Test void paymentEngineTimestampMayBeLaterThanCommandStart(){var n=fixture();ops.advanceDeposit=true;assertThat(service.deposit(actor(n,RoleCode.CUSTOMER),n.getId(),new RenewalOperationCommands.Version(version(n)),"advancing-clock").state().depositPaidAt()).isEqualTo(NOW.plusSeconds(1));}
     @Test void slowFinancialVerificationCannotCompletePastDeadline(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrival");ops.advanceCompletion=true;assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST slow finance"),"slow")).hasMessageContaining("deadline");assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,6));}
@@ -139,20 +149,40 @@ class RenewalOperationIntegrationTests {
     @Test void followUpNoteIdempotentVersionedAndDoesNotClearDebt(){var n=fixture();var a=actor(n,RoleCode.MANAGER);String ref="RENTAL_TERM:"+n.getRental().getId();var body=new OverdueCommands.FollowUp(OverdueCommands.Type.NOTE,"TEST contact",0L);var event=overdue.followUp(a,ref,body,"note");assertThat(event.followUpVersion()).isEqualTo(1);assertThat(overdue.followUp(a,ref,body,"note")).isEqualTo(event);assertThatThrownBy(()->overdue.followUp(a,ref,body,"new")).hasMessageContaining("stale");assertThat(overdue.history(a,ref,0,20,"test").pagination().totalItems()).isEqualTo(1);assertThat(overdue.list(a,query("PAYMENT_DUE"),"test").data()).hasSize(1);}
     @Test void reminderThrottledAcrossKeysAndRecoveryNeverUsesDebtDay8(){var n=fixture();var a=actor(n,RoleCode.MANAGER);String ref="RENTAL_TERM:"+n.getRental().getId();overdue.followUp(a,ref,new OverdueCommands.FollowUp(OverdueCommands.Type.REMINDER,"TEST",0L),"reminder");assertThatThrownBy(()->overdue.followUp(a,ref,new OverdueCommands.FollowUp(OverdueCommands.Type.REMINDER,"TEST",1L),"other")).hasMessageContaining("throttled");clock.time=NOW.plus(Duration.ofDays(10));String debt="PAYMENT_DUE:"+n.getRental().getId()+":"+sources.obligation;assertThatThrownBy(()->overdue.recovery(a,debt,new OverdueCommands.Recovery("TEST",0L),"debt-recovery")).hasMessageContaining("term expiry");var status=n.getRental().getStorageUnit().getStatus();assertThat(overdue.recovery(a,ref,new OverdueCommands.Recovery("TEST",1L),"term-recovery").externalRef()).isNotNull();assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(status);}
     @Test void overdueWrongScopeAndMalformedQueryRejected(){var n=fixture();var wrong=new ActorPrincipal(n.getRequestedBy().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code()),Map.of(UUID.randomUUID(),FacilityScopeLevel.READ));assertThatThrownBy(()->overdue.detail(wrong,"RENTAL_TERM:"+n.getRental().getId())).hasMessageContaining("not found");var q=new LinkedMultiValueMap<String,String>();q.add("asOf","2099-01-01");assertThatThrownBy(()->OverdueQuery.parse(q)).isInstanceOf(ApiException.class);}
+    @Test void exclusiveCompletionWritesRawEndOnceAndCanBeReadBackThroughProjectAdapter() {
+        var n=scheduled(true);var r=n.getRental();var staff=actor(n,RoleCode.STAFF);
+        r.getReservation().setAssignedUnit(r.getStorageUnit());r.getReservation().setStatus(ReservationStatus.COMPLETED);
+        var handover=new CheckIn();handover.setReservation(r.getReservation());handover.setRental(r);handover.setPerformedBy(n.getRequestedBy());handover.setStatus(CheckInStatus.completed);em.persist(handover);em.flush();
+        var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
+        var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"exclusive-arrival");
+        var body=new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST exclusive completion");
+        var result=service.complete(staff,n.getId(),body,"exclusive-complete");
+        assertThat(service.complete(staff,n.getId(),body,"exclusive-complete")).isEqualTo(result);
+        assertThat(r.getContractEndDate()).isEqualTo(LocalDate.of(2026,11,7));assertThat(n.getNewEndDate()).isEqualTo(LocalDate.of(2026,11,6));
+        assertThat(ops.consumes).isEqualTo(1);
+        assertThat(new ObjectMapper().valueToTree(result.event().data()).has("rentalPeriodEvidence")).isFalse();
+        em.flush();var rentalId=r.getId();em.clear();r=em.find(Rental.class,rentalId);
+        var adapter=new com.storagehub.service.rental.period.ProjectHandoffRentalPeriodAdapter(em,new ObjectMapper().findAndRegisterModules());
+        var dates=adapter.read(r).orElseThrow();assertThat(dates.convention()).isEqualTo(com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE);
+        assertThat(dates.inclusiveEndDate()).isEqualTo(LocalDate.of(2026,11,6));assertThat(dates.storedEndDate()).isEqualTo(LocalDate.of(2026,11,7));
+    }
     private OverdueQuery query(String kind){return new OverdueQuery(0,20,null,kind,"","priority",true);}
     private long version(Renewal n){return em.find(RenewalWorkflow.class,n.getId()).getVersion();}
-    private Renewal paid(){var n=fixture();service.deposit(actor(n,RoleCode.CUSTOMER),n.getId(),new RenewalOperationCommands.Version(version(n)),"pay-"+n.getId());return n;}
-    private Renewal scheduled(){var n=paid();service.appointment(actor(n,RoleCode.CUSTOMER),n.getId(),new Appointment(NOW.plusSeconds(3600),null,version(n)),"appt-"+n.getId(),false);return n;}
+    private Renewal paid(){return paid(false);}
+    private Renewal paid(boolean exclusive){var n=fixture(exclusive);service.deposit(actor(n,RoleCode.CUSTOMER),n.getId(),new RenewalOperationCommands.Version(version(n)),"pay-"+n.getId());return n;}
+    private Renewal scheduled(){return scheduled(false);}
+    private Renewal scheduled(boolean exclusive){var n=paid(exclusive);service.appointment(actor(n,RoleCode.CUSTOMER),n.getId(),new Appointment(NOW.plusSeconds(3600),null,version(n)),"appt-"+n.getId(),false);return n;}
     private ActorPrincipal actor(Renewal n,RoleCode role){return new ActorPrincipal(n.getRequestedBy().getId(),UUID.randomUUID(),Set.of(role),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),role==RoleCode.CUSTOMER?Map.of():Map.of(n.getRental().getFacility().getId(),FacilityScopeLevel.MANAGE));}
-    private Renewal fixture(){
+    private Renewal fixture(){return fixture(false);}
+    private Renewal fixture(boolean exclusive){
         String suffix=UUID.randomUUID().toString().substring(0,8);Facility f=new Facility();f.setCode(suffix);f.setName("TEST");f.setAddress("TEST");f.setCity("TEST");em.persist(f);
         User u=new User();u.setEmail(suffix+"@test.invalid");u.setFullName("TEST Customer");u.setPasswordHash("test-only");em.persist(u);
         UnitType t=new UnitType();t.setFacility(f);t.setCode("TEST");t.setName("TEST");t.setLengthM(BigDecimal.ONE);t.setWidthM(BigDecimal.ONE);t.setHeightM(BigDecimal.ONE);t.setMonthlyPrice(new BigDecimal("100"));t.setMaxLoadKg(BigDecimal.ONE);t.setRackLengthM(BigDecimal.ONE);t.setRackWidthM(BigDecimal.ONE);t.setRackHeightM(BigDecimal.ONE);em.persist(t);
         StorageUnit unit=new StorageUnit();unit.setFacility(f);unit.setUnitType(t);unit.setCode("TEST-"+suffix);em.persist(unit);
         var q=new ReservationQuote();q.setCustomer(u);q.setFacility(f);q.setUnitType(t);q.setPricingPackageCode("TEST");q.setPolicyVersion("TEST");q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,10,7));q.setRentalMonths(1);q.setMonthlyPrice(new BigDecimal("100"));q.setSubtotal(new BigDecimal("100"));q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(new BigDecimal("100"));q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(new BigDecimal("100"));q.setDueAtCheckIn(new BigDecimal("100"));q.setTotalInitialObligation(new BigDecimal("100"));q.setQuotedAt(NOW);q.setExpiresAt(NOW.plusSeconds(1800));em.persist(q);
         var res=new Reservation();res.setReservationCode(suffix);res.setCustomer(u);res.setSourceQuote(q);res.setIdempotencyKey(suffix);res.setFacility(f);res.setUnitType(t);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());em.persist(res);
-        var r=new Rental();r.setCustomer(u);r.setFacility(f);r.setStorageUnit(unit);r.setReservation(res);r.setStartDate(q.getStartDate());r.setContractEndDate(LocalDate.of(2026,10,6));r.setMonthlyPrice(new BigDecimal("100"));em.persist(r);em.flush();
-        var terms=new RenewalQuoteResponse.Terms(r.getContractEndDate(),LocalDate.of(2026,10,7),LocalDate.of(2026,11,7),LocalDate.of(2026,11,6),t.getId(),"TEST",UUID.randomUUID(),"v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),new BigDecimal("20"),new BigDecimal("80"),"VND","TEST","v1",unit.getId(),f.getId());
+        var r=new Rental();r.setCustomer(u);r.setFacility(f);r.setStorageUnit(unit);r.setReservation(res);r.setStartDate(q.getStartDate());r.setContractEndDate(exclusive?LocalDate.of(2026,10,7):LocalDate.of(2026,10,6));r.setMonthlyPrice(new BigDecimal("100"));em.persist(r);em.flush();if(exclusive)dateEvidence.exclusive.add(r.getId());
+        var terms=new RenewalQuoteResponse.Terms(r.getContractEndDate(),LocalDate.of(2026,10,7),LocalDate.of(2026,11,7),LocalDate.of(2026,11,6),t.getId(),"TEST",UUID.randomUUID(),"v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),new BigDecimal("20"),new BigDecimal("80"),"VND","TEST","v1",unit.getId(),f.getId(),exclusive?"EXCLUSIVE":"INCLUSIVE",r.getStartDate());
         var quote=store.storeQuote(r,u,terms,NOW,NOW.plusSeconds(1800));var n=new Renewal();n.setRental(r);n.setRequestedBy(u);n.setAmount(terms.totalAfterDiscount());n.setNewEndDate(terms.newEndDate());em.persist(n);var wf=store.acceptInitial(r,n,quote,NOW,"TEST");n.setStatus(RenewalStatus.approved);wf.reviewed(u,NOW,"TEST",NOW.plusSeconds(86400),UUID.randomUUID());em.flush();return n;
     }
 }

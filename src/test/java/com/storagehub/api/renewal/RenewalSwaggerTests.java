@@ -23,6 +23,7 @@ class RenewalSwaggerTests {
         var json=mapper.readTree(response.body());var paths=json.path("paths");
         assertThat(json.path("components").path("schemas").path("RenewalResponse").path("properties").has("acceptedTerms")).isTrue();
         assertThat(json.path("components").path("schemas").path("RenewalResponse").path("properties").has("cancellationReason")).isTrue();
+        assertThat(json.path("components").path("schemas").toString()).contains("endDateConvention","rentalStartDate");
         for(String role:new String[]{"customer","manager"}) {
             var list=paths.path("/api/"+role+"/renewals").path("get");
             assertThat(list.path("parameters").toString()).contains("page","size","status","rentalId","sort");

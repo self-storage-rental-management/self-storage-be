@@ -82,6 +82,14 @@ class RentalQueryServiceTests {
         assertThat(dto.financialSummary().completeness()).isEqualTo("UNKNOWN");assertThat(dto.financialSummary().outstandingAmount()).isNull();
         assertThat(dto.access().completeness()).isEqualTo("UNKNOWN");assertThat(dto.dataWarnings()).hasSize(1);
     }
+    @Test void exclusiveProofAddsCanonicalDatesWithoutChangingStoredApiDate() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        provider("dateSources",(RentalReadSources.DateSource) rental -> Optional.of(new RentalReadSources.Dates(rental.getId(),rental.getStartDate(),rental.getContractEndDate().minusDays(1),"receipt-proof",rental.getContractEndDate(),com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE)));
+        var dto=service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false);
+        assertThat(dto.contractEndDate()).isEqualTo(r.getContractEndDate());assertThat(dto.dateSemantics().completeness()).isEqualTo("COMPLETE");
+        assertThat(dto.dateSemantics().lastPermittedDate()).isEqualTo(r.getContractEndDate().minusDays(1));
+        assertThat(dto.dateSemantics().endExclusive()).isEqualTo(r.getContractEndDate());verify(repo,never()).save(any());
+    }
     @Test void invalidFinancialTotalsAreNotDisplayedAsComplete() {
         var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
         Instant now=Instant.parse("2026-10-06T00:00:00Z");provider("clocks",Clock.fixed(now,ZoneOffset.UTC));
