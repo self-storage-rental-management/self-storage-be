@@ -51,6 +51,9 @@ public class ReservationQuoteService {
         int rentalMonths = calculateRentalMonths(request.getStartDate(), request.getEndDate());
         RentalPackagePolicy policy = policyRepository
             .findByFacility_IdAndCode(request.getFacilityId(), request.getPricingPackageCode().trim())
+            .or(() -> policyRepository.findByFacility_IdOrderByRentalMonthsAsc(request.getFacilityId()).stream()
+                .filter(p -> p.getRentalMonths() == rentalMonths && p.isActive())
+                .findFirst())
             .orElseThrow(() -> ApiExceptions.notFound("Rental package was not found"));
         validatePolicy(policy, request.getStartDate(), rentalMonths);
 
