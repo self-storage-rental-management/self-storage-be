@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AuthEmailService {
 
     private static final String LOGO_PATH = "static/email/storagehub-logo.png";
@@ -36,6 +38,9 @@ public class AuthEmailService {
 
     @Value("${app.mail.from:no-reply@storagehub.local}")
     private String from;
+
+    @Value("${spring.mail.host:}")
+    private String mailHost;
 
     @Value("${app.auth.verification-url:http://localhost:5173/?verifyEmail=}")
     private String verificationUrl;
@@ -153,6 +158,13 @@ public class AuthEmailService {
 
             mailSender.send(mimeMessage);
         } catch (MessagingException | MailException exception) {
+            log.error(
+                "Failed to send authentication email to {} using SMTP host '{}': {}",
+                recipient,
+                mailHost,
+                exception.getMessage(),
+                exception
+            );
             throw ApiExceptions.conflict("The email delivery service is unavailable");
         }
     }
