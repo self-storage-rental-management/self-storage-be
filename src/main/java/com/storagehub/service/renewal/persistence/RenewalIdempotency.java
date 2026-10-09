@@ -16,7 +16,7 @@ public class RenewalIdempotency extends BaseEntity {
     @Column(nullable=false,updatable=false) private UUID resourceId;
     @Column(nullable=false,updatable=false,length=64) private String payloadHash;
     @Column(nullable=false,updatable=false) private int httpStatus;
-    @Lob @Column(nullable=false,updatable=false) private String resultJson;
+    @Lob @Column(columnDefinition="LONGTEXT",nullable=false,updatable=false) private String resultJson;
     public RenewalIdempotency(User actor,String operation,String key,UUID resourceId,String hash,int status,String resultJson) {
         this.actor=actor;this.operation=operation;this.requestKey=key;this.resourceId=resourceId;this.payloadHash=hash;this.httpStatus=status;this.resultJson=resultJson;
         try{this.requestKeyHash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(key.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException(e);}
