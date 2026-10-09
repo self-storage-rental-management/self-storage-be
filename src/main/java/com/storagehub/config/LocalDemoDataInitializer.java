@@ -3,6 +3,7 @@ package com.storagehub.config;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FacilityStatus;
+import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Role;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnit;
@@ -13,12 +14,14 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.UserFacilityScope;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.FacilityRepository;
+import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.RoleRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -42,6 +45,7 @@ public class LocalDemoDataInitializer {
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
     private final StorageUnitRepository storageUnitRepository;
+    private final RentalPackagePolicyRepository rentalPackagePolicyRepository;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final UserFacilityScopeRepository userFacilityScopeRepository;
@@ -57,11 +61,12 @@ public class LocalDemoDataInitializer {
         Map<String, Facility> facilities = seedFacilities();
         Map<String, UnitType> unitTypes = seedUnitTypes(facilities);
         int unitCount = seedStorageUnits(facilities, unitTypes);
+        int packageCount = seedRentalPackagePolicies(facilities);
         int userCount = seedUsers(facilities);
 
         log.info(
-            "Local demo data ready: {} facilities, {} unit types, {} storage units, {} demo users",
-            facilities.size(), unitTypes.size(), unitCount, userCount
+            "Local demo data ready: {} facilities, {} unit types, {} storage units, {} rental packages, {} demo users",
+            facilities.size(), unitTypes.size(), unitCount, packageCount, userCount
         );
     }
 
@@ -163,6 +168,31 @@ public class LocalDemoDataInitializer {
         return existing.size();
     }
 
+    private int seedRentalPackagePolicies(Map<String, Facility> facilities) {
+        int createdCount = 0;
+        LocalDate effectiveFrom = LocalDate.of(2020, 1, 1);
+        for (Facility facility : facilities.values()) {
+            for (RentalPackageDefinition definition : rentalPackageDefinitions()) {
+                if (rentalPackagePolicyRepository.findByFacility_IdAndCode(facility.getId(), definition.code()).isPresent()) {
+                    continue;
+                }
+
+                RentalPackagePolicy policy = new RentalPackagePolicy();
+                policy.setFacility(facility);
+                policy.setCode(definition.code());
+                policy.setName(definition.name());
+                policy.setRentalMonths(definition.rentalMonths());
+                policy.setDiscountRate(definition.discountRate());
+                policy.setPolicyVersion("demo-v1");
+                policy.setActive(true);
+                policy.setEffectiveFrom(effectiveFrom);
+                rentalPackagePolicyRepository.saveAndFlush(policy);
+                createdCount++;
+            }
+        }
+        return createdCount;
+    }
+
     private int seedUsers(Map<String, Facility> facilities) {
         int seededCount = 0;
         for (DemoUserDefinition definition : List.of(
@@ -210,6 +240,15 @@ public class LocalDemoDataInitializer {
         );
     }
 
+    private List<RentalPackageDefinition> rentalPackageDefinitions() {
+        return List.of(
+            new RentalPackageDefinition("DEMO_3M", "Gói thuê 3 tháng", 3, BigDecimal.ZERO),
+            new RentalPackageDefinition("DEMO_6M", "Gói thuê 6 tháng", 6, new BigDecimal("0.05")),
+            new RentalPackageDefinition("DEMO_12M", "Gói thuê 12 tháng", 12, new BigDecimal("0.10")),
+            new RentalPackageDefinition("DEMO_24M", "Gói thuê 24 tháng", 24, new BigDecimal("0.15"))
+        );
+    }
+
     private boolean isOccupied(String facilityCode, String unitTypeCode, int number) {
         if ("BD-F01".equals(facilityCode) && "XL".equals(unitTypeCode)) {
             return number <= 2;
@@ -238,6 +277,13 @@ public class LocalDemoDataInitializer {
         int rackCount,
         int floor,
         String zone
+    ) {}
+
+    private record RentalPackageDefinition(
+        String code,
+        String name,
+        int rentalMonths,
+        BigDecimal discountRate
     ) {}
 
     private record DemoUserDefinition(
