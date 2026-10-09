@@ -109,7 +109,8 @@ public class CustomerReservationService {
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-        Rental rental = rentalRepository.findByReservation_Id(reservationId).orElseGet(() -> {
+        var existingRental = rentalRepository.findByReservation_Id(reservationId);
+        Rental rental = existingRental.orElseGet(() -> {
             Rental created = new Rental();
             created.setCustomer(reservation.getCustomer());
             created.setFacility(reservation.getFacility());
@@ -134,7 +135,8 @@ public class CustomerReservationService {
             saved.getCustomer(), "CUSTOMER_RECEIPT_CONFIRMED", "Reservation", saved.getId(),
             saved.getFacility().getId(),
             Map.of("status", previousStatus),
-            Map.of("status", saved.getStatus(), "rentalId", rental.getId())
+            Map.of("status", saved.getStatus(), "rentalId", rental.getId(), "rentalPeriodEvidence",
+                com.storagehub.service.rental.period.RentalPeriodEvidence.receipt(rental, existingRental.isEmpty()))
         );
         notificationService.createNotification(
             saved.getCustomer().getId(), NotificationType.CHECKIN,

@@ -43,7 +43,7 @@ public class RentalQueryService {
         return new RentalDetailResponse(s.id(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
-            financial(r), access(r));
+            financial(r), access(r), s.dateSemantics());
     }
 
     private java.time.Instant now() {
@@ -81,11 +81,10 @@ public class RentalQueryService {
     }
     private boolean validTime(java.time.Instant time) { return time != null && !time.isAfter(now()); }
     private boolean nonnegative(java.math.BigDecimal value) { return value != null && value.signum() >= 0; }
-    private boolean verifiedDates(Rental r) {
+    private Optional<com.storagehub.service.rental.period.RentalPeriod> verifiedDates(Rental r) {
         var source = dateSources == null ? null : dateSources.getIfAvailable();
         var value = source == null ? Optional.<RentalReadSources.Dates>empty() : source.read(r);
-        return value.filter(d -> Objects.equals(r.getId(), d.rentalId()) && Objects.equals(r.getStartDate(), d.startDate())
-            && Objects.equals(r.getContractEndDate(), d.inclusiveEndDate()) && d.reference() != null && !d.reference().isBlank()).isPresent();
+        return value.flatMap(d -> com.storagehub.service.rental.period.RentalPeriodResolver.normalize(r,d));
     }
 
     private Set<UUID> authorize(ActorPrincipal actor, boolean manager, UUID requested) {
@@ -144,14 +143,16 @@ public class RentalQueryService {
     private RentalSummaryResponse summary(Rental r) {
         integrity(r);
         var unit = r.getStorageUnit(); var type = unit.getUnitType();
-        // No record-level activation provenance currently exists: do not pretend legacy date semantics were verified.
-        var warnings = verifiedDates(r) ? List.<RentalSummaryResponse.Warning>of() : List.of(new RentalSummaryResponse.Warning("contractEndDate",
-            "Giá trị ngày được lưu; nguồn xác minh semantics ngày của hồ sơ chưa được tích hợp trong D1"));
+        var period=verifiedDates(r);
+        var warnings = period.isPresent() ? List.<RentalSummaryResponse.Warning>of() : List.of(new RentalSummaryResponse.Warning("contractEndDate",
+            "Chưa đủ thông tin để xác minh ngày cuối sử dụng của hồ sơ thuê."));
         return new RentalSummaryResponse(r.getId(), new RentalSummaryResponse.Customer(r.getCustomer().getId(), r.getCustomer().getFullName()),
             new RentalSummaryResponse.Facility(r.getFacility().getId(), r.getFacility().getCode(), r.getFacility().getName()),
             new RentalSummaryResponse.Unit(unit.getId(), unit.getCode()),
             new RentalSummaryResponse.UnitType(type.getId(), type.getCode(), type.getName()),
-            r.getStatus(), r.getStartDate(), r.getContractEndDate(), r.getMonthlyPrice(), "VND", warnings);
+            r.getStatus(), r.getStartDate(), r.getContractEndDate(), r.getMonthlyPrice(), "VND", warnings,
+            period.map(p -> new RentalSummaryResponse.DateSemantics("COMPLETE",p.convention().name(),p.lastPermittedDate(),p.endExclusive()))
+                .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)));
     }
     private void integrity(Rental r) {
         boolean valid = r.getCustomer() != null && r.getFacility() != null && r.getStorageUnit() != null
