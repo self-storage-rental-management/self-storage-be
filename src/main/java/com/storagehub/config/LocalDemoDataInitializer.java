@@ -5,6 +5,7 @@ import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.Role;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitType;
@@ -14,11 +15,13 @@ import com.storagehub.domain.model.UserFacilityScope;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.RoleRepository;
+import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -44,6 +47,7 @@ public class LocalDemoDataInitializer {
     private final StorageUnitRepository storageUnitRepository;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
+    private final RentalPackagePolicyRepository rentalPackagePolicyRepository;
     private final UserFacilityScopeRepository userFacilityScopeRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -55,14 +59,45 @@ public class LocalDemoDataInitializer {
 
     private void seed() {
         Map<String, Facility> facilities = seedFacilities();
+        int packageCount = seedRentalPackagePolicies(facilities);
         Map<String, UnitType> unitTypes = seedUnitTypes(facilities);
         int unitCount = seedStorageUnits(facilities, unitTypes);
         int userCount = seedUsers(facilities);
 
         log.info(
-            "Local demo data ready: {} facilities, {} unit types, {} storage units, {} demo users",
-            facilities.size(), unitTypes.size(), unitCount, userCount
+            "Local demo data ready: {} facilities, {} rental packages, {} unit types, {} storage units, {} demo users",
+            facilities.size(), packageCount, unitTypes.size(), unitCount, userCount
         );
+    }
+
+    private int seedRentalPackagePolicies(Map<String, Facility> facilities) {
+        List<RentalPackageDefinition> definitions = List.of(
+            new RentalPackageDefinition("PKG-01M", "Gói 1 tháng", 1, "0.0000"),
+            new RentalPackageDefinition("PKG-03M", "Gói 3 tháng", 3, "0.0500"),
+            new RentalPackageDefinition("PKG-06M", "Gói 6 tháng", 6, "0.1000"),
+            new RentalPackageDefinition("PKG-12M", "Gói 12 tháng", 12, "0.1500")
+        );
+        for (Facility facility : facilities.values()) {
+            for (RentalPackageDefinition definition : definitions) {
+                RentalPackagePolicy policy = rentalPackagePolicyRepository
+                    .findByFacility_IdAndCode(facility.getId(), definition.code())
+                    .orElseGet(RentalPackagePolicy::new);
+                policy.setFacility(facility);
+                policy.setCode(definition.code());
+                policy.setName(definition.name());
+                policy.setRentalMonths(definition.months());
+                policy.setDiscountRate(new BigDecimal(definition.discountRate()));
+                policy.setPolicyVersion("LOCAL-2026-01");
+                policy.setActive(true);
+                policy.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+                policy.setEffectiveTo(null);
+                rentalPackagePolicyRepository.save(policy);
+            }
+        }
+        rentalPackagePolicyRepository.flush();
+        return rentalPackagePolicyRepository.count() > Integer.MAX_VALUE
+            ? Integer.MAX_VALUE
+            : (int) rentalPackagePolicyRepository.count();
     }
 
     private Map<String, Facility> seedFacilities() {
@@ -226,6 +261,8 @@ public class LocalDemoDataInitializer {
     }
 
     private record FacilityDefinition(String code, String name, String address, String city) {}
+
+    private record RentalPackageDefinition(String code, String name, int months, String discountRate) {}
 
     private record UnitTypeDefinition(
         String code,
