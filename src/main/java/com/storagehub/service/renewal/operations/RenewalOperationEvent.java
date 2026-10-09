@@ -14,7 +14,7 @@ public class RenewalOperationEvent extends BaseEntity {
     @Column(nullable=false,updatable=false,length=32) private String kind;
     @Column(nullable=false,updatable=false) private Instant occurredAt;
     @Column(updatable=false) private UUID actorId;
-    @Lob @Column(nullable=false,updatable=false) private String payloadJson;
+    @Lob @Column(columnDefinition="LONGTEXT",nullable=false,updatable=false) private String payloadJson;
     public RenewalOperationEvent(Renewal n,String kind,Instant at,UUID actor,String json) {
         renewal=n;this.kind=kind;occurredAt=at;actorId=actor;payloadJson=json;
     }
