@@ -17,7 +17,7 @@ public class RenewalAcceptedRevision extends BaseEntity {
     private RenewalQuote quote;
     @Column(name="revision_number",nullable=false,updatable=false) private int revisionNumber;
     @Column(nullable=false,updatable=false) private Instant acceptedAt;
-    @Lob @Column(updatable=false) private String note;
+    @Lob @Column(columnDefinition="LONGTEXT",updatable=false) private String note;
     public RenewalAcceptedRevision(Renewal renewal,RenewalQuote quote,int revision,Instant acceptedAt,String note) {
         if(renewal==null||quote==null||revision<1||acceptedAt==null)throw new IllegalArgumentException("Accepted revision requires persisted sources");
         this.renewal=renewal;this.quote=quote;this.revisionNumber=revision;this.acceptedAt=acceptedAt;this.note=note;
