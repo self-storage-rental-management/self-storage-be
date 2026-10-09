@@ -4,9 +4,11 @@ import com.storagehub.api.reservation.CompatibilityCheckRequest;
 import com.storagehub.api.reservation.CompatibilityCheckResponse;
 import com.storagehub.api.reservation.ReservationQuoteRequest;
 import com.storagehub.api.reservation.ReservationQuoteResponse;
+import com.storagehub.api.reservation.ReservationRentalPackageResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.CompatibilityResult;
 import com.storagehub.domain.model.RentalPackagePolicy;
+import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.User;
@@ -20,6 +22,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +39,34 @@ public class ReservationQuoteService {
     private final ReservationQuoteRepository quoteRepository;
     private final UnitTypeRepository unitTypeRepository;
     private final UserRepository userRepository;
+
+    @Transactional(readOnly = true)
+    public List<ReservationRentalPackageResponse> listAvailablePackages(
+        ActorPrincipal actor,
+        java.util.UUID facilityId,
+        LocalDate startDate
+    ) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customers can read reservation rental packages");
+        }
+        LocalDate effectiveDate = startDate == null ? LocalDate.now() : startDate;
+        return policyRepository
+            .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(
+                facilityId,
+                effectiveDate
+            )
+            .stream()
+            .filter(policy -> policy.getEffectiveTo() == null
+                || !policy.getEffectiveTo().isBefore(effectiveDate))
+            .map(policy -> new ReservationRentalPackageResponse(
+                policy.getCode(),
+                policy.getName(),
+                policy.getRentalMonths(),
+                policy.getDiscountRate(),
+                policy.getPolicyVersion()
+            ))
+            .toList();
+    }
 
     @Transactional
     public ReservationQuoteResponse createQuote(ActorPrincipal actor, ReservationQuoteRequest request) {
