@@ -41,6 +41,36 @@ public class RenewalOperationService {
     public RenewalOperationResponse detail(ActorPrincipal actor,UUID id,Audience audience) {
         return projection(visible(actor,id,audience,false,Capability.READ));
     }
+    @Transactional(readOnly=true)
+    public RenewalExceptionProposalResponse exceptionProposal(ActorPrincipal actor,UUID id) {
+        var n=visible(actor,id,Audience.CUSTOMER,false,Capability.READ);
+        var w=em.find(RenewalWorkflow.class,id);var s=state(n);Instant checkedAt=now();
+        if(s==null||s.getPendingExceptionRef()==null)
+            return proposal(n,w,s,null,"NONE",checkedAt,null,null,null,null,false,List.of("NO_CURRENT_PROPOSAL"));
+        var e=linked(n,s.getPendingExceptionRef(),"EXCEPTION");
+        var d=decode(e.getPayloadJson(),ExceptionDecision.class);
+        if(d.action()!=ExceptionAction.APPROVE_RESCHEDULE_BEFORE_CUTOFF)
+            return proposal(n,w,s,e.getId(),"UNAVAILABLE",checkedAt,null,null,null,null,false,List.of("NOT_RESCHEDULE_PROPOSAL"));
+        nonterminal(n);requireProposalState(s,e);
+        if(d.appointmentAt()==null||d.revisedDeadline()==null)throw ApiExceptions.conflict("Stored exception proposal is incomplete");
+        if(s.getRecoveryCutoff()==null)
+            return proposal(n,w,s,e.getId(),"UNAVAILABLE",checkedAt,d.appointmentAt(),null,d.revisedDeadline(),null,false,List.of("SOURCE_UNAVAILABLE"));
+        if(!checkedAt.isBefore(d.appointmentAt())||!checkedAt.isBefore(d.revisedDeadline())||!checkedAt.isBefore(s.getRecoveryCutoff()))
+            return proposal(n,w,s,e.getId(),"UNAVAILABLE",checkedAt,d.appointmentAt(),null,d.revisedDeadline(),min(s.getRecoveryCutoff(),min(d.appointmentAt(),d.revisedDeadline())),false,List.of("PROPOSAL_EXPIRED"));
+        // No fake readiness. The proposal remains visible, but unusable, until owner sources exist.
+        var p=policies.getIfAvailable();var calendar=calendars.getIfAvailable();var safety=safetySources.getIfAvailable();
+        if(w==null||p==null||calendar==null||!calendar.atomic()||safety==null||!safety.atomic())
+            return proposal(n,w,s,e.getId(),"UNAVAILABLE",checkedAt,d.appointmentAt(),null,d.revisedDeadline(),null,false,List.of("SOURCE_UNAVAILABLE"));
+        var valid=validateReschedule(new Context(n,null,w),s,e,d);
+        checkedAt=now();Instant validUntil=min(valid.cutoff(),valid.slot().start());boolean allowed=checkedAt.isBefore(validUntil);
+        return proposal(n,w,s,e.getId(),allowed?"AVAILABLE":"UNAVAILABLE",checkedAt,valid.slot().start(),valid.slot().end(),d.revisedDeadline(),validUntil,allowed,allowed?List.of():List.of("PROPOSAL_EXPIRED"));
+    }
+    private RenewalExceptionProposalResponse proposal(Renewal n,RenewalWorkflow w,RenewalOperationState s,UUID ref,String status,Instant checked,
+        Instant start,Instant end,Instant deadline,Instant validUntil,boolean allowed,List<String> reasons) {
+        return new RenewalExceptionProposalResponse(n.getId(),w==null?null:w.getVersion(),ref,status,checked,
+            s==null?null:s.getAppointmentStart(),s==null?null:s.getAppointmentEnd(),s==null?null:s.getEffectiveSigningDeadline(),
+            start,end,deadline,validUntil,allowed,List.copyOf(reasons));
+    }
     public Result deposit(ActorPrincipal actor,UUID id,RenewalOperationCommands.Version body,String key) {
         var c=context(actor,id,Audience.CUSTOMER,Capability.READ,key,"d3_deposit",body,body.expectedVersion());
         var old=replay(c,"d3_deposit",key,body);if(old.isPresent())return old.get();
@@ -145,15 +175,29 @@ public class RenewalOperationService {
     public Result confirm(ActorPrincipal actor,UUID id,Confirmation body,String key) {
         var c=context(actor,id,Audience.CUSTOMER,Capability.READ,key,"d3_confirm",body,body.expectedVersion());var old=replay(c,"d3_confirm",key,body);if(old.isPresent())return old.get();
         nonterminal(c.renewal());var s=requiredState(c.renewal());var event=linked(c.renewal(),body.decisionRef(),"EXCEPTION");var decision=decode(event.getPayloadJson(),ExceptionDecision.class);
-        if(decision.action()!=ExceptionAction.APPROVE_RESCHEDULE_BEFORE_CUTOFF||s.getDepositPaidAt()==null)throw ApiExceptions.conflict("Decision is not a signing reschedule");
         if(!Objects.equals(s.getPendingExceptionRef(),body.decisionRef()))throw ApiExceptions.conflict("Decision already confirmed or superseded");
-        linked(c.renewal(),decision.incidentId(),"INCIDENT");var p=policy(c.renewal());var safety=safety();var cutoff=safety.check(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());
+        var valid=validateReschedule(c,s,event,decision);
+        safety().retain(c.renewal(),c.workflow().getExtensionHoldRef(),decision.revisedDeadline());
+        calendar().reserve(c.renewal(),valid.slot(),now());
+        Instant confirmedAt=now();
+        if(!confirmedAt.isBefore(valid.cutoff())||!confirmedAt.isBefore(valid.slot().start())||!confirmedAt.isBefore(decision.revisedDeadline()))throw ApiExceptions.conflict("Reschedule expired during reservation");
+        var appointment=event(c,"APPOINTMENT",valid.slot());s.exception(body.decisionRef(),decision.revisedDeadline(),valid.cutoff(),appointment.getId(),valid.slot().start(),valid.slot().end());c.renewal().setStatus(RenewalStatus.appointment_scheduled);
+        return finish(c,"d3_confirm",key,body,event(c,"CONFIRMATION",Map.of("decisionRef",body.decisionRef(),"appointmentRef",appointment.getId())),200);
+    }
+    private record ValidReschedule(Slot slot,Instant cutoff) {}
+    private void requireProposalState(RenewalOperationState s,RenewalOperationEvent event) {
+        if(s.getDepositPaidAt()==null||s.getOriginalSigningDeadline()==null||s.getEffectiveSigningDeadline()==null||s.getPhase()==null
+            ||!Set.of(RenewalOperationState.Phase.SIGNING,RenewalOperationState.Phase.SIGNING_EXPIRED).contains(s.getPhase())
+            ||event.getOccurredAt()==null||event.getOccurredAt().isAfter(now()))throw ApiExceptions.conflict("Signing proposal state is no longer valid");
+    }
+    private ValidReschedule validateReschedule(Context c,RenewalOperationState s,RenewalOperationEvent event,ExceptionDecision decision) {
+        requireProposalState(s,event);
+        if(decision.action()!=ExceptionAction.APPROVE_RESCHEDULE_BEFORE_CUTOFF||decision.appointmentAt()==null||decision.revisedDeadline()==null)throw ApiExceptions.conflict("Decision is not a signing reschedule");
+        linked(c.renewal(),decision.incidentId(),"INCIDENT");var p=policy(c.renewal());
+        var cutoff=safety().check(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());
         policies.getIfAvailable().requireFacilityFault(c.renewal(),decision.incidentId(),event.getActorId());
         if(cutoff==null||!now().isBefore(cutoff)||decision.revisedDeadline().isAfter(cutoff)||decision.revisedDeadline().isBefore(s.getEffectiveSigningDeadline())||decision.revisedDeadline().isAfter(s.getOriginalSigningDeadline().plus(p.exceptionExtensionLimit())))throw ApiExceptions.conflict("Reschedule no longer eligible");
-        var slot=slot(c.renewal(),decision.appointmentAt(),decision.revisedDeadline());safety.retain(c.renewal(),c.workflow().getExtensionHoldRef(),decision.revisedDeadline());
-        calendar().reserve(c.renewal(),slot,now());
-        var appointment=event(c,"APPOINTMENT",slot);s.exception(body.decisionRef(),decision.revisedDeadline(),cutoff,appointment.getId(),slot.start(),slot.end());c.renewal().setStatus(RenewalStatus.appointment_scheduled);
-        return finish(c,"d3_confirm",key,body,event(c,"CONFIRMATION",Map.of("decisionRef",body.decisionRef(),"appointmentRef",appointment.getId())),200);
+        return new ValidReschedule(slot(c.renewal(),decision.appointmentAt(),decision.revisedDeadline()),cutoff);
     }
     public Result refund(ActorPrincipal actor,UUID id,RefundDecision body,String key) {
         var c=context(actor,id,Audience.MANAGER,Capability.REFUND,key,"d3_refund",body,body.expectedVersion());var old=replay(c,"d3_refund",key,body);if(old.isPresent())return old.get();

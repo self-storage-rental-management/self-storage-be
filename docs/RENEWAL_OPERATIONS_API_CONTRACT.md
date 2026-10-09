@@ -23,6 +23,7 @@ Không cài đặt lớp triển khai chạy thực tế/giá trị mặc địn
 | Người thao tác | Phương thức/hậu tố đường dẫn | Body | Kết quả |
 |---|---|---|---|
 | Customer | GET `/customer/renewals/{id}/operations` | — | Trạng thái vận hành, expectedVersion workflow đã xác minh, missingSources |
+| Customer | GET `.../exception-proposal` | Không nhận query | Đề xuất đổi lịch hiện tại đã lọc dữ liệu nội bộ; trạng thái NONE/AVAILABLE/UNAVAILABLE, ref/version, lịch/hạn cũ và mới, checkedAt/validUntil, confirmationAllowed/disabledReasons |
 | Customer | POST `.../simulated-payment` | expectedVersion | 200 Result; chỉ DEPOSIT, điều khoản/kết quả do server xác định |
 | Customer | POST/PATCH `.../appointment` | appointmentAt là thời điểm ISO, reason (bắt buộc với PATCH), expectedVersion | 200 Result; toàn bộ khung hẹn thực nằm trong hạn có hiệu lực |
 | Customer | GET `.../appointment` | — | Trạng thái cùng appointmentRef/thời điểm bắt đầu/kết thúc/các hạn hiện tại |
@@ -64,7 +65,19 @@ Result = `{state: RenewalOperationResponse, event: {id,kind,occurredAt,actorId,d
 
 Bổ sung bảng renewal_operation_states, renewal_operation_events; sự kiện bất biến mang người thao tác/thời điểm occurredAt từ server thực và liên kết Renewal cha. Tái sử dụng renewal_idempotency của D2 với không gian tên thao tác riêng (`d3_*`); không có bộ nhớ đệm thứ hai. Lệnh D3 không giả phiên bản cho bản ghi cũ.
 
-DDL chỉ để rà soát nằm trong docs/sql/renewal-operations-overdue-schema.sql. Không phải migration Flyway, chưa được thực thi. Cấu hình ddl-auto=update hiện có có thể tạo bảng khi khởi động; KHÔNG chạy trên TiDB/MySQL chung của team trước khi phối hợp duyệt schema. Không bổ sung ngược dữ liệu lịch sử hoặc sửa chữa bản ghi.
+DDL review cũ nằm trong docs/sql/renewal-operations-overdue-schema.sql. Hiện bộ migration đã có V2026100904__create_overdue_renewal_support_persistence.sql tạo các bảng D2–D5. Sự tồn tại của migration source không chứng minh DB hiện tại đã áp dụng: owner DB phải kiểm tra schema và Flyway history, đặc biệt khi bảng đã từng được tạo thủ công/qua Hibernate. Chỉ validate trên DB test được xác nhận; không tự bật update/create hoặc chạy migration trên DB chung. Không bổ sung ngược dữ liệu lịch sử hoặc sửa chữa bản ghi.
+
+## Đề xuất ngoại lệ dành cho Customer (bổ sung 09/10/2026)
+
+GET `/api/customer/renewals/{id}/exception-proposal` chỉ cho Customer sở hữu Rental. Không mở endpoint lịch sử `facility-incidents` cho Customer. DTO mới không trả incidentId, actor/reviewer, lý do nội bộ hoặc evidenceFileIds.
+
+- `NONE`: không có đề xuất đang chờ, decisionRef null, confirmationAllowed false.
+- `UNAVAILABLE`: đề xuất không phải đổi lịch, đã hết hạn hoặc thiếu nguồn cần thiết; không giả readiness. Nội dung lịch/hạn chỉ từ snapshot có thật, không tự tính khung hẹn.
+- `AVAILABLE`: current proposal/ref/version đã đối chiếu với state; có lịch/hạn cũ, proposedAppointmentStart/End, proposedSigningDeadline và validUntil theo cutoff/khung hẹn đã được nguồn chung kiểm tra. Đây là projection lúc checkedAt, không phải một quyền bỏ qua kiểm tra lệnh sau đó.
+- `disabledReasons`: NO_CURRENT_PROPOSAL, NOT_RESCHEDULE_PROPOSAL, PROPOSAL_EXPIRED hoặc SOURCE_UNAVAILABLE. Bản chụp lỗi/điều khoản thay đổi, policy/lỗi cơ sở bị thu hồi, slot không còn hợp lệ trả conflict; lỗi truy cập vẫn 401/403/404, không chuyển thành thành công.
+- FE phải hiển thị đề xuất đã tải, đúng renewal/ref/version, còn hiệu lực và được phép; yêu cầu Customer xác nhận đã đọc. POST `exception-confirmations` chỉ gửi decisionRef và expectedVersion, cùng Idempotency-Key, không gửi lịch/hạn/amount/reason từ client.
+- BE recheck current proposal, state/terms, policy/lỗi cơ sở, calendar và hold/cutoff trong transaction của command. Recheck thời gian sau retain/reserve trước mutation để không xác nhận muộn do nguồn xử lý chậm. Retry key cũ vẫn theo idempotency contract hiện hữu; proposal mới/version mới cần đọc lại, không tự thay payload retry.
+- Thay đổi không thêm bảng/cột, không thay BO policy, payment hoặc shared security. Cần adapter thật trước khi xác nhận nghiệp vụ được bật production; test-only mocks không tính là tích hợp nguồn.
 
 400 trường sai định dạng/chèn trường không hợp lệ/thiếu header; 401 phiên đăng nhập không hợp lệ; 403 thiếu role/năng lực được cấp; 404 tài nguyên/tham chiếu lồng ngoài quyền xem; 409 phiên bản/giai đoạn/hạn cũ, xung đột hoặc DEFERRED_SOURCE. Mã lỗi/cấu trúc bao toàn cục hiện có giữ nguyên.
 

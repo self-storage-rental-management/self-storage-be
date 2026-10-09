@@ -21,6 +21,8 @@ public class CustomerRenewalOperationController {
     private final ActorContext actors;private final RenewalOperationService service;
     @GetMapping("/operations") @Operation(summary="Read my signing deadlines and operational state")
     public ApiResponse<RenewalOperationResponse> detail(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){RenewalOperationQuery.none(query);return new ApiResponse<>(service.detail(actors.required(),id,CUSTOMER),CorrelationIdContext.current());}
+    @GetMapping("/exception-proposal") @Operation(summary="Read my current proposed signing appointment and deadline",description="Customer-safe projection only, never the internal incident timeline. Missing sources disable confirmation; the command rechecks ownership, version, proposal, policy, calendar and cutoff.")
+    public ApiResponse<RenewalExceptionProposalResponse> exceptionProposal(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){RenewalOperationQuery.none(query);return new ApiResponse<>(service.exceptionProposal(actors.required(),id),CorrelationIdContext.current());}
     @PostMapping("/simulated-payment") @Operation(summary="Pay approved Renewal DEPOSIT only",description="Amount/outcome determined by shared engine. Does not extend Rental. No Customer BALANCE/CASH.")
     public ApiResponse<RenewalOperationService.Result> deposit(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.Version body,@RequestHeader("Idempotency-Key") String key){return response(service.deposit(actors.required(),id,body,key));}
     @PostMapping("/appointment") @Operation(summary="Book a signing slot within verified deadlines")
