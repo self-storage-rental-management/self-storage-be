@@ -68,6 +68,9 @@ public class CheckInHandoverService {
         ActorPrincipal actor,
         UUID facilityId,
         String q,
+        String status,
+        Instant scheduledFrom,
+        Instant scheduledTo,
         int page,
         int pageSize,
         String correlationId
@@ -81,8 +84,16 @@ public class CheckInHandoverService {
         List<UUID> facilityIds = actor.facilityScopes().isEmpty()
             ? List.of(new UUID(0, 0))
             : actor.facilityScopes().keySet().stream().toList();
+        CheckInListFilter statusFilter = CheckInListFilter.parse(status);
+        if (scheduledFrom != null && scheduledTo != null && !scheduledFrom.isBefore(scheduledTo)) {
+            throw ApiExceptions.validation(
+                "scheduledFrom must be before scheduledTo",
+                Map.of("scheduledFrom", scheduledFrom, "scheduledTo", scheduledTo)
+            );
+        }
         Page<CheckInResponse> result = reservationRepository.findCheckInWork(
-            facilityId, clean(q), scoped, facilityIds,
+            facilityId, clean(q), statusFilter.enabled(), statusFilter.unscheduled(),
+            statusFilter.checkInStatus(), scheduledFrom, scheduledTo, scoped, facilityIds,
             pageRequest(page, pageSize)
         ).map(reservation -> toResponse(
             reservation,
@@ -90,6 +101,33 @@ public class CheckInHandoverService {
             latestAssignment(reservation.getId())
         ));
         return PageResponse.from(result, correlationId);
+    }
+
+    private record CheckInListFilter(
+        boolean enabled,
+        boolean unscheduled,
+        CheckInStatus checkInStatus
+    ) {
+        private static CheckInListFilter parse(String value) {
+            if (value == null || value.isBlank()) {
+                return new CheckInListFilter(false, false, null);
+            }
+            if ("UNSCHEDULED".equalsIgnoreCase(value.trim())) {
+                return new CheckInListFilter(true, true, null);
+            }
+            try {
+                return new CheckInListFilter(
+                    true,
+                    false,
+                    CheckInStatus.valueOf(value.trim().toLowerCase())
+                );
+            } catch (IllegalArgumentException exception) {
+                throw ApiExceptions.validation(
+                    "Unsupported check-in status filter",
+                    Map.of("status", value)
+                );
+            }
+        }
     }
 
     @Transactional

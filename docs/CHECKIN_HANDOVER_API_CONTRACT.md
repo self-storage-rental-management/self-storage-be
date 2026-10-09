@@ -27,11 +27,13 @@ CheckIn completed
 
 ## 1. Danh sách hồ sơ check-in
 
-`GET /api/staff/check-ins?facilityId={uuid}&q={text}&page=0&pageSize=20`
+`GET /api/staff/check-ins?facilityId={uuid}&q={text}&status={status}&scheduledFrom={instant}&scheduledTo={instant}&page=0&pageSize=20`
 
 - Chỉ trả reservation ở `UNIT_RESERVED`, `READY_FOR_CHECKIN` hoặc `AWAITING_CUSTOMER_RECEIPT`.
 - Reservation phải có unit và assignment `ACTIVE` hoặc `COMPLETED`.
 - `q` tìm theo mã reservation, tên/email khách hàng hoặc mã unit.
+- `status` lọc theo `UNSCHEDULED`, `scheduled`, `no_show` hoặc `completed`.
+- `scheduledFrom` (bao gồm) và `scheduledTo` (không bao gồm) lọc lịch nhận theo ISO-8601 instant.
 - Kết quả dùng chuẩn `PageResponse<CheckInResponse>`.
 
 ## 2. Lên lịch check-in
