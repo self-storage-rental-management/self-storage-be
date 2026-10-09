@@ -23,7 +23,14 @@ Ticket cũ không có cơ sở bị loại khỏi danh sách theo phạm vi và 
 
 ## Đường dẫn API
 
-Tiền tố `C = /api/customer/support-tickets`, `M = /api/manager/support-tickets`, `S = /api/staff/support-tickets`.
+Tiền tố D5 `C = /api/customer/support-workflows`, `M = /api/manager/support-tickets`, `S = /api/staff/support-workflows`.
+
+### Tương thích sau tích hợp develop (09/10/2026)
+
+- `develop` đã loại bỏ hai controller cũ tại `/api/customer/support-tickets` và `/api/staff/support-tickets`. Các đường dẫn này không còn được đăng ký; D5 không khôi phục controller cũ hoặc thêm handler thay thế tại đó. Swagger và kiểm thử mapping xác nhận điều này.
+- Hai controller D5 Customer/Staff dùng tiền tố `support-workflows` để giữ đầy đủ luồng có phiên bản, idempotency, phân công và giới hạn hiển thị riêng. API Manager không đổi. Client D5 phải dùng đúng tiền tố mới; không fallback sang API dùng chung vì DTO và quy tắc lệnh khác nhau.
+- D5 vẫn tham chiếu `SupportTicket` hiện có và chỉ thay đổi ticket có metadata workflow đã xác minh. Việc bỏ controller cũ không di chuyển dữ liệu hoặc tự bổ sung metadata cho ticket cũ, cũng không đồng bộ lịch sử giữa `support_ticket_messages` và `support_messages`.
+- Client thuộc module khác còn gọi đường dẫn cũ cần owner cập nhật theo contract D5. Nếu cần chuyển lịch sử/trạng thái cũ, team phải thống nhất riêng; không dùng việc xóa controller hay đổi URL như bằng chứng dữ liệu đã được hợp nhất.
 
 | Phương thức / đường dẫn | Hành vi |
 | --- | --- |

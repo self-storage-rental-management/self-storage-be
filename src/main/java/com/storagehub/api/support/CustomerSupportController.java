@@ -14,7 +14,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
 import static com.storagehub.service.support.SupportService.Audience.CUSTOMER;
 
-@RestController @RequestMapping("/api/customer/support-tickets") @RequiredArgsConstructor
+@RestController @RequestMapping("/api/customer/support-workflows") @RequiredArgsConstructor
 @Tag(name="D5 - Customer Support",description="Owned ticket lifecycle. No internal messages, automatic refund or arbitrary facility/link ownership.")
 @SecurityRequirement(name="bearerAuth")
 @io.swagger.v3.oas.annotations.responses.ApiResponses({

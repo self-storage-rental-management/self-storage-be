@@ -38,9 +38,22 @@ Các trường JSON báo giá được dàn phẳng: id,rentalId,customerId,quot
 
 GET tính reviewState và allowedActions theo từng người dùng, không ghi dữ liệu. Tài chính UNKNOWN/null khi nguồn chưa đầy đủ; không bao giờ suy thành nợ bằng 0. Giá/policy thay đổi trước khi duyệt → 409; cần báo giá mới và Customer xác nhận bằng PATCH. Yêu cầu pending không hết hạn chỉ vì TTL của báo giá đã chấp nhận đã hết. Rental không hoạt động hoặc thiếu nguồn không được báo READY.
 
-## Nguồn có thẩm quyền bắt buộc (không có lớp triển khai chạy thực tế tại đây)
+## Nguồn có thẩm quyền bắt buộc
 
 PolicySource: tham chiếu/phiên bản BO, TTL, cửa sổ thanh toán/gửi yêu cầu, tỷ lệ cọc, ID gói đủ điều kiện. PricingSource: gói/giá/giảm giá/phiên bản có hiệu lực và ánh xạ loại gian. Bộ tính dùng VND với scale2 HALF_UP: bộ kết nối phải công bố rõ moneyScale2; scale0/tiền tệ khác bị chặn, không chuyển đổi. Chủ nguồn phải xác nhận việc công bố quy tắc làm tròn.
+
+### Adapter giá đọc danh mục chung — 09/10/2026
+
+`service/renewal/integration/SharedCatalogRenewalPricingSource` là Spring bean triển khai `RenewalSources.PricingSource`. Chỉ đọc `UnitTypeRepository.findById` và `RentalPackagePolicyRepository.findByFacility_IdOrderByRentalMonthsAsc`, không ghi entity/repository/policy chung và không tạo gói mặc định.
+
+- Giá kỳ mới lấy `UnitType.monthlyPrice` hiện hành của loại gian thực sự gắn với Rental. Không lấy lại applied rate kỳ cũ, không chuyển đổi tiền tệ hoặc nhân 26.000.
+- Gói đúng cơ sở, đang active, có hiệu lực tại `extensionStartDate`; cả `effectiveFrom` và `effectiveTo` đều bao gồm ngày biên. Truy vết bằng ID/code/policyVersion đã lưu; kỳ thuê và discount lấy nguyên từ gói.
+- VND/scale2 theo hợp đồng tiền hiện hữu trong `ReservationQuoteService` và `RenewalTermCalculator`; adapter không tự công bố chính sách làm tròn mới. Giá sai scale/precision, giảm giá sai giới hạn, metadata mơ hồ hoặc lệch cơ sở trả 409, không sửa dữ liệu để làm hợp lệ.
+- Không có gói hợp lệ là danh mục rỗng đã xác minh. Thiếu ánh xạ/loại gian đang dùng không khả dụng trả nguồn không xác minh được. Lỗi DB được truyền lên, không chuyển thành danh sách rỗng hay giá 0.
+- Adapter chỉ cung cấp **giá ứng viên**, không quyết định gói được phép dùng cho Renewal. `RenewalWorkflowService.prices` vẫn bắt buộc giao với `PolicySource.eligiblePackageIds`. Không kéo ưu đãi Booking sang Renewal nếu BO chưa cho phép.
+- Policy/eligibility/financial consistency/extension hold/approval lifecycle chưa có adapter có thẩm quyền vẫn chặn các lệnh liên quan bằng `DEFERRED_SOURCE`. Có PricingSource không đồng nghĩa options/quote/approval hay toàn bộ D2 đã sẵn sàng.
+
+Không đổi endpoint/DTO/permission, không chạy migration. Test adapter dùng H2 cô lập, không phải bằng chứng E2E MySQL/DB triển khai. Khi owner cung cấp PricingSource thay thế, cần phối hợp chỉ giữ một bean cho port; không thêm source song song hoặc `@Primary` để âm thầm ghi đè nguồn.
 
 EligibilitySource: nguồn gốc ngày đã xác minh/mốc giới hạn Recovery/tính khả thi. FinancialSource: tham chiếu nghĩa vụ đến hạn/tranh chấp với checkedAt; độ mới của dữ liệu đọc có thẩm quyền là trách nhiệm bộ kết nối. ExtensionHoldSource: giao thức dung lượng/khóa dùng chung cho phần kéo dài gian đang chiếm; mặc định participatesInTransaction=false nên chặn duyệt. Lớp triển khai giao dịch local đã được rà soát phải chủ động xác nhận hỗ trợ và bảo đảm rollback cùng bên gọi; không tạo tác động bên ngoài từ xa thiếu tính nguyên tử. Lớp triển khai kiểm thử chỉ có trong dữ liệu H2 của test.
 
