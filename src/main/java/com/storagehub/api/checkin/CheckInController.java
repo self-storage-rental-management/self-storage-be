@@ -6,6 +6,7 @@ import com.storagehub.common.api.PageResponse;
 import com.storagehub.security.ActorContext;
 import com.storagehub.service.CheckInHandoverService;
 import jakarta.validation.Valid;
+import java.time.Instant;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,11 +29,15 @@ public class CheckInController {
     public PageResponse<CheckInResponse> list(
         @RequestParam(required = false) UUID facilityId,
         @RequestParam(required = false) String q,
+        @RequestParam(required = false) String status,
+        @RequestParam(required = false) Instant scheduledFrom,
+        @RequestParam(required = false) Instant scheduledTo,
         @RequestParam(defaultValue = "0") int page,
         @RequestParam(defaultValue = "20") int pageSize
     ) {
         return service.list(
-            actorContext.required(), facilityId, q, page, pageSize,
+            actorContext.required(), facilityId, q, status, scheduledFrom, scheduledTo,
+            page, pageSize,
             CorrelationIdContext.current()
         );
     }

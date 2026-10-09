@@ -36,7 +36,8 @@ class UnitAssignmentQueryTests {
     @Test
     void checkInWorkQueryExecutes() {
         var result = reservationRepository.findCheckInWork(
-            null, null, false, List.of(new UUID(0, 0)), PageRequest.of(0, 20)
+            null, null, false, false, null, null, null,
+            false, List.of(new UUID(0, 0)), PageRequest.of(0, 20)
         );
 
         assertThat(result).isEmpty();
