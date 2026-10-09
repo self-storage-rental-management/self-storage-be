@@ -32,13 +32,17 @@ public class OverdueService {
         var scopes=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.READ)).map(Map.Entry::getKey).toList();
         var query=em.createQuery("select r from Rental r join fetch r.customer join fetch r.facility join fetch r.storageUnit where r.facility.id in :ids"+(q.facilityId()==null?"":" and r.facility.id=:facility"),Rental.class).setParameter("ids",scopes);
         if(q.facilityId()!=null)query.setParameter("facility",q.facilityId());
-        Instant asOf=now();var missing=new TreeSet<String>();var rows=new ArrayList<OverdueResponse>();
-        for(var rental:query.getResultList())rows.addAll(cases(rental,asOf,q.kind(),missing));
-        String search=q.search().toLowerCase(Locale.ROOT);rows.removeIf(r->!search.isEmpty()&&!r.caseRef().toLowerCase(Locale.ROOT).contains(search)&&!r.rentalId().toString().contains(search)&&!r.customerName().toLowerCase(Locale.ROOT).contains(search)&&!r.storageUnitCode().toLowerCase(Locale.ROOT).contains(search));
+        Instant asOf=now();var missing=new TreeSet<String>();String search=q.search().toLowerCase(Locale.ROOT);
         Comparator<OverdueResponse> order=switch(q.sort()){case "overdueDays"->Comparator.comparingLong(OverdueResponse::overdueDays);case "caseRef"->Comparator.comparing(OverdueResponse::caseRef);default->Comparator.comparingInt(r->priority(r.priority()));};
-        if(q.descending())order=order.reversed();rows.sort(order.thenComparing(OverdueResponse::caseRef));
-        int from=(int)Math.min((long)q.page()*q.size(),rows.size());int end=Math.min(from+q.size(),rows.size());
-        return new OverdueResponse.ListResult(List.copyOf(rows.subList(from,end)),new PageResponse.Pagination(q.page(),q.size(),rows.size(),(int)((rows.size()+(long)q.size()-1)/q.size()),q.sort()+","+(q.descending()?"desc":"asc")),correlation,asOf,missing.isEmpty()?"COMPLETE":"PARTIAL",List.copyOf(missing));
+        if(q.descending())order=order.reversed();
+        var page=new OverduePageCollector<OverdueResponse>(q.page(),q.size(),order.thenComparing(OverdueResponse::caseRef));
+        // Do not paginate rentals before expanding/filtering cases: one rental may create several cases.
+        // Closing the JPA stream releases cursor resources; managed entities/owner source work still require benchmarking.
+        try(var rentals=query.getResultStream()) {
+            rentals.forEach(rental->{for(var r:cases(rental,asOf,q.kind(),missing))
+                if(search.isEmpty()||r.caseRef().toLowerCase(Locale.ROOT).contains(search)||r.rentalId().toString().contains(search)||r.customerName().toLowerCase(Locale.ROOT).contains(search)||r.storageUnitCode().toLowerCase(Locale.ROOT).contains(search))page.accept(r);});
+        }
+        return new OverdueResponse.ListResult(page.page(),new PageResponse.Pagination(q.page(),q.size(),page.total(),(int)((page.total()+q.size()-1)/q.size()),q.sort()+","+(q.descending()?"desc":"asc")),correlation,asOf,missing.isEmpty()?"COMPLETE":"PARTIAL",List.copyOf(missing));
     }
     @Transactional(readOnly=true)
     public OverdueResponse detail(ActorPrincipal actor,String id){var ref=parse(id);var rental=visible(actor,ref,false);return current(rental,ref);}
