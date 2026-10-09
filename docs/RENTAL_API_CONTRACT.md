@@ -6,8 +6,12 @@ Phạm vi đã triển khai: chỉ gồm bốn endpoint GET. Không bao gồm k�
 
 Chạy BE bằng cấu hình local hiện có, sau đó mở `/swagger-ui/index.html` trên địa chỉ BE (cổng Spring mặc định là 8080 nếu cấu hình của bạn không ghi đè). Tái sử dụng `/v3/api-docs` và bearerAuth hiện có. Các thẻ: **D1 - Customer Rentals**, **D1 - Manager Rentals**. Đăng nhập bằng Auth API hiện có, sao chép accessToken vào **Authorize**, rồi chọn **Try it out**. Không công khai token hoặc đưa thông tin đăng nhập production/staging vào nhật ký kiểm thử.
 
-- GET /api/customer/rentals và /api/customer/rentals/{id}: yêu cầu vai trò CUSTOMER và xác định chủ sở hữu từ JWT. API đặt chỗ Customer hiện có kiểm tra quyền sở hữu mà không cần cấp sẵn VIEW_RENTALS cho Customer; D1 tuân theo cách này và không thay đổi cơ chế xác thực/phân quyền.
+- GET /api/customer/rental-records và /api/customer/rental-records/{id}: yêu cầu vai trò CUSTOMER và xác định chủ sở hữu từ JWT. API đặt chỗ Customer hiện có kiểm tra quyền sở hữu mà không cần cấp sẵn VIEW_RENTALS cho Customer; D1 tuân theo cách này và không thay đổi cơ chế xác thực/phân quyền.
 - GET /api/manager/rentals và /api/manager/rentals/{id}: yêu cầu MANAGER + VIEW_RENTALS + phạm vi cơ sở READ. Không tự động cấp quyền. Thiếu quyền hoặc phạm vi trả 403; người dùng đã được cấp quyền nhưng truy vấn chi tiết ngoài phạm vi được xem nhận 404.
+
+### Tương thích với API Customer dùng chung (09/10/2026)
+
+`GET /api/customer/rentals` của `CustomerRentalController` và `CustomerRentalService` được giữ nguyên: DTO phẳng `CustomerRentalResponse`, bộ lọc và kiểm tra quyền của nguồn dùng chung. D1 cung cấp mô hình đọc có quan hệ lồng nhau và chi tiết tại namespace riêng `/api/customer/rental-records`, qua `CustomerRentalReadController` và `RentalQueryService`. Hai API đọc cùng bản ghi Rental, không tạo bảng hay sao chép dữ liệu, không chuyển hướng hoặc fallback giữa hai contract. FE D1 gọi namespace mới; client `customerRentalApi.ts` của teammate giữ nguyên. Các lệnh D2 `/api/customer/rentals/{id}/renewal-options`, `/renewal-quote`, `/renewal-requests` không đổi.
 
 Danh sách: page=0, size=20 (1–100), status theo giá trị chuẩn, search (tối đa 200 ký tự sau khi bỏ khoảng trắng đầu/cuối), endFrom/endTo là ngày ISO bao gồm cả hai đầu mút; mặc định sort=createdAt,desc. Các trường sắp xếp: createdAt,contractEndDate,startDate,monthlyPrice,id; chiều asc/desc; dùng id ASC để phân định khi giá trị bằng nhau. Manager có thể truyền facilityId; nếu bỏ trống thì lấy hợp các phạm vi READ. Tìm kiếm theo chuỗi con mã gian kho, không phân biệt hoa thường và không diễn giải ký tự đại diện, hoặc theo UUID Rental chính xác; Manager còn có thể tìm theo fullName của khách hàng. Không tìm kiếm xuyên quyền sở hữu.
 

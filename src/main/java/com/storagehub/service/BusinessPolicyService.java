@@ -7,6 +7,7 @@ import com.storagehub.api.configuration.UpdateBusinessConfigRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.RentalPackagePolicy;
+import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.SystemSetting;
 import com.storagehub.domain.repo.FacilityRepository;
@@ -62,7 +63,7 @@ public class BusinessPolicyService {
 
     @Transactional
     public BusinessConfigResponse updateBusinessConfig(ActorPrincipal actor, UpdateBusinessConfigRequest request) {
-        authorizationService.require(actor, SystemPermission.MANAGE_POLICIES);
+        requirePolicyOwner(actor);
 
         BusinessConfigResponse before = getBusinessConfig(actor);
 
@@ -145,7 +146,7 @@ public class BusinessPolicyService {
 
     @Transactional
     public RentalPackagePolicyResponse createPackagePolicy(ActorPrincipal actor, RentalPackagePolicyRequest request) {
-        authorizationService.require(actor, SystemPermission.MANAGE_POLICIES);
+        requirePolicyOwner(actor);
 
         Facility facility = facilityRepository.findById(request.facilityId())
             .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
@@ -187,7 +188,7 @@ public class BusinessPolicyService {
         UUID policyId,
         RentalPackagePolicyRequest request
     ) {
-        authorizationService.require(actor, SystemPermission.MANAGE_POLICIES);
+        requirePolicyOwner(actor);
 
         RentalPackagePolicy policy = policyRepository.findById(policyId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental package policy not found"));
@@ -223,7 +224,7 @@ public class BusinessPolicyService {
 
     @Transactional
     public void deletePackagePolicy(ActorPrincipal actor, UUID policyId) {
-        authorizationService.require(actor, SystemPermission.MANAGE_POLICIES);
+        requirePolicyOwner(actor);
 
         RentalPackagePolicy policy = policyRepository.findById(policyId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental package policy not found"));
@@ -311,6 +312,14 @@ public class BusinessPolicyService {
         return systemSettingRepository.findBySettingKey(key)
             .map(s -> s.getValue().replace("\"", "").trim())
             .orElse(defaultValue);
+    }
+
+    private void requirePolicyOwner(ActorPrincipal actor) {
+        if (actor == null) throw ApiExceptions.unauthorized("Authentication is required");
+        if (!actor.hasRole(RoleCode.BUSINESS)) {
+            throw ApiExceptions.forbidden("Only Business Operations may edit rental policies");
+        }
+        authorizationService.require(actor, SystemPermission.MANAGE_POLICIES);
     }
 
     public RentalPackagePolicyResponse toResponse(RentalPackagePolicy p) {

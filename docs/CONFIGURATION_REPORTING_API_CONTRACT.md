@@ -6,12 +6,15 @@ Tài liệu đặc tả API phân hệ **Cấu hình chính sách & Báo cáo th
 
 ## 1. Phân quyền & Vai trò (Role & Permissions)
 
-- **Business Owner & Admin (`BUSINESS`, `ADMIN`)**:
+- **Business Operations Manager (`BUSINESS`)**:
   - `VIEW_POLICIES`: Xem cấu hình vận hành và chính sách giá thuê.
   - `MANAGE_POLICIES`: Cập nhật cấu hình vận hành (`gracePeriodDays`, `lateFeeAmount`, `defaultDepositRatio`, `holdExpiryHours`, `dimDivisor`, `maintenanceMode`, `bannerNotice`) và quản lý các gói ưu đãi thuê (`RentalPackagePolicy`).
   - `VIEW_REPORTS`: Xem báo cáo doanh thu hệ thống (`/api/business/reports/revenue`) và hiệu suất mạng lưới cơ sở (`/api/business/reports/performance`).
 - **Facility Manager (`FACILITY_MANAGER`, `MANAGER`)**:
+  - `policies:read`: Đọc chính sách chung để áp dụng tại cơ sở. Không được `policies:update`, kể cả khi tài khoản còn quyền cũ trong DB/session. Các lệnh sửa cấu hình và gói thuê kiểm tra role `BUSINESS` cùng quyền `policies:update` ở service.
   - `VIEW_UNITS` / `VIEW_REPORTS`: Xem báo cáo tổng hợp cơ sở thuộc phạm vi quản lý (`/api/manager/reports/summary`) và nhật ký hoạt động cơ sở (`/api/manager/reports/activities`).
+
+Quyết định quyền policy được chủ dự án duyệt ngày 09/10/2026: BO sở hữu policy, Manager chỉ đọc. Các tên enum `VIEW_POLICIES` / `MANAGE_POLICIES` tương ứng mã API `policies:read` / `policies:update`. Admin quản lý cấp quyền, không trực tiếp sửa policy. `RoleDataInitializer` nâng phiên bản quyền từ 3 lên 4, chỉ điều chỉnh quyền policy của Manager/BO và giữ các quyền tùy chỉnh khác; `AdminRoleService` bảo vệ ranh giới này khi sửa bảng quyền. Chưa chạy nâng phiên bản trên DB thật trong lượt sửa này vì schema test vẫn chưa qua `validate`.
 
 ---
 
