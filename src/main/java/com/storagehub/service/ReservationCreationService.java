@@ -111,6 +111,10 @@ public class ReservationCreationService {
         reservation.setCompatibilityResult(compatibility.getResult());
         reservation.setStartDate(quote.getStartDate());
         reservation.setEndDate(quote.getEndDate());
+        if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
+            throw ApiExceptions.validation("appointmentAt must be in the present or future", null);
+        }
+        reservation.setAppointmentAt(request.getAppointmentAt());
         reservation.setAmount(quote.getTotalAfterDiscount());
         reservation.setGoodsCondition(clean(request.getGoodsCondition()));
         reservation.setTotalGoodsVolumeM3(compatibility.getTotalGoodsVolumeM3());
@@ -221,7 +225,7 @@ public class ReservationCreationService {
             snapshot.getTotalInitialObligation(), reservation.getTotalGoodsVolumeM3(),
             reservation.getTotalGoodsWeightKg(), reservation.getHoldExpiresAt(), reservation.getCreatedAt(),
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
-            snapshot.getDiscountRate(), snapshot.getDiscountAmount()
+            snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
     }
 
@@ -250,6 +254,9 @@ public class ReservationCreationService {
         append(canonical, request.getQuoteId());
         append(canonical, cleanValue(request.getGoodsCondition()));
         append(canonical, cleanValue(request.getNotes()));
+        if (request.getAppointmentAt() != null) {
+            append(canonical, request.getAppointmentAt());
+        }
         List<GoodsItemRequest> items = request.getGoodsItems();
         append(canonical, items == null ? null : items.size());
         if (items != null) {
@@ -276,6 +283,9 @@ public class ReservationCreationService {
         append(canonical, reservation.getSourceQuote().getId());
         append(canonical, cleanValue(reservation.getGoodsCondition()));
         append(canonical, cleanValue(reservation.getNotes()));
+        if (reservation.getAppointmentAt() != null) {
+            append(canonical, reservation.getAppointmentAt());
+        }
         append(canonical, items.size());
         for (ReservationGoodsItem item : items) {
             append(canonical, item.getCategory());
