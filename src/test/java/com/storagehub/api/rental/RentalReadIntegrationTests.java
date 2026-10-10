@@ -65,6 +65,10 @@ class RentalReadIntegrationTests {
         mvc.perform(get("/api/customer/rental-records/"+r.getId())).andExpect(status().isOk())
             .andExpect(jsonPath("data.monthlyPrice").value(9500000)).andExpect(jsonPath("data.unitType.name").value("Medium"))
             .andExpect(jsonPath("data.financialSummary.completeness").value("UNKNOWN"))
+            .andExpect(jsonPath("data.dateSemantics.completeness").value("UNKNOWN"))
+            .andExpect(jsonPath("data.dateSemantics.lastPermittedDate").isEmpty())
+            .andExpect(jsonPath("data.dateSemantics.endExclusive").isEmpty())
+            .andExpect(jsonPath("data.contractEndDate").value("2026-10-31"))
             .andExpect(jsonPath("data.access.completeness").value("UNKNOWN"))
             .andExpect(jsonPath("data.accessPin").doesNotExist());
         mvc.perform(get("/api/customer/rental-records").param("needsAttention","false")).andExpect(status().isBadRequest());
