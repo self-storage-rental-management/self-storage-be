@@ -14,6 +14,11 @@ import org.springframework.data.repository.query.Param;
 
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
+    Optional<Payment> findByGatewayIntentId(String gatewayIntentId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select payment from Payment payment where payment.gatewayIntentId = :gatewayIntentId")
+    Optional<Payment> findByGatewayIntentIdForUpdate(@Param("gatewayIntentId") String gatewayIntentId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select payment from Payment payment where payment.id = :id")

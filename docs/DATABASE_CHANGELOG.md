@@ -153,7 +153,7 @@ Các cột cũ như `timezone`, `price_per_m3`, `area_m2`, `volume_m3` hoặc `r
 
 `AWAITING_PAYMENT` đến hạn chuyển sang `PAYMENT_GRACE` thay vì `EXPIRED`. Trong grace, Reservation vẫn trừ capacity. Hết `complaint_expires_at` mà chưa có complaint thì mới chuyển `EXPIRED`, đặt `archived_at` và giải phóng capacity.
 
-Đã xóa provider class, gateway interface, payment-intent/reconcile API, public webhook API, webhook entity/repository và cấu hình MoMo khỏi code. Các cột/bảng cũ có thể vẫn tồn tại trong MySQL local vì `ddl-auto=update` không drop schema; chúng không còn được map hoặc sử dụng và có thể xóa thủ công sau khi sao lưu dữ liệu cần thiết.
+Các cột/bảng thanh toán cũ có thể vẫn tồn tại trong MySQL local vì `ddl-auto=update` không drop schema; chúng không còn được map hoặc sử dụng và có thể xóa thủ công sau khi sao lưu dữ liệu cần thiết.
 
 ## 2026-10-02 — Payment complaint và Manager review
 
