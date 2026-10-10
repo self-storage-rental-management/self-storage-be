@@ -3,9 +3,9 @@ package com.storagehub.config;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FacilityStatus;
+import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Role;
 import com.storagehub.domain.model.RoleCode;
-import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitType;
@@ -45,9 +45,9 @@ public class LocalDemoDataInitializer {
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
     private final StorageUnitRepository storageUnitRepository;
+    private final RentalPackagePolicyRepository rentalPackagePolicyRepository;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
-    private final RentalPackagePolicyRepository rentalPackagePolicyRepository;
     private final UserFacilityScopeRepository userFacilityScopeRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -59,46 +59,17 @@ public class LocalDemoDataInitializer {
 
     private void seed() {
         Map<String, Facility> facilities = seedFacilities();
-        int packageCount = seedRentalPackagePolicies(facilities);
         Map<String, UnitType> unitTypes = seedUnitTypes(facilities);
         int unitCount = seedStorageUnits(facilities, unitTypes);
+        int packageCount = seedRentalPackagePolicies(facilities);
         int userCount = seedUsers(facilities);
 
         log.info(
-            "Local demo data ready: {} facilities, {} rental packages, {} unit types, {} storage units, {} demo users",
-            facilities.size(), packageCount, unitTypes.size(), unitCount, userCount
+            "Local demo data ready: {} facilities, {} unit types, {} storage units, {} rental packages, {} demo users",
+            facilities.size(), unitTypes.size(), unitCount, packageCount, userCount
         );
     }
-
-    private int seedRentalPackagePolicies(Map<String, Facility> facilities) {
-        List<RentalPackageDefinition> definitions = List.of(
-            new RentalPackageDefinition("PKG-01M", "Gói 1 tháng", 1, "0.0000"),
-            new RentalPackageDefinition("PKG-03M", "Gói 3 tháng", 3, "0.0500"),
-            new RentalPackageDefinition("PKG-06M", "Gói 6 tháng", 6, "0.1000"),
-            new RentalPackageDefinition("PKG-12M", "Gói 12 tháng", 12, "0.1500")
-        );
-        for (Facility facility : facilities.values()) {
-            for (RentalPackageDefinition definition : definitions) {
-                RentalPackagePolicy policy = rentalPackagePolicyRepository
-                    .findByFacility_IdAndCode(facility.getId(), definition.code())
-                    .orElseGet(RentalPackagePolicy::new);
-                policy.setFacility(facility);
-                policy.setCode(definition.code());
-                policy.setName(definition.name());
-                policy.setRentalMonths(definition.months());
-                policy.setDiscountRate(new BigDecimal(definition.discountRate()));
-                policy.setPolicyVersion("LOCAL-2026-01");
-                policy.setActive(true);
-                policy.setEffectiveFrom(LocalDate.of(2026, 1, 1));
-                policy.setEffectiveTo(null);
-                rentalPackagePolicyRepository.save(policy);
-            }
-        }
-        rentalPackagePolicyRepository.flush();
-        return rentalPackagePolicyRepository.count() > Integer.MAX_VALUE
-            ? Integer.MAX_VALUE
-            : (int) rentalPackagePolicyRepository.count();
-    }
+   
 
     private Map<String, Facility> seedFacilities() {
         Map<String, Facility> result = new HashMap<>();
@@ -198,6 +169,31 @@ public class LocalDemoDataInitializer {
         return existing.size();
     }
 
+    private int seedRentalPackagePolicies(Map<String, Facility> facilities) {
+        int createdCount = 0;
+        LocalDate effectiveFrom = LocalDate.of(2020, 1, 1);
+        for (Facility facility : facilities.values()) {
+            for (RentalPackageDefinition definition : rentalPackageDefinitions()) {
+                if (rentalPackagePolicyRepository.findByFacility_IdAndCode(facility.getId(), definition.code()).isPresent()) {
+                    continue;
+                }
+
+                RentalPackagePolicy policy = new RentalPackagePolicy();
+                policy.setFacility(facility);
+                policy.setCode(definition.code());
+                policy.setName(definition.name());
+                policy.setRentalMonths(definition.rentalMonths());
+                policy.setDiscountRate(definition.discountRate());
+                policy.setPolicyVersion("demo-v1");
+                policy.setActive(true);
+                policy.setEffectiveFrom(effectiveFrom);
+                rentalPackagePolicyRepository.saveAndFlush(policy);
+                createdCount++;
+            }
+        }
+        return createdCount;
+    }
+
     private int seedUsers(Map<String, Facility> facilities) {
         int seededCount = 0;
         for (DemoUserDefinition definition : List.of(
@@ -252,6 +248,15 @@ public class LocalDemoDataInitializer {
         );
     }
 
+    private List<RentalPackageDefinition> rentalPackageDefinitions() {
+        return List.of(
+            new RentalPackageDefinition("DEMO_3M", "Gói thuê 3 tháng", 3, BigDecimal.ZERO),
+            new RentalPackageDefinition("DEMO_6M", "Gói thuê 6 tháng", 6, new BigDecimal("0.05")),
+            new RentalPackageDefinition("DEMO_12M", "Gói thuê 12 tháng", 12, new BigDecimal("0.10")),
+            new RentalPackageDefinition("DEMO_24M", "Gói thuê 24 tháng", 24, new BigDecimal("0.15"))
+        );
+    }
+
     private boolean isOccupied(String facilityCode, String unitTypeCode, int number) {
         if ("BD-F01".equals(facilityCode) && "XL".equals(unitTypeCode)) {
             return number <= 2;
@@ -283,6 +288,7 @@ public class LocalDemoDataInitializer {
         int floor,
         String zone
     ) {}
+
 
     private record DemoUserDefinition(
         String email,

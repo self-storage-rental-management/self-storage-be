@@ -60,7 +60,7 @@ class RenewalPreparationTests {
         var r=rental();var repo=mock(RentalRepository.class);when(repo.findByIdAndCustomer_Id(r.getId(),r.getCustomer().getId())).thenReturn(Optional.of(r));
         var gateway=gateway(repo,r);
         assertThatThrownBy(()->gateway.quote(customer(r),r.getId(),new RenewalCommands.Quote("MONTHLY")))
-            .isInstanceOfSatisfying(ApiException.class,e->{assertThat(e.getStatus().value()).isEqualTo(409);assertThat(e.getMessage()).contains("DEFERRED_SOURCE");});
+            .isInstanceOfSatisfying(ApiException.class,e->{assertThat(e.getStatus().value()).isEqualTo(409);assertThat(e.getMessage()).contains("DEFERRED_SOURCE", "BO renewal policy missing");});
         verify(repo,never()).save(any());
     }
     @Test void missingOwnerIs404BeforeDependencies(){
@@ -73,8 +73,14 @@ class RenewalPreparationTests {
     private RenewalWorkflowService gateway(RentalRepository repo,Rental rental){
         var store=mock(com.storagehub.service.renewal.persistence.RenewalPersistence.class);
         when(store.lockRental(any())).thenReturn(rental);
-        return new RenewalWorkflowService(repo,mock(RenewalReadService.class),store,mock(jakarta.persistence.EntityManager.class),
+        var service = new RenewalWorkflowService(repo,mock(RenewalReadService.class),store,mock(jakarta.persistence.EntityManager.class),
             new com.fasterxml.jackson.databind.ObjectMapper(),mock(com.storagehub.service.AuditLogService.class),provider(),provider(),provider(),provider(),provider(),provider(),provider());
+        var periods=mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        if(rental!=null)when(periods.require(rental)).thenReturn(com.storagehub.service.rental.period.RentalPeriod.verified(
+            rental.getId(),LocalDate.of(2026,10,1),rental.getContractEndDate(),
+            com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE,"test-only:inclusive-owner-proof").orElseThrow());
+        ReflectionTestUtils.setField(service,"periods",periods);
+        return service;
     }
     private ActorPrincipal actor(RoleCode role,Set<String> permissions,Map<UUID,FacilityScopeLevel> scopes){return new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(role),permissions,scopes);}
     private ActorPrincipal customer(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());}

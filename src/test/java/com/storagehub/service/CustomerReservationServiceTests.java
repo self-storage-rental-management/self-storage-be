@@ -24,10 +24,13 @@ import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.RentalRepository;
+import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -49,7 +52,10 @@ import org.springframework.test.util.ReflectionTestUtils;
 class CustomerReservationServiceTests {
 
     @Mock private ReservationRepository reservationRepository;
+    @Mock private CheckInRepository checkInRepository;
     @Mock private PaymentRepository paymentRepository;
+    @Mock private RentalRepository rentalRepository;
+    @Mock private StorageUnitRepository storageUnitRepository;
     @Mock private ReservationPricingSnapshotRepository snapshotRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private AuditLogService auditLogService;
@@ -63,7 +69,8 @@ class CustomerReservationServiceTests {
     @BeforeEach
     void setUp() {
         service = new CustomerReservationService(
-            reservationRepository, paymentRepository, snapshotRepository,
+            reservationRepository, checkInRepository, paymentRepository,
+            rentalRepository, storageUnitRepository, snapshotRepository,
             goodsItemRepository, auditLogService, notificationService
         );
 

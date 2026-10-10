@@ -1,7 +1,9 @@
 package com.storagehub.domain.repo;
 
+import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
+import java.math.BigDecimal;
 import java.util.UUID;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
@@ -27,6 +29,27 @@ public interface UnitTypeRepository extends JpaRepository<UnitType, UUID> {
     Page<UnitType> search(
         @Param("facilityId") UUID facilityId,
         @Param("status") UnitTypeStatus status,
+        Pageable pageable
+    );
+
+    @Query("""
+        select min(unitType.monthlyPrice) from UnitType unitType
+        where unitType.facility.id = :facilityId
+          and unitType.status = :status
+        """)
+    BigDecimal findMinimumMonthlyPrice(
+        @Param("facilityId") UUID facilityId,
+        @Param("status") UnitTypeStatus status
+    );
+
+    @Query("""
+        select unitType from UnitType unitType
+        where unitType.facility.status = :facilityStatus
+          and unitType.status = :unitTypeStatus
+        """)
+    Page<UnitType> searchPublic(
+        @Param("facilityStatus") FacilityStatus facilityStatus,
+        @Param("unitTypeStatus") UnitTypeStatus unitTypeStatus,
         Pageable pageable
     );
 }

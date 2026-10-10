@@ -1,15 +1,18 @@
 package com.storagehub.service;
 
 import com.storagehub.api.facility.FacilityResponse;
+import com.storagehub.api.facility.PublicFacilityResponse;
 import com.storagehub.api.facility.StorageUnitResponse;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.model.UnitTypeStatus;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
+import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.List;
 import java.util.UUID;
@@ -27,6 +30,7 @@ public class FacilityQueryService {
 
     private final FacilityRepository facilityRepository;
     private final StorageUnitRepository storageUnitRepository;
+    private final UnitTypeRepository unitTypeRepository;
     private final FacilityScopeService facilityScopeService;
 
     @Transactional(readOnly = true)
@@ -45,6 +49,25 @@ public class FacilityQueryService {
         FacilityStatus effectiveStatus = actor.hasRole(RoleCode.CUSTOMER) ? FacilityStatus.active : status;
         Page<FacilityResponse> page = facilityRepository.search(effectiveStatus, clean(city), clean(query), scoped, facilityIds, pageable)
             .map(this::toFacilityResponse);
+        return PageResponse.from(page, correlationId);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<PublicFacilityResponse> searchPublicFacilities(Pageable pageable, String correlationId) {
+        Page<PublicFacilityResponse> page = facilityRepository.findByStatus(FacilityStatus.active, pageable)
+            .map(facility -> new PublicFacilityResponse(
+                facility.getId(),
+                facility.getCode(),
+                facility.getName(),
+                facility.getAddress(),
+                facility.getCity(),
+                facility.getStatus(),
+                storageUnitRepository.countByFacility_Id(facility.getId()),
+                storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.available),
+                unitTypeRepository.findMinimumMonthlyPrice(facility.getId(), UnitTypeStatus.active),
+                facility.getCreatedAt(),
+                facility.getUpdatedAt()
+            ));
         return PageResponse.from(page, correlationId);
     }
 
