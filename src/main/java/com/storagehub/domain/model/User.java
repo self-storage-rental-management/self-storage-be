@@ -47,7 +47,7 @@ public class User extends BaseEntity {
     private String emergencyContactPhone;
 
     @Lob
-    @Column
+    @Column(columnDefinition = "LONGTEXT")
     private String avatarUrl;
 
     @Enumerated(EnumType.STRING)

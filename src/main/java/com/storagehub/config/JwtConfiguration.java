@@ -12,7 +12,6 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
-import org.springframework.context.annotation.Primary;
 
 @Configuration
 @EnableConfigurationProperties({ JwtProperties.class, PaymentProperties.class, FileProperties.class })

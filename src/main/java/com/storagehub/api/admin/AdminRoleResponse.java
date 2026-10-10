@@ -6,6 +6,10 @@ import java.util.Set;
 public record AdminRoleResponse(
     RoleCode code,
     String name,
-    Set<String> permissions
+    RoleCode parentRole,
+    Set<String> permissions,
+    Set<String> directPermissions,
+    Set<String> inheritedPermissions,
+    long userCount
 ) {
 }
