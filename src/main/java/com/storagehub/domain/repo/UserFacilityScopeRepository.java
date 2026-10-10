@@ -13,8 +13,6 @@ public interface UserFacilityScopeRepository extends JpaRepository<UserFacilityS
     List<UserFacilityScope> findByUserId(UUID userId);
     Optional<UserFacilityScope> findByUser_IdAndFacility_Id(UUID userId, UUID facilityId);
 
-    java.util.Optional<UserFacilityScope> findByUser_IdAndFacility_Id(UUID userId, UUID facilityId);
-
     @Modifying
     @Query("delete from UserFacilityScope scope where scope.user.id = :userId")
     void deleteByUserId(@Param("userId") UUID userId);
