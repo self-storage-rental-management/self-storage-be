@@ -30,6 +30,7 @@ import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.time.LocalDate;
