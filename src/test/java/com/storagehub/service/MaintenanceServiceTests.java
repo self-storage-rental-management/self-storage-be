@@ -28,6 +28,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
+import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;

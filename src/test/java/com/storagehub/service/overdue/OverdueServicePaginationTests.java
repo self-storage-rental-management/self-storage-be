@@ -33,13 +33,16 @@ class OverdueServicePaginationTests {
         facility=id(new Facility());facility.setName("TEST facility");rentals=new ArrayList<>();closed=new AtomicBoolean();
         for(int i=0;i<3;i++){
             var u=id(new User());u.setFullName("TEST Customer "+i);var unit=id(new StorageUnit());unit.setCode("TEST-A-"+i);
-            var r=id(new Rental());r.setCustomer(u);r.setFacility(facility);r.setStorageUnit(unit);r.setContractEndDate(LocalDate.of(2026,10,5));rentals.add(r);
+            var r=id(new Rental());r.setCustomer(u);r.setFacility(facility);r.setStorageUnit(unit);r.setStartDate(LocalDate.of(2026,9,1));r.setContractEndDate(LocalDate.of(2026,10,5));rentals.add(r);
         }
         when(em.createQuery(anyString(),eq(Rental.class))).thenReturn(query);when(query.setParameter(anyString(),any())).thenReturn(query);
         when(query.getResultStream()).thenAnswer(i->rentals.stream().onClose(()->closed.set(true)));
         when(terms.term(any(),eq(NOW))).thenAnswer(i->{Rental r=i.getArgument(0);return Optional.of(new Term("TEST-term","TEST-v1",r.getContractEndDate(),3,6,7,8,NOW.plusSeconds(86400),NOW.plusSeconds(172800)));});
         when(finance.read(any(),eq(NOW))).thenAnswer(i->{Rental r=i.getArgument(0);return Optional.of(new Finance(NOW,List.of(new Obligation(r.getId(),r.getId(),NOW.minusSeconds(1),new BigDecimal("5"),"VND"))));});
         actor=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code()),Map.of(facility.getId(),FacilityScopeLevel.READ));
+        var periods=mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        when(periods.read(any())).thenAnswer(a -> {Rental r=a.getArgument(0);return com.storagehub.service.rental.period.RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE,"TEST-ONLY-period");});
+        ReflectionTestUtils.setField(service,"periods",periods);
     }
     OverdueQuery q(int page,int size,String kind,String search,String sort,boolean desc){return new OverdueQuery(page,size,null,kind,search,sort,desc);}
     @Test void casesNotRentalsAreCountedAndPagesMatchFullOrdering(){
@@ -75,5 +78,23 @@ class OverdueServicePaginationTests {
     @Test void foreignFacilityFailsBeforeQueryOrSourceCalls(){
         var q=new OverdueQuery(0,20,UUID.randomUUID(),"ALL","","priority",true);
         assertThatThrownBy(()->service.list(actor,q,"TEST")).isInstanceOf(ApiException.class);verifyNoInteractions(terms,finance);verify(em,never()).createQuery(anyString(),eq(Rental.class));
+    }
+    @Test void termPolicyWithoutDateProvenanceRemainsPartialNotEmptyComplete(){
+        var periods=mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        when(periods.read(any())).thenReturn(Optional.empty());ReflectionTestUtils.setField(service,"periods",periods);
+        var result=service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST");
+        assertThat(result.data()).isEmpty();assertThat(result.completeness()).isEqualTo("PARTIAL");
+        assertThat(result.missingSources()).contains("RENTAL_TERM_POLICY_DATE_CUTOFF");
+    }
+    @Test void exclusiveTermDayOneSevenEightUseLastPermittedNotRawEnd(){
+        var periods=mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        when(periods.read(any())).thenAnswer(a -> {Rental r=a.getArgument(0);return com.storagehub.service.rental.period.RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE,"TEST-ONLY-exclusive");});
+        ReflectionTestUtils.setField(service,"periods",periods);
+        when(terms.term(any(),eq(NOW))).thenAnswer(a -> {Rental r=a.getArgument(0);return Optional.of(new Term("TEST","v1",r.getContractEndDate().minusDays(1),3,6,7,8,NOW.plusSeconds(86400),NOW.plusSeconds(172800)));});
+        for(int days:List.of(1,7,8)){
+            rentals.forEach(r -> r.setContractEndDate(NOW.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().minusDays(days-1)));
+            var result=service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST");
+            assertThat(result.data()).hasSize(3).allSatisfy(r -> {assertThat(r.overdueDays()).isEqualTo(days);assertThat(r.priority()).isEqualTo(days==1?"WARNING":days==7?"URGENT":"RECOVERY");});
+        }
     }
 }
