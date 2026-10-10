@@ -13,6 +13,8 @@ import com.storagehub.api.payment.VnpayPaymentUrlResponse;
 import com.storagehub.api.payment.VnpayTransactionResponse;
 import com.storagehub.api.payment.CreatePaymentComplaintRequest;
 import com.storagehub.api.payment.PaymentComplaintResponse;
+import com.storagehub.api.file.FileAssetResponse;
+import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.service.PaymentComplaintService;
 import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletRequest;
@@ -106,12 +108,23 @@ public class CustomerReservationController {
         );
     }
 
-    @PostMapping("/{reservationId}/receipt-confirmation")
-    public ApiResponse<ReservationDetailResponse> confirmReceipt(
+    @PostMapping("/{reservationId}/check-in-appointment")
+    public ApiResponse<ReservationResponse> setCheckInAppointment(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody CheckInAppointmentRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.setCheckInAppointment(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @GetMapping("/{reservationId}/check-in-documents")
+    public ApiResponse<List<FileAssetResponse>> listCheckInDocuments(
         @PathVariable UUID reservationId
     ) {
         return new ApiResponse<>(
-            customerReservationService.confirmReceipt(actorContext.required(), reservationId),
+            customerReservationService.listCheckInDocuments(actorContext.required(), reservationId),
             CorrelationIdContext.current()
         );
     }

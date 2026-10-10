@@ -140,6 +140,10 @@ public class FileStorageService {
         if ("CHECK_IN".equals(asset.getEntityType()) && asset.getEntityId() != null) {
             var checkIn = checkInRepository.findById(asset.getEntityId())
                 .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            if (actor.hasRole(RoleCode.CUSTOMER)
+                && checkIn.getReservation().getCustomer().getId().equals(actor.userId())) {
+                return;
+            }
             authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
             facilityScopeService.assertCanRead(actor, checkIn.getReservation().getFacility().getId());
             return;

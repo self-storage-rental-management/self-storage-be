@@ -274,7 +274,12 @@ public class LocalDemoDataInitializer {
 
     private record FacilityDefinition(String code, String name, String address, String city) {}
 
-    private record RentalPackageDefinition(String code, String name, int months, String discountRate) {}
+    private record RentalPackageDefinition(
+        String code,
+        String name,
+        int rentalMonths,
+        BigDecimal discountRate
+    ) {}
 
     private record UnitTypeDefinition(
         String code,
