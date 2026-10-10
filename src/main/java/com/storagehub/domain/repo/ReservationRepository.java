@@ -20,6 +20,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     Optional<Reservation> findByIdAndCustomer_Id(UUID id, UUID customerId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select reservation from Reservation reservation where reservation.id = :id")
+    Optional<Reservation> findByIdForUpdate(@Param("id") UUID id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
         select reservation from Reservation reservation
         where reservation.id = :id
