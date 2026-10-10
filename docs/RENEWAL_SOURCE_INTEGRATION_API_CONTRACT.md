@@ -106,10 +106,39 @@ File các namespace cũ giữ nguyên handler/guard. SupportSources.EvidenceSour
 Adapter mới chỉ chứng nhận file PUBLIC/INTERNAL riêng; lịch sử chứa file ngoài namespace được trả evidenceCompleteness=UNKNOWN và evidenceFileIds=null,
 không làm lỗi toàn bộ timeline và không giả download/COMPLETE. Denied hoặc corruption trên file thuộc adapter không bị nuốt thành success.
 
-## 6. Giới hạn
+## 6. Bổ sung 10/10/2026: đọc đối chiếu, không đổi writer
+
+### Chính sách đã lưu
+
+- GET `/api/business/facilities/{id}/renewal-policy/stored` trả snapshot đã lưu, kể cả chưa có hiệu lực hoặc hết hiệu lực.
+- Query `revision` không bắt buộc, số nguyên >=1. Khi có, trả đúng lần công bố hiện tại hoặc snapshot `RENEWAL_POLICY_PUBLISHED` trong ActivityLog của cùng SystemSetting/cơ sở; không dùng revision mới hơn thay kết quả của lần cũ.
+- Chỉ BO ACTIVE, `policies:read` trong token và DB. Response giữ nguyên DTO PublishedRenewalPolicy, không thêm dữ liệu giả hoặc revision 0.
+- Không có lịch sử chứng minh revision yêu cầu: 404. Snapshot lỗi/mơ hồ: 409. FE giữ kết quả chưa xác định, không báo lưu thành công.
+- Các reader áp dụng chính sách theo ngày, GET/PUT cũ và điều kiện công bố không đổi.
+
+### Phân công gia hạn hiện tại
+
+GET `/api/manager/renewals/{id}/staff-assignment`, Bearer bắt buộc; Manager ACTIVE với `rentals:read` và scope READ thực trong token/DB.
+Không thay POST cùng path, Booking assignment, Check-in hay kiểm quyền xử lý của Staff.
+
+Response `{renewalId, expectedVersion, status, staffId, staffName}`:
+
+| status | Ý nghĩa |
+|---|---|
+| ASSIGNED | Bằng chứng STAFF_ASSIGNMENT hợp lệ với accepted quote hiện tại; Staff còn ACTIVE/quyền/scope OPERATE thực |
+| UNASSIGNED | Có workflow/accepted revision nhưng chưa ghi nhận phân công D3; staffId/staffName null |
+| UNAVAILABLE | Thiếu workflow/accepted revision hoặc bằng chứng mơ hồ/không hợp lệ; không giả chưa phân công |
+| INELIGIBLE | Có bằng chứng phân công nhưng Staff không còn đủ điều kiện; không chứng nhận quyền ký |
+
+expectedVersion là phiên bản workflow thực hoặc null khi thiếu; FE không dùng projection khác phiên bản để chứng nhận phân công hiện tại.
+Đọc không ghi event, không tăng version, không tự sửa phân công hoặc cấp quyền.
+
+## 7. Giới hạn còn giữ nguyên
 
 API mới không mở khóa các guard accounting, hold, service calendar, refund hay delivery.
 Simulated-payment vẫn là thử nghiệm, không phải chứng từ thu tiền thật.
 Notification persisted/read không được coi là bằng chứng delivery của current resolution cycle.
-Không có source implementation cho ledger đầy đủ, cross-writer hold, trạng thái access/PIN, delivery retry hoặc objective-specific Support result trong đợt này.
+Từ 10/10/2026 có kernel ledger và outbox/review receipt riêng, mặc định OFF; xem [contract ledger và communication](LEDGER_COMMUNICATION_INTEGRATION_API_CONTRACT.md).
+Ledger chưa có writer-backed coverage hoặc engine Accounting/Refund hoàn chỉnh. Outbox chỉ cung cấp proof khi Customer xác nhận nhận đúng notification/current resolution/policy; persistence/readFlag đơn thuần vẫn không phải proof.
+Cross-writer hold, trạng thái access/PIN và objective-specific Support result vẫn thiếu implementation.
 Không thể suy đủ các trường đó từ Payment.status hoặc ghi chú người dùng. End-to-end D1-D5 chưa được chứng nhận hoàn tất.
