@@ -12,6 +12,8 @@ import com.storagehub.service.SimulatedPaymentService;
 import com.storagehub.api.payment.SimulatedPaymentResponse;
 import com.storagehub.api.payment.CreatePaymentComplaintRequest;
 import com.storagehub.api.payment.PaymentComplaintResponse;
+import com.storagehub.api.file.FileAssetResponse;
+import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.service.PaymentComplaintService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -100,6 +102,27 @@ public class CustomerReservationController {
     ) {
         return new ApiResponse<>(
             customerReservationService.getDetail(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{reservationId}/check-in-appointment")
+    public ApiResponse<ReservationResponse> setCheckInAppointment(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody CheckInAppointmentRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.setCheckInAppointment(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @GetMapping("/{reservationId}/check-in-documents")
+    public ApiResponse<List<FileAssetResponse>> listCheckInDocuments(
+        @PathVariable UUID reservationId
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.listCheckInDocuments(actorContext.required(), reservationId),
             CorrelationIdContext.current()
         );
     }
