@@ -25,6 +25,8 @@ public class OverdueService {
     private final EntityManager em;private final ObjectMapper mapper;private final RenewalPersistence store;private final AuditLogService audit;
     private final ObjectProvider<Clock> clocks;private final ObjectProvider<FinancialSource> finances;
     private final ObjectProvider<TermSource> terms;private final ObjectProvider<ReminderSource> reminders;private final ObjectProvider<RecoverySource> recoveries;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.rental.period.RentalPeriodResolver periods;
     private record Ref(String value,UUID rentalId,String kind,UUID obligationId) {}
     @Transactional(readOnly=true)
     public OverdueResponse.ListResult list(ActorPrincipal actor,OverdueQuery q,String correlation) {
@@ -79,8 +81,9 @@ public class OverdueService {
         var result=new ArrayList<OverdueResponse>();
         if(!kind.equals("PAYMENT_DUE")&&r.getActualReturnedAt()==null&&r.getStatus()!=RentalStatus.completed){
             var source=terms.getIfAvailable();var t=source==null?null:source.term(r,at).orElse(null);
-            if(t==null)missing.add("RENTAL_TERM_POLICY_DATE_CUTOFF");else {
-                if(t.policyRef()==null||t.policyRef().isBlank()||t.policyVersion()==null||t.policyVersion().isBlank()||t.lastPermittedDate()==null||!Objects.equals(t.lastPermittedDate(),r.getContractEndDate())||t.warningThroughDay()<1||t.seriousThroughDay()<=t.warningThroughDay()||t.urgentThroughDay()<=t.seriousThroughDay()||t.recoveryFromDay()!=t.urgentThroughDay()+1||t.recoveryCutoff()==null||t.recoveryStart()==null||!t.recoveryStart().isAfter(t.recoveryCutoff()))throw ApiExceptions.conflict("Authoritative overdue term policy/date mapping inconsistent");
+            var period=t==null||periods==null?Optional.<com.storagehub.service.rental.period.RentalPeriod>empty():periods.read(r);
+            if(t==null||period.isEmpty())missing.add("RENTAL_TERM_POLICY_DATE_CUTOFF");else {
+                if(t.policyRef()==null||t.policyRef().isBlank()||t.policyVersion()==null||t.policyVersion().isBlank()||t.lastPermittedDate()==null||!Objects.equals(t.lastPermittedDate(),period.get().lastPermittedDate())||t.warningThroughDay()<1||t.seriousThroughDay()<=t.warningThroughDay()||t.urgentThroughDay()<=t.seriousThroughDay()||t.recoveryFromDay()!=t.urgentThroughDay()+1||t.recoveryCutoff()==null||t.recoveryStart()==null||!t.recoveryStart().isAfter(t.recoveryCutoff()))throw ApiExceptions.conflict("Authoritative overdue term policy/date mapping inconsistent");
                 long days=ChronoUnit.DAYS.between(t.lastPermittedDate(),at.atZone(ZONE).toLocalDate());
                 if(days>0){String priority=days<=t.warningThroughDay()?"WARNING":days<=t.seriousThroughDay()?"SERIOUS":days<=t.urgentThroughDay()?"URGENT":"RECOVERY";String ref="RENTAL_TERM:"+r.getId();boolean eligible=days>=t.recoveryFromDay()&&!at.isBefore(t.recoveryStart());result.add(row(r,ref,"RENTAL_TERM",days,priority,null,null,null,null,t.policyRef(),t.policyVersion(),t.recoveryCutoff(),eligible));}
             }

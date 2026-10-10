@@ -28,6 +28,8 @@ class RenewalWorkflowIntegrationTests {
     static final Instant NOW=Instant.parse("2026-10-06T00:00:00Z");
     static final UUID PACKAGE=UUID.fromString("00000000-0000-0000-0000-000000000001");
     @TestConfiguration static class Sources {
+        @Bean com.storagehub.service.RentalReadSources.DateSource dateEvidence(){return r -> Optional.of(new com.storagehub.service.RentalReadSources.Dates(r.getId(),r.getStartDate(),r.getContractEndDate(),"TEST-ONLY-inclusive-period"));}
+        @Bean com.storagehub.service.rental.period.RentalPeriodResolver periods(org.springframework.beans.factory.ObjectProvider<com.storagehub.service.RentalReadSources.DateSource> sources){return new com.storagehub.service.rental.period.RentalPeriodResolver(sources);}
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
         @Bean ActorContext actorContext(){return mock(ActorContext.class);}
         @Bean TestClock clock(){return new TestClock();}

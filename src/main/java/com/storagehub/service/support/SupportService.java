@@ -32,6 +32,8 @@ public class SupportService {
     private final ObjectProvider<NotificationSource> reviewNotifications;
     private final ObjectProvider<ResolutionSource> resolutions;
     private final ObjectProvider<EscalationSource> receivers;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.communication.CommunicationSourceAdapters> communication;
 
     @Transactional(readOnly=true)
     public PageResponse<SupportResponse> list(ActorPrincipal actor,Audience audience,SupportQuery q,String correlation) {
@@ -142,7 +144,10 @@ public class SupportService {
         requireEscalationsResolved(ticket);
         if(state.getLinkedId()!=null){var source=resolutions.getIfAvailable();if(source==null)throw deferred("Linked-record resolution result verification unavailable");source.requireResult(ticket,state);}
         append(actor,ticket,state,"STAFF",Visibility.PUBLIC,body.summary(),body.evidenceFileIds());ticket.setStatus(SupportTicketStatus.resolved);state.resolve(actor.userId(),now());
-        event(actor,ticket,state,"RESOLVED","Staff supplied resolution");notify(ticket.getCustomer().getId(),ticket,"Support resolved; please review",ticket.getSubject());notifyManagers(ticket,"Support resolved",ticket.getSubject());
+        var resolvedEvent=event(actor,ticket,state,"RESOLVED","Staff supplied resolution");em.flush();
+        var channel=communication==null?null:communication.getIfAvailable();
+        if(channel==null||!channel.enqueueReview(ticket,state,resolvedEvent,now()))notify(ticket.getCustomer().getId(),ticket,"Support resolved; please review",ticket.getSubject());
+        notifyManagers(ticket,"Support resolved",ticket.getSubject());
         return finish(actor,"support_resolve",key,payload,ticket);
     }
     public SupportResponse close(ActorPrincipal actor,UUID id,Close body,String key) {
@@ -276,7 +281,7 @@ public class SupportService {
     }
     private List<UUID> files(List<UUID> requested){if(requested==null)return List.of();if(requested.size()>10||requested.stream().anyMatch(Objects::isNull)||new HashSet<>(requested).size()!=requested.size())throw ApiExceptions.validation("Use at most 10 distinct evidence file IDs",null);return List.copyOf(requested);}
     private void attach(ActorPrincipal actor,SupportTicket ticket,Visibility visibility,List<UUID> files){if(files.isEmpty())return;var source=evidence.getIfAvailable();if(source==null||!source.atomic())throw deferred("Shared Support file attach/read authorization unavailable");source.requireAttach(actor,ticket,visibility,files);}
-    private SupportResponse.Message messageResponse(ActorPrincipal actor,SupportTicket ticket,SupportMessage message){var files=receipts.files(message.getEvidenceJson());boolean complete=files.isEmpty()||evidence.getIfAvailable()!=null;if(!files.isEmpty()&&complete)evidence.getObject().requireRead(actor,ticket,Visibility.valueOf(message.getVisibility()),files);
+    private SupportResponse.Message messageResponse(ActorPrincipal actor,SupportTicket ticket,SupportMessage message){var files=receipts.files(message.getEvidenceJson());var source=evidence.getIfAvailable();boolean complete=files.isEmpty()||source!=null&&source.supportsFiles(files);if(!files.isEmpty()&&complete)source.requireRead(actor,ticket,Visibility.valueOf(message.getVisibility()),files);
         return new SupportResponse.Message(message.getId(),ticket.getId(),message.getAuthorId(),message.getAuthorRole(),message.getVisibility(),message.getBody(),message.getSentAt(),complete?"COMPLETE":"UNKNOWN",complete?files:null);}
     private SupportResponse.Message replayMessage(ActorPrincipal actor,SupportTicket ticket,SupportResponse.Message cached){
         var message=em.find(SupportMessage.class,cached.id());
@@ -310,7 +315,7 @@ public class SupportService {
             ||proof.deliveredAt()==null||proof.deliveredAt().isBefore(state.getResolvedAt())||proof.deliveredAt().isAfter(checkedAt))
             throw ApiExceptions.conflict("Support review notification proof is inconsistent");
     }
-    private void event(ActorPrincipal actor,SupportTicket ticket,SupportState state,String type,String reason){state.touch(now());em.persist(new SupportEvent(ticket,type,actor.userId(),state.getAssignmentRevision(),text(reason,2000),now()));}
+    private SupportEvent event(ActorPrincipal actor,SupportTicket ticket,SupportState state,String type,String reason){var at=type.equals("RESOLVED")?state.getResolvedAt():now();if(at==null)throw ApiExceptions.conflict("Resolution time missing");state.touch(at);var event=new SupportEvent(ticket,type,actor.userId(),state.getAssignmentRevision(),text(reason,2000),at);em.persist(event);return event;}
     private SupportResponse finish(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket){em.flush();var result=response(ticket);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private SupportResponse.Message finishMessage(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket,SupportMessage message){em.flush();var result=messageResponse(actor,ticket,message);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private void audit(ActorPrincipal actor,SupportTicket ticket,String operation){audit.recordMutation(em.getReference(User.class,actor.userId()),operation,"SupportTicket",ticket.getId(),ticket.getFacility().getId(),null,Map.of("status",ticket.getStatus().name()));}

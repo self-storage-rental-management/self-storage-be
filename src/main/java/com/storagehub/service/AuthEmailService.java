@@ -7,6 +7,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.service.email.EmailTemplateRenderer;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
+import jakarta.annotation.PostConstruct;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -42,6 +43,12 @@ public class AuthEmailService {
     @Value("${spring.mail.host:}")
     private String mailHost;
 
+    @Value("${spring.mail.port:587}")
+    private int mailPort;
+
+    @Value("${spring.mail.username:}")
+    private String mailUsername;
+
     @Value("${app.auth.verification-url:http://localhost:5173/?verifyEmail=}")
     private String verificationUrl;
 
@@ -50,6 +57,18 @@ public class AuthEmailService {
 
     @Value("${app.auth.expose-development-code:false}")
     private boolean exposeDevelopmentCode;
+
+    @PostConstruct
+    void logMailConfiguration() {
+        log.info(
+            "Authentication email configuration: enabled={}, smtpHost='{}', smtpPort={}, usernameConfigured={}, from='{}'",
+            enabled,
+            mailHost,
+            mailPort,
+            mailUsername != null && !mailUsername.isBlank(),
+            from
+        );
+    }
 
     public void sendVerification(User user, String otp, String token) {
         Map<String, Object> variables = new HashMap<>();
@@ -157,6 +176,12 @@ public class AuthEmailService {
             }
 
             mailSender.send(mimeMessage);
+            log.info(
+                "Authentication email accepted by SMTP: template={}, recipient={}, smtpHost='{}'",
+                templateName,
+                recipient,
+                mailHost
+            );
         } catch (MessagingException | MailException exception) {
             log.error(
                 "Failed to send authentication email to {} using SMTP host '{}': {}",

@@ -47,10 +47,14 @@ class RenewalExceptionProposalTests {
         policies=provider(policy);calendars=provider(calendar);safeties=provider(safety);
         service=new RenewalOperationService(em,mapper,store,mock(AuditLogService.class),clocks,
             provider(null),policies,calendars,safeties,provider(null),provider(null),provider(null));
+        ReflectionTestUtils.setField(service,"assignmentSources",provider(null));
         customer=id(new User());var facility=id(new Facility());var type=id(new UnitType());
         var unit=id(new StorageUnit());unit.setFacility(facility);unit.setUnitType(type);
         var rental=id(new Rental());rental.setCustomer(customer);rental.setFacility(facility);rental.setStorageUnit(unit);
         rental.setStartDate(LocalDate.of(2026,9,1));rental.setContractEndDate(LocalDate.of(2026,10,8));
+        var periods=mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        when(periods.require(rental)).thenAnswer(a -> com.storagehub.service.rental.period.RentalPeriod.verified(rental.getId(),rental.getStartDate(),rental.getContractEndDate(),com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE,"TEST-ONLY-evidence").orElseThrow());
+        ReflectionTestUtils.setField(service,"periods",periods);
         n=id(new Renewal());n.setRental(rental);n.setRequestedBy(customer);n.setStatus(RenewalStatus.appointment_scheduled);
         n.setNewEndDate(LocalDate.of(2026,11,8));n.setAmount(new BigDecimal("100"));
         var terms=new RenewalQuoteResponse.Terms(rental.getContractEndDate(),LocalDate.of(2026,10,9),LocalDate.of(2026,11,9),n.getNewEndDate(),

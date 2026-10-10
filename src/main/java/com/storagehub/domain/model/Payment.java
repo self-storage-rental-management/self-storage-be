@@ -47,6 +47,36 @@ public class Payment extends BaseEntity {
     @Column(nullable = false, unique = true, length = 100)
     private String idempotencyKey;
 
+    @Column(nullable = false, unique = true, length = 100)
+    private String gatewayIntentId;
+
+    @Column(length = 32)
+    private String gatewayProvider;
+
+    @Column(length = 100)
+    private String gatewayTransactionNo;
+
+    @Column(length = 32)
+    private String gatewayBankCode;
+
+    @Column(length = 32)
+    private String gatewayCardType;
+
+    @Column(length = 16)
+    private String gatewayResponseCode;
+
+    @Column(length = 16)
+    private String gatewayTransactionStatus;
+
+    @Column(length = 32)
+    private String gatewayPayDate;
+
+    @Column
+    private Instant lastReconciledAt;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal refundedAmount = BigDecimal.ZERO;
+
     @Column
     private Instant processedAt;
 

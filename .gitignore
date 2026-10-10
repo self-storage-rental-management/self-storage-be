@@ -36,6 +36,7 @@ build/
 .env
 .env.*
 !.env.example
+/application-local.properties
 src/main/resources/application-local.properties
 src/main/resources/application-local.yml
 start-dev.*
@@ -46,3 +47,7 @@ uploads/
 ### Generated QA artifacts ###
 /output/
 /tmp/
+
+# Local documentation & agent instructions
+RUN_PROJECT.md
+GEMINI.md
