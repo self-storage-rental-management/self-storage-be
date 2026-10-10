@@ -31,7 +31,7 @@ import org.springframework.test.context.*;
 @DataJpaTest @ActiveProfiles("test")
 @TestPropertySource(properties="storagehub.integration.rental-period.enabled=true")
 @Import({DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
-    RenewalPolicyPublicationService.class,PublishedRenewalPolicyAdapters.class,
+    RenewalPolicyPublicationService.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
     ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,
     RenewalPersistence.class,com.storagehub.service.FileStorageService.class,
     com.storagehub.service.AdminAuthorizationService.class,com.storagehub.service.FacilityScopeService.class,
@@ -51,9 +51,38 @@ class DuongPortAdaptersJpaTests {
     @Autowired RenewalAssignmentSource assignments; @Autowired DuongFileEvidence files;
     @Autowired FileProperties fileProperties; @Autowired ProjectHandoffRentalPeriodAdapter periods;
     @Autowired RenewalOperationService operations;
+    @Autowired RenewalAssignmentReadService assignmentRead;
     @Autowired com.storagehub.service.FileStorageService storage;
     @Autowired com.storagehub.service.support.SupportService support;
     @TempDir Path root;
+    @Test void assignmentReadSurvivesEntityReloadWithoutChangingBookingOrWorkflow() {
+        var a=actor(manager,RoleCode.MANAGER);UUID id=renewal.getId(),sid=staff.getId();
+        assertThat(assignmentRead.read(a,id).status()).isEqualTo("UNASSIGNED");
+        var result=operations.assignStaff(a,id,new RenewalOperationCommands.StaffAssignment(sid,"TEST",0L),"readback-assignment");
+        var before=renewal.getRental().getReservation().getStatus();em.flush();em.clear();
+        var view=assignmentRead.read(a,id);
+        assertThat(view.status()).isEqualTo("ASSIGNED");assertThat(view.staffId()).isEqualTo(sid);assertThat(view.staffName()).isNotBlank();
+        assertThat(view.expectedVersion()).isEqualTo(result.state().expectedVersion());
+        assertThat(em.find(Renewal.class,id).getRental().getReservation().getStatus()).isEqualTo(before);
+        assertThat(em.createQuery("select count(e) from RenewalOperationEvent e where e.kind='STAFF_ASSIGNMENT'",Long.class).getSingleResult()).isEqualTo(1);
+        em.find(User.class,sid).setStatus(UserStatus.INACTIVE);em.flush();
+        assertThat(assignmentRead.read(a,id).status()).isEqualTo("INELIGIBLE");
+        assertThat(em.find(RenewalWorkflow.class,id).getVersion()).isEqualTo(view.expectedVersion());
+    }
+    @Test void assignmentReadDoesNotExposeAmbiguousProofOrBypassCurrentDbScope() throws Exception {
+        var a=actor(manager,RoleCode.MANAGER);assign(staff,NOW);assign(staff,NOW);
+        assertThat(assignmentRead.read(a,renewal.getId()).status()).isEqualTo("UNAVAILABLE");
+        assertThat(assignmentRead.read(a,renewal.getId()).staffId()).isNull();
+        em.createQuery("delete from UserFacilityScope s where s.user.id=:u").setParameter("u",manager.getId()).executeUpdate();
+        assertThatThrownBy(()->assignmentRead.read(a,renewal.getId())).hasMessageContaining("not found");
+        assertThatThrownBy(()->assignmentRead.read(actor(customer,RoleCode.CUSTOMER),renewal.getId())).hasMessageContaining("role/permissions");
+    }
+    @Test void expiredPaymentCannotAcceptAssignmentOrFaultReview() {
+        renewal.setStatus(RenewalStatus.payment_expired);em.flush();var a=actor(manager,RoleCode.MANAGER);
+        assertThatThrownBy(()->operations.assignStaff(a,renewal.getId(),new RenewalOperationCommands.StaffAssignment(staff.getId(),"TEST",0L),"expired-assignment")).hasMessageContaining("Terminal");
+        assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"expired-fault")).hasMessageContaining("Terminal");
+        assertThat(em.createQuery("select count(e) from RenewalOperationEvent e",Long.class).getSingleResult()).isZero();
+    }
     Facility facility;User customer,staff,manager,business;Rental rental;Renewal renewal;
     @BeforeEach void fixture() throws Exception {
         fileProperties.setStoragePath(root.toString());
