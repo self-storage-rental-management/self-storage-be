@@ -99,6 +99,7 @@ public class SimulatedPaymentService {
         payment.setAmount(snapshot.getReservationDepositAmount());
         payment.setCurrency("VND");
         payment.setPurpose(PaymentType.RESERVATION_DEPOSIT);
+        payment.setGatewayIntentId("SIMULATED-" + UUID.randomUUID());
         payment.setIdempotencyKey(key);
         payment.setProcessedAt(now);
 

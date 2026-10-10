@@ -9,5 +9,16 @@ public record RenewalQuoteResponse(UUID id,UUID rentalId,UUID customerId,@com.fa
         UUID unitTypeId,String pricingPackageCode,UUID packagePolicyRef,String packagePolicyVersion,int rentalMonths,
         BigDecimal monthlyPrice,BigDecimal discountRate,BigDecimal subtotal,BigDecimal discountAmount,BigDecimal totalAfterDiscount,
         BigDecimal renewalDepositAmount,BigDecimal remainingRentalAmount,String currency,String renewalPolicyRef,String renewalPolicyVersion,
-        UUID storageUnitId,UUID facilityId) {}
+        UUID storageUnitId,UUID facilityId,String endDateConvention,LocalDate rentalStartDate) {
+        /** Legacy stored snapshots remain readable; commands require matching verified provenance. */
+        public Terms(LocalDate oldEndDate,LocalDate extensionStartDate,LocalDate extensionEndExclusive,LocalDate newEndDate,
+            UUID unitTypeId,String pricingPackageCode,UUID packagePolicyRef,String packagePolicyVersion,int rentalMonths,
+            BigDecimal monthlyPrice,BigDecimal discountRate,BigDecimal subtotal,BigDecimal discountAmount,BigDecimal totalAfterDiscount,
+            BigDecimal renewalDepositAmount,BigDecimal remainingRentalAmount,String currency,String renewalPolicyRef,String renewalPolicyVersion,
+            UUID storageUnitId,UUID facilityId) {
+            this(oldEndDate,extensionStartDate,extensionEndExclusive,newEndDate,unitTypeId,pricingPackageCode,packagePolicyRef,
+                packagePolicyVersion,rentalMonths,monthlyPrice,discountRate,subtotal,discountAmount,totalAfterDiscount,
+                renewalDepositAmount,remainingRentalAmount,currency,renewalPolicyRef,renewalPolicyVersion,storageUnitId,facilityId,null,null);
+        }
+    }
 }

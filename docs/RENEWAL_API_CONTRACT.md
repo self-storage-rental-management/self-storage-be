@@ -16,6 +16,14 @@ Việc công bố policy chung, giá/điều kiện gói thuê/làm tròn, ngu�
 
 ## Thao tác
 
+### Ngày gia hạn tương thích D1-D4 - 09/10/2026
+
+Terms báo giá và acceptedTerms thêm `endDateConvention` INCLUSIVE/EXCLUSIVE và `rentalStartDate` (JSON snapshot hiện có, không thêm DB column). `oldEndDate` vẫn là raw snapshot của Rental; `newEndDate` và Renewal.newEndDate vẫn là ngày cuối kỳ gia hạn inclusive. `extensionStartDate` là canonical endExclusive kỳ cũ; `extensionEndExclusive` là đầu ngày sau kỳ mới.
+
+D2 cửa sổ gửi yêu cầu dựa trên ngày cuối sử dụng đã xác minh; pricing/policy/hold dùng khoảng canonical. D3 completion ghi raw Rental.contractEndDate theo convention: exclusive ghi extensionEndExclusive, inclusive ghi newEndDate. Không thay giá/cọc/quyền/tiền/lịch hẹn hay body/key replay. Completion proof lưu nội bộ trong event JSON, không trả ra event data công khai. D4 so policy.lastPermittedDate với canonical lastPermittedDate, không nhầm raw exclusive là ngày cuối sử dụng.
+
+Snapshot cũ thiếu metadata vẫn đọc được; command chỉ dùng lại khi có bằng chứng nguồn inclusive và khoảng ngày khớp. Exclusive legacy snapshot thiếu metadata phải requote/review, không đổi nghĩa/reprice snapshot. Thiếu DateSource/proof chặn command cần ngày bằng DEFERRED_SOURCE; không bỏ các gate policy/finance/capacity/hold. Adapter ngày mới tắt mặc định đến khi xác minh rollout.
+
 | Phương thức/đường dẫn | Kết quả | Điều kiện tiên quyết |
 |---|---|---|
 | GET /customer/rentals/{id}/renewal-options | 200 các lựa chọn đủ điều kiện | Rental đang hoạt động, thuộc Customer; có policy/eligibility/pricing |
