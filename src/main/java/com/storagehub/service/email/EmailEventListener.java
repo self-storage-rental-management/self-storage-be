@@ -39,7 +39,8 @@ public class EmailEventListener {
             event.toEmail(),
             event.fullName(),
             event.resetUrl(),
-            event.expiryMinutes()
+            event.expiryMinutes(),
+            event.otp()
         );
     }
 

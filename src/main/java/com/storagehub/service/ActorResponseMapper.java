@@ -36,7 +36,7 @@ public class ActorResponseMapper {
             Map.copyOf(facilityNames),
             user.isMustChangePassword(),
             user.getRoles().stream()
-                .flatMap(role -> role.getPermissions().stream())
+                .flatMap(role -> role.getEffectivePermissions().stream())
                 .map(permission -> permission.getCode())
                 .collect(Collectors.toUnmodifiableSet())
         );

@@ -140,6 +140,9 @@ public class ReservationCreationService {
     private void validateQuoteStillCurrent(ReservationQuote quote) {
         RentalPackagePolicy policy = policyRepository
             .findByFacility_IdAndCode(quote.getFacility().getId(), quote.getPricingPackageCode())
+            .or(() -> policyRepository.findByFacility_IdOrderByRentalMonthsAsc(quote.getFacility().getId()).stream()
+                .filter(p -> p.getRentalMonths() == quote.getRentalMonths() && p.isActive())
+                .findFirst())
             .orElseThrow(() -> ApiExceptions.conflict("Rental package is no longer available"));
         BigDecimal currentMonthlyPrice = money(quote.getUnitType().getMonthlyPrice());
         BigDecimal subtotal = money(currentMonthlyPrice.multiply(BigDecimal.valueOf(quote.getRentalMonths())));

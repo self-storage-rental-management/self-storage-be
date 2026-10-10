@@ -107,7 +107,8 @@ public class AuthChallengeService {
             user.getEmail(),
             user.getFullName(),
             passwordResetUrl + issue.token(),
-            expiryMinutes
+            expiryMinutes,
+            issue.otp()
         );
         return new AuthChallengeResponse(true, true, issue.debugCode());
     }
