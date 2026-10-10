@@ -3,6 +3,7 @@ package com.storagehub.domain.repo;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import java.util.UUID;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
@@ -22,6 +23,8 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
     );
 
     java.util.Optional<Rental> findByIdAndCustomer_Id(UUID id, UUID customerId);
+
+    Optional<Rental> findByReservation_Id(UUID reservationId);
 
     org.springframework.data.domain.Page<Rental> findByCustomer_Id(UUID customerId, org.springframework.data.domain.Pageable pageable);
 

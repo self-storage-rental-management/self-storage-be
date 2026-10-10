@@ -53,6 +53,8 @@ public class FileStorageService {
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.integration.DuongFileEvidence> duongEvidence;
 
     @Transactional
     public FileAssetResponse store(ActorPrincipal actor, MultipartFile file, String entityType, UUID entityId) {
@@ -88,8 +90,10 @@ public class FileStorageService {
             asset.setContentType(contentType);
             asset.setSizeBytes(file.getSize());
             asset.setChecksumSha256(checksum);
-            asset.setEntityType(normalizedEntityType);
-            asset.setEntityId(entityId);
+            boolean privateSupportUpload=com.storagehub.service.integration.DuongFileEvidence.UPLOAD.equals(normalizedEntityType)
+                ||com.storagehub.service.integration.DuongFileEvidence.PUBLIC.equals(normalizedEntityType)&&entityId==null;
+            asset.setEntityType(privateSupportUpload?com.storagehub.service.integration.DuongFileEvidence.UPLOAD:normalizedEntityType);
+            asset.setEntityId(privateSupportUpload?actor.userId():entityId);
             FileAsset saved = fileAssetRepository.saveAndFlush(asset);
             FileAssetResponse response = toResponse(saved);
             auditLogService.recordMutation(user, "FILE_UPLOADED", "FileAsset", saved.getId(), null, null, response);
@@ -126,6 +130,10 @@ public class FileStorageService {
     }
 
     private void requireDownloadAccess(ActorPrincipal actor, FileAsset asset) {
+        if(com.storagehub.service.integration.DuongFileEvidence.handles(asset.getEntityType())) {
+            duongEvidence().requireDownload(actor,asset);
+            return; // Deliberately before uploader shortcut, so INTERNAL never leaks to Customer.
+        }
         if (asset.getUploadedBy().getId().equals(actor.userId())) {
             return;
         }
@@ -176,6 +184,7 @@ public class FileStorageService {
             return null;
         }
         String normalized = entityType.trim().toUpperCase(java.util.Locale.ROOT);
+        if(com.storagehub.service.integration.DuongFileEvidence.handles(normalized))return normalized;
         if (!Set.of("CONTRACT", "CHECK_IN", "RETURN_CASE", "SUPPORT_TICKET", "RESERVATION_GOODS_ITEM", "OTHER").contains(normalized)) {
             throw ApiExceptions.validation("entityType is not supported", null);
         }
@@ -188,6 +197,10 @@ public class FileStorageService {
         UUID entityId,
         String contentType
     ) {
+        if(com.storagehub.service.integration.DuongFileEvidence.handles(entityType)) {
+            duongEvidence().requireUpload(actor,entityType,entityId);
+            return;
+        }
         if ("CHECK_IN".equals(entityType)) {
             if (entityId == null) {
                 throw ApiExceptions.validation("entityId is required for check-in evidence", null);
@@ -218,6 +231,11 @@ public class FileStorageService {
         }
     }
 
+    private com.storagehub.service.integration.DuongFileEvidence duongEvidence() {
+        var source=duongEvidence==null?null:duongEvidence.getIfAvailable();
+        if(source==null)throw ApiExceptions.conflict("DEFERRED_SOURCE: Evidence access source is missing");
+        return source;
+    }
     private String sha256(Path path) throws IOException {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
