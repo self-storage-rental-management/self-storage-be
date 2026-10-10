@@ -16,7 +16,14 @@ public final class RentalReadSources {
         LocalDate nextDueDate, BillingMode billingMode) {}
     public record Access(UUID rentalId, Instant checkedAt, AccessStatus status) {}
     /** Evidence applies to these exact stored dates, not merely a facility-wide convention. */
-    public record Dates(UUID rentalId, LocalDate startDate, LocalDate inclusiveEndDate, String reference) {}
+    public record Dates(UUID rentalId, LocalDate startDate, LocalDate inclusiveEndDate, String reference,
+        LocalDate storedEndDate, com.storagehub.service.rental.period.RentalPeriod.Convention convention) {
+        /** Existing explicit inclusive providers remain compatible, never a raw-date fallback. */
+        public Dates(UUID rentalId, LocalDate startDate, LocalDate inclusiveEndDate, String reference) {
+            this(rentalId, startDate, inclusiveEndDate, reference, inclusiveEndDate,
+                com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE);
+        }
+    }
     public interface FinancialSource { Optional<Financial> read(Rental rental); }
     public interface AccessSource { Optional<Access> read(Rental rental); }
     public interface DateSource { Optional<Dates> read(Rental rental); }

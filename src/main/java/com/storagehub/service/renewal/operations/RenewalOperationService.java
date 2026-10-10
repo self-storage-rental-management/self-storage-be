@@ -36,6 +36,10 @@ public class RenewalOperationService {
     private final ObjectProvider<AccountingSource> accountingSources;
     private final ObjectProvider<EvidenceSource> evidences;
     private final ObjectProvider<RefundSource> refunds;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.rental.period.RentalPeriodResolver periods;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.renewal.integration.RenewalAssignmentSource> assignmentSources;
 
     @Transactional(readOnly=true)
     public RenewalOperationResponse detail(ActorPrincipal actor,UUID id,Audience audience) {
@@ -153,9 +157,15 @@ public class RenewalOperationService {
         safety.consume(c.renewal(),c.workflow().getExtensionHoldRef());
         Instant completedAt=now();beforeOrEqual(completedAt,s.getEffectiveSigningDeadline());beforeOrEqual(completedAt,min(s.getRecoveryCutoff(),finalCutoff));
         // Normal completion is the only D3 command that extends Rental; shared writer locks are mandatory above.
-        c.renewal().getRental().setContractEndDate(terms.newEndDate());c.renewal().setStatus(RenewalStatus.completed);
+        var period=periods.require(c.renewal().getRental());
+        com.storagehub.service.rental.period.RenewalPeriodCompatibility.require(period,terms);
+        var newStoredEnd=period.storeEnd(terms.extensionEndExclusive());
+        c.renewal().getRental().setContractEndDate(newStoredEnd);c.renewal().setStatus(RenewalStatus.completed);
         s.completed(actor.userId(),completedAt);store.releaseSlot(c.workflow());
-        return finish(c,"d3_complete",key,body,event(c,"COMPLETION",body),200);
+        var eventData=new LinkedHashMap<String,Object>(mapper.convertValue(body,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
+        eventData.put("rentalPeriodEvidence",com.storagehub.service.rental.period.RentalPeriodEvidence.completion(
+            c.renewal().getRental(),period,newStoredEnd,c.workflow().getAcceptedRevision().getQuote().getId()));
+        return finish(c,"d3_complete",key,body,event(c,"COMPLETION",eventData),200);
     }
     public Result exception(ActorPrincipal actor,UUID id,ExceptionDecision body,String key) {
         var c=context(actor,id,Audience.MANAGER,Capability.EXCEPTION,key,"d3_exception",body,body.expectedVersion());var old=replay(c,"d3_exception",key,body);if(old.isPresent())return old.get();
@@ -211,6 +221,22 @@ public class RenewalOperationService {
         } else data.put("status","REJECTED");
         return finish(c,"d3_refund",key,body,event(c,"REFUND",data),201);
     }
+    public Result assignStaff(ActorPrincipal actor,UUID id,StaffAssignment body,String key) {
+        var c=context(actor,id,Audience.MANAGER,Capability.EXCEPTION,key,"d3_staff_assignment",body,body.expectedVersion());
+        var old=replay(c,"d3_staff_assignment",key,body);if(old.isPresent())return old.get();nonterminal(c.renewal());
+        if(c.renewal().getStatus()==RenewalStatus.pending)throw ApiExceptions.conflict("Approved Renewal required for signing assignment");
+        var s=state(c.renewal());if(s!=null&&s.getArrivalRef()!=null)throw ApiExceptions.conflict("Cannot replace signing Staff after arrival evidence");
+        var assignmentSource=assignmentSources.getIfAvailable();if(assignmentSource==null)throw deferred("Assignment writer source unavailable");
+        var staff=em.find(User.class,body.assignedStaffId());assignmentSource.requireAssignable(staff,c.renewal().getRental().getFacility().getId());
+        var current=assignmentSource.current(c.renewal());if(current.filter(a->body.assignedStaffId().equals(a.staffId())).isPresent())throw ApiExceptions.conflict("Staff is already assigned");
+        var proof=new com.storagehub.service.renewal.integration.RenewalAssignmentSource.Assignment(id,c.renewal().getRental().getFacility().getId(),staff.getId(),c.workflow().getAcceptedRevision().getQuote().getId(),c.workflow().getVersion());
+        return finish(c,"d3_staff_assignment",key,body,event(c,"STAFF_ASSIGNMENT",proof),201);
+    }
+    public Result reviewFault(ActorPrincipal actor,UUID id,FaultReview body,String key) {
+        var c=context(actor,id,Audience.MANAGER,Capability.EXCEPTION,key,"d3_fault_review",body,body.expectedVersion());var old=replay(c,"d3_fault_review",key,body);if(old.isPresent())return old.get();nonterminal(c.renewal());
+        linked(c.renewal(),body.incidentId(),"INCIDENT");evidence(actor,c.renewal(),"FAULT_REVIEW",body.evidenceFileIds());
+        return finish(c,"d3_fault_review",key,body,event(c,"FAULT_REVIEW",body),201);
+    }
     /** Internal per-resource reconciliation entry; no auto scheduler is enabled before sources/schema rollout. */
     public boolean expire(UUID id) {
         var n=em.find(Renewal.class,id);if(n==null)return false;
@@ -242,7 +268,7 @@ public class RenewalOperationService {
     @Transactional(readOnly=true)
     public PageResponse<RenewalOperationResponse.Event> events(ActorPrincipal actor,UUID id,Audience audience,String category,int page,int size,String correlation) {
         var n=visible(actor,id,audience,false,Capability.READ);if(page<0||size<1||size>100)throw ApiExceptions.validation("Invalid page/size",null);
-        List<String> kinds=switch(category){case "payments"->List.of("DEPOSIT","CASH");case "refunds"->List.of("REFUND");case "facility-incidents"->List.of("INCIDENT","EXCEPTION");default->throw ApiExceptions.validation("Unknown event category",null);};
+        List<String> kinds=switch(category){case "payments"->List.of("DEPOSIT","CASH");case "refunds"->List.of("REFUND");case "facility-incidents"->List.of("INCIDENT","EXCEPTION","FAULT_REVIEW");default->throw ApiExceptions.validation("Unknown event category",null);};
         if(category.equals("facility-incidents")&&audience!=Audience.MANAGER)throw ApiExceptions.forbidden("Internal incident timeline");
         var q=em.createQuery("select e from RenewalOperationEvent e where e.renewal.id=:id and e.kind in :kinds order by e.occurredAt desc,e.id",RenewalOperationEvent.class).setParameter("id",n.getId()).setParameter("kinds",kinds);
         long count=em.createQuery("select count(e) from RenewalOperationEvent e where e.renewal.id=:id and e.kind in :kinds",Long.class).setParameter("id",id).setParameter("kinds",kinds).getSingleResult();
@@ -282,7 +308,9 @@ public class RenewalOperationService {
     private RenewalQuoteResponse.Terms terms(Context c) {
         var rev=c.workflow().getAcceptedRevision();var quote=rev.getQuote();var n=c.renewal();var r=n.getRental();var t=decode(quote.getTermsJson(),RenewalQuoteResponse.Terms.class);
         if(!rev.getRenewal().getId().equals(n.getId())||!quote.getRental().getId().equals(r.getId())||!quote.getCustomer().getId().equals(r.getCustomer().getId())||!Objects.equals(n.getRequestedBy().getId(),r.getCustomer().getId())||t.totalAfterDiscount()==null||n.getAmount().compareTo(t.totalAfterDiscount())!=0||!Objects.equals(n.getNewEndDate(),t.newEndDate())||!Objects.equals(r.getContractEndDate(),t.oldEndDate())||!Objects.equals(r.getStorageUnit().getId(),t.storageUnitId())||r.getStorageUnit().getUnitType()==null||!Objects.equals(r.getStorageUnit().getUnitType().getId(),t.unitTypeId())||!Objects.equals(r.getFacility().getId(),t.facilityId())||r.getStatus()!=RentalStatus.active||r.getActualReturnedAt()!=null)throw ApiExceptions.conflict("Rental/accepted terms or return state changed");
-        if(t.oldEndDate()==null||t.newEndDate()==null||!t.oldEndDate().plusDays(1).equals(t.extensionStartDate())||!t.newEndDate().plusDays(1).equals(t.extensionEndExclusive())||!t.newEndDate().isAfter(t.oldEndDate())||t.renewalDepositAmount()==null||t.renewalDepositAmount().signum()<0||t.remainingRentalAmount()==null||t.remainingRentalAmount().signum()<0||t.renewalDepositAmount().add(t.remainingRentalAmount()).compareTo(t.totalAfterDiscount())!=0||!"VND".equals(t.currency()))throw ApiExceptions.conflict("Accepted period/financial terms inconsistent");
+        if(periods==null)throw deferred("Rental date provenance unknown");
+        com.storagehub.service.rental.period.RenewalPeriodCompatibility.require(periods.require(r),t);
+        if(t.renewalDepositAmount()==null||t.renewalDepositAmount().signum()<0||t.remainingRentalAmount()==null||t.remainingRentalAmount().signum()<0||t.renewalDepositAmount().add(t.remainingRentalAmount()).compareTo(t.totalAfterDiscount())!=0||!"VND".equals(t.currency()))throw ApiExceptions.conflict("Accepted period/financial terms inconsistent");
         return t;
     }
     private void currentAppointment(Context c,RenewalOperationState s,UUID ref){if(ref==null||!ref.equals(s.getAppointmentRef()))throw ApiExceptions.conflict("Current appointment required");linked(c.renewal(),ref,"APPOINTMENT");}
@@ -303,7 +331,8 @@ public class RenewalOperationService {
         var calendar=calendars.getIfAvailable();if(calendar==null||!calendar.atomic())missing.add("SERVICE_CALENDAR");
         var accounting=accountingSources.getIfAvailable();if(accounting==null||!accounting.atomic())missing.add("RENEWAL_ACCOUNTING");
         var safety=safetySources.getIfAvailable();if(safety==null||!safety.atomic())missing.add("SHARED_HOLD_RETURN_RECOVERY");
-        if(authorizations.getIfAvailable()==null)missing.add("STAFF_PERMISSION_ASSIGNMENT");if(evidences.getIfAvailable()==null)missing.add("RESOURCE_EVIDENCE");
+        var assignment=assignmentSources.getIfAvailable();
+        if(authorizations.getIfAvailable()==null||assignment!=null&&assignment.current(n).isEmpty())missing.add("STAFF_PERMISSION_ASSIGNMENT");if(evidences.getIfAvailable()==null)missing.add("RESOURCE_EVIDENCE");
         var refund=refunds.getIfAvailable();if(refund==null||!refund.atomic())missing.add("REFUND_ENTITLEMENT_EXECUTION");
         String phase=s==null?(w!=null&&n.getStatus()==RenewalStatus.approved?"AWAITING_DEPOSIT":"UNKNOWN"):s.getPhase().name();
         if(s!=null&&s.getPhase()==RenewalOperationState.Phase.SIGNING&&s.getEffectiveSigningDeadline()!=null&&now().isAfter(s.getEffectiveSigningDeadline()))phase="SIGNING_EXPIRY_PENDING";
@@ -313,7 +342,9 @@ public class RenewalOperationService {
             s==null?null:s.getArrivalRef(),s==null?null:s.getConfirmedExceptionRef(),s==null?null:s.getCompletedBy(),s==null?null:s.getCompletedAt(),
             missing,s==null?null:s.getAppointmentStart(),s==null?null:s.getAppointmentEnd(),s==null?null:s.getPendingExceptionRef());
     }
-    private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND")){var raw=mapper.valueToTree(data);var safe=new LinkedHashMap<String,Object>();safe.put("status",raw.path("status").asText());if(raw.has("reservation"))safe.put("reservation",mapper.convertValue(raw.get("reservation"),Object.class));data=safe;}return new RenewalOperationResponse.Event(e.getId(),e.getKind(),e.getOccurredAt(),audience==Audience.CUSTOMER?null:e.getActorId(),data);}
+    private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
+        if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
+        if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND")){var raw=mapper.valueToTree(data);var safe=new LinkedHashMap<String,Object>();safe.put("status",raw.path("status").asText());if(raw.has("reservation"))safe.put("reservation",mapper.convertValue(raw.get("reservation"),Object.class));data=safe;}return new RenewalOperationResponse.Event(e.getId(),e.getKind(),e.getOccurredAt(),audience==Audience.CUSTOMER?null:e.getActorId(),data);}
     private <T>T decode(String json,Class<T> type){try{return mapper.readValue(json,type);}catch(Exception e){throw ApiExceptions.conflict("Stored operation snapshot invalid");}}
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}
     private static Instant min(Instant a,Instant b){return a.isBefore(b)?a:b;}

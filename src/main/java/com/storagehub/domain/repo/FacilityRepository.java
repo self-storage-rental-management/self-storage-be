@@ -28,4 +28,6 @@ public interface FacilityRepository extends JpaRepository<Facility, UUID> {
         @Param("facilityIds") Collection<UUID> facilityIds,
         Pageable pageable
     );
+
+    Page<Facility> findByStatus(FacilityStatus status, Pageable pageable);
 }

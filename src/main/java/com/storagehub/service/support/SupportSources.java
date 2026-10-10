@@ -13,6 +13,8 @@ public final class SupportSources {
     public interface EvidenceSource {
         /** Must bind validated ownership/visibility in the ticket transaction (or a durable outbox). */
         default boolean atomic() {return false;}
+        /** Unsupported legacy namespaces remain unavailable, not falsely certified by a new adapter. */
+        default boolean supportsFiles(List<UUID> files) {return true;}
         /** Shared file owner validates AND binds attach/read visibility. No arbitrary URLs. */
         void requireAttach(ActorPrincipal actor,SupportTicket ticket,Visibility visibility,List<UUID> files);
         void requireRead(ActorPrincipal actor,SupportTicket ticket,Visibility visibility,List<UUID> files);

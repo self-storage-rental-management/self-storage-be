@@ -1,9 +1,11 @@
 package com.storagehub.service;
 
+import com.storagehub.api.facility.PublicUnitTypeResponse;
 import com.storagehub.api.facility.UnitTypeResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Facility;
+import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
@@ -52,6 +54,14 @@ public class UnitTypeQueryService {
     }
 
     @Transactional(readOnly = true)
+    public PageResponse<PublicUnitTypeResponse> searchPublicUnitTypes(Pageable pageable, String correlationId) {
+        Page<PublicUnitTypeResponse> page = unitTypeRepository
+            .searchPublic(FacilityStatus.active, UnitTypeStatus.active, pageable)
+            .map(this::toPublicResponse);
+        return PageResponse.from(page, correlationId);
+    }
+
+    @Transactional(readOnly = true)
     public UnitTypeResponse get(ActorPrincipal actor, UUID unitTypeId, LocalDate startDate, LocalDate endDate) {
         validateDateRange(startDate, endDate);
         UnitType unitType = unitTypeRepository.findById(unitTypeId)
@@ -61,6 +71,29 @@ public class UnitTypeQueryService {
             throw ApiExceptions.notFound("Unit type was not found");
         }
         return toResponse(unitType, startDate, endDate);
+    }
+
+    private PublicUnitTypeResponse toPublicResponse(UnitType unitType) {
+        return new PublicUnitTypeResponse(
+            unitType.getId(),
+            unitType.getFacility().getId(),
+            unitType.getCode(),
+            unitType.getName(),
+            unitType.getLengthM(),
+            unitType.getWidthM(),
+            unitType.getHeightM(),
+            unitType.getAreaM2(),
+            unitType.getVolumeM3(),
+            unitType.getMonthlyPrice(),
+            unitType.getMaxLoadKg(),
+            unitType.getRackCount(),
+            unitType.getRackLengthM(),
+            unitType.getRackWidthM(),
+            unitType.getRackHeightM(),
+            storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(
+                unitType.getFacility().getId(), unitType.getId(), StorageUnitStatus.available
+            )
+        );
     }
 
     private UnitTypeResponse toResponse(UnitType unitType, LocalDate startDate, LocalDate endDate) {
