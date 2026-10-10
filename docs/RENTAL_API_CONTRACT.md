@@ -4,6 +4,14 @@ Phạm vi đã triển khai: chỉ gồm bốn endpoint GET. Không bao gồm k�
 
 ## Swagger
 
+### Bổ sung ngày đã xác minh - 09/10/2026
+
+Danh sách/chi tiết D1 thêm `dateSemantics`: `completeness` COMPLETE hoặc UNKNOWN, `convention` INCLUSIVE/EXCLUSIVE, `lastPermittedDate`, `endExclusive`. UNKNOWN trả ba trường sau null, không giả ngày cuối sử dụng. `startDate`/`contractEndDate` vẫn là ngày đang lưu; endFrom/endTo/sort và số liệu theo ngày vẫn dùng raw contractEndDate, không thay nghĩa truy vấn cũ.
+
+`ProjectHandoffRentalPeriodAdapter` chỉ đọc liên kết Rental/Reservation/CheckIn và receipt/completion proof. Booking [start,end) chỉ được áp dụng khi receipt audit chứng minh Rental mới tạo và đúng tuple; reused/legacy/ambiguous/missing proof giữ UNKNOWN. Không GET write/backfill. Canonical exclusive: lastPermittedDate=storedEnd-1; inclusive: endExclusive=storedEnd+1. Reference/proof nội bộ không đưa vào DTO công khai.
+
+Bean chỉ bật khi `storagehub.integration.rental-period.enabled=true`, mặc định tắt. Không sửa schema/migration; cần xác minh MySQL test với validate và review nguồn trước rollout. Có nguồn ngày không đồng nghĩa có finance/access/policy/hold đầy đủ.
+
 Chạy BE bằng cấu hình local hiện có, sau đó mở `/swagger-ui/index.html` trên địa chỉ BE (cổng Spring mặc định là 8080 nếu cấu hình của bạn không ghi đè). Tái sử dụng `/v3/api-docs` và bearerAuth hiện có. Các thẻ: **D1 - Customer Rentals**, **D1 - Manager Rentals**. Đăng nhập bằng Auth API hiện có, sao chép accessToken vào **Authorize**, rồi chọn **Try it out**. Không công khai token hoặc đưa thông tin đăng nhập production/staging vào nhật ký kiểm thử.
 
 - GET /api/customer/rental-records và /api/customer/rental-records/{id}: yêu cầu vai trò CUSTOMER và xác định chủ sở hữu từ JWT. API đặt chỗ Customer hiện có kiểm tra quyền sở hữu mà không cần cấp sẵn VIEW_RENTALS cho Customer; D1 tuân theo cách này và không thay đổi cơ chế xác thực/phân quyền.

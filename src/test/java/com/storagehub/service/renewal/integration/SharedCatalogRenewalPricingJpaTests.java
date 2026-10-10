@@ -38,6 +38,12 @@ class SharedCatalogRenewalPricingJpaTests {
     static class TestBeans {
         @Bean ObjectMapper mapper() { return new ObjectMapper().findAndRegisterModules(); }
         @Bean ActorContext actorContext() { return mock(ActorContext.class); }
+        @Bean com.storagehub.service.RentalReadSources.DateSource dates() {
+            return r -> java.util.Optional.of(new com.storagehub.service.RentalReadSources.Dates(r.getId(),r.getStartDate(),r.getContractEndDate(),"TEST-ONLY-inclusive-proof"));
+        }
+        @Bean com.storagehub.service.rental.period.RentalPeriodResolver periods(org.springframework.beans.factory.ObjectProvider<com.storagehub.service.RentalReadSources.DateSource> sources) {
+            return new com.storagehub.service.rental.period.RentalPeriodResolver(sources);
+        }
     }
 
     @Autowired EntityManager em;
