@@ -28,7 +28,20 @@ public class EmailService {
     }
 
     public void sendPasswordReset(UUID userId, String toEmail, String fullName, String resetUrl, int expiryMinutes) {
-        eventPublisher.publishEvent(new SendPasswordResetEvent(userId, toEmail, fullName, resetUrl, expiryMinutes));
+        sendPasswordReset(userId, toEmail, fullName, resetUrl, expiryMinutes, null);
+    }
+
+    public void sendPasswordReset(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String resetUrl,
+        int expiryMinutes,
+        String otp
+    ) {
+        eventPublisher.publishEvent(new SendPasswordResetEvent(
+            userId, toEmail, fullName, resetUrl, expiryMinutes, otp
+        ));
     }
 
     public void sendPasswordReset(String toEmail, String fullName, String resetUrl, int expiryMinutes) {

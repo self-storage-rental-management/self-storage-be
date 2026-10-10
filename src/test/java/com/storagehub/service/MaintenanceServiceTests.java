@@ -93,7 +93,7 @@ class MaintenanceServiceTests {
             managerId,
             UUID.randomUUID(),
             Set.of(RoleCode.MANAGER),
-            Set.of("manage_inventory", "manage_staff_tasks", "view_units"),
+            Set.of("inventory:update", "staff_tasks:update", "storage_units:read"),
             Map.of(facilityId, com.storagehub.domain.model.FacilityScopeLevel.MANAGE)
         );
 
@@ -101,7 +101,7 @@ class MaintenanceServiceTests {
             staffId,
             UUID.randomUUID(),
             Set.of(RoleCode.STAFF),
-            Set.of("view_units"),
+            Set.of("storage_units:read"),
             Map.of(facilityId, com.storagehub.domain.model.FacilityScopeLevel.OPERATE)
         );
 

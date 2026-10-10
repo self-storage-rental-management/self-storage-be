@@ -24,6 +24,7 @@ public class FacilityController {
 
     private final ActorContext actorContext;
     private final FacilityQueryService facilityQueryService;
+    private final com.storagehub.service.FacilityManagementService facilityManagementService;
 
     @GetMapping
     public PageResponse<FacilityResponse> list(
@@ -41,6 +42,16 @@ public class FacilityController {
     public ApiResponse<FacilityResponse> get(@PathVariable UUID facilityId) {
         return new ApiResponse<>(
             facilityQueryService.getFacility(actorContext.required(), facilityId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @org.springframework.web.bind.annotation.PostMapping
+    public ApiResponse<FacilityResponse> create(
+        @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody CreateFacilityRequest request
+    ) {
+        return new ApiResponse<>(
+            facilityManagementService.createFacility(actorContext.required(), request),
             CorrelationIdContext.current()
         );
     }

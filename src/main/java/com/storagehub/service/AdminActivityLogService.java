@@ -10,6 +10,7 @@ import com.storagehub.domain.repo.ActivityLogRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.Set;
 import java.util.UUID;
+import java.time.Instant;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -31,14 +32,20 @@ public class AdminActivityLogService {
         int size,
         String search,
         String entityType,
+        UUID actorId,
+        Instant from,
+        Instant to,
         String correlationId
     ) {
         authorizationService.require(actor, SystemPermission.VIEW_AUDIT_LOGS);
         if (page < 0 || size < 1 || size > 100) {
             throw ApiExceptions.validation("page must be >= 0 and size must be between 1 and 100", null);
         }
+        if (from != null && to != null && !from.isBefore(to)) {
+            throw ApiExceptions.validation("from must be before to", null);
+        }
         return PageResponse.from(
-            activityLogRepository.search(clean(search), clean(entityType), PageRequest.of(
+            activityLogRepository.search(clean(search), clean(entityType), actorId, from, to, PageRequest.of(
                 page, size, Sort.by(Sort.Direction.DESC, "createdAt")
             )).map(this::toResponse),
             correlationId

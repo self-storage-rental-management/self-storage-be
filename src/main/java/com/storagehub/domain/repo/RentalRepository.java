@@ -4,10 +4,11 @@ import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-public interface RentalRepository extends JpaRepository<Rental, UUID> {
+public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecificationExecutor<Rental> {
 
     @Query("""
         select (count(r) > 0) from Rental r
@@ -23,6 +24,12 @@ public interface RentalRepository extends JpaRepository<Rental, UUID> {
     java.util.Optional<Rental> findByIdAndCustomer_Id(UUID id, UUID customerId);
 
     org.springframework.data.domain.Page<Rental> findByCustomer_Id(UUID customerId, org.springframework.data.domain.Pageable pageable);
+
+    org.springframework.data.domain.Page<Rental> findByCustomer_IdAndStatus(
+        UUID customerId,
+        RentalStatus status,
+        org.springframework.data.domain.Pageable pageable
+    );
 
     java.util.List<Rental> findByFacility_Id(UUID facilityId);
 

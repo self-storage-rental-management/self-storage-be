@@ -3,6 +3,7 @@ package com.storagehub.domain.repo;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.UserStatus;
+import com.storagehub.domain.model.FacilityScopeLevel;
 import java.util.Optional;
 import java.util.List;
 import java.util.UUID;
@@ -17,6 +18,26 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     boolean existsByEmailIgnoreCase(String email);
     long countByRoles_Code(RoleCode code);
     long countByStatus(UserStatus status);
+
+    @Query("""
+        select distinct u from User u
+        join u.roles assignedRole
+        where u.status = :status
+          and assignedRole.code = :role
+          and exists (
+              select scope from UserFacilityScope scope
+              where scope.user.id = u.id
+                and scope.facility.id = :facilityId
+                and scope.scopeLevel in :scopeLevels
+          )
+        order by u.fullName asc
+        """)
+    List<User> findEligibleStaff(
+        @Param("status") UserStatus status,
+        @Param("role") RoleCode role,
+        @Param("facilityId") UUID facilityId,
+        @Param("scopeLevels") java.util.Collection<FacilityScopeLevel> scopeLevels
+    );
 
     @Query("""
         select assignedRole.code as roleCode, count(distinct u.id) as total
