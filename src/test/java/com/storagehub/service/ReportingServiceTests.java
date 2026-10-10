@@ -96,7 +96,7 @@ class ReportingServiceTests {
             UUID.randomUUID(),
             UUID.randomUUID(),
             Set.of(RoleCode.MANAGER),
-            Set.of("view_units", "view_reports"),
+            Set.of("storage_units:read", "reports:read"),
             Map.of(facilityId, com.storagehub.domain.model.FacilityScopeLevel.MANAGE)
         );
 
@@ -104,7 +104,7 @@ class ReportingServiceTests {
             UUID.randomUUID(),
             UUID.randomUUID(),
             Set.of(RoleCode.BUSINESS),
-            Set.of("view_reports", "view_units"),
+            Set.of("reports:read", "storage_units:read"),
             Map.of(facilityId, com.storagehub.domain.model.FacilityScopeLevel.MANAGE)
         );
     }

@@ -6,6 +6,7 @@ import com.storagehub.api.maintenance.AssignStaffTaskRequest;
 import com.storagehub.api.maintenance.CompleteMaintenanceTaskRequest;
 import com.storagehub.api.maintenance.CreateMaintenanceTaskRequest;
 import com.storagehub.api.maintenance.MaintenanceTaskResponse;
+import com.storagehub.api.maintenance.MaintenanceStaffOption;
 import com.storagehub.api.maintenance.UpdateStorageUnitStatusRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
@@ -18,10 +19,14 @@ import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.TaskPriority;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.UserStatus;
+import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.util.Collection;
@@ -44,6 +49,7 @@ public class MaintenanceService {
     private final StorageUnitRepository storageUnitRepository;
     private final ReturnCaseRepository returnCaseRepository;
     private final UserRepository userRepository;
+    private final UserFacilityScopeRepository userFacilityScopeRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final NotificationService notificationService;
@@ -63,8 +69,10 @@ public class MaintenanceService {
 
         User assignedStaff = null;
         if (request.assignedStaffId() != null) {
+            authorizationService.require(actor, SystemPermission.MANAGE_STAFF_TASKS);
             assignedStaff = userRepository.findById(request.assignedStaffId())
                 .orElseThrow(() -> ApiExceptions.notFound("Assigned staff was not found"));
+            assertEligibleStaff(assignedStaff, unit.getFacility().getId());
         }
 
         ReturnCase returnCase = null;
@@ -151,7 +159,10 @@ public class MaintenanceService {
 
                 User assignedStaff = null;
                 if (request.assignedStaffId() != null) {
-                    assignedStaff = userRepository.findById(request.assignedStaffId()).orElse(null);
+                    authorizationService.require(actor, SystemPermission.MANAGE_STAFF_TASKS);
+                    assignedStaff = userRepository.findById(request.assignedStaffId())
+                        .orElseThrow(() -> ApiExceptions.notFound("Assigned staff was not found"));
+                    assertEligibleStaff(assignedStaff, unit.getFacility().getId());
                 }
 
                 MaintenanceTask task = new MaintenanceTask();
@@ -215,6 +226,7 @@ public class MaintenanceService {
 
         User staff = userRepository.findById(request.assignedStaffId())
             .orElseThrow(() -> ApiExceptions.notFound("Staff user was not found"));
+        assertEligibleStaff(staff, task.getFacility().getId());
 
         task.setAssignedTo(staff);
         MaintenanceTask saved = maintenanceTaskRepository.save(task);
@@ -237,6 +249,21 @@ public class MaintenanceService {
         );
 
         return toResponse(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<MaintenanceStaffOption> listEligibleStaff(ActorPrincipal actor, UUID facilityId) {
+        authorizationService.require(actor, SystemPermission.MANAGE_STAFF_TASKS);
+        facilityScopeService.assertCanManage(actor, facilityId);
+        return userRepository.findEligibleStaff(
+                UserStatus.ACTIVE,
+                RoleCode.STAFF,
+                facilityId,
+                List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
+            )
+            .stream()
+            .map(user -> new MaintenanceStaffOption(user.getId(), user.getFullName()))
+            .toList();
     }
 
     @Transactional
@@ -456,5 +483,15 @@ public class MaintenanceService {
             t.getCreatedAt(),
             t.getUpdatedAt()
         );
+    }
+
+    private void assertEligibleStaff(User staff, UUID facilityId) {
+        boolean isStaff = staff.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.STAFF);
+        boolean hasFacilityScope = userFacilityScopeRepository.findByUser_IdAndFacility_Id(staff.getId(), facilityId)
+            .map(scope -> scope.getScopeLevel().includes(FacilityScopeLevel.OPERATE))
+            .orElse(false);
+        if (staff.getStatus() != UserStatus.ACTIVE || !isStaff || !hasFacilityScope) {
+            throw ApiExceptions.forbidden("Assigned user must be an active Staff with OPERATE scope at this facility");
+        }
     }
 }

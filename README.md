@@ -1,240 +1,233 @@
 # StorageHub Backend
 
-Backend cho hệ thống quản lý kho tự lưu trữ StorageHub, xây dựng bằng Spring Boot, Spring Security, JWT, Spring Data JPA và MySQL.
+Backend cho hệ thống quản lý kho tự lưu trữ StorageHub. Tài liệu này bám theo code baseline main.
 
-## Trạng thái hiện tại
+## Công nghệ
 
-Đã có nền tảng:
+- Java 21, Spring Boot 4.1.1, Spring Web MVC.
+- Spring Data JPA, MySQL 8.x.
+- Spring Security, OAuth2 Resource Server và JWT.
+- Spring Boot Mail, Springdoc OpenAPI/Swagger UI.
+- Docker Desktop cho MySQL local.
 
-- Đăng ký, đăng nhập, xác minh email, refresh token, đổi mật khẩu và đăng xuất.
-- JWT authentication và phân quyền theo role/permission.
-- Admin API cho users, roles, facilities, settings, login history, sessions và activity logs.
-- Một số API nền tảng cho facilities, unit types, storage units, files và payments.
+Kiến trúc xử lý:
 
-Đang phát triển:
+```text
+HTTP request
+  -> Controller / DTO validation
+  -> Service nghiệp vụ
+  -> Domain model / Repository
+  -> MySQL
+```
 
-- Customer business flow đầy đủ: hồ sơ, reservation, hợp đồng, bàn giao, trả kho và thanh toán theo nghiệp vụ.
-- Các API trên có thể chưa đủ contract để kết nối toàn bộ Customer FE.
+Package chính:
 
-## Yêu cầu môi trường
+| Package | Trách nhiệm |
+| --- | --- |
+| api | Controller và request/response DTO |
+| common | Response, exception handler và context dùng chung |
+| config | JWT, Google, mail, file, payment, CORS, bootstrap admin |
+| domain | Entity, enum và Spring Data repositories |
+| security | JWT, role/permission và actor context |
+| service | Authentication, Admin, reservation, payment, notification |
 
-- Java 21
-- Docker Desktop
-- MySQL 8.x (khuyến nghị dùng Docker)
+## Chức năng hiện có trong main
+
+- Authentication: register, email verification, login/password, Google login, refresh token, logout, đổi/reset password.
+- Profile: GET/PUT actor hiện tại tại /api/auth/me.
+- Admin: users, roles, facilities, settings, dashboard, login history, sessions và activity logs.
+- Facility: facilities, unit types và storage units.
+- File: multipart upload theo storage path cấu hình.
+- Notification: xem, đọc một thông báo hoặc đọc tất cả.
+- Reservation: compatibility check, quote, create, list, detail, cancel và email verification.
+- Staff: review reservation và quyết định review.
+- Payment: payment intent và payment webhook.
+
+Google login xác minh issuer, thời gian sống và audience của Google ID token. Tài khoản Google mới được tạo với role Customer và trạng thái active.
+
+## Yêu cầu
+
 - Git
+- JDK 21
+- Docker Desktop với MySQL 8.x
+- Windows dùng mvnw.cmd; Linux/macOS dùng ./mvnw
 
-Kiểm tra Java:
+## Chạy local trên Windows
 
-```cmd
-java -version
-```
-
-## Quick start trên Windows
-
-### 1. Clone đúng branch
+### 1. Lấy source
 
 ```cmd
-git clone -b auth-admin https://github.com/self-storage-rental-management/self-storage-be.git
-cd self-storage-be
+git clone -b main https://github.com/self-storage-rental-management/self-storage-BE.git
+cd self-storage-BE
 ```
 
-Nếu đã clone repository:
+Nếu repository đã tồn tại:
 
 ```cmd
-git switch auth-admin
-git pull --ff-only origin auth-admin
+git switch main
+git pull --ff-only origin main
 ```
 
-### 2. Khởi động MySQL
-
-Lần đầu tạo container:
+### 2. Chạy MySQL
 
 ```cmd
 docker run --name storagehub-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=storagehub_local -p 3306:3306 -d mysql:8.4
 ```
 
-Nếu container đã tồn tại nhưng đang dừng:
+Nếu container đã có sẵn:
 
 ```cmd
 docker start storagehub-mysql
 ```
 
-Kiểm tra container:
-
-```cmd
-docker ps
-```
-
-### 3. Cấu hình biến môi trường
-
-Các biến dưới đây áp dụng cho cửa sổ CMD hiện tại. Có thể dùng giá trị local khác nếu máy hoặc database khác cấu hình mặc định.
+### 3. Cấu hình local
 
 ```cmd
 set "STORAGEHUB_DB_URL=jdbc:mysql://localhost:3306/storagehub_local?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
 set "STORAGEHUB_DB_USERNAME=root"
 set "STORAGEHUB_DB_PASSWORD=root"
-set "STORAGEHUB_ALLOWED_ORIGIN=http://localhost:8443"
-set "STORAGEHUB_GOOGLE_CLIENT_ID=586674216860-4lqog6tpp7o0qjeqo7laf6s249foc1lq.apps.googleusercontent.com"
+set "STORAGEHUB_ALLOWED_ORIGIN=http://localhost:5173,http://localhost:8443"
+set "STORAGEHUB_GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID"
 set "STORAGEHUB_MAIL_ENABLED=false"
 set "STORAGEHUB_EXPOSE_DEVELOPMENT_CODE=true"
+set "STORAGEHUB_FILE_STORAGE_PATH=./uploads"
 ```
 
-Tạo JWT secret riêng cho máy local. Secret phải là Base64 và có tối thiểu 32 bytes:
+Tạo secret JWT Base64 tối thiểu 32 bytes:
 
 ```cmd
 powershell -NoProfile -Command "$bytes=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Fill($bytes); [Convert]::ToBase64String($bytes)"
 ```
 
-Copy kết quả rồi đặt vào biến:
-
 ```cmd
 set "STORAGEHUB_JWT_SECRET=PASTE_BASE64_SECRET_HERE"
 ```
 
-`STORAGEHUB_EXPOSE_DEVELOPMENT_CODE=true` chỉ dùng local để hiển thị mã xác minh khi chưa cấu hình mail. Không dùng cấu hình này ở production.
+Không commit database password, JWT secret, SMTP password, payment webhook secret hoặc bootstrap-admin password.
 
-Nếu cần gửi email thật bằng Gmail, hãy bật xác minh 2 bước và tạo Gmail App Password. Không dùng mật khẩu Gmail chính:
+### 4. Email thật bằng Gmail (tuỳ chọn)
+
+Dùng Gmail App Password, không dùng mật khẩu Gmail chính:
 
 ```powershell
 $env:STORAGEHUB_MAIL_ENABLED="true"
-$env:STORAGEHUB_MAIL_FROM="storagehub.sender@gmail.com"
+$env:STORAGEHUB_MAIL_FROM="storagehub.sender@example.com"
 $env:STORAGEHUB_MAIL_HOST="smtp.gmail.com"
 $env:STORAGEHUB_MAIL_PORT="587"
-$env:STORAGEHUB_MAIL_USERNAME="storagehub.sender@gmail.com"
-$env:STORAGEHUB_MAIL_PASSWORD="APP_PASSWORD_16_KY_TU"
+$env:STORAGEHUB_MAIL_USERNAME="your-sender@gmail.com"
+$env:STORAGEHUB_MAIL_PASSWORD="GMAIL_APP_PASSWORD"
 $env:STORAGEHUB_MAIL_SMTP_AUTH="true"
 $env:STORAGEHUB_MAIL_SMTP_STARTTLS="true"
 $env:STORAGEHUB_EXPOSE_DEVELOPMENT_CODE="false"
 ```
 
-Nếu FE chạy ở port khác, cập nhật các URL xác minh/đặt lại mật khẩu để trỏ về đúng port FE:
+Cập nhật callback nếu FE chạy port khác:
 
 ```powershell
-$env:STORAGEHUB_VERIFICATION_URL="http://localhost:8443/?verifyEmail="
-$env:STORAGEHUB_PASSWORD_RESET_URL="http://localhost:8443/?resetPassword="
+$env:STORAGEHUB_VERIFICATION_URL="http://localhost:5173/?verifyEmail="
+$env:STORAGEHUB_PASSWORD_RESET_URL="http://localhost:5173/?resetPassword="
 ```
 
-### 4. Chạy backend
+### 5. Chạy backend
 
 ```cmd
 mvnw.cmd spring-boot:run
 ```
 
-Backend mặc định chạy tại:
+Mặc định:
 
-```text
-http://localhost:8080
-```
+- Backend: http://localhost:8080
+- Swagger UI: http://localhost:8080/swagger-ui.html
+- OpenAPI JSON: http://localhost:8080/v3/api-docs
 
-Swagger UI:
+## Các biến cấu hình chính
 
-```text
-http://localhost:8080/swagger-ui.html
-```
+| Biến | Mục đích | Mặc định |
+| --- | --- | --- |
+| STORAGEHUB_DB_URL | JDBC URL MySQL | storagehub_local |
+| STORAGEHUB_JWT_SECRET | JWT secret Base64 | placeholder |
+| STORAGEHUB_JWT_EXPIRATION | Access token, giây | 3600 |
+| STORAGEHUB_JWT_REFRESH_EXPIRATION | Refresh token, giây | 604800 |
+| STORAGEHUB_GOOGLE_CLIENT_ID | Google OAuth client ID | rỗng |
+| STORAGEHUB_ALLOWED_ORIGIN | CORS origins | 5173,8443 |
+| STORAGEHUB_PAYMENT_WEBHOOK_SECRET | Payment webhook secret | placeholder |
+| STORAGEHUB_FILE_STORAGE_PATH | Thư mục upload | ./uploads |
+| STORAGEHUB_FILE_MAX_SIZE_BYTES | File tối đa | 10485760 |
+| STORAGEHUB_MAIL_ENABLED | Bật mail thật | false |
+| STORAGEHUB_MAIL_HOST / PORT | SMTP server | rỗng / 587 |
+| STORAGEHUB_MAIL_USERNAME / PASSWORD | SMTP credential | rỗng |
+| STORAGEHUB_VERIFICATION_URL | URL verify email | localhost:5173 |
+| STORAGEHUB_PASSWORD_RESET_URL | URL reset password | localhost:5173 |
+| STORAGEHUB_EXPOSE_DEVELOPMENT_CODE | Hiện mã local | false |
+| STORAGEHUB_BOOTSTRAP_ADMIN_* | Bootstrap admin | tắt/rỗng |
 
-OpenAPI JSON:
+## API chính theo main
 
-```text
-http://localhost:8080/v3/api-docs
-```
+### Auth — /api/auth
 
-Trong Swagger UI, chọn `Authorize` và nhập JWT để gọi các API cần đăng nhập.
-
-Dừng server bằng `Ctrl + C`.
-
-## Các lệnh Maven thường dùng
-
-| Lệnh | Mục đích |
-| --- | --- |
-| `mvnw.cmd spring-boot:run` | Chạy backend local |
-| `mvnw.cmd test` | Chạy test |
-| `mvnw.cmd clean package` | Build file JAR |
-
-## API chính hiện có
-
-### Auth
-
-Base path: `/api/auth`
-
-- `POST /register`
-- `POST /login`
-- `POST /google`
-- `POST /refresh`
-- `POST /verify-email`
-- `POST /forgot-password`
-- `POST /reset-password`
-- `POST /logout`
-- `POST /password`
-- `GET /me`
+- POST /register
+- POST /login
+- POST /google
+- POST /refresh
+- POST /verify-email
+- POST /forgot-password
+- POST /reset-password
+- POST /logout
+- POST /password
+- GET /me
+- PUT /me
 
 ### Admin
 
-- `/api/admin/users`
-- `/api/admin/roles`
-- `/api/admin/settings`
-- `/api/admin/activity-logs`
-- `/api/admin/login-history`
-- `/api/admin/sessions`
+- Users: /api/admin/users và các route con cho detail, roles, facilities, status, unlock, password-reset.
+- Roles: /api/admin/roles và /api/admin/roles/{role}/permissions.
+- Settings: /api/admin/settings và /api/admin/settings/{key}.
+- Security: /api/admin/dashboard, /api/admin/login-history, /api/admin/sessions và revoke session.
+- Activity: /api/admin/activity-logs.
 
-Các endpoint Admin yêu cầu JWT hợp lệ và permission tương ứng. Không tin role hoặc permission do FE tự gửi lên; backend phải kiểm tra từ JWT và dữ liệu server.
+### Facility, file, notification
 
-### Facility và tài nguyên nền tảng
+- GET /api/facilities
+- GET /api/facilities/{facilityId}/unit-types
+- GET /api/storage-units
+- POST /api/files
+- GET /api/notifications
+- PATCH /api/notifications/{id}/read
+- PATCH /api/notifications/read-all
 
-- `GET /api/facilities`
-- `GET /api/facilities/{facilityId}/unit-types`
-- `GET /api/storage-units`
-- `POST /api/files`
-- `GET /api/files/{fileId}` (chỉ uploader hoặc Manager có quyền/phạm vi phù hợp)
-- `POST /api/customer/reservations/{reservationId}/simulated-payment`
-- `GET /api/customer/reservations/{reservationId}/payment`
-- `POST /api/customer/reservations/{reservationId}/payment-complaints`
-- `GET /api/customer/reservations/{reservationId}/payment-complaint`
-- `POST /api/customer/payment-complaints/{complaintId}/withdraw`
-- `/api/manager/payment-complaints`
-- `GET /api/manager/payment-complaints/review-queue`
-- `POST /api/customer/reservations/{reservationId}/booking-document`
-- `GET /api/customer/reservations/{reservationId}/booking-document`
-- `GET /api/customer/reservations/{reservationId}/booking-document/download`
+### Reservation, staff và payment
 
-Contract của các API nghiệp vụ Customer vẫn cần được hoàn thiện trước khi nối toàn bộ Customer FE.
+- POST /api/customer/reservations/compatibility-check
+- POST /api/customer/reservations/quote
+- POST /api/customer/reservations
+- GET /api/customer/reservations
+- GET /api/customer/reservations/{reservationId}
+- POST /api/customer/reservations/{reservationId}/cancel
+- POST /api/customer/reservations/{reservationId}/email-verification
+- POST /api/customer/reservations/{reservationId}/email-verification/resend
+- POST /api/customer/reservations/{reservationId}/payment-intent
+- GET /api/staff/reservation-reviews
+- POST /api/staff/reservation-reviews/{reservationId}/decision
+- POST /api/payments/intents
+- POST /api/webhooks/payments/{provider}
 
-## Cấu trúc thư mục
+Contract chi tiết: docs/BOOKING_API_CONTRACT.md và thư mục docs/.
 
-```text
-src/main/java/com/storagehub/
-├── api/          # Controller và request/response DTO
-├── common/       # API response, exception và context dùng chung
-├── config/       # Cấu hình ứng dụng
-├── domain/       # Entity, enum và domain model
-├── repository/   # Spring Data repositories
-├── security/     # JWT, authentication và authorization
-└── service/      # Business services
-```
-
-## Quy tắc làm việc với Git
-
-Không code trực tiếp trên `develop`:
+## Lệnh Maven
 
 ```cmd
-git switch develop
-git pull --ff-only origin develop
-git switch -c feature/ten-tinh-nang
+mvnw.cmd spring-boot:run
+mvnw.cmd test
+mvnw.cmd clean package
 ```
 
-Sau khi hoàn thành:
+## Git và production
 
-```cmd
-git add .
-git commit -m "feat: mô tả ngắn thay đổi"
-git push -u origin feature/ten-tinh-nang
-```
+- Authorization phải được kiểm tra ở backend từ JWT/security context; không tin role do FE gửi.
+- spring.jpa.hibernate.ddl-auto=update phù hợp local/development; production cần migration có kiểm soát.
+- CORS production chỉ cho phép domain FE thật.
+- Tắt STORAGEHUB_EXPOSE_DEVELOPMENT_CODE ở production.
+- Không commit secret hoặc thông tin credential.
+- Không bật stacktrace/message nội bộ trong response production.
 
-Tạo Pull Request về `develop`. Trước khi push, kiểm tra không đưa password, JWT secret, token hoặc file cấu hình local vào Git.
 
-## Lưu ý quan trọng
-
-- `spring.jpa.hibernate.ddl-auto=update` phù hợp cho local development; cần migration rõ ràng trước production.
-- Không commit secret thật hoặc thông tin database cá nhân.
-- Nếu đổi port FE, cập nhật `STORAGEHUB_ALLOWED_ORIGIN`.
-- Nếu đổi port hoặc host MySQL, cập nhật `STORAGEHUB_DB_URL`.
-- Sau khi thay đổi biến môi trường, khởi động lại backend.

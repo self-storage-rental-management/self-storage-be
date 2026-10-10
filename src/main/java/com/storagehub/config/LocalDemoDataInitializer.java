@@ -3,9 +3,9 @@ package com.storagehub.config;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FacilityStatus;
-import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Role;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitType;
@@ -293,7 +293,6 @@ public class LocalDemoDataInitializer {
         int floor,
         String zone
     ) {}
-
 
     private record DemoUserDefinition(
         String email,
