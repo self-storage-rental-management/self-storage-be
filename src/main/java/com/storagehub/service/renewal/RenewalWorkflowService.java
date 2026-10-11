@@ -115,7 +115,7 @@ public class RenewalWorkflowService {
         String review="UNKNOWN";
         if(n.getStatus()==RenewalStatus.pending){try{var current=terms(n.getRental(),gate(n.getRental(),now()),t.pricingPackageCode());review=store.canonical(t).equals(store.canonical(current))?"READY":"AWAITING_CUSTOMER_CONFIRMATION";}catch(com.storagehub.common.api.ApiException ignored){}}
         var financial=legacy.financialCheck();var fs=finance.getIfAvailable();
-        if(fs!=null){var state=fs.read(n.getRental());if(state.isPresent()&&state.get().checkedAt()!=null&&!state.get().checkedAt().isAfter(now())&&state.get().dueObligations()!=null){var s=state.get();financial=new RenewalResponse.FinancialCheck("COMPLETE",s.checkedAt(),s.dueObligations(),s.unresolvedDispute());}}
+        if(fs!=null){var state=fs.read(n.getRental());if(state.isPresent()&&state.get().checkedAt()!=null&&!state.get().checkedAt().isAfter(now())&&state.get().dueObligations()!=null){var s=state.get();financial=new RenewalResponse.FinancialCheck(fs.consistentThroughApproval()?"COMPLETE":"PARTIAL",s.checkedAt(),s.dueObligations(),s.unresolvedDispute());}}
         var actions=new ArrayList<String>();
         if(actor!=null&&n.getStatus()==RenewalStatus.pending){
             if(!manager&&actor.hasRole(RoleCode.CUSTOMER)&&actor.userId().equals(n.getRental().getCustomer().getId())){actions.add("CANCEL");if(!review.equals("UNKNOWN"))actions.add("ACCEPT_REVISED_QUOTE");}
@@ -130,7 +130,7 @@ public class RenewalWorkflowService {
         if(n.getStatus()==RenewalStatus.pending){
             if(review.equals("UNKNOWN"))reasons.add("Shared policy/pricing/eligibility is unavailable or operational eligibility blocks review");
             if(review.equals("AWAITING_CUSTOMER_CONFIRMATION"))reasons.add("Terms changed: Customer must accept a new quote");
-            if(!financial.completeness().equals("COMPLETE"))reasons.add("Financial obligations/dispute source is UNKNOWN");
+            if(!financial.completeness().equals("COMPLETE"))reasons.add("Financial obligations/dispute source is not certified through approval");
             else if(Boolean.TRUE.equals(financial.hasUnresolvedDispute())||!financial.blockingObligationRefs().isEmpty())reasons.add("Due obligations or unresolved dispute block approval");
             var f=finance.getIfAvailable();if(f==null||!f.consistentThroughApproval())reasons.add("Financial consistency through approval is unavailable");
             var h=holds.getIfAvailable();if(h==null||!h.participatesInTransaction())reasons.add("Atomic extension hold is unavailable");

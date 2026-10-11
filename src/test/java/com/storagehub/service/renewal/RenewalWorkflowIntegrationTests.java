@@ -279,6 +279,18 @@ class RenewalWorkflowIntegrationTests {
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");finance.unknown=true;
         assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve")).isInstanceOf(ApiException.class);assertThat(hold.calls).isZero();
     }
+    @Test void financialReadbackIsPartialWhenApprovalConsistencyIsUnavailable(){
+        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit-financial-partial");
+        finance.consistent=false;
+        var managerView=reads.detail(manager(r),n.id(),true);
+        assertThat(managerView.financialCheck().completeness()).isEqualTo("PARTIAL");
+        assertThat(managerView.allowedActions()).doesNotContain("APPROVE");
+        assertThat(managerView.disabledReasons()).anyMatch(reason->reason.contains("not certified through approval"));
+        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve-financial-partial"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("Consistent financial source missing");
+        assertThat(hold.calls).isZero();
+    }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings={"RETURNED","MAINTENANCE","RECOVERY","BOOKING"})
     void operationalConflictIsRecheckedByD2OptionsQuoteSubmitEditAndApproval(String kind){
