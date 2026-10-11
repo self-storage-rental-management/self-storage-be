@@ -44,11 +44,15 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
 public class CheckInHandoverService {
+
+    @Autowired
+    private AccessCredentialService accessCredentialService;
 
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
@@ -239,6 +243,10 @@ public class CheckInHandoverService {
         }
         validateVariance(reservation, request);
         validateEvidence(checkInId, request.evidenceReferences());
+        if (accessCredentialService != null
+            && !accessCredentialService.hasActiveForReservation(reservation.getId())) {
+            throw ApiExceptions.conflict("At least one active access credential must be issued before handover");
+        }
 
         User operator = requireActor(actor);
         Instant now = Instant.now();
