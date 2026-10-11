@@ -209,6 +209,39 @@ class RenewalWorkflowIntegrationTests {
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");finance.unknown=true;
         assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve")).isInstanceOf(ApiException.class);assertThat(hold.calls).isZero();
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"RETURNED","MAINTENANCE","RECOVERY","BOOKING"})
+    void operationalConflictIsRecheckedByD2OptionsQuoteSubmitEditAndApproval(String kind){
+        var factory=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        factory.addBean("guard",new com.storagehub.service.renewal.integration.RenewalOperationalGuard(em));
+        org.springframework.test.util.ReflectionTestUtils.setField(commands,"operationalGuards",factory.getBeanProvider(com.storagehub.service.renewal.integration.RenewalOperationalGuard.class));
+        try {
+            var r=fixture();r.getStorageUnit().setStatus(StorageUnitStatus.occupied);em.flush();
+            var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+            var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"before-conflict");
+            var q2=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+            switch(kind){
+                case "RETURNED" -> r.setActualReturnedAt(NOW);
+                case "MAINTENANCE" -> {var task=new MaintenanceTask();task.setFacility(r.getFacility());task.setStorageUnit(r.getStorageUnit());task.setTitle("TEST");task.setReason("TEST");task.setReportedBy(r.getCustomer());em.persist(task);}
+                case "RECOVERY" -> em.persist(new com.storagehub.service.overdue.OverdueFollowUp("RENTAL_TERM:"+r.getId(),r,"RECOVERY_HANDOFF","TEST",r.getCustomer().getId(),NOW,UUID.randomUUID(),"TEST","1"));
+                case "BOOKING" -> {var other=new Reservation();other.setReservationCode("OTHER");other.setIdempotencyKey("OTHER");other.setCustomer(r.getCustomer());other.setSourceQuote(r.getReservation().getSourceQuote());other.setFacility(r.getFacility());other.setUnitType(r.getStorageUnit().getUnitType());other.setAssignedUnit(r.getStorageUnit());other.setStartDate(r.getStartDate());other.setEndDate(r.getContractEndDate());other.setStatus(ReservationStatus.CONFIRMED);em.persist(other);}
+            }
+            em.flush();
+            String expected=switch(kind){case "RETURNED" -> "non-active rental";case "MAINTENANCE" -> "Active maintenance";case "RECOVERY" -> "Recovery handoff";default -> "Another booking";};
+            assertThatThrownBy(()->commands.options(a,r.getId())).hasMessageContaining(expected);
+            assertThatThrownBy(()->commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"))).hasMessageContaining(expected);
+            assertThatThrownBy(()->commands.submit(a,r.getId(),new RenewalCommands.Submit(q2.id(),null),"after-conflict")).hasMessageContaining(expected);
+            assertThatThrownBy(()->commands.edit(a,n.id(),new RenewalCommands.Edit(q2.id(),null,n.version()),"edit-conflict")).hasMessageContaining(expected);
+            assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve-conflict")).hasMessageContaining(expected);
+            assertThat(hold.calls).isZero();assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.pending);
+            assertThat(reads.detail(manager(r),n.id(),true).allowedActions()).doesNotContain("APPROVE");
+            // Successful replay/cancel/reject remain usable; a new conflict must not duplicate the request.
+            assertThat(commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"before-conflict").id()).isEqualTo(n.id());
+            assertThat(commands.cancel(a,n.id(),new RenewalCommands.Cancel("TEST",n.version()),"cancel-conflict").status()).isEqualTo(RenewalStatus.cancelled);
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"operationalGuards",new org.springframework.beans.factory.support.StaticListableBeanFactory().getBeanProvider(com.storagehub.service.renewal.integration.RenewalOperationalGuard.class));
+        }
+    }
     private ActorPrincipal customer(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());}
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.

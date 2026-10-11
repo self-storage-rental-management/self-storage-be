@@ -1,5 +1,13 @@
 # Đặc tả API gia hạn (D2)
 
+## Eligibility/operational guard — 11/10/2026
+
+`SharedRenewalEligibilitySource` triển khai `EligibilitySource`, opt-in cùng `RenewalOperationalGuard` qua `storagehub.integration.renewal-operational-checks.enabled=true`. Gate D2 gọi guard trước policy/eligibility: options, quote, submit, edit, APPROVE và review/allowedActions. Guard chặn Rental đã trả/completed, unit không occupied, ReturnCase, bảo trì đang mở, Rental/booking khác cam kết cùng unit và Recovery handoff. Replay thành công, CANCEL/REJECT không bị đưa qua gate mới.
+
+Adapter đọc ngày từ RentalPeriodResolver và cutoff từ TermSource của policy BO đã công bố; chỉ trả eligibility đầy đủ khi có `RenewalEligibilityEvidenceSource` xác nhận Recovery/khả thi ký đúng Rental/unit/facility và checkedAt bằng server now. Nguồn coverage này **chưa có implementation runtime**: trước cutoff, thiếu coverage vẫn UNKNOWN; quá cutoff được chặn bằng dữ liệu policy thật. Không suy feasible=true từ vắng conflict, không dùng booking sellable count hoặc hardcode lịch ký/cutoff. Dữ liệu lệch/DB lỗi không chuyển thành eligibility thành công. Không thay atomic hold, finance consistency hoặc approval lifecycle.
+
+Không đổi default flag hoặc tự bật module trong môi trường đang chạy. Xem [báo cáo implementation/test và giới hạn](RENEWAL_ELIGIBILITY_IMPLEMENTATION_20261011.md).
+
 ## Bổ sung hoàn thiện theo hướng mở rộng — 06/10/2026
 
 - Phản hồi Renewal bổ sung `acceptedTerms` có thể null (đối tượng lồng `RenewalQuoteResponse.Terms`, không dàn phẳng) và `cancellationReason`. Điều khoản chỉ lấy từ phiên bản điều chỉnh/báo giá đã lưu và được Customer chấp nhận; không tính lại theo giá hiện tại. Bản ghi cũ không có workflow trả null. Lược đồ danh sách/chi tiết/lệnh nhất quán; không bổ sung API tra cứu báo giá công khai riêng.
