@@ -28,6 +28,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.RentalRepository;
+import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
@@ -60,6 +61,7 @@ public class CheckInHandoverService {
     private final CheckInRepository checkInRepository;
     private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
+    private final ReservationGoodsItemRepository goodsItemRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
@@ -481,9 +483,18 @@ public class CheckInHandoverService {
             reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), unit.getId(), unit.getCode(), unit.getStatus(),
             assignment.getId(), assignment.getStatus(), reservation.getStartDate(),
-            reservation.getEndDate(), reservation.getTotalGoodsWeightKg(),
+            reservation.getEndDate(), declaredPackageCount(reservation.getId()),
+            reservation.getTotalGoodsWeightKg(),
             reservation.getTotalGoodsVolumeM3(), readHandover(checkIn)
         );
+    }
+
+    private Integer declaredPackageCount(UUID reservationId) {
+        var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId);
+        if (goodsItems.isEmpty()) {
+            return null;
+        }
+        return goodsItems.stream().mapToInt(item -> item.getQuantity()).sum();
     }
 
     private String writeHandover(CompleteCheckInRequest request) {
@@ -537,13 +548,16 @@ public class CheckInHandoverService {
     }
 
     private void validateVariance(Reservation reservation, CompleteCheckInRequest request) {
+        Integer declaredPackageCount = declaredPackageCount(reservation.getId());
+        boolean packageCountVaries = declaredPackageCount != null
+            && request.packageCount() != declaredPackageCount;
         boolean weightVaries = exceedsTolerance(
             request.actualMeasurements().weightKg(), reservation.getTotalGoodsWeightKg(), new BigDecimal("0.10")
         );
         boolean volumeVaries = exceedsTolerance(
             request.actualMeasurements().actualVolumeM3(), reservation.getTotalGoodsVolumeM3(), new BigDecimal("0.000100")
         );
-        if (!weightVaries && !volumeVaries) {
+        if (!packageCountVaries && !weightVaries && !volumeVaries) {
             return;
         }
         if (!request.actualMeasurements().varianceAccepted()) {

@@ -36,6 +36,7 @@ public record CheckInResponse(
     UnitAssignmentStatus assignmentStatus,
     LocalDate startDate,
     LocalDate endDate,
+    Integer declaredPackageCount,
     BigDecimal declaredGoodsWeightKg,
     BigDecimal declaredGoodsVolumeM3,
     CompleteCheckInRequest handover
