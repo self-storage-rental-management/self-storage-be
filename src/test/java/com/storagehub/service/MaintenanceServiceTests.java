@@ -28,7 +28,9 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
+import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -51,6 +53,7 @@ class MaintenanceServiceTests {
     @Mock StorageUnitRepository storageUnitRepository;
     @Mock ReturnCaseRepository returnCaseRepository;
     @Mock UserRepository userRepository;
+    @Mock UserFacilityScopeRepository userFacilityScopeRepository;
     @Mock AdminAuthorizationService authorizationService;
     @Mock FacilityScopeService facilityScopeService;
     @Mock NotificationService notificationService;
@@ -74,6 +77,7 @@ class MaintenanceServiceTests {
             storageUnitRepository,
             returnCaseRepository,
             userRepository,
+            userFacilityScopeRepository,
             authorizationService,
             facilityScopeService,
             notificationService,

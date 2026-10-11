@@ -1,29 +1,42 @@
 package com.storagehub.service;
 
 import com.storagehub.api.reservation.CancelReservationRequest;
+import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.api.reservation.ReservationDetailResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationResponse;
+import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.CheckIn;
+import com.storagehub.domain.model.CheckInStatus;
+import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.model.Rental;
+import com.storagehub.domain.model.RentalStatus;
+import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.PaymentRepository;
+import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.RentalRepository;
+import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -31,15 +44,73 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class CustomerReservationService {
 
     private final ReservationRepository reservationRepository;
+    private final CheckInRepository checkInRepository;
     private final PaymentRepository paymentRepository;
+    private final RentalRepository rentalRepository;
+    private final StorageUnitRepository storageUnitRepository;
+    private final FileAssetRepository fileAssetRepository;
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
+
+    @Autowired
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        FileAssetRepository fileAssetRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService
+    ) {
+        this.reservationRepository = reservationRepository;
+        this.paymentRepository = paymentRepository;
+        this.checkInRepository = checkInRepository;
+        this.rentalRepository = rentalRepository;
+        this.storageUnitRepository = storageUnitRepository;
+        this.fileAssetRepository = fileAssetRepository;
+        this.snapshotRepository = snapshotRepository;
+        this.goodsItemRepository = goodsItemRepository;
+        this.auditLogService = auditLogService;
+        this.notificationService = notificationService;
+    }
+
+    /** Compatibility constructor retained for service unit tests and existing integrations. */
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService
+    ) {
+        this(reservationRepository, paymentRepository, null, null, null, null, snapshotRepository,
+            goodsItemRepository, auditLogService, notificationService);
+    }
+
+    /** Compatibility constructor retained for receipt-confirmation service tests. */
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        CheckInRepository checkInRepository,
+        PaymentRepository paymentRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService
+    ) {
+        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, null, snapshotRepository, goodsItemRepository,
+            auditLogService, notificationService);
+    }
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationResponse> list(
@@ -67,6 +138,115 @@ public class CustomerReservationService {
     public ReservationDetailResponse getDetail(ActorPrincipal actor, UUID reservationId) {
         Reservation reservation = findOwnedReservation(actor, reservationId);
         return toDetailResponse(reservation);
+    }
+
+    @Transactional
+    public ReservationDetailResponse confirmReceipt(ActorPrincipal actor, UUID reservationId) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customer actors can confirm unit receipt");
+        }
+
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(
+            reservationId, actor.userId()
+        ).orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+
+        if (reservation.getStatus() == ReservationStatus.COMPLETED) {
+            return toDetailResponse(reservation);
+        }
+        if (reservation.getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT) {
+            throw ApiExceptions.conflict("Reservation is not waiting for customer receipt confirmation");
+        }
+        if (reservation.getAssignedUnit() == null) {
+            throw ApiExceptions.conflict("Reservation has no assigned storage unit");
+        }
+
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Completed handover record was not found"));
+        if (checkIn.getStatus() != CheckInStatus.completed) {
+            throw ApiExceptions.conflict("Storage unit handover is not completed");
+        }
+
+        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        var existingRental = rentalRepository.findByReservation_Id(reservationId);
+        Rental rental = existingRental.orElseGet(() -> {
+            Rental created = new Rental();
+            created.setCustomer(reservation.getCustomer());
+            created.setFacility(reservation.getFacility());
+            created.setStorageUnit(reservation.getAssignedUnit());
+            created.setReservation(reservation);
+            created.setStatus(RentalStatus.active);
+            created.setStartDate(reservation.getStartDate());
+            created.setContractEndDate(reservation.getEndDate());
+            created.setMonthlyPrice(snapshot.getMonthlyPrice());
+            return rentalRepository.saveAndFlush(created);
+        });
+
+        reservation.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
+        storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
+        checkIn.setRental(rental);
+        checkInRepository.saveAndFlush(checkIn);
+        ReservationStatus previousStatus = reservation.getStatus();
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        Reservation saved = reservationRepository.saveAndFlush(reservation);
+
+        auditLogService.recordMutation(
+            saved.getCustomer(), "CUSTOMER_RECEIPT_CONFIRMED", "Reservation", saved.getId(),
+            saved.getFacility().getId(),
+            Map.of("status", previousStatus),
+            Map.of("status", saved.getStatus(), "rentalId", rental.getId(), "rentalPeriodEvidence",
+                com.storagehub.service.rental.period.RentalPeriodEvidence.receipt(rental, existingRental.isEmpty()))
+        );
+        notificationService.createNotification(
+            saved.getCustomer().getId(), NotificationType.CHECKIN,
+            "Đã xác nhận nhận kho",
+            "Đơn " + saved.getReservationCode() + " đã được xác nhận nhận kho và tạo hồ sơ thuê.",
+            saved.getId()
+        );
+        return toDetailResponse(saved);
+    }
+
+    @Transactional
+    public ReservationResponse setCheckInAppointment(
+        ActorPrincipal actor,
+        UUID reservationId,
+        CheckInAppointmentRequest request
+    ) {
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        if (reservation.getStatus() != ReservationStatus.UNIT_RESERVED
+            && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+            throw ApiExceptions.conflict("Reservation is not ready to set a check-in appointment");
+        }
+        reservation.setAppointmentAt(request.appointmentAt());
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
+        if (checkIn != null && checkIn.getStatus() == com.storagehub.domain.model.CheckInStatus.scheduled) {
+            checkIn.setScheduledAt(request.appointmentAt());
+            checkInRepository.saveAndFlush(checkIn);
+        }
+        Reservation saved = reservationRepository.saveAndFlush(reservation);
+        auditLogService.recordMutation(
+            saved.getCustomer(), "CUSTOMER_CHECKIN_APPOINTMENT_SET", "Reservation", saved.getId(),
+            saved.getFacility().getId(), null, Map.of("appointmentAt", saved.getAppointmentAt())
+        );
+        return toSummaryResponse(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<FileAssetResponse> listCheckInDocuments(ActorPrincipal actor, UUID reservationId) {
+        Reservation reservation = findOwnedReservation(actor, reservationId);
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        if (checkIn == null) {
+            return List.of();
+        }
+        return fileAssetRepository.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("CHECK_IN", checkIn.getId())
+            .stream()
+            .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
+            .map(asset -> new FileAssetResponse(
+                asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
+                asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(), asset.getStatus(), asset.getCreatedAt()
+            ))
+            .toList();
     }
 
     @Transactional
@@ -166,7 +346,7 @@ public class CustomerReservationService {
             snapshot.getTotalInitialObligation(), reservation.getTotalGoodsVolumeM3(),
             reservation.getTotalGoodsWeightKg(), reservation.getHoldExpiresAt(), reservation.getCreatedAt(),
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
-            snapshot.getDiscountRate(), snapshot.getDiscountAmount()
+            snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
     }
 

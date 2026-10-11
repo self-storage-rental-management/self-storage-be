@@ -183,7 +183,7 @@ GET  /api/manager/payment-complaints/review-queue
 POST /api/manager/payment-complaints/{complaintId}/decision
 ```
 
-Quyết định 2026-10-02 bỏ MoMo Sandbox, gateway, redirect, IPN, query và refund. Payment mô phỏng chỉ được tạo khi reservation là `AWAITING_PAYMENT`; amount luôn lấy từ pricing snapshot, FE không gửi amount hoặc tự đặt `PAID`.
+Payment mô phỏng chỉ được tạo khi reservation là `AWAITING_PAYMENT`; amount luôn lấy từ pricing snapshot, FE không gửi amount hoặc tự đặt `PAID`.
 
 Customer UI chỉ có nút `Thanh toán`. Nút gọi endpoint mô phỏng, bị disable trong lúc xử lý và không cho Customer chọn outcome. Response trả `SUCCESS`, `FAILED` hoặc `NOT_RECEIVED`; FE hiển thị thông báo rồi refetch Payment/Reservation. Outcome được cấu hình có kiểm soát tại BE cho local/demo, không chọn ngẫu nhiên và không nhận từ request Customer.
 

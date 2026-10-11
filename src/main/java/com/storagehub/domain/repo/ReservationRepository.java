@@ -148,12 +148,12 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                 and checkIn.status = :checkInStatus
             ))
           )
-          and (:scheduledFrom is null or exists (
+          and (:scheduledFrom is null or reservation.appointmentAt >= :scheduledFrom or exists (
             select checkIn.id from CheckIn checkIn
             where checkIn.reservation.id = reservation.id
               and checkIn.scheduledAt >= :scheduledFrom
           ))
-          and (:scheduledTo is null or exists (
+          and (:scheduledTo is null or reservation.appointmentAt < :scheduledTo or exists (
             select checkIn.id from CheckIn checkIn
             where checkIn.reservation.id = reservation.id
               and checkIn.scheduledAt < :scheduledTo
