@@ -37,6 +37,8 @@ public class RenewalOperationService {
     private final ObjectProvider<EvidenceSource> evidences;
     private final ObjectProvider<RefundSource> refunds;
     @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.renewal.integration.RenewalOperationalGuard> operationalGuards;
+    @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.renewal.integration.RenewalAssignmentSource> assignmentSources;
@@ -80,7 +82,7 @@ public class RenewalOperationService {
         var old=replay(c,"d3_deposit",key,body);if(old.isPresent())return old.get();
         var n=c.renewal();if(n.getStatus()!=RenewalStatus.approved||state(n)!=null)throw ApiExceptions.conflict("Renewal is not awaiting deposit");
         var terms=terms(c);Instant now=now();var policy=policy(n);var safety=safety();
-        Instant cutoff=safety.check(n,terms,c.workflow().getExtensionHoldRef(),now);
+        Instant cutoff=checkSafety(n,terms,c.workflow().getExtensionHoldRef(),now);
         Instant paymentDeadline=c.workflow().getPaymentDeadline();
         if(cutoff==null||paymentDeadline==null)throw deferred("Payment deadline/recovery cutoff missing");
         beforeOrEqual(now,min(paymentDeadline,cutoff));
@@ -91,7 +93,7 @@ public class RenewalOperationService {
         if(paid.outcome()==Outcome.SUCCESS) {
             Instant verifiedNow=now();
             if(paid.amount()==null||paid.amount().compareTo(terms.renewalDepositAmount())!=0||!terms.currency().equals(paid.currency())||paid.paidAt()==null||paid.paidAt().isAfter(verifiedNow)||paid.paidAt().isAfter(paymentDeadline)||paid.paidAt().isAfter(cutoff))throw ApiExceptions.conflict("Verified deposit does not match accepted terms/deadline");
-            cutoff=safety.check(n,terms,c.workflow().getExtensionHoldRef(),verifiedNow);if(cutoff==null)throw deferred("Recovery cutoff disappeared");
+            cutoff=checkSafety(n,terms,c.workflow().getExtensionHoldRef(),verifiedNow);if(cutoff==null)throw deferred("Recovery cutoff disappeared");
             Instant deadline=min(paid.paidAt().plus(policy.signingWindow()),cutoff);beforeOrEqual(verifiedNow,deadline);
             if(!calendar.feasible(n,verifiedNow,deadline))throw ApiExceptions.conflict("No feasible signing slot for verified payment");
             safety.retain(n,c.workflow().getExtensionHoldRef(),deadline);
@@ -151,7 +153,7 @@ public class RenewalOperationService {
         if(arrival.getOccurredAt().isAfter(now())||arrival.getOccurredAt().isAfter(s.getEffectiveSigningDeadline()))throw ApiExceptions.conflict("Arrival outside deadline");
         currentAppointment(c,s,s.getAppointmentRef());evidence(actor,c.renewal(),"SIGNED_RENEWAL",List.of(body.signedDocumentFileId()));
         var terms=terms(c);accounting().requireFullyPaid(c.renewal(),terms,now());
-        var safety=safety();var finalCutoff=safety.check(c.renewal(),terms,c.workflow().getExtensionHoldRef(),now());
+        var safety=safety();var finalCutoff=checkSafety(c.renewal(),terms,c.workflow().getExtensionHoldRef(),now());
         if(finalCutoff==null)throw deferred("Recovery cutoff unavailable at completion");
         beforeOrEqual(now(),s.getEffectiveSigningDeadline());beforeOrEqual(now(),min(s.getRecoveryCutoff(),finalCutoff));
         safety.consume(c.renewal(),c.workflow().getExtensionHoldRef());
@@ -174,7 +176,7 @@ public class RenewalOperationService {
             nonterminal(c.renewal());var s=requiredState(c.renewal());var p=policy(c.renewal());
             policies.getIfAvailable().requireFacilityFault(c.renewal(),body.incidentId(),actor.userId());
             if(s.getDepositPaidAt()==null||s.getPhase()==RenewalOperationState.Phase.PAYMENT_EXPIRED)throw ApiExceptions.conflict("Verified deposit required");
-            var cutoff=safety().check(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());
+            var cutoff=checkSafety(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());
             if(body.revisedDeadline()==null||body.appointmentAt()==null||cutoff==null||!now().isBefore(cutoff)||body.revisedDeadline().isAfter(cutoff)||body.revisedDeadline().isBefore(s.getEffectiveSigningDeadline())||body.revisedDeadline().isAfter(s.getOriginalSigningDeadline().plus(p.exceptionExtensionLimit())))throw ApiExceptions.conflict("Exception deadline outside BO bounds/cutoff");
             slot(c.renewal(),body.appointmentAt(),body.revisedDeadline());
         } else if(body.appointmentAt()!=null||body.revisedDeadline()!=null)throw ApiExceptions.validation("Only reschedule decision accepts appointment/deadline",null);
@@ -204,7 +206,7 @@ public class RenewalOperationService {
         requireProposalState(s,event);
         if(decision.action()!=ExceptionAction.APPROVE_RESCHEDULE_BEFORE_CUTOFF||decision.appointmentAt()==null||decision.revisedDeadline()==null)throw ApiExceptions.conflict("Decision is not a signing reschedule");
         linked(c.renewal(),decision.incidentId(),"INCIDENT");var p=policy(c.renewal());
-        var cutoff=safety().check(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());
+        var cutoff=checkSafety(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());
         policies.getIfAvailable().requireFacilityFault(c.renewal(),decision.incidentId(),event.getActorId());
         if(cutoff==null||!now().isBefore(cutoff)||decision.revisedDeadline().isAfter(cutoff)||decision.revisedDeadline().isBefore(s.getEffectiveSigningDeadline())||decision.revisedDeadline().isAfter(s.getOriginalSigningDeadline().plus(p.exceptionExtensionLimit())))throw ApiExceptions.conflict("Reschedule no longer eligible");
         return new ValidReschedule(slot(c.renewal(),decision.appointmentAt(),decision.revisedDeadline()),cutoff);
@@ -298,7 +300,7 @@ public class RenewalOperationService {
         nonterminal(c.renewal());var s=requiredState(c.renewal());
         if(s.getPhase()!=RenewalOperationState.Phase.SIGNING||s.getDepositPaidAt()==null)throw ApiExceptions.conflict("Verified deposit and active signing phase required");
         beforeOrEqual(now(),s.getEffectiveSigningDeadline());beforeOrEqual(now(),s.getRecoveryCutoff());
-        if(safetyCheck){var cutoff=safety().check(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());if(cutoff==null)throw deferred("Recovery cutoff unavailable");beforeOrEqual(now(),cutoff);}
+        if(safetyCheck){var cutoff=checkSafety(c.renewal(),terms(c),c.workflow().getExtensionHoldRef(),now());if(cutoff==null)throw deferred("Recovery cutoff unavailable");beforeOrEqual(now(),cutoff);}
         return s;
     }
     private static void nonterminal(Renewal n) {if(Set.of(RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Terminal Renewal cannot resume");}
@@ -319,6 +321,12 @@ public class RenewalOperationService {
     private CalendarSource calendar(){var s=calendars.getIfAvailable();if(s==null||!s.atomic())throw deferred("Transactional service calendar/office hours missing");return s;}
     private Slot slot(Renewal n,Instant at,Instant deadline){if(at==null||at.isBefore(now()))throw ApiExceptions.conflict("Appointment must not be in the past");var s=calendar().slot(n,at).orElseThrow(()->ApiExceptions.conflict("Service slot unavailable"));if(s.reference()==null||s.reference().isBlank()||!at.equals(s.start())||s.end()==null||!s.end().isAfter(s.start())||s.end().isAfter(deadline))throw ApiExceptions.conflict("Entire service slot must fit deadline");return s;}
     private SafetySource safety(){var s=safetySources.getIfAvailable();if(s==null||!s.atomic())throw deferred("Shared transactional capacity/return/recovery safety missing");return s;}
+    private Instant checkSafety(Renewal renewal,RenewalQuoteResponse.Terms terms,UUID hold,Instant at){
+        var guard=operationalGuards==null?null:operationalGuards.getIfAvailable();
+        if(guard!=null)guard.requireNoKnownConflict(renewal.getRental());
+        // Local negative checks never replace the atomic shared-writer/hold protocol.
+        return safety().check(renewal,terms,hold,at);
+    }
     private AccountingSource accounting(){var s=accountingSources.getIfAvailable();if(s==null||!s.atomic())throw deferred("Shared transactional Renewal accounting missing");return s;}
     private void evidence(ActorPrincipal a,Renewal n,String purpose,List<UUID> ids){if(ids==null||ids.size()>10||ids.stream().anyMatch(Objects::isNull)||new HashSet<>(ids).size()!=ids.size())throw ApiExceptions.validation("Invalid evidence IDs",null);var s=evidences.getIfAvailable();if(s==null)throw deferred("Resource-linked evidence authorization missing");s.require(a,n,purpose,ids);}
     private void validateStatement(Renewal n,Statement s){if(s==null||s.reference()==null||!n.getId().equals(s.renewalId())||s.version()==null||s.version().isBlank()||s.expiresAt()==null||!now().isBefore(s.expiresAt())||s.amount()==null||s.amount().signum()<0||!"VND".equals(s.currency())||s.requiredObligations()==null||s.requiredObligations().isEmpty()||s.requiredObligations().stream().anyMatch(Objects::isNull)||new HashSet<>(s.requiredObligations()).size()!=s.requiredObligations().size())throw deferred("Payable statement incomplete/stale");}
