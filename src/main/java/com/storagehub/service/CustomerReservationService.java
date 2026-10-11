@@ -46,8 +46,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CustomerReservationService {
 
+    @Autowired
+    private AccessCredentialService accessCredentialService;
+
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
+    private final CheckInRepository checkInRepository;
     private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
     private final StorageUnitRepository storageUnitRepository;
@@ -64,8 +68,6 @@ public class CustomerReservationService {
         RentalRepository rentalRepository,
         StorageUnitRepository storageUnitRepository,
         FileAssetRepository fileAssetRepository,
-        RentalRepository rentalRepository,
-        StorageUnitRepository storageUnitRepository,
         ReservationPricingSnapshotRepository snapshotRepository,
         ReservationGoodsItemRepository goodsItemRepository,
         AuditLogService auditLogService,
@@ -77,8 +79,6 @@ public class CustomerReservationService {
         this.rentalRepository = rentalRepository;
         this.storageUnitRepository = storageUnitRepository;
         this.fileAssetRepository = fileAssetRepository;
-        this.rentalRepository = rentalRepository;
-        this.storageUnitRepository = storageUnitRepository;
         this.snapshotRepository = snapshotRepository;
         this.goodsItemRepository = goodsItemRepository;
         this.auditLogService = auditLogService;
@@ -110,78 +110,9 @@ public class CustomerReservationService {
         AuditLogService auditLogService,
         NotificationService notificationService
     ) {
-        this(reservationRepository, paymentRepository, checkInRepository, null,
-            rentalRepository, storageUnitRepository, snapshotRepository,
+        this(reservationRepository, paymentRepository, checkInRepository,
+            rentalRepository, storageUnitRepository, null, snapshotRepository,
             goodsItemRepository, auditLogService, notificationService);
-    }
-
-    /**
-     * Confirms a completed physical handover and creates the customer's active rental.
-     * Kept here for backward compatibility with the customer receipt flow while the
-     * staff check-in endpoints remain responsible for completing the handover itself.
-     */
-    @Transactional
-    public ReservationDetailResponse confirmReceipt(ActorPrincipal actor, UUID reservationId) {
-        if (!actor.hasRole(RoleCode.CUSTOMER)) {
-            throw ApiExceptions.forbidden("Only customer actors can confirm unit receipt");
-        }
-
-        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(
-            reservationId, actor.userId()
-        ).orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
-
-        if (reservation.getStatus() == ReservationStatus.COMPLETED) {
-            return toDetailResponse(reservation);
-        }
-        if (reservation.getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT) {
-            throw ApiExceptions.conflict("Reservation is not waiting for customer receipt confirmation");
-        }
-        if (reservation.getAssignedUnit() == null) {
-            throw ApiExceptions.conflict("Reservation has no assigned storage unit");
-        }
-
-        CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId)
-            .orElseThrow(() -> ApiExceptions.conflict("Completed handover record was not found"));
-        if (checkIn.getStatus() != CheckInStatus.completed) {
-            throw ApiExceptions.conflict("Storage unit handover is not completed");
-        }
-
-        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
-            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-        Rental rental = rentalRepository.findByReservation_Id(reservationId).orElseGet(() -> {
-            Rental created = new Rental();
-            created.setCustomer(reservation.getCustomer());
-            created.setFacility(reservation.getFacility());
-            created.setStorageUnit(reservation.getAssignedUnit());
-            created.setReservation(reservation);
-            created.setStatus(RentalStatus.active);
-            created.setStartDate(reservation.getStartDate());
-            created.setContractEndDate(reservation.getEndDate());
-            created.setMonthlyPrice(snapshot.getMonthlyPrice());
-            return rentalRepository.saveAndFlush(created);
-        });
-
-        reservation.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
-        storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
-        checkIn.setRental(rental);
-        checkInRepository.saveAndFlush(checkIn);
-
-        ReservationStatus previousStatus = reservation.getStatus();
-        reservation.setStatus(ReservationStatus.COMPLETED);
-        Reservation saved = reservationRepository.saveAndFlush(reservation);
-        auditLogService.recordMutation(
-            saved.getCustomer(), "CUSTOMER_RECEIPT_CONFIRMED", "Reservation", saved.getId(),
-            saved.getFacility().getId(),
-            Map.of("status", previousStatus),
-            Map.of("status", saved.getStatus(), "rentalId", rental.getId())
-        );
-        notificationService.createNotification(
-            saved.getCustomer().getId(), NotificationType.CHECKIN,
-            "Đã xác nhận nhận kho",
-            "Đơn " + saved.getReservationCode() + " đã được xác nhận nhận kho và tạo hồ sơ thuê.",
-            saved.getId()
-        );
-        return toDetailResponse(saved);
     }
 
     @Transactional(readOnly = true)
@@ -258,6 +189,9 @@ public class CustomerReservationService {
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
         checkIn.setRental(rental);
         checkInRepository.saveAndFlush(checkIn);
+        if (accessCredentialService != null) {
+            accessCredentialService.attachToRental(reservation, rental);
+        }
         ReservationStatus previousStatus = reservation.getStatus();
         reservation.setStatus(ReservationStatus.COMPLETED);
         Reservation saved = reservationRepository.saveAndFlush(reservation);
