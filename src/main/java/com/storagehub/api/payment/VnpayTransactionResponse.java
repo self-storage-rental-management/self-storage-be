@@ -18,6 +18,7 @@ public record VnpayTransactionResponse(
     ReservationStatus reservationStatus,
     String responseCode,
     String transactionStatus,
+    String gatewayPayDate,
     String message,
     Instant processedAt,
     Instant lastReconciledAt
