@@ -106,6 +106,31 @@ class SupportWorkflowIntegrationTests {
         scope(otherStaff,facility,FacilityScopeLevel.OPERATE);scope(foreignStaff,otherFacility,FacilityScopeLevel.OPERATE);em.flush();
         c=actor(customer,RoleCode.CUSTOMER,null);m=actor(manager,RoleCode.MANAGER,facility);s=actor(staff,RoleCode.STAFF,facility);s2=actor(otherStaff,RoleCode.STAFF,facility);
     }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void assignedStaffNameComesFromCommittedAssignmentInHttpListAndDetail() throws Exception {
+        var created=service.create(c,new Create("Assignee name readback","TEST ONLY",facility.getId(),null,List.of()),"name-create");
+        assertThat(created.assignedStaffName()).isNull();
+        service.assign(m,created.id(),new Assignment(staff.getId(),created.version(),"TEST assignment"),"name-assign");
+        new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(tx->{
+            em.find(User.class,staff.getId()).setFullName("Assigned Staff Readback");
+        });
+        var context=mock(ActorContext.class);when(context.required()).thenReturn(m);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new ManagerSupportController(context,service))
+            .setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        var detail=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/support-tickets/"+created.id())).andReturn().getResponse();
+        assertThat(detail.getStatus()).isEqualTo(200);
+        assertThat(mapper.readTree(detail.getContentAsString()).path("data").path("assignedStaffName").asText()).isEqualTo("Assigned Staff Readback");
+        var list=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/support-tickets")
+            .param("facilityId",facility.getId().toString()).param("search","Assignee name readback")).andReturn().getResponse();
+        assertThat(list.getStatus()).isEqualTo(200);
+        assertThat(mapper.readTree(list.getContentAsString()).path("data").get(0).path("assignedStaffName").asText()).isEqualTo("Assigned Staff Readback");
+        try(var connection=datasource.getConnection();var sql=connection.prepareStatement("select u.full_name from support_tickets t join users u on u.id=t.assigned_to where t.id=?")) {
+            sql.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(created.id().getMostSignificantBits()).putLong(created.id().getLeastSignificantBits()).array());
+            try(var rows=sql.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).isEqualTo("Assigned Staff Readback");}
+        }
+    }
     @Test void createDerivesHonestUnknownSlaAndIdempotentResult(){
         var body=new Create("Access question","Please help",facility.getId(),null,List.of());
         var t=service.create(c,body,"create");
