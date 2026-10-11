@@ -155,6 +155,19 @@ public class VnpayService {
             payment.setFailureReason("VNPAY transaction was not successful");
         }
         paymentRepository.saveAndFlush(payment);
+        // Persist provenance only after signature and amount validation; replay above writes nothing.
+        // Query/complaint approval and historical PAID rows do not create this proof.
+        if (success && "VNPAY".equals(payment.getGatewayProvider())
+            && properties.getTmnCode().equals(query.get("vnp_TmnCode"))
+            && payment.getGatewayTransactionNo()!=null && !payment.getGatewayTransactionNo().isBlank()) {
+            var proof=new java.util.LinkedHashMap<String,Object>();
+            proof.put("paymentId",payment.getId());proof.put("reservationId",reservation.getId());
+            proof.put("customerId",reservation.getCustomer().getId());proof.put("intentId",payment.getGatewayIntentId());
+            proof.put("transactionNo",payment.getGatewayTransactionNo());proof.put("purpose",payment.getPurpose());
+            proof.put("currency",payment.getCurrency());proof.put("amount",payment.getAmount());proof.put("signatureVerified",true);
+            proof.put("environment",PaymentProvenance.environment(properties.getPayUrl(),properties.getApiUrl()));
+            auditLogService.recordMutation((User)null,PaymentProvenance.CALLBACK_ACTION,"Payment",payment.getId(),reservation.getFacility().getId(),null,proof);
+        }
         return new CallbackResult("00", "Confirm Success", payment.getId(), reservation.getId(), success);
     }
 

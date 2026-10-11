@@ -191,6 +191,9 @@ public class CustomerReservationService {
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (ledgerStores != null && ledgerStores.getIfAvailable() != null) {
+            com.storagehub.service.ledger.FinancialContractSpecifications.validateInitial(snapshot);
+        }
         var existingRental = rentalRepository.findByReservation_Id(reservationId);
         Rental rental = existingRental.orElseGet(() -> {
             Rental created = new Rental();
@@ -209,6 +212,7 @@ public class CustomerReservationService {
         if (existingRental.isEmpty() && ledgerStores != null) {
             LedgerStore ledger = ledgerStores.getIfAvailable();
             if (ledger != null) {
+                com.storagehub.service.ledger.FinancialContractSpecifications.initial(rental, snapshot);
                 ledger.open(rental.getId(), rental.getCustomer().getId(), rental.getFacility().getId());
             }
         }

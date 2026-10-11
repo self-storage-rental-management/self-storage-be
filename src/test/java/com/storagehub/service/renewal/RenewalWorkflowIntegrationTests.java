@@ -74,6 +74,7 @@ class RenewalWorkflowIntegrationTests {
     @Autowired TestLifecycle lifecycle;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired TestClock clock;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
         var r=fixture();var a=customer(r);var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads,commands))
@@ -178,6 +179,10 @@ class RenewalWorkflowIntegrationTests {
         var body=new RenewalCommands.Submit(quote.id(),"test");var created=commands.submit(customer,r.getId(),body,"submit");
         assertThat(created.version()).isZero();assertThat(created.acceptedRevision()).isEqualTo(1);assertThat(created.reviewState()).isEqualTo("READY");
         assertThat(commands.submit(customer,r.getId(),body,"submit")).isEqualTo(created);
+        var revision=em.find(RenewalWorkflow.class,created.id()).getAcceptedRevision();
+        var specs=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(revision,quote.terms());
+        assertThat(specs).hasSize(2);assertThat(specs.getFirst().sourceReference()).contains(revision.getId().toString(),quote.id().toString());
+        verifyNoInteractions(ledgerWrites);
         var decision=new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,created.version());
         var approved=commands.decision(manager,created.id(),decision,"approve");
         assertThat(approved.status()).isEqualTo(RenewalStatus.approved);assertThat(approved.approvedPaymentDeadline()).isEqualTo(NOW.plusSeconds(86400));

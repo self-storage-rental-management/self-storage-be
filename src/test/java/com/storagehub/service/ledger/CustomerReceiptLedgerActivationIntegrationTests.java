@@ -33,10 +33,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.test.context.transaction.TestTransaction;
 
 /** Real JPA/JDBC persistence for the existing Customer receipt activation flow, isolated in H2. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE, properties = {
     "spring.datasource.url=${STORAGEHUB_LEDGER_E2E_DB_URL:jdbc:h2:mem:ledger-activation;MODE=MySQL;DB_CLOSE_DELAY=-1}",
+    "spring.datasource.driver-class-name=${STORAGEHUB_LEDGER_E2E_DRIVER:org.h2.Driver}",
     "spring.datasource.username=${STORAGEHUB_LEDGER_E2E_DB_USERNAME:sa}",
     "spring.datasource.password=${STORAGEHUB_LEDGER_E2E_DB_PASSWORD:}",
     "spring.jpa.hibernate.ddl-auto=${STORAGEHUB_LEDGER_E2E_DDL_AUTO:create-drop}",
@@ -69,6 +71,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
     @Autowired CustomerReservationService service;
     @Autowired RentalRepository rentals;
     @Autowired LedgerStore ledger;
+    @Autowired @org.springframework.beans.factory.annotation.Qualifier("activationAuditLogService") AuditLogService activationAudit;
     @MockitoBean(name = "seedSystemRoles") CommandLineRunner roleDataInitializer;
     @MockitoBean(name = "seedSystemSettings") CommandLineRunner systemSettingsInitializer;
 
@@ -82,9 +85,9 @@ class CustomerReceiptLedgerActivationIntegrationTests {
             if (product.toLowerCase().contains("mysql")) {
                 String database = jdbc.queryForObject("SELECT DATABASE()", String.class);
                 String serverVersion = jdbc.queryForObject("SELECT VERSION()", String.class);
-                assertThat(database).isEqualTo("storagehub_local");
+                assertThat(database).startsWith("storagehub_v5_test_");
                 var latest = jdbc.queryForMap(
-                    "SELECT version, description, success FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 1");
+                    "SELECT version, description, success FROM storagehub_local.flyway_schema_history ORDER BY installed_rank DESC LIMIT 1");
                 assertThat(Boolean.parseBoolean(latest.get("success").toString())).isTrue();
                 List<String> tables = jdbc.queryForList(
                     "SELECT LOWER(table_name) FROM information_schema.tables WHERE table_schema=DATABASE() " +
@@ -94,7 +97,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
                     "rental_ledger_accounts", "rental_ledger_obligations", "rental_ledger_receipts",
                     "rental_ledger_allocations", "rental_ledger_refunds", "rental_ledger_commands");
                 System.out.println("Ledger Slice 1 DB preflight PASS: database=" + database + "; mysql=" +
-                    serverVersion + "; flyway=" + latest.get("version") + "; six ledger tables present");
+                    serverVersion + "; source schema flyway=" + latest.get("version") + "; six isolated ledger tables present; no Flyway history fabricated");
             } else {
                 assertThat(product.toLowerCase()).contains("h2");
                 List<String> tables = jdbc.queryForList(
@@ -120,6 +123,12 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         em.clear();
 
         var account = ledger.read(rentalId).orElseThrow();
+        var persistedRental=em.find(Rental.class,rentalId);
+        var persistedSnapshot=em.createQuery("select s from ReservationPricingSnapshot s where s.reservation.id=:id",ReservationPricingSnapshot.class).setParameter("id",fixture.reservationId()).getSingleResult();
+        var specs=FinancialContractSpecifications.initial(persistedRental,persistedSnapshot);
+        assertThat(specs).extracting(FinancialContractSpecifications.Specification::kind).containsExactly(LedgerStore.Kind.RENT,LedgerStore.Kind.SECURITY_DEPOSIT);
+        assertThat(specs.getFirst().sourceReference()).contains(persistedSnapshot.getId().toString());
+        assertThat(account.obligations()).isEmpty();
         assertThat(first.getReservation().getStatus()).isEqualTo(ReservationStatus.COMPLETED);
         assertThat(account.rentalId()).isEqualTo(rentalId);
         assertThat(account.customerId()).isEqualTo(fixture.customerId());
@@ -160,6 +169,54 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         assertThat(ledger.read(existingRental)).isEmpty();
         assertThat(jdbc.queryForObject("select count(*) from rental_ledger_accounts where rental_id=?", Integer.class,
             existingRental.toString())).isZero();
+    }
+
+    @Test @Order(5)
+    void committedActivationIsVisibleToIndependentConnectionAndReplay() throws Exception {
+        var f=fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT,CheckInStatus.completed,false);
+        service.confirmReceipt(f.actor(),f.reservationId());
+        UUID id=rentals.findByReservation_Id(f.reservationId()).orElseThrow().getId();
+        TestTransaction.flagForCommit();TestTransaction.end();
+        try(var connection=jdbc.getDataSource().getConnection();var p=connection.prepareStatement("select customer_id,facility_id,revision from rental_ledger_accounts where rental_id=?")) {
+            p.setString(1,id.toString());try(var result=p.executeQuery()){assertThat(result.next()).isTrue();assertThat(result.getString(1)).isEqualTo(f.customerId().toString());assertThat(result.getString(2)).isEqualTo(f.facilityId().toString());assertThat(result.getLong(3)).isZero();assertThat(result.next()).isFalse();}
+        }
+        service.confirmReceipt(f.actor(),f.reservationId());
+        assertThat(ledger.read(id).orElseThrow().obligations()).isEmpty();
+        TestTransaction.start();
+    }
+    @Test @Order(6)
+    void failureAfterLedgerOpeningRollsBackRentalUnitCheckinAndReservation() {
+        var f=fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT,CheckInStatus.completed,false);
+        TestTransaction.flagForCommit();TestTransaction.end();
+        org.mockito.Mockito.doThrow(new IllegalStateException("Injected audit failure after ledger opening")).when(activationAudit).recordMutation(
+            org.mockito.ArgumentMatchers.any(User.class),org.mockito.ArgumentMatchers.eq("CUSTOMER_RECEIPT_CONFIRMED"),org.mockito.ArgumentMatchers.eq("Reservation"),
+            org.mockito.ArgumentMatchers.eq(f.reservationId()),org.mockito.ArgumentMatchers.eq(f.facilityId()),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any());
+        long before=jdbc.queryForObject("select count(*) from rental_ledger_accounts",Long.class);
+        try {assertThatThrownBy(()->service.confirmReceipt(f.actor(),f.reservationId())).hasMessageContaining("Injected audit failure");}
+        finally {org.mockito.Mockito.reset(activationAudit);}
+        TestTransaction.start();em.clear();
+        assertThat(rentals.findByReservation_Id(f.reservationId())).isEmpty();
+        assertThat(jdbc.queryForObject("select count(*) from rental_ledger_accounts",Long.class)).isEqualTo(before);
+        var res=em.find(Reservation.class,f.reservationId());assertThat(res.getStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        assertThat(res.getAssignedUnit().getStatus()).isEqualTo(StorageUnitStatus.assigned);
+        var checkin=em.createQuery("select c from CheckIn c where c.reservation.id=:id",CheckIn.class).setParameter("id",f.reservationId()).getSingleResult();assertThat(checkin.getRental()).isNull();
+    }
+    @Test @Order(7)
+    void immutableAcceptedRevisionMapsOnlyItsOwnRenewalPurposesAndRejectsHashTampering() throws Exception {
+        var r=em.createQuery("select r from Rental r",Rental.class).setMaxResults(1).getSingleResult();
+        var start=r.getContractEndDate().plusDays(1);var end=start.plusMonths(3);
+        var t=new com.storagehub.api.renewal.RenewalQuoteResponse.Terms(r.getContractEndDate(),start,end,end.minusDays(1),r.getStorageUnit().getUnitType().getId(),"TEST-3M",UUID.randomUUID(),"test-v1",3,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("300"),BigDecimal.ZERO,new BigDecimal("300"),new BigDecimal("60"),new BigDecimal("240"),"VND","test-policy","v1",r.getStorageUnit().getId(),r.getFacility().getId());
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();var json=mapper.writeValueAsString(t);
+        var hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        var now=Instant.now();var q=new com.storagehub.service.renewal.persistence.RenewalQuote(r,r.getCustomer(),json,hash,now,now.plusSeconds(600));em.persist(q);
+        var n=new Renewal();n.setRental(r);n.setRequestedBy(r.getCustomer());n.setAmount(t.totalAfterDiscount());n.setNewEndDate(t.newEndDate());em.persist(n);
+        var revision=new com.storagehub.service.renewal.persistence.RenewalAcceptedRevision(n,q,1,now,"TEST_ONLY immutable source validation");em.persist(revision);em.flush();var id=revision.getId();em.clear();
+        var stored=em.find(com.storagehub.service.renewal.persistence.RenewalAcceptedRevision.class,id);
+        var specs=FinancialContractSpecifications.accepted(stored,t);assertThat(specs).extracting(FinancialContractSpecifications.Specification::kind).containsExactly(LedgerStore.Kind.RENEWAL_DEPOSIT,LedgerStore.Kind.RENEWAL_REMAINDER);
+        assertThat(specs.getFirst().sourceReference()).contains(id.toString(),q.getId().toString());assertThat(ledger.read(r.getId()).orElseThrow().obligations()).isEmpty();
+        em.createNativeQuery("update renewal_quotes set terms_hash=:hash where id=:id").setParameter("hash","0".repeat(64)).setParameter("id",q.getId()).executeUpdate();em.clear();
+        var changed=em.find(com.storagehub.service.renewal.persistence.RenewalAcceptedRevision.class,id);
+        assertThatThrownBy(()->FinancialContractSpecifications.accepted(changed,t)).hasMessageContaining("hash mismatch");
     }
 
     private Fixture fixture(ReservationStatus reservationStatus, CheckInStatus checkInStatus, boolean existingRental) {

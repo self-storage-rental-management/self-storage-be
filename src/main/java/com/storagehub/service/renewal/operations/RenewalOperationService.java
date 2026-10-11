@@ -309,6 +309,7 @@ public class RenewalOperationService {
     private RenewalWorkflow workflow(Renewal n){var w=em.find(RenewalWorkflow.class,n.getId());if(w==null)throw ApiExceptions.conflict("Verified accepted workflow missing");return w;}
     private RenewalQuoteResponse.Terms terms(Context c) {
         var rev=c.workflow().getAcceptedRevision();var quote=rev.getQuote();var n=c.renewal();var r=n.getRental();var t=decode(quote.getTermsJson(),RenewalQuoteResponse.Terms.class);
+        com.storagehub.service.ledger.FinancialContractSpecifications.accepted(rev,t);
         if(!rev.getRenewal().getId().equals(n.getId())||!quote.getRental().getId().equals(r.getId())||!quote.getCustomer().getId().equals(r.getCustomer().getId())||!Objects.equals(n.getRequestedBy().getId(),r.getCustomer().getId())||t.totalAfterDiscount()==null||n.getAmount().compareTo(t.totalAfterDiscount())!=0||!Objects.equals(n.getNewEndDate(),t.newEndDate())||!Objects.equals(r.getContractEndDate(),t.oldEndDate())||!Objects.equals(r.getStorageUnit().getId(),t.storageUnitId())||r.getStorageUnit().getUnitType()==null||!Objects.equals(r.getStorageUnit().getUnitType().getId(),t.unitTypeId())||!Objects.equals(r.getFacility().getId(),t.facilityId())||r.getStatus()!=RentalStatus.active||r.getActualReturnedAt()!=null)throw ApiExceptions.conflict("Rental/accepted terms or return state changed");
         if(periods==null)throw deferred("Rental date provenance unknown");
         com.storagehub.service.rental.period.RenewalPeriodCompatibility.require(periods.require(r),t);
