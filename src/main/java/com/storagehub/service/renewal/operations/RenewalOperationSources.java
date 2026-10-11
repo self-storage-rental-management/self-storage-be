@@ -26,6 +26,8 @@ public final class RenewalOperationSources {
     public record Slot(String reference, Instant start, Instant end) {}
     public interface CalendarSource {
         default boolean atomic() { return false; }
+        /** Pre-approval feasibility from actual office hours, duration and capacity; never invent a Renewal. */
+        default Optional<Boolean> feasible(com.storagehub.domain.model.Rental rental,Instant now,Instant deadline) { return Optional.empty(); }
         /** Actual service slot, including office hours/holidays/duration; empty means no available slot. */
         Optional<Slot> slot(Renewal renewal, Instant start);
         boolean feasible(Renewal renewal, Instant start, Instant deadline);
