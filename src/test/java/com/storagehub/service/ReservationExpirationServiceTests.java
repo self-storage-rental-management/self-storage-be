@@ -33,6 +33,7 @@ class ReservationExpirationServiceTests {
     @Mock private PaymentRepository paymentRepository;
     @Mock private NotificationService notificationService;
     @Mock private AuditLogService auditLogService;
+    @Mock private VnpayService vnpayService;
 
     private ReservationExpirationService service;
     private Reservation reservation;
@@ -40,7 +41,7 @@ class ReservationExpirationServiceTests {
     @BeforeEach
     void setUp() {
         service = new ReservationExpirationService(
-            reservationRepository, paymentRepository, notificationService, auditLogService
+            reservationRepository, paymentRepository, notificationService, auditLogService, vnpayService
         );
 
         User customer = new User();
@@ -59,6 +60,7 @@ class ReservationExpirationServiceTests {
 
     @Test
     void expiresReservationAndItsPendingPayment() {
+        reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         Payment payment = new Payment();
         payment.setReservation(reservation);
         payment.setStatus(PaymentStatus.PENDING);
@@ -99,6 +101,7 @@ class ReservationExpirationServiceTests {
 
     @Test
     void doesNotExpireReservationWhilePaymentIsProcessing() {
+        reservation.setStatus(ReservationStatus.AWAITING_REVIEW);
         Payment payment = new Payment();
         payment.setReservation(reservation);
         payment.setStatus(PaymentStatus.PROCESSING);
@@ -113,12 +116,38 @@ class ReservationExpirationServiceTests {
         int expired = service.expireDueReservations();
 
         assertThat(expired).isZero();
-        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.AWAITING_REVIEW);
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
         verify(reservationRepository, never()).saveAndFlush(any());
         verify(notificationService, never()).createNotification(
             any(), any(), any(), any(), any()
         );
+    }
+
+    @Test
+    void startsPaymentGraceWhenVnpayAttemptHasNoFinalResult() {
+        reservation.setPaymentExpiresAt(Instant.now().minusSeconds(5));
+        Payment payment = new Payment();
+        payment.setReservation(reservation);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(reservationRepository
+            .findTop100ByStatusAndPaymentExpiresAtLessThanEqualOrderByPaymentExpiresAtAsc(
+                eq(ReservationStatus.AWAITING_PAYMENT), any()
+            )).thenReturn(List.of(reservation));
+        when(paymentRepository.findAllByReservation_IdAndStatusIn(any(), anyCollection()))
+            .thenReturn(List.of(payment));
+        when(vnpayService.reconcileAtPaymentDeadline(payment))
+            .thenReturn(VnpayService.ReconciliationOutcome.UNKNOWN);
+
+        int transitioned = service.expireDueReservations();
+
+        assertThat(transitioned).isEqualTo(1);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.PAYMENT_GRACE);
+        assertThat(reservation.getComplaintExpiresAt()).isAfter(Instant.now());
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.NOT_RECEIVED);
+        assertThat(payment.getFailureCode()).isEqualTo("VNPAY_RESULT_NOT_RECEIVED");
+        verify(paymentRepository).saveAll(List.of(payment));
+        verify(notificationService).createNotification(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -137,5 +166,72 @@ class ReservationExpirationServiceTests {
         assertThat(reservation.getComplaintExpiresAt()).isNull();
         assertThat(reservation.getArchivedAt()).isNotNull();
         verify(notificationService).createNotification(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void confirmsReservationWhenDeadlineQueryFindsSuccessfulPayment() {
+        reservation.setPaymentExpiresAt(Instant.now().minusSeconds(5));
+        Payment payment = new Payment();
+        payment.setReservation(reservation);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(reservationRepository
+            .findTop100ByStatusAndPaymentExpiresAtLessThanEqualOrderByPaymentExpiresAtAsc(
+                eq(ReservationStatus.AWAITING_PAYMENT), any()
+            )).thenReturn(List.of(reservation));
+        when(paymentRepository.findAllByReservation_IdAndStatusIn(any(), anyCollection()))
+            .thenReturn(List.of(payment));
+        when(vnpayService.reconcileAtPaymentDeadline(payment)).thenAnswer(invocation -> {
+            payment.setStatus(PaymentStatus.PAID);
+            reservation.setStatus(ReservationStatus.CONFIRMED);
+            return VnpayService.ReconciliationOutcome.SUCCESS;
+        });
+
+        service.expireDueReservations();
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(reservation.getComplaintExpiresAt()).isNull();
+    }
+
+    @Test
+    void expiresWithoutGraceWhenDeadlineQueryConfirmsFailure() {
+        reservation.setPaymentExpiresAt(Instant.now().minusSeconds(5));
+        Payment payment = new Payment();
+        payment.setReservation(reservation);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(reservationRepository
+            .findTop100ByStatusAndPaymentExpiresAtLessThanEqualOrderByPaymentExpiresAtAsc(
+                eq(ReservationStatus.AWAITING_PAYMENT), any()
+            )).thenReturn(List.of(reservation));
+        when(paymentRepository.findAllByReservation_IdAndStatusIn(any(), anyCollection()))
+            .thenReturn(List.of(payment), List.of());
+        when(vnpayService.reconcileAtPaymentDeadline(payment)).thenAnswer(invocation -> {
+            payment.setStatus(PaymentStatus.FAILED);
+            return VnpayService.ReconciliationOutcome.FINAL_FAILURE;
+        });
+
+        service.expireDueReservations();
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.EXPIRED);
+        assertThat(reservation.getComplaintExpiresAt()).isNull();
+    }
+
+    @Test
+    void expiresPaymentGraceWhenComplaintWindowEnds() {
+        reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
+        reservation.setComplaintExpiresAt(Instant.now().minusSeconds(5));
+        when(reservationRepository
+            .findTop100ByStatusAndComplaintExpiresAtLessThanEqualOrderByComplaintExpiresAtAsc(
+                eq(ReservationStatus.PAYMENT_GRACE), any()
+            )).thenReturn(List.of(reservation));
+        when(paymentRepository.findAllByReservation_IdAndStatusIn(any(), anyCollection()))
+            .thenReturn(List.of());
+
+        int expired = service.expireDueReservations();
+
+        assertThat(expired).isEqualTo(1);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.EXPIRED);
+        assertThat(reservation.getArchivedAt()).isNotNull();
     }
 }
