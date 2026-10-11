@@ -26,6 +26,8 @@ public class PaymentProvenance {
             if(s==PaymentComplaintStatus.APPROVED)return Classification.UNVERIFIED;
         }
         if(p.getGatewayIntentId()!=null && p.getGatewayIntentId().startsWith("SIMULATED-"))return Classification.SIMULATED;
+        // Late funds are the Payment owner's reconciliation case, not available Rental credit.
+        if("PAYMENT_AFTER_DEADLINE".equals(p.getFailureCode()))return Classification.UNVERIFIED;
         if(p.getStatus()!=PaymentStatus.PAID)return "VNPAY".equals(p.getGatewayProvider())
             && (p.getStatus()==PaymentStatus.PENDING || p.getStatus()==PaymentStatus.PROCESSING)?Classification.ATTEMPT:Classification.UNVERIFIED;
         if(!"VNPAY".equals(p.getGatewayProvider()) || !"VND".equals(p.getCurrency()) || p.getPaidAt()==null
@@ -35,6 +37,12 @@ public class PaymentProvenance {
         if(proof.size()!=1)return Classification.UNVERIFIED;
         try {
             var log=proof.getFirst();var d=mapper.readTree(log.getAfterStateJson());var res=p.getReservation();
+            // Older proof without accepted-payment/date context cannot certify current credit.
+            var deadline=res.getPaymentExpiresAt()!=null?res.getPaymentExpiresAt():res.getHoldExpiresAt();
+            if(!d.path("bookingPaymentAccepted").asBoolean() || deadline==null)return Classification.UNVERIFIED;
+            var gatewayPaidAt=java.time.Instant.parse(d.path("gatewayPaidAt").asText());
+            if(!gatewayPaidAt.equals(p.getPaidAt()) || gatewayPaidAt.isAfter(deadline)
+                || !deadline.equals(java.time.Instant.parse(d.path("paymentDeadline").asText())))return Classification.UNVERIFIED;
             if(log.getFacility()==null || !Objects.equals(log.getFacility().getId(),res.getFacility().getId())
                 || !p.getId().toString().equals(d.path("paymentId").asText())
                 || !res.getId().toString().equals(d.path("reservationId").asText())

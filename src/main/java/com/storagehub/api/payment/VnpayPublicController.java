@@ -30,7 +30,12 @@ public class VnpayPublicController {
     @GetMapping("/return")
     public ResponseEntity<Void> returnFromVnpay(@RequestParam Map<String, String> query) {
         VnpayService.CallbackResult result = service.processCallback(query);
+        return ResponseEntity.status(302).location(frontendLocation(result)).build();
+    }
+
+    java.net.URI frontendLocation(VnpayService.CallbackResult result) {
         Map<String, String> target = new LinkedHashMap<>();
+        target.put("page", "reservations");
         target.put("vnpayReturn", "true");
         target.put("status", result.success() ? "success" : "failed");
         target.put("code", result.rspCode());
@@ -40,6 +45,6 @@ public class VnpayPublicController {
             .map(entry -> URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8) + "="
                 + URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
             .reduce((left, right) -> left + "&" + right).orElse("");
-        return ResponseEntity.status(302).location(java.net.URI.create(properties.getFrontendReturnUrl() + separator + params)).build();
+        return java.net.URI.create(properties.getFrontendReturnUrl() + separator + params);
     }
 }

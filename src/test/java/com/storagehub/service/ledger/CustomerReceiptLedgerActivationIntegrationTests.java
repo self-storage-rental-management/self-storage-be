@@ -147,7 +147,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
 
     @Test
     @Order(3)
-    void incompleteHandoverAndCancelledReservationDoNotCreateRentalOrLedgerAccount() {
+    void incompleteHandoverAndCancelledOrExpiredReservationDoNotCreateRentalOrLedgerAccount() {
         Fixture pending = fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT, CheckInStatus.scheduled, false);
         assertThatThrownBy(() -> service.confirmReceipt(pending.actor(), pending.reservationId()))
             .hasMessageContaining("handover is not completed");
@@ -156,8 +156,13 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         assertThatThrownBy(() -> service.confirmReceipt(cancelled.actor(), cancelled.reservationId()))
             .hasMessageContaining("not waiting for customer receipt");
 
+        Fixture expired = fixture(ReservationStatus.EXPIRED, CheckInStatus.completed, false);
+        assertThatThrownBy(() -> service.confirmReceipt(expired.actor(), expired.reservationId()))
+            .hasMessageContaining("not waiting for customer receipt");
+
         assertThat(rentals.findByReservation_Id(pending.reservationId())).isEmpty();
         assertThat(rentals.findByReservation_Id(cancelled.reservationId())).isEmpty();
+        assertThat(rentals.findByReservation_Id(expired.reservationId())).isEmpty();
         assertThat(jdbc.queryForObject("select count(*) from rental_ledger_accounts", Integer.class)).isZero();
     }
 
