@@ -2,6 +2,7 @@ package com.storagehub.api.reservation;
 
 import java.time.Instant;
 import java.util.List;
+import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
 
 public class ReservationDetailResponse {
 
@@ -15,6 +16,7 @@ public class ReservationDetailResponse {
     private Instant cancelledAt;
     private String cancelReason;
     private List<ReservationGoodsItemResponse> goodsItems;
+    private List<CustomerPaymentReceiptResponse> payments;
 
     public ReservationDetailResponse() {
     }
@@ -39,4 +41,6 @@ public class ReservationDetailResponse {
     public void setCancelReason(String cancelReason) { this.cancelReason = cancelReason; }
     public List<ReservationGoodsItemResponse> getGoodsItems() { return goodsItems; }
     public void setGoodsItems(List<ReservationGoodsItemResponse> goodsItems) { this.goodsItems = goodsItems; }
+    public List<CustomerPaymentReceiptResponse> getPayments() { return payments; }
+    public void setPayments(List<CustomerPaymentReceiptResponse> payments) { this.payments = payments; }
 }

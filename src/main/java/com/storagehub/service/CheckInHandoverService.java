@@ -3,6 +3,8 @@ package com.storagehub.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.checkin.CheckInResponse;
+import com.storagehub.api.checkin.CheckInPaymentRequest;
+import com.storagehub.api.checkin.CheckInPaymentResponse;
 import com.storagehub.api.checkin.CompleteCheckInRequest;
 import com.storagehub.api.checkin.MarkNoShowRequest;
 import com.storagehub.api.checkin.RejectCheckInRequest;
@@ -14,6 +16,9 @@ import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.FileAsset;
 import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.model.Payment;
+import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationStatus;
@@ -28,7 +33,9 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.RentalRepository;
+import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
@@ -38,6 +45,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -61,7 +69,9 @@ public class CheckInHandoverService {
     private final CheckInRepository checkInRepository;
     private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
+    private final PaymentRepository paymentRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
+    private final ReservationPricingSnapshotRepository pricingSnapshotRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
@@ -245,6 +255,7 @@ public class CheckInHandoverService {
         }
         validateVariance(reservation, request);
         validateEvidence(checkInId, request.evidenceReferences());
+        requireRemainingPayment(reservation);
         if (accessCredentialService != null
             && !accessCredentialService.hasActiveForReservation(reservation.getId())) {
             throw ApiExceptions.conflict("At least one active access credential must be issued before handover");
@@ -288,6 +299,72 @@ public class CheckInHandoverService {
             reservation.getId()
         );
         return toResponse(reservation, saved, assignment);
+    }
+
+    @Transactional
+    public CheckInPaymentResponse recordRemainingPayment(
+        ActorPrincipal actor,
+        UUID checkInId,
+        CheckInPaymentRequest request
+    ) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getStatus() != CheckInStatus.scheduled
+            || reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+            throw ApiExceptions.conflict("Check-in is not ready to record the remaining payment");
+        }
+        var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (request.amount().compareTo(snapshot.getDueAtCheckIn()) != 0) {
+            throw ApiExceptions.validation("Payment amount must match the remaining check-in amount", Map.of("expectedAmount", snapshot.getDueAtCheckIn()));
+        }
+        String paymentMethod = request.paymentMethod().trim().toUpperCase(Locale.ROOT);
+        if (!paymentMethod.equals("CASH") && !paymentMethod.equals("BANK_TRANSFER")) {
+            throw ApiExceptions.validation("paymentMethod must be CASH or BANK_TRANSFER", Map.of("paymentMethod", request.paymentMethod()));
+        }
+        String reference = request.transactionReference().trim();
+        var existing = paymentRepository.findTopByReservation_IdAndPurposeAndGatewayTransactionNo(
+            reservation.getId(), PaymentType.RENTAL_BALANCE, reference
+        );
+        if (existing.isPresent()) {
+            return toPaymentResponse(existing.get());
+        }
+
+        User operator = requireActor(actor);
+        Instant now = Instant.now();
+        Payment payment = new Payment();
+        payment.setInitiatedBy(operator);
+        payment.setReservation(reservation);
+        payment.setAmount(request.amount());
+        payment.setCurrency("VND");
+        payment.setPurpose(PaymentType.RENTAL_BALANCE);
+        payment.setStatus(PaymentStatus.PAID);
+        payment.setIdempotencyKey("CHECKIN-BALANCE-" + checkInId + "-" + reference);
+        payment.setGatewayIntentId("MANUAL-CHECKIN-" + UUID.randomUUID());
+        payment.setGatewayProvider("MANUAL");
+        payment.setGatewayTransactionNo(reference);
+        payment.setGatewayBankCode(paymentMethod);
+        payment.setGatewayResponseCode("00");
+        payment.setGatewayTransactionStatus("PAID");
+        payment.setPaidAt(now);
+        payment.setProcessedAt(now);
+        Payment saved = paymentRepository.saveAndFlush(payment);
+        auditLogService.recordMutation(
+            operator, "CHECKIN_REMAINING_PAYMENT_RECORDED", "Payment", saved.getId(),
+            reservation.getFacility().getId(), null, toPaymentResponse(saved)
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Đã ghi nhận thanh toán khi nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
+            reservation.getId()
+        );
+        return toPaymentResponse(saved);
     }
 
     @Transactional
@@ -480,12 +557,49 @@ public class CheckInHandoverService {
             checkIn == null ? null : checkIn.getPerformedBy().getFullName(),
             reservation.getId(), reservation.getReservationCode(), reservation.getStatus(),
             reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
-            reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
+            reservation.getCustomer().getEmail(), reservation.getCustomer().getPhone(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), unit.getId(), unit.getCode(), unit.getStatus(),
             assignment.getId(), assignment.getStatus(), reservation.getStartDate(),
             reservation.getEndDate(), declaredPackageCount(reservation.getId()),
             reservation.getTotalGoodsWeightKg(),
-            reservation.getTotalGoodsVolumeM3(), readHandover(checkIn)
+            reservation.getTotalGoodsVolumeM3(), dueAtCheckIn(reservation.getId()), readHandover(checkIn)
+        );
+    }
+
+    private BigDecimal dueAtCheckIn(UUID reservationId) {
+        if (pricingSnapshotRepository == null) {
+            return null;
+        }
+        return pricingSnapshotRepository.findByReservation_Id(reservationId)
+            .map(snapshot -> snapshot.getDueAtCheckIn())
+            .orElse(null);
+    }
+
+    private void requireRemainingPayment(Reservation reservation) {
+        if (pricingSnapshotRepository == null || paymentRepository == null) {
+            return;
+        }
+        var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        if (snapshot == null || snapshot.getDueAtCheckIn() == null
+            || snapshot.getDueAtCheckIn().signum() <= 0) {
+            return;
+        }
+        var payment = paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(
+            reservation.getId(), PaymentType.RENTAL_BALANCE
+        ).orElse(null);
+        if (payment == null || payment.getStatus() != PaymentStatus.PAID
+            || payment.getAmount() == null
+            || payment.getAmount().compareTo(snapshot.getDueAtCheckIn()) != 0) {
+            throw ApiExceptions.conflict("Remaining check-in payment must be recorded before handover");
+        }
+    }
+
+    private CheckInPaymentResponse toPaymentResponse(Payment payment) {
+        return new CheckInPaymentResponse(
+            payment.getId(), payment.getReservation().getId(), payment.getAmount(), payment.getCurrency(),
+            payment.getPurpose(), payment.getStatus(), payment.getGatewayTransactionNo(),
+            payment.getGatewayBankCode(), payment.getPaidAt(), payment.getProcessedAt(),
+            payment.getInitiatedBy().getFullName()
         );
     }
 

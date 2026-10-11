@@ -40,7 +40,9 @@ Response dùng `PageResponse<CheckInResponse>`.
 
 Mỗi `CheckInResponse` trả thêm `declaredPackageCount`, là tổng số kiện từ
 `ReservationGoodsItem.quantity` do khách hàng khai báo. Giá trị này có thể là
-`null` với hồ sơ cũ chưa có hàng hóa chi tiết.
+`null` với hồ sơ cũ chưa có hàng hóa chi tiết. Response cũng trả `customerName`,
+`customerEmail`, `customerPhone` và `dueAtCheckIn` để Staff đối chiếu đúng khách
+hàng và biết số tiền cần thu tại quầy.
 
 ## 2. Schedule check-in
 
@@ -87,13 +89,36 @@ Checklist handover phải có `accessHandedOver = true`. BE yêu cầu reservati
 
 ## 4. Upload hợp đồng và bằng chứng
 
-`POST /api/files` với `entityType=CHECK_IN`, `entityId={checkInId}`. File hợp đồng đã ký là bắt buộc trong UI Staff và được đưa vào `evidenceReferences` cùng ảnh/PDF hiện trạng.
+`POST /api/files` với `entityType=CHECK_IN`, `entityId={checkInId}`. File hợp đồng đã ký là bắt buộc trong UI Staff và được đưa vào `evidenceReferences` cùng ảnh/PDF hiện trạng. UI gắn tiền tố `hop-dong-da-ky-` vào tên tệp hợp đồng để hệ thống nhận diện ổn định.
 
 `GET /api/files/{assetId}` cho actor có quyền đọc check-in và facility tương ứng.
 
-Customer xem lại các tệp đã bàn giao bằng `GET /api/customer/reservations/{reservationId}/check-in-documents`. Mỗi `assetId` trả về được mở hoặc tải qua `GET /api/files/{assetId}` sau khi hệ thống kiểm tra reservation thuộc về Customer đó. UI hiển thị tệp đầu tiên là hợp đồng đã ký và các tệp tiếp theo là bằng chứng bàn giao.
+Customer xem lại các tệp đã bàn giao bằng `GET /api/customer/reservations/{reservationId}/check-in-documents`. Mỗi `assetId` trả về được mở hoặc tải qua `GET /api/files/{assetId}` sau khi hệ thống kiểm tra reservation thuộc về Customer đó. API ưu tiên tệp có tiền tố `hop-dong-da-ky-`, sau đó mới đến các bằng chứng bàn giao. UI hiển thị đúng hợp đồng đã ký và các tệp bằng chứng tương ứng.
 
-## 5. Hoàn tất physical handover
+## 5. Ghi nhận khoản thanh toán còn lại
+
+Staff ghi nhận số tiền `dueAtCheckIn` tại quầy bằng:
+
+`POST /api/staff/check-ins/{checkInId}/remaining-payment`
+
+```json
+{
+  "amount": 3400000,
+  "paymentMethod": "CASH",
+  "transactionReference": "PT-20261012-001",
+  "note": "Ghi nhận tại bước bàn giao và nhận kho"
+}
+```
+
+- Actor phải là Staff, có `PERFORM_CHECKIN` và scope `OPERATE`.
+- Check-in phải ở `scheduled`, reservation phải ở `READY_FOR_CHECKIN`.
+- `amount` phải khớp tuyệt đối với `ReservationPricingSnapshot.dueAtCheckIn`.
+- Request lặp lại cùng mã giao dịch của reservation trả lại biên lai đã ghi nhận.
+- Payment được lưu với `purpose=RENTAL_BALANCE`, `status=PAID`, phương thức và mã giao dịch do Staff nhập.
+
+Customer đọc biên lai qua `GET /api/customer/reservations/{reservationId}/payments` hoặc trường `payments` trong `GET /api/customer/reservations/{reservationId}`. Biên lai hiển thị số tiền, phương thức, mã giao dịch, thời điểm xử lý và nhân viên ghi nhận.
+
+## 6. Hoàn tất physical handover
 
 `POST /api/staff/check-ins/{checkInId}/complete`
 
@@ -121,7 +146,11 @@ StorageUnit reserved → assigned
 
 Không tạo Rental tại endpoint này.
 
-## 6. Cảnh báo cho Nhiệm vụ hằng ngày
+Sau khi Assignment hoàn tất, các response reservation của Customer gồm
+`assignedUnitId`, `assignedUnitCode` và `assignedUnitStatus`. Customer không còn
+hiển thị trạng thái chờ phân kho khi mã gian kho đã được gán.
+
+## 7. Cảnh báo cho Nhiệm vụ hằng ngày
 
 `GET /api/staff/credential-alerts?facilityId={uuid}`
 
@@ -132,7 +161,7 @@ Response là mảng `CredentialAlert`:
 
 Màn hình `Nhiệm vụ hằng ngày` hiển thị hai loại cảnh báo này cùng deadline/lý do và điều hướng tới đúng màn hình nghiệp vụ.
 
-## 7. Nghiệm thu Trả kho và revoke credential
+## 8. Nghiệm thu Trả kho và revoke credential
 
 Khi Staff thực hiện `POST /api/staff/returns/{returnId}/inspection`, BE thu hồi toàn bộ credential ACTIVE của Rental trong cùng transaction:
 
@@ -146,13 +175,13 @@ Có thể thu hồi thủ công từng credential qua `POST /api/staff/access-cr
 
 Thông tin `returnedKey`, `returnedCard`, `returnedLock` trong `ReturnInspectionRequest` tiếp tục ghi nhận đối chiếu vật lý. `revokedAt` là bằng chứng vô hiệu hóa quyền truy cập trên hệ thống.
 
-## 8. Manager credential history
+## 9. Manager credential history
 
 `GET /api/manager/access-credentials?facilityId={uuid}&q={text}&status=ACTIVE|REVOKED&page=0&pageSize=20`
 
 Manager chỉ nhận projection lịch sử gồm loại, reference, `issuedAt`, `issuedBy`, `revokedAt`, `revokedBy`, reservation, customer và unit. API không trả secret thô và không có thao tác issue/revoke cho Manager.
 
-## 9. No-show và reject
+## 10. No-show và reject
 
 - `POST /api/staff/check-ins/{checkInId}/no-show`: chỉ khi lịch đã đến hạn. Giữ assignment/unit để có thể lên lịch lại.
 - `POST /api/staff/check-ins/{checkInId}/reject`: yêu cầu bằng chứng. Hủy assignment, giải phóng unit hoặc chuyển maintenance theo disposition. Không tạo Rental.

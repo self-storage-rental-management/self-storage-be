@@ -64,6 +64,17 @@ public class CheckInController {
         );
     }
 
+    @PostMapping("/{checkInId}/remaining-payment")
+    public ApiResponse<CheckInPaymentResponse> recordRemainingPayment(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody CheckInPaymentRequest request
+    ) {
+        return new ApiResponse<>(
+            service.recordRemainingPayment(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{checkInId}/no-show")
     public ApiResponse<CheckInResponse> markNoShow(
         @PathVariable UUID checkInId,
