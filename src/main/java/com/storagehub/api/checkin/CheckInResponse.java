@@ -27,6 +27,7 @@ public record CheckInResponse(
     UUID customerId,
     String customerName,
     String customerEmail,
+    String customerPhone,
     UUID facilityId,
     String facilityName,
     UUID storageUnitId,
@@ -39,6 +40,7 @@ public record CheckInResponse(
     Integer declaredPackageCount,
     BigDecimal declaredGoodsWeightKg,
     BigDecimal declaredGoodsVolumeM3,
+    BigDecimal dueAtCheckIn,
     CompleteCheckInRequest handover
 ) {
 }

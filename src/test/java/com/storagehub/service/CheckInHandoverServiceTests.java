@@ -34,8 +34,10 @@ import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
+import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
@@ -65,7 +67,9 @@ class CheckInHandoverServiceTests {
     @Mock private CheckInRepository checkInRepository;
     @Mock private FileAssetRepository fileAssetRepository;
     @Mock private RentalRepository rentalRepository;
+    @Mock private PaymentRepository paymentRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
+    @Mock private ReservationPricingSnapshotRepository pricingSnapshotRepository;
     @Mock private UserRepository userRepository;
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private FacilityScopeService facilityScopeService;
@@ -84,7 +88,8 @@ class CheckInHandoverServiceTests {
     void setUp() {
         service = new CheckInHandoverService(
             reservationRepository, storageUnitRepository, assignmentRepository,
-            checkInRepository, fileAssetRepository, rentalRepository, goodsItemRepository, userRepository, authorizationService,
+            checkInRepository, fileAssetRepository, rentalRepository, paymentRepository,
+            goodsItemRepository, pricingSnapshotRepository, userRepository, authorizationService,
             facilityScopeService, auditLogService, notificationService, new ObjectMapper()
         );
         staff = entityWithId(new User());
