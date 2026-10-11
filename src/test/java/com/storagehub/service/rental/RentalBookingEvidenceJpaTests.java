@@ -21,6 +21,7 @@ class RentalBookingEvidenceJpaTests {
         @org.springframework.context.annotation.Bean com.storagehub.config.VnpayProperties gateway(){var p=new com.storagehub.config.VnpayProperties();p.setEnabled(true);p.setTmnCode("TEST_ONLY");p.setHashSecret("test-only-no-external-gateway");return p;}
         @org.springframework.context.annotation.Bean com.storagehub.security.ActorContext actors(){return org.mockito.Mockito.mock(com.storagehub.security.ActorContext.class);}
         @org.springframework.context.annotation.Bean com.storagehub.service.AdminAuthorizationService auth(){return org.mockito.Mockito.mock(com.storagehub.service.AdminAuthorizationService.class);}
+        @org.springframework.context.annotation.Bean com.storagehub.service.NotificationService notifications(){return org.mockito.Mockito.mock(com.storagehub.service.NotificationService.class);}
     }
     @Autowired EntityManager em;
     @Autowired RentalBookingEvidenceReader reader;
@@ -29,10 +30,21 @@ class RentalBookingEvidenceJpaTests {
     @Test void authenticatedCallbackPersistenceAndReplayPreserveSandboxProvenance() throws Exception {
         gatewayConfig.setEnabled(true);gatewayConfig.setTmnCode("TEST_ONLY");gatewayConfig.setHashSecret("test-only-no-external-gateway");
         var r=fixture();snapshot(r);var p=payment(r,"VNPAY-",0);p.setStatus(PaymentStatus.PENDING);p.setGatewayProvider("VNPAY");em.flush();
+        p.setPaidAt(null);r.getReservation().setStatus(ReservationStatus.AWAITING_PAYMENT);
+        r.getReservation().setPaymentExpiresAt(Instant.parse("2026-10-10T02:00:00Z"));
         var query=new TreeMap<String,String>();query.put("vnp_TxnRef",p.getGatewayIntentId());query.put("vnp_TmnCode",gatewayConfig.getTmnCode());query.put("vnp_Amount","2000");query.put("vnp_ResponseCode","00");query.put("vnp_TransactionStatus","00");query.put("vnp_TransactionNo","TEST_ONLY_TRANSACTION");
+        query.put("vnp_PayDate","20261010080000");
         var encoded=query.entrySet().stream().map(e->java.net.URLEncoder.encode(e.getKey(),java.nio.charset.StandardCharsets.UTF_8)+"="+java.net.URLEncoder.encode(e.getValue(),java.nio.charset.StandardCharsets.UTF_8)).reduce((a,b)->a+"&"+b).orElseThrow();
         var mac=javax.crypto.Mac.getInstance("HmacSHA512");mac.init(new javax.crypto.spec.SecretKeySpec(gatewayConfig.getHashSecret().getBytes(java.nio.charset.StandardCharsets.UTF_8),"HmacSHA512"));query.put("vnp_SecureHash",HexFormat.of().formatHex(mac.doFinal(encoded.getBytes(java.nio.charset.StandardCharsets.UTF_8))));
-        assertThat(gateway.processCallback(query).rspCode()).isEqualTo("00");assertThat(gateway.processCallback(query).rspCode()).isEqualTo("02");em.flush();em.clear();
+        var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+            new com.storagehub.api.payment.VnpayPublicController(gateway,gatewayConfig)).build();
+        var params=new org.springframework.util.LinkedMultiValueMap<String,String>();query.forEach(params::add);
+        http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/public/payments/vnpay/ipn").params(params))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.RspCode").value("00"));
+        http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/public/payments/vnpay/ipn").params(params))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.RspCode").value("02"));
+        em.flush();em.clear();
         var rental=em.find(Rental.class,r.getId());var evidence=reader.read(customer(rental),rental,false).orElseThrow();
         assertThat(evidence.payments().getFirst().verification()).isEqualTo("SANDBOX");assertThat(evidence.payments().getFirst().reconciliation().status()).isEqualTo("NON_VERIFIED_MONEY");
         assertThat(em.createQuery("select count(a) from ActivityLog a where a.action=:action",Long.class).setParameter("action",com.storagehub.service.PaymentProvenance.CALLBACK_ACTION).getSingleResult()).isEqualTo(1);
