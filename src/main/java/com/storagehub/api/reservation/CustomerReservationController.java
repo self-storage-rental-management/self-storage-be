@@ -181,6 +181,16 @@ public class CustomerReservationController {
         );
     }
 
+    @GetMapping("/{reservationId}/payments")
+    public ApiResponse<List<com.storagehub.api.payment.CustomerPaymentReceiptResponse>> listPayments(
+        @PathVariable UUID reservationId
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.listPayments(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/vnpay/payment-url")
     public ApiResponse<VnpayPaymentUrlResponse> createVnpayPaymentUrl(
         @PathVariable UUID reservationId,

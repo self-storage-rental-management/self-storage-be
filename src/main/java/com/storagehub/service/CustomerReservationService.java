@@ -6,6 +6,7 @@ import com.storagehub.api.reservation.ReservationDetailResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationResponse;
 import com.storagehub.api.file.FileAssetResponse;
+import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Reservation;
@@ -143,6 +144,15 @@ public class CustomerReservationService {
         return toDetailResponse(reservation);
     }
 
+    @Transactional(readOnly = true)
+    public List<CustomerPaymentReceiptResponse> listPayments(ActorPrincipal actor, UUID reservationId) {
+        Reservation reservation = findOwnedReservation(actor, reservationId);
+        return paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
+            .stream()
+            .map(payment -> toPaymentResponse(payment, reservation.getStatus()))
+            .toList();
+    }
+
     @Transactional
     public ReservationDetailResponse confirmReceipt(ActorPrincipal actor, UUID reservationId) {
         if (!actor.hasRole(RoleCode.CUSTOMER)) {
@@ -248,6 +258,16 @@ public class CustomerReservationService {
         return fileAssetRepository.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("CHECK_IN", checkIn.getId())
             .stream()
             .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
+            .sorted((left, right) -> {
+                boolean leftContract = left.getOriginalName() != null
+                    && left.getOriginalName().toLowerCase().startsWith("hop-dong-da-ky-");
+                boolean rightContract = right.getOriginalName() != null
+                    && right.getOriginalName().toLowerCase().startsWith("hop-dong-da-ky-");
+                if (leftContract == rightContract) {
+                    return 0;
+                }
+                return leftContract ? -1 : 1;
+            })
             .map(asset -> new FileAssetResponse(
                 asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
                 asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(), asset.getStatus(), asset.getCreatedAt()
@@ -342,7 +362,7 @@ public class CustomerReservationService {
         ReservationPricingSnapshot snapshot = snapshotRepository
             .findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-        return new ReservationResponse(
+        ReservationResponse response = new ReservationResponse(
             reservation.getId(), reservation.getReservationCode(), reservation.getSourceQuote().getId(),
             reservation.getFacility().getId(), reservation.getUnitType().getId(), reservation.getStatus(),
             reservation.getGoodsReviewStatus(), reservation.getCompatibilityResult(),
@@ -354,6 +374,15 @@ public class CustomerReservationService {
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
+        response.setCustomerName(reservation.getCustomer().getFullName());
+        response.setCustomerEmail(reservation.getCustomer().getEmail());
+        response.setCustomerPhone(reservation.getCustomer().getPhone());
+        if (reservation.getAssignedUnit() != null) {
+            response.setAssignedUnitId(reservation.getAssignedUnit().getId());
+            response.setAssignedUnitCode(reservation.getAssignedUnit().getCode());
+            response.setAssignedUnitStatus(reservation.getAssignedUnit().getStatus().name());
+        }
+        return response;
     }
 
     private ReservationDetailResponse toDetailResponse(Reservation reservation) {
@@ -374,7 +403,24 @@ public class CustomerReservationService {
         response.setCancelledAt(reservation.getCancelledAt());
         response.setCancelReason(reservation.getCancelReason());
         response.setGoodsItems(goodsItems);
+        response.setPayments(paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
+            .stream()
+            .map(payment -> toPaymentResponse(payment, reservation.getStatus()))
+            .toList());
         return response;
+    }
+
+    private CustomerPaymentReceiptResponse toPaymentResponse(Payment payment, ReservationStatus reservationStatus) {
+        return new CustomerPaymentReceiptResponse(
+            payment.getId(), payment.getReservation().getId(), payment.getGatewayIntentId(),
+            payment.getGatewayTransactionNo(), payment.getAmount(), payment.getCurrency(),
+            payment.getRefundedAmount(), payment.getStatus(), payment.getPurpose(), reservationStatus,
+            payment.getGatewayResponseCode(), payment.getGatewayTransactionStatus(),
+            payment.getGatewayPayDate(), payment.getGatewayBankCode(),
+            payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
+            payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
+            payment.getInitiatedBy().getFullName()
+        );
     }
 
     private ReservationGoodsItemResponse toGoodsItemResponse(ReservationGoodsItem item) {
