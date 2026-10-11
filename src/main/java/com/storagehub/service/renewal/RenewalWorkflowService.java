@@ -44,8 +44,8 @@ public class RenewalWorkflowService {
     public RenewalResponse submit(ActorPrincipal a,UUID rentalId,RenewalCommands.Submit body,String key){
         owned(a,rentalId);var user=lockActor(a);var r=store.lockRental(rentalId);em.refresh(r);checkOwner(a,r);
         var replay=store.replay(user,"submit",key,rentalId,body);if(replay.isPresent())return decode(replay.get().dataJson(),RenewalResponse.class);
-        Instant now=now();gate(r,now);var q=store.validQuote(body.renewalQuoteId(),r,user,now);var t=decode(q.getTermsJson(),RenewalQuoteResponse.Terms.class);
-        requireSnapshot(r,t);
+        Instant now=now();var g=gate(r,now);var q=store.validQuote(body.renewalQuoteId(),r,user,now);var t=decode(q.getTermsJson(),RenewalQuoteResponse.Terms.class);
+        requireSnapshot(r,t);requireCurrentTerms(r,g,t);
         // Conservative guard also covers legacy requests and phases not yet coordinated with D3.
         var existing=em.createQuery("select count(n) from Renewal n where n.rental.id=:id and n.status not in :terminal",Long.class)
             .setParameter("id",rentalId).setParameter("terminal",List.of(RenewalStatus.rejected,RenewalStatus.cancelled,RenewalStatus.completed)).getSingleResult();
@@ -56,8 +56,8 @@ public class RenewalWorkflowService {
     public RenewalResponse edit(ActorPrincipal a,UUID id,RenewalCommands.Edit body,String key){
         var n=reads.find(a,id,false);var user=lockActor(a);var r=store.lockRental(n.getRental().getId());em.refresh(r);checkOwner(a,r);
         var replay=store.replay(user,"edit",key,id,body);if(replay.isPresent())return decode(replay.get().dataJson(),RenewalResponse.class);
-        em.refresh(n);pending(n);var wf=store.lockWorkflow(id,body.expectedVersion());Instant now=now();gate(r,now);
-        var q=store.validQuote(body.renewalQuoteId(),r,user,now);var t=decode(q.getTermsJson(),RenewalQuoteResponse.Terms.class);requireSnapshot(r,t);
+        em.refresh(n);pending(n);var wf=store.lockWorkflow(id,body.expectedVersion());Instant now=now();var g=gate(r,now);
+        var q=store.validQuote(body.renewalQuoteId(),r,user,now);var t=decode(q.getTermsJson(),RenewalQuoteResponse.Terms.class);requireSnapshot(r,t);requireCurrentTerms(r,g,t);
         var before=Map.of("status",n.getStatus(),"revision",wf.getAcceptedRevision().getRevisionNumber());
         store.acceptRevision(wf,q,now,body.note());n.setNewEndDate(t.newEndDate());n.setAmount(t.totalAfterDiscount());return finish(user,"edit",key,id,body,n,200,before);
     }
@@ -80,7 +80,7 @@ public class RenewalWorkflowService {
         }else{
             var g=gate(r,now);var accepted=decode(wf.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);requireSnapshot(r,accepted);
             com.storagehub.service.ledger.FinancialContractSpecifications.accepted(wf.getAcceptedRevision(),accepted);
-            if(!store.canonical(accepted).equals(store.canonical(terms(r,g,accepted.pricingPackageCode()))))throw ApiExceptions.conflict("Terms changed: new quote and Customer confirmation required");
+            requireCurrentTerms(r,g,accepted);
             var f=finance.getIfAvailable();if(f==null||!f.consistentThroughApproval())throw deferred("Consistent financial source missing");var state=f.read(r).orElseThrow(()->deferred("Financial state UNKNOWN"));
             if(state.checkedAt()==null||state.checkedAt().isAfter(now)||state.dueObligations()==null)throw deferred("Financial state incomplete");
             if(state.unresolvedDispute()||!state.dueObligations().isEmpty())throw ApiExceptions.conflict("Due obligations or dispute block approval");
@@ -174,6 +174,10 @@ public class RenewalWorkflowService {
         var t=RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),p.discountRate(),g.policy.depositRate());
         if(t.netRent().precision()>14)throw ApiExceptions.conflict("Shared renewal amount exceeds supported precision");
         return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),p.discountRate(),t.subtotal(),t.discountAmount(),t.netRent(),t.depositAmount(),t.remainder(),p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate());
+    }
+    private void requireCurrentTerms(Rental r,Gate g,RenewalQuoteResponse.Terms accepted){
+        if(!store.canonical(accepted).equals(store.canonical(terms(r,g,accepted.pricingPackageCode()))))
+            throw ApiExceptions.conflict("Terms changed: new quote and Customer confirmation required");
     }
     private void requireSnapshot(Rental r,RenewalQuoteResponse.Terms t){if(!Objects.equals(r.getContractEndDate(),t.oldEndDate())||r.getStorageUnit()==null||r.getStorageUnit().getUnitType()==null||!Objects.equals(r.getStorageUnit().getId(),t.storageUnitId())||!Objects.equals(r.getFacility().getId(),t.facilityId())||!Objects.equals(r.getStorageUnit().getUnitType().getId(),t.unitTypeId()))throw ApiExceptions.conflict("Rental allocation/end changed; requote required");
         com.storagehub.service.ledger.FinancialContractSpecifications.validateRenewal(t);

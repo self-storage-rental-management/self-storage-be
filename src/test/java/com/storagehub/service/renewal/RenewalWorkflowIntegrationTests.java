@@ -33,7 +33,7 @@ class RenewalWorkflowIntegrationTests {
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
         @Bean ActorContext actorContext(){return mock(ActorContext.class);}
         @Bean TestClock clock(){return new TestClock();}
-        @Bean RenewalSources.PolicySource policy(){return (r,d)->Optional.of(new RenewalSources.Policy("test-policy","v1",Duration.ofMinutes(30),Duration.ofHours(24),30,new BigDecimal("0.2"),Set.of(PACKAGE)));}
+        @Bean TestPolicy policy(){return new TestPolicy();}
         @Bean TestEligibility eligibility(){return new TestEligibility();}
         @Bean TestPrice prices(){return new TestPrice();}
         @Bean TestFinance finance(){return new TestFinance();}
@@ -43,6 +43,10 @@ class RenewalWorkflowIntegrationTests {
     static class TestPrice implements RenewalSources.PricingSource {
         BigDecimal rate=new BigDecimal("100");
         public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,BigDecimal.ZERO,"VND",2)));}
+    }
+    static class TestPolicy implements RenewalSources.PolicySource {
+        String version="v1";
+        public Optional<RenewalSources.Policy> read(Rental r,LocalDate date){return Optional.of(new RenewalSources.Policy("test-policy",version,Duration.ofMinutes(30),Duration.ofHours(24),30,new BigDecimal("0.2"),Set.of(PACKAGE)));}
     }
     static class TestEligibility implements RenewalSources.EligibilitySource {
         boolean unknown;
@@ -70,12 +74,13 @@ class RenewalWorkflowIntegrationTests {
             return UUID.fromString("00000000-0000-0000-0000-000000000002");}
     }
     @Autowired EntityManager em;@Autowired RenewalWorkflowService commands;@Autowired RenewalReadService reads;
-    @Autowired TestPrice pricing;@Autowired TestEligibility eligibility;@Autowired TestFinance finance;@Autowired TestHold hold;
+    @Autowired TestPrice pricing;@Autowired TestPolicy policy;@Autowired TestEligibility eligibility;@Autowired TestFinance finance;@Autowired TestHold hold;
     @Autowired TestLifecycle lifecycle;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired javax.sql.DataSource datasource;
     @Autowired TestClock clock;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
+    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";}
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
         var r=fixture();var a=customer(r);var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads,commands))
@@ -201,6 +206,54 @@ class RenewalWorkflowIntegrationTests {
         assertThat(updated.acceptedRevision()).isEqualTo(2);assertThat(updated.amount()).isEqualByComparingTo("200");
         assertThat(commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,updated.version()),"approve").status()).isEqualTo(RenewalStatus.approved);
         assertThat(em.createQuery("select count(x) from RenewalAcceptedRevision x",Long.class).getSingleResult()).isEqualTo(2);
+    }
+    @Test void staleQuoteCannotBeSubmittedOrAcceptedAsRevision(){
+        var r=fixture();var a=customer(r);
+        var stale=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        pricing.rate=new BigDecimal("150");
+        assertThatThrownBy(()->commands.submit(a,r.getId(),new RenewalCommands.Submit(stale.id(),null),"stale-submit"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("new quote and Customer confirmation");
+        assertThat(em.createQuery("select count(n) from Renewal n",Long.class).getSingleResult()).isZero();
+        var fresh=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(fresh.id(),null),"fresh-submit");
+        assertThat(n.amount()).isEqualByComparingTo("150");
+        var revision=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        policy.version="v2";
+        assertThatThrownBy(()->commands.edit(a,n.id(),new RenewalCommands.Edit(revision.id(),"consent",n.version()),"stale-edit"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("new quote and Customer confirmation");
+        assertThat(reads.detail(a,n.id(),false).acceptedRevision()).isEqualTo(1);
+        var revised=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        assertThat(commands.edit(a,n.id(),new RenewalCommands.Edit(revised.id(),"consent",n.version()),"fresh-edit").acceptedRevision()).isEqualTo(2);
+    }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void stalePolicyQuoteHttpRejectsAndFreshQuoteCommitsWithJdbcReadback() throws Exception {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        var r=tx.execute(s->fixture());var a=customer(r);var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands))
+            .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        String path="/api/customer/rentals/"+r.getId();
+        var quoted=mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"))
+            .andExpect(status().isOk()).andReturn();
+        String staleId=new ObjectMapper().readTree(quoted.getResponse().getContentAsString()).path("data").path("id").asText();
+        policy.version="v2";
+        mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","stale-policy").contentType("application/json")
+            .content("{\"renewalQuoteId\":\""+staleId+"\"}"))
+            .andExpect(status().isConflict());
+        try(var connection=datasource.getConnection();var statement=connection.prepareStatement("select count(*) from renewals")){
+            try(var rows=statement.executeQuery()){rows.next();assertThat(rows.getLong(1)).isZero();}
+        }
+        var fresh=mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"))
+            .andExpect(status().isOk()).andReturn();
+        String freshId=new ObjectMapper().readTree(fresh.getResponse().getContentAsString()).path("data").path("id").asText();
+        var submitted=mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","fresh-policy").contentType("application/json")
+            .content("{\"renewalQuoteId\":\""+freshId+"\"}"))
+            .andExpect(status().isCreated()).andReturn();
+        String requestId=new ObjectMapper().readTree(submitted.getResponse().getContentAsString()).path("data").path("id").asText();
+        try(var connection=datasource.getConnection();var statement=connection.prepareStatement("select count(*) from renewals")){
+            try(var rows=statement.executeQuery()){rows.next();assertThat(rows.getLong(1)).isEqualTo(1);}
+        }
+        assertThat(reads.detail(a,UUID.fromString(requestId),false).acceptedQuoteId()).isEqualTo(UUID.fromString(freshId));
     }
     @Test void pendingCancellationReleasesSlotKeepsHistoryAndReplays(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
