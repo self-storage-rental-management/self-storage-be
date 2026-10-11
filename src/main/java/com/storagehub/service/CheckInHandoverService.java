@@ -159,7 +159,16 @@ public class CheckInHandoverService {
         checkIn.setReservation(reservation);
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.scheduled);
-        checkIn.setScheduledAt(request.scheduledAt());
+        // The appointment belongs to the customer. Keep the request field for API
+        // compatibility, but never let a staff actor move the customer appointment.
+        Instant appointmentAt = reservation.getAppointmentAt();
+        if (appointmentAt == null) {
+            // Legacy reservations created before appointmentAt was persisted can
+            // still be scheduled once; the value is then pinned for subsequent runs.
+            appointmentAt = request.scheduledAt();
+            reservation.setAppointmentAt(appointmentAt);
+        }
+        checkIn.setScheduledAt(appointmentAt);
         checkIn.setCheckedInAt(null);
         checkIn.setChecklistJson(null);
         checkIn.setReadinessNote(clean(request.note()));
@@ -174,13 +183,13 @@ public class CheckInHandoverService {
             Map.of("reservationStatus", previousStatus),
             Map.of(
                 "reservationStatus", ReservationStatus.READY_FOR_CHECKIN,
-                "scheduledAt", request.scheduledAt()
+                "scheduledAt", appointmentAt
             )
         );
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Lịch nhận kho đã được xác nhận",
-            "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + request.scheduledAt() + ".",
+            "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
             reservation.getId()
         );
         return toResponse(reservation, saved, assignment);
@@ -452,6 +461,7 @@ public class CheckInHandoverService {
             checkIn == null ? null : checkIn.getId(),
             checkIn == null ? null : checkIn.getStatus(),
             checkIn == null ? null : checkIn.getScheduledAt(),
+            reservation.getAppointmentAt(),
             checkIn == null ? null : checkIn.getCheckedInAt(),
             checkIn == null ? null : checkIn.getReadinessNote(),
             checkIn == null ? null : checkIn.getRejectionReason(),
