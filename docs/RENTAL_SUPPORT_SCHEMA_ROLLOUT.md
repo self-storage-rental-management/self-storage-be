@@ -2,7 +2,7 @@
 
 Ngày soạn: 11/10/2026, Asia/Saigon. Đây là hướng dẫn triển khai, không phải xác nhận DB chung đã được cập nhật.
 
-Cập nhật: DB mới dùng version develop `0909` VNPay và `1001` lịch nhận kho; ledger/outbox là Java `1103` ở location mặc định `db/migration`. DB cũ giữ SQL ledger `1001` qua bộ resource lịch sử được customizer tự chọn; không sửa history/checksum. `0910` chỉ resolve khi đã áp dụng. Không scan history root; standalone Flyway phải dùng `DevelopMigrationHistoryLocations.configure(...)`. Payment vẫn opt-in. Xem [báo cáo chuỗi hiện tại](DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md).
+Cập nhật: DB mới dùng version develop `0909` VNPay và `1001` lịch nhận kho; ledger/outbox là Java `1103` ở location mặc định `db/migration`. DB cũ giữ SQL ledger `1001` qua bộ resource lịch sử được customizer tự chọn; không sửa history/checksum. `0910` chỉ resolve khi đã áp dụng. Không scan history root; standalone Flyway phải dùng `DevelopMigrationHistoryLocations.configure(...)`. Payment vẫn opt-in. Xem [database changelog](DATABASE_CHANGELOG.md).
 
 ## Phạm vi
 
