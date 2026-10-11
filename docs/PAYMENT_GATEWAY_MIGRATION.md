@@ -2,7 +2,7 @@
 
 Ngày kiểm chứng: 11/10/2026. Chỉ áp dụng trên DB test; chưa rollout DB chung.
 
-Chuỗi hiện tại ưu tiên develop `0909` VNPay, `1001` lịch nhận kho; ledger mới là `1103`. Bộ SQL lịch sử được tự chọn bằng customizer trên datasource thật. `0910` chỉ resolve khi đã áp dụng, không chạy thêm trên DB mới. Giữ `1101` Payment opt-in và `1102` bất biến; không sửa dữ liệu/lịch sử đã áp dụng. Xem [báo cáo chuỗi hiện tại](DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md).
+Chuỗi hiện tại ưu tiên develop `0909` VNPay, `1001` lịch nhận kho; ledger mới là `1103`. Bộ SQL lịch sử được tự chọn bằng customizer trên datasource thật. `0910` chỉ resolve khi đã áp dụng, không chạy thêm trên DB mới. Giữ `1101` Payment opt-in và `1102` bất biến; không sửa dữ liệu/lịch sử đã áp dụng. Xem [hướng dẫn rollout schema](RENTAL_SUPPORT_SCHEMA_ROLLOUT.md).
 
 ## Phạm vi và location
 
