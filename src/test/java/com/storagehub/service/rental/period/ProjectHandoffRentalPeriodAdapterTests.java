@@ -60,6 +60,28 @@ class ProjectHandoffRentalPeriodAdapterTests {
         verify(checkIns).setParameter("id",rental.getReservation().getId());
         verify(logs).setParameter("id",rental.getReservation().getId());verify(logs).setMaxResults(2);
     }
+    @Test void approvedInclusiveRuleAppliesToOldExclusiveProofWithoutChangingStoredDate() {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        var d=adapter.read(rental).orElseThrow();
+        var p=RentalPeriodResolver.normalize(rental,d).orElseThrow();
+        assertThat(p.lastPermittedDate()).isEqualTo(LocalDate.of(2026,11,1));
+        assertThat(p.endExclusive()).isEqualTo(LocalDate.of(2026,11,2));
+        assertThat(p.convention()).isEqualTo(RentalPeriod.Convention.INCLUSIVE);
+        assertThat(p.reference()).startsWith("project-inclusive-end:v1:");
+        assertThat(rental.getContractEndDate()).isEqualTo(LocalDate.of(2026,11,1));
+        verify(em,never()).persist(any());verify(em,never()).merge(any());
+    }
+    @Test void approvedLegacyReceiptUsesCurrentRuleNotInventedHistoricalProof() throws Exception {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        receipt.setAfterStateJson(mapper.writeValueAsString(Map.of("status","COMPLETED","rentalId",rental.getId())));
+        assertThat(adapter.read(rental).orElseThrow().inclusiveEndDate()).isEqualTo(rental.getContractEndDate());
+        receipt.setActor(id(new User()));assertThat(adapter.read(rental)).isEmpty();
+    }
+    @Test void inclusiveRuleDoesNotHideMalformedEvidenceOrIncompleteHandover() {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        receipt.setAfterStateJson("{}");assertThat(adapter.read(rental)).isEmpty();
+        handover.setStatus(CheckInStatus.scheduled);assertThat(adapter.read(rental)).isEmpty();
+    }
     @Test void beforeCustomerReceiptNoRentalIsCreatedOrQueried() {
         rental.getReservation().setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         clearInvocations(em);

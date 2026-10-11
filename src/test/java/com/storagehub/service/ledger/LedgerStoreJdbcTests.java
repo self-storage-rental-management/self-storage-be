@@ -23,8 +23,8 @@ class LedgerStoreJdbcTests {
     com.zaxxer.hikari.HikariDataSource datasource;JdbcTemplate jdbc;TransactionTemplate tx;LedgerStore store;
     UUID rental,customer,facility,actor;
     @BeforeEach void setup(){
-        datasource=new com.zaxxer.hikari.HikariDataSource();datasource.setJdbcUrl("jdbc:h2:mem:duong-ledger-"+UUID.randomUUID()+";MODE=MySQL;LOCK_TIMEOUT=5000");datasource.setUsername("sa");datasource.setPassword("");datasource.setMaximumPoolSize(4);datasource.setMinimumIdle(1);
-        new ResourceDatabasePopulator(new ClassPathResource("duong-ledger-test-schema.sql")).execute(datasource);
+        datasource=new com.zaxxer.hikari.HikariDataSource();datasource.setJdbcUrl("jdbc:h2:mem:rental-ledger-"+UUID.randomUUID()+";MODE=MySQL;LOCK_TIMEOUT=5000");datasource.setUsername("sa");datasource.setPassword("");datasource.setMaximumPoolSize(4);datasource.setMinimumIdle(1);
+        new ResourceDatabasePopulator(new ClassPathResource("rental-ledger-test-schema.sql")).execute(datasource);
         jdbc=new JdbcTemplate(datasource);tx=new TransactionTemplate(new DataSourceTransactionManager(datasource));store=new LedgerStore(jdbc);
         rental=UUID.randomUUID();customer=UUID.randomUUID();facility=UUID.randomUUID();actor=UUID.randomUUID();
         tx.executeWithoutResult(s->store.open(rental,customer,facility));
@@ -37,7 +37,7 @@ class LedgerStoreJdbcTests {
         UUID id=charge("100");receive(id,"60",LedgerStore.Method.CASH,"cash-1","receipt-1");
         var fresh=new LedgerStore(new JdbcTemplate(datasource)).read(rental).orElseThrow();
         assertThat(fresh.knownOutstanding()).isEqualByComparingTo("40");assertThat(fresh.revision()).isEqualTo(2);
-        assertThat(jdbc.queryForObject("select count(*) from duong_ledger_allocations",Long.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from rental_ledger_allocations",Long.class)).isEqualTo(1);
     }
     @Test void missingAccountIsUnknownNotVerifiedZero(){assertThat(store.read(UUID.randomUUID())).isEmpty();}
     @Test void openingAnEmptyAccountDoesNotCertifyDebt(){assertThat(store.read(rental).orElseThrow().obligations()).isEmpty();assertThat(adapters(null).read(fakeRental())).isEmpty();}

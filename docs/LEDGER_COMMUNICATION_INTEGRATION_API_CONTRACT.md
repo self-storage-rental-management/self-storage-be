@@ -1,6 +1,6 @@
 # Contract tích hợp sổ tài chính và thông báo
 
-Cập nhật: 10/10/2026. Contract của code hiện tại; **không phải xác nhận đã triển khai DB chung**.
+Cập nhật: 11/10/2026. Contract của code hiện tại; **không phải xác nhận đã triển khai DB chung**.
 
 ## 1. Bật module và tương thích
 
@@ -10,7 +10,8 @@ Hai module độc lập, mặc định tắt:
 - `storagehub.integration.communication.enabled=true`: đăng ký hàng đợi thông báo, worker, policy và provider P16/P18/ClosePolicy.
 
 Chỉ bật sau khi DB đích có schema được thống nhất. Schema guard chỉ SELECT các cột cần thiết và dừng khởi động nếu thiếu; không chạy DDL, không tự sửa DB.
-Không có Flyway migration mới. SQL trong `src/test/resources/duong-*-test-schema.sql` chỉ dành cho DB test cô lập.
+Migration `V2026101001__create_rental_ledger_and_notification_outbox.sql` đã chuyển vào `src/main/resources/db/migration` theo phê duyệt; BE tự phát hiện tại location mặc định. Version/nội dung/checksum giữ nguyên, không để SQL trùng ở location cũ. Callback riêng chặn engine chưa chứng nhận/bảng trùng trước DDL ledger. Chưa trực tiếp rollout DB chung; deployment cần backup và kiểm chứng DB đích.
+SQL `rental-ledger-test-schema.sql` và `notification-outbox-test-schema.sql` trong test resources chỉ dành cho H2 test cô lập, không phải migration MySQL.
 Không đổi cấu hình `ddl-auto` của ứng dụng, role/grant, Payment, Booking, Return hoặc writer capacity.
 Khi communication tắt, Support giữ notification trực tiếp hiện có. Khi bật nhưng chưa có close policy hợp lệ, resolve vẫn dùng notification trực tiếp; không tạo bằng chứng nhận giả.
 Không thêm endpoint thu/chuyển tiền. Các hàm ghi ledger là persistence nội bộ; không được gọi từ request chưa xác minh.
@@ -119,7 +120,7 @@ Biên nhận này chỉ xác nhận **nhận thông báo trong ứng dụng**, k
 P18 chỉ trả ReviewNotice sau ACKNOWLEDGED, đúng current RESOLVED event/customer/policy/version và thời điểm không tương lai.
 Chính sách hoặc chu kỳ resolution đổi thì receipt cũ không chứng minh chu kỳ mới; không tự reuse/migrate receipt.
 Auto-close vẫn kiểm review deadline, objective/result, escalation và delivery proof theo service hiện hữu.
-FE hiện chưa tự gọi endpoint acknowledgement; có thể kiểm qua Swagger sau khi rollout module/DB. Chưa có bằng chứng browser E2E hoặc toàn bộ khách hàng production đã nhận thông báo.
+FE đã có wiring đọc trạng thái acknowledgement và nút Customer gửi xác nhận qua API; không tự coi thao tác đọc/thông báo isRead là bằng chứng nhận. Chưa có bằng chứng browser E2E hoặc toàn bộ khách hàng production đã nhận thông báo.
 
 ## 5. Schema cần thống nhất trước rollout
 
@@ -127,16 +128,17 @@ Không đặt SQL test vào production migration. Chưa áp dụng các bảng s
 
 | Bảng riêng | Trường chính / ràng buộc |
 |---|---|
-| duong_ledger_accounts | rental_id PK, customer_id, facility_id, revision >=0 |
-| duong_ledger_obligations | id PK, rental_id FK, renewal_id nullable, kind, amount DECIMAL(19,0), due_at_ms, source_ref; unique rental/source/kind; index rental/due |
-| duong_ledger_receipts | id PK, rental_id FK, method, amount, evidence_ref unique, evidence_file_id, actor_id, received_at_ms; index rental/received |
-| duong_ledger_allocations | receipt_id + obligation_id PK, rental_id, amount; composite FK bảo đảm receipt/obligation cùng Rental; index obligation |
-| duong_ledger_refunds | id PK, rental_id, receipt_id, obligation_id, amount, status, decision_ref unique, payout_ref unique nullable; FK allocation; index receipt/obligation/status |
-| duong_ledger_commands | actor_id + operation + key_hash PK, rental_id FK, payload_hash, result_id |
-| duong_notification_outbox | id PK, recipient_id, resource_id, kind, resolution_event_id nullable, policy_ref/version, content, key_hash/payload_hash, status, attempts, retry_at_ms, notification_id unique nullable, acknowledged_at nullable |
+| rental_ledger_accounts | rental_id PK, customer_id, facility_id, revision >=0; FK binary projection tới rentals/users/facilities |
+| rental_ledger_obligations | id PK, rental_id FK, renewal_id nullable, kind, amount DECIMAL(19,0), due_at_ms, source_ref; unique rental/source/kind; index rental/due; FK binary renewal projection |
+| rental_ledger_receipts | id PK, rental_id FK, method, amount, evidence_ref unique, evidence_file_id, actor_id, received_at_ms; index rental/received; FK binary file/actor projections |
+| rental_ledger_allocations | receipt_id + obligation_id PK, rental_id, amount; composite FK bảo đảm receipt/obligation cùng Rental; index obligation |
+| rental_ledger_refunds | id PK, rental_id, receipt_id, obligation_id, amount, status, decision_ref unique, payout_ref unique nullable; FK allocation; index receipt/obligation/status |
+| rental_ledger_commands | actor_id + operation + key_hash PK, rental_id FK, payload_hash, result_id; FK binary actor projection |
+| notification_outbox | id PK, recipient_id, resource_id, kind, resolution_event_id nullable, policy_ref/version, content, key_hash/payload_hash, status, attempts, retry_at_ms, notification_id unique nullable, acknowledged_at nullable; FK binary recipient/notification projections |
 
-UUID của các bảng mới trong SQL test là VARCHAR(36); JSON/projection kiểm tuple với Rental/User/Facility thực.
-Chưa tạo FK tới shared UUID binary entities: phải thống nhất kiểu UUID, FK, collation, index và kế hoạch backfill/import chính thức trước migration.
+UUID trong H2 test schema là VARCHAR(36). Migration MySQL dùng CHAR(36) ascii_bin tương thích JDBC hiện tại, kèm cột BINARY(16) generated/stored bằng UNHEX(REPLACE(...)) để tạo FK tới bảng chung mà không ALTER kiểu UUID của bảng chung.
+FK kiểm sự tồn tại, không chứng nhận đúng tuple customer/facility/Rental hoặc coverage lịch sử; service/caller vẫn phải kiểm ownership, tuple và chứng từ. Resource/event outbox là tham chiếu đa hình nên không tạo FK giả tới một bảng duy nhất.
+Chỉ đã kiểm chứng MySQL 8.4 trên DB test mới, chưa chứng nhận TiDB hoặc DB chung. SQL ledger đã áp dụng storagehub_local test ngày 10/10/2026, không phải rollout shared. Không seed/balance backfill hoặc grant quyền trong migration này.
 Outbox unique(resource_id,kind,key_hash), index(status,retry_at_ms,id), index(resource,kind,resolution_event,status).
 Guard cột hiện tại không thay kiểm chứng đầy đủ FK/index/engine/transaction isolation trên MySQL/TiDB.
 
@@ -175,3 +177,7 @@ GET `/api/customer/notifications/{id}/acknowledgement`, không có body. Respons
 P02 access lifecycle, P05/P07/P10 common capacity/hold writer protocol và P19 objective-specific result chưa được module này triển khai.
 P01/P06/P14 vẫn cần writer-backed coverage; P11/P13 mới có primitives, không đủ protocol để công bố port READY.
 Không dùng mock, nợ 0, policy mặc định hoặc simulated payment để vượt các giới hạn này.
+
+### Schema Payment bổ sung 11/10/2026
+
+Migration Java opt-in 2026101101 bổ sung payments.gateway_intent_id theo Entity hiện hành, không đổi endpoint/DTO/writer/quyền. Profile rollout dùng db/migration + db/paymentmigration; ledger đã ở location chung, Payment vẫn opt-in. Mã hiện có giữ nguyên; NULL/blank nhận LEGACY-UNVERIFIED + Payment ID, vẫn UNVERIFIED, không chứng minh thu tiền hoặc simulation/financial coverage. Collision/schema bất thường bị chặn, không ghi đè/cắt reference. Chưa chạy Payment migration trên DB chung/storagehub_local. Xem PAYMENT_GATEWAY_MIGRATION.md và báo cáo test/startup riêng.

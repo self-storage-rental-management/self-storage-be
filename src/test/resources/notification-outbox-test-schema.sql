@@ -1,5 +1,5 @@
--- Isolated TEST database only; not a registered migration.
-CREATE TABLE duong_notification_outbox (
+-- Isolated TEST schema for the notification outbox. Not a runtime initializer.
+CREATE TABLE notification_outbox (
  id VARCHAR(36) PRIMARY KEY,
  recipient_id VARCHAR(36) NOT NULL,
  resource_id VARCHAR(36) NOT NULL,
@@ -17,5 +17,5 @@ CREATE TABLE duong_notification_outbox (
  acknowledged_at VARCHAR(40),
  UNIQUE (resource_id,kind,key_hash)
 );
-CREATE INDEX idx_duong_notice_dispatch ON duong_notification_outbox(status,retry_at_ms,id);
-CREATE INDEX idx_duong_notice_review ON duong_notification_outbox(resource_id,kind,resolution_event_id,status);
+CREATE INDEX idx_notification_outbox_dispatch ON notification_outbox(status,retry_at_ms,id);
+CREATE INDEX idx_notification_outbox_review ON notification_outbox(resource_id,kind,resolution_event_id,status);

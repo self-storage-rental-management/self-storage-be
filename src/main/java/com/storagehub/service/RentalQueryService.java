@@ -28,6 +28,8 @@ public class RentalQueryService {
     private org.springframework.beans.factory.ObjectProvider<RentalReadSources.DateSource> dateSources;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<java.time.Clock> clocks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.rental.RentalBookingEvidenceReader> bookingEvidenceReaders;
 
     public PageResponse<RentalSummaryResponse> list(ActorPrincipal actor, RentalQuery query, boolean manager, String correlationId) {
         Set<UUID> facilities = authorize(actor, manager, query.facilityId());
@@ -43,7 +45,12 @@ public class RentalQueryService {
         return new RentalDetailResponse(s.id(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
-            financial(r), access(r), s.dateSemantics());
+            financial(r), access(r), s.dateSemantics(), bookingEvidence(actor,r,manager));
+    }
+
+    private RentalBookingEvidence bookingEvidence(ActorPrincipal actor,Rental rental,boolean manager) {
+        var reader=bookingEvidenceReaders==null?null:bookingEvidenceReaders.getIfAvailable();
+        return reader==null?null:reader.read(actor,rental,manager).orElse(null);
     }
 
     private java.time.Instant now() {
