@@ -73,6 +73,7 @@ class RenewalWorkflowIntegrationTests {
     @Autowired TestPrice pricing;@Autowired TestEligibility eligibility;@Autowired TestFinance finance;@Autowired TestHold hold;
     @Autowired TestLifecycle lifecycle;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    @Autowired javax.sql.DataSource datasource;
     @Autowired TestClock clock;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
@@ -259,15 +260,80 @@ class RenewalWorkflowIntegrationTests {
         }
     }
     private ActorPrincipal customer(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());}
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"MATCH","REFERENCE","VERSION","CUTOFF","MISSING_POLICY","EXPIRED_POLICY","RECOVERY","UNKNOWN_CALENDAR"})
+    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void publishedPolicyAndBoundEligibilityGateHttpQuoteWithCommittedReadback(String kind) throws Exception {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        var r=tx.execute(s->{var rental=fixture();rental.getStorageUnit().setStatus(StorageUnitStatus.occupied);em.flush();return rental;});
+        if(!kind.equals("MISSING_POLICY"))tx.executeWithoutResult(s->{
+            var setting=new SystemSetting();setting.setSettingKey(com.storagehub.service.renewal.integration.RenewalPolicyPublicationService.key(r.getFacility().getId()));
+            setting.setGroupName("TEST");setting.setLabel("TEST");setting.setSettingType("text");
+            var policy=new PublishedRenewalPolicy("RENEWAL_POLICY_V1",r.getFacility().getId(),1,"test-published-v1",r.getCustomer().getId(),NOW.minusSeconds(1),
+                LocalDate.of(2026,10,1),kind.equals("EXPIRED_POLICY")?LocalDate.of(2026,10,5):LocalDate.of(2026,11,30),30,24,30,new BigDecimal("0.2"),Set.of(PACKAGE),
+                new PublishedRenewalPolicy.Signing(60,60),new PublishedRenewalPolicy.Term("CALENDAR_DAYS","Asia/Ho_Chi_Minh",1,3,7,8,LocalTime.of(17,0),LocalTime.of(8,0)));
+            try{setting.setValue(mapper.writeValueAsString(policy));}catch(Exception e){throw new IllegalStateException(e);}em.persist(setting);
+        });
+        var periods=(com.storagehub.service.rental.period.RentalPeriodResolver)org.springframework.test.util.ReflectionTestUtils.getField(commands,"periods");
+        var published=new com.storagehub.service.renewal.integration.PublishedRenewalPolicyAdapters(
+            new com.storagehub.service.renewal.integration.RenewalPolicyPublicationService(em,mapper,null,null),periods,em,mapper,null);
+        var factory=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        factory.addBean("policy",(RenewalSources.PolicySource)(rental,start)->published.read(rental,start));
+        var termCalls=new java.util.concurrent.atomic.AtomicInteger();
+        factory.addBean("term",(com.storagehub.service.overdue.OverdueSources.TermSource)(rental,at)->published.term(rental,at).map(t->{
+            if(termCalls.incrementAndGet()!=2)return t;
+            return new com.storagehub.service.overdue.OverdueSources.Term(kind.equals("REFERENCE")?"OTHER":t.policyRef(),kind.equals("VERSION")?"v2":t.policyVersion(),
+                t.lastPermittedDate(),t.warningThroughDay(),t.seriousThroughDay(),t.urgentThroughDay(),t.recoveryFromDay(),
+                kind.equals("CUTOFF")?t.recoveryCutoff().minusSeconds(1):t.recoveryCutoff(),t.recoveryStart());
+        }));
+        // External receiver/calendar are TEST-ONLY boundary fixtures; published policy and DB services are real.
+        factory.addBean("recovery",new com.storagehub.service.overdue.OverdueSources.RecoverySource(){
+            public com.storagehub.service.overdue.OverdueSources.Handoff receive(Rental rental,String ref,String reason,String key,Instant at){throw new UnsupportedOperationException();}
+            public Optional<com.storagehub.service.overdue.OverdueSources.RecoveryState> state(Rental rental,Instant at){return Optional.of(new com.storagehub.service.overdue.OverdueSources.RecoveryState(rental.getId(),rental.getFacility().getId(),at,kind.equals("RECOVERY")));}
+        });
+        var calendar=mock(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class);
+        when(calendar.atomic()).thenReturn(true);when(calendar.feasible(any(Rental.class),any(),any())).thenReturn(kind.equals("UNKNOWN_CALENDAR")?Optional.empty():Optional.of(true));factory.addBean("calendar",calendar);
+        var coverage=new com.storagehub.service.renewal.integration.SharedRenewalEligibilityEvidenceSource(factory.getBeanProvider(com.storagehub.service.overdue.OverdueSources.RecoverySource.class),factory.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class),factory.getBeanProvider(com.storagehub.service.overdue.OverdueSources.TermSource.class));
+        factory.addBean("coverage",coverage);
+        factory.addBean("eligibility",new com.storagehub.service.renewal.integration.SharedRenewalEligibilitySource(new com.storagehub.service.renewal.integration.RenewalOperationalGuard(em),periods,factory.getBeanProvider(com.storagehub.service.overdue.OverdueSources.TermSource.class),factory.getBeanProvider(com.storagehub.service.renewal.integration.RenewalEligibilityEvidenceSource.class)));
+        var oldPolicy=org.springframework.test.util.ReflectionTestUtils.getField(commands,"policies");var oldEligibility=org.springframework.test.util.ReflectionTestUtils.getField(commands,"eligibility");
+        try{
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"policies",factory.getBeanProvider(RenewalSources.PolicySource.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"eligibility",factory.getBeanProvider(RenewalSources.EligibilitySource.class));
+            var context=mock(ActorContext.class);when(context.required()).thenReturn(customer(r));
+            var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands))
+                .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+            var result=mvc.perform(post("/api/customer/rentals/"+r.getId()+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"));
+            if(kind.equals("MATCH"))result.andExpect(status().isOk()).andExpect(jsonPath("data.renewalPolicyVersion").value("test-published-v1"));
+            else result.andExpect(status().isConflict());
+            tx.executeWithoutResult(s->{em.clear();assertThat(em.find(Rental.class,r.getId()).getContractEndDate()).isEqualTo(r.getContractEndDate());
+                var rows=em.createQuery("select q from RenewalQuote q where q.rental.id=:id",RenewalQuote.class).setParameter("id",r.getId()).getResultList();
+                assertThat(rows).hasSize(kind.equals("MATCH")?1:0);
+                if(!rows.isEmpty())assertThat(rows.getFirst().getTermsJson()).contains("test-published-v1","system-setting:");
+            });
+            try(var connection=datasource.getConnection();var statement=connection.prepareStatement("select terms_json from renewal_quotes where rental_id=?")){
+                var uuid=r.getId();statement.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(uuid.getMostSignificantBits()).putLong(uuid.getLeastSignificantBits()).array());
+                try(var rows=statement.executeQuery()){
+                    if(kind.equals("MATCH")){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).contains("test-published-v1","system-setting:");}
+                    assertThat(rows.next()).isFalse();
+                }
+            }
+        }finally{
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"policies",oldPolicy);org.springframework.test.util.ReflectionTestUtils.setField(commands,"eligibility",oldEligibility);
+        }
+    }
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.
     private Rental fixture(){
-        Facility f=new Facility();f.setCode("TEST");f.setName("Test");f.setAddress("Test");f.setCity("Test");em.persist(f);
-        User u=new User();u.setEmail("fixture@test.invalid");u.setFullName("Test Customer");u.setPasswordHash("test-only");em.persist(u);
+        String fixtureKey=UUID.randomUUID().toString().substring(0,8);
+        Facility f=new Facility();f.setCode("TEST-"+fixtureKey);f.setName("Test");f.setAddress("Test");f.setCity("Test");em.persist(f);
+        User u=new User();u.setEmail(fixtureKey+"@test.invalid");u.setFullName("Test Customer");u.setPasswordHash("test-only");em.persist(u);
         UnitType t=new UnitType();t.setFacility(f);t.setCode("M");t.setName("Medium");t.setLengthM(BigDecimal.ONE);t.setWidthM(BigDecimal.ONE);t.setHeightM(BigDecimal.ONE);t.setMonthlyPrice(new BigDecimal("100"));t.setMaxLoadKg(BigDecimal.ONE);t.setRackLengthM(BigDecimal.ONE);t.setRackWidthM(BigDecimal.ONE);t.setRackHeightM(BigDecimal.ONE);em.persist(t);
-        StorageUnit unit=new StorageUnit();unit.setFacility(f);unit.setUnitType(t);unit.setCode("TEST-1");em.persist(unit);
+        StorageUnit unit=new StorageUnit();unit.setFacility(f);unit.setUnitType(t);unit.setCode("TEST-"+fixtureKey);em.persist(unit);
         ReservationQuote q=new ReservationQuote();q.setCustomer(u);q.setFacility(f);q.setUnitType(t);q.setPricingPackageCode("TEST");q.setPolicyVersion("test-only");q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,11,1));q.setRentalMonths(1);q.setMonthlyPrice(new BigDecimal("100"));q.setSubtotal(new BigDecimal("100"));q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(new BigDecimal("100"));q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(new BigDecimal("100"));q.setDueAtCheckIn(new BigDecimal("100"));q.setTotalInitialObligation(new BigDecimal("100"));q.setQuotedAt(NOW);q.setExpiresAt(NOW.plusSeconds(1800));em.persist(q);
-        Reservation res=new Reservation();res.setReservationCode("TEST");res.setCustomer(u);res.setSourceQuote(q);res.setIdempotencyKey("TEST");res.setFacility(f);res.setUnitType(t);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());em.persist(res);
+        Reservation res=new Reservation();res.setReservationCode("TEST-"+fixtureKey);res.setCustomer(u);res.setSourceQuote(q);res.setIdempotencyKey("TEST-"+fixtureKey);res.setFacility(f);res.setUnitType(t);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());em.persist(res);
         Rental r=new Rental();r.setCustomer(u);r.setFacility(f);r.setStorageUnit(unit);r.setReservation(res);r.setStartDate(q.getStartDate());r.setContractEndDate(LocalDate.of(2026,10,31));r.setMonthlyPrice(new BigDecimal("100"));em.persist(r);em.flush();return r;
     }
 }
