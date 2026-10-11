@@ -29,9 +29,12 @@ public class RenewalWorkflowService {
     private final ObjectProvider<Clock> clocks;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.renewal.integration.RenewalOperationalGuard> operationalGuards;
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}
     public List<RenewalCommands.Option> options(ActorPrincipal a,UUID rentalId){
-        var r=owned(a,rentalId);var g=gate(r,now());return prices(r,g).stream().map(p->new RenewalCommands.Option(p.packageCode(),p.months())).toList();
+        var r=owned(a,rentalId);var context=policyPeriod(r);
+        return prices(r,context).stream().map(p->new RenewalCommands.Option(p.packageCode(),p.months())).toList();
     }
     public RenewalQuoteResponse quote(ActorPrincipal a,UUID rentalId,RenewalCommands.Quote body){
         owned(a,rentalId);var r=store.lockRental(rentalId);em.refresh(r);checkOwner(a,r);Instant now=now();var g=gate(r,now);
@@ -137,18 +140,25 @@ public class RenewalWorkflowService {
     private Rental owned(ActorPrincipal a,UUID id){RenewalReadService.authorize(a,false,false);return rentals.findByIdAndCustomer_Id(id,a.userId()).orElseThrow(()->ApiExceptions.notFound("Rental was not found"));}
     private static void checkOwner(ActorPrincipal a,Rental r){if(r.getCustomer()==null||!a.userId().equals(r.getCustomer().getId()))throw ApiExceptions.notFound("Rental was not found");}
     private User lockActor(ActorPrincipal a){var user=em.find(User.class,a.userId(),LockModeType.PESSIMISTIC_WRITE);if(user==null)throw ApiExceptions.unauthorized("Actor no longer exists");return user;}
+    private record PolicyPeriod(RenewalSources.Policy policy,com.storagehub.service.rental.period.RentalPeriod period){}
     private record Gate(RenewalSources.Policy policy,RenewalSources.Eligibility eligibility,com.storagehub.service.rental.period.RentalPeriod period){}
-    private Gate gate(Rental r,Instant now){
+    private PolicyPeriod policyPeriod(Rental r){
+        var guard=operationalGuards==null?null:operationalGuards.getIfAvailable();
+        if(guard!=null)guard.requireNoKnownConflict(r);
         if(r.getStatus()!=RentalStatus.active||r.getContractEndDate()==null)throw ApiExceptions.conflict("Move-out/non-active or incomplete rental blocks renewal");
         var period=periods==null?null:periods.require(r);if(period==null)throw deferred("Rental date provenance unknown");
         var source=policies.getIfAvailable();if(source==null)throw deferred("BO renewal policy missing");var p=source.read(r,period.endExclusive()).orElseThrow(()->deferred("BO renewal policy missing"));
         if(p.reference()==null||p.reference().isBlank()||p.version()==null||p.version().isBlank()||p.eligiblePackageIds()==null||p.quoteTtl()==null||p.quoteTtl().isNegative()||p.quoteTtl().isZero()||p.paymentWindow()==null||p.paymentWindow().isNegative()||p.paymentWindow().isZero()||p.depositRate()==null||p.requestWindowDays()<0)throw deferred("Incomplete BO policy");
+        return new PolicyPeriod(p,period);
+    }
+    private Gate gate(Rental r,Instant now){
+        var context=policyPeriod(r);var p=context.policy();var period=context.period();
         var es=eligibility.getIfAvailable();if(es==null)throw deferred("Eligibility/cutoff missing");var e=es.read(r,now).orElseThrow(()->deferred("Eligibility UNKNOWN"));
         if(!e.datesVerified()||e.recoveryCutoff()==null)throw deferred("Unverified date provenance/cutoff");
         if(e.recoveryBlocked()||!e.feasible()||!now.isBefore(e.recoveryCutoff()))throw ApiExceptions.conflict("Recovery/cutoff conflict");
         if(now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().isBefore(period.lastPermittedDate().minusDays(p.requestWindowDays())))throw ApiExceptions.conflict("Renewal window not open");return new Gate(p,e,period);
     }
-    private List<RenewalSources.Price> prices(Rental r,Gate g){
+    private List<RenewalSources.Price> prices(Rental r,PolicyPeriod g){
         var s=pricing.getIfAvailable();if(s==null)throw deferred("Authoritative renewal pricing/rounding source missing");
         var data=s.read(r,g.period.endExclusive()).orElseThrow(()->deferred("Renewal pricing UNKNOWN"));
         if(r.getStorageUnit()==null||r.getStorageUnit().getUnitType()==null)throw ApiExceptions.conflict("Rental unit type missing");
@@ -159,7 +169,7 @@ public class RenewalWorkflowService {
         result.sort(Comparator.comparingInt(RenewalSources.Price::months).thenComparing(RenewalSources.Price::packageCode));return result;
     }
     private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code){
-        var p=prices(r,g).stream().filter(x->x.packageCode().equals(code)).findFirst().orElseThrow(()->ApiExceptions.conflict("Package not eligible for Renewal"));
+        var p=prices(r,new PolicyPeriod(g.policy(),g.period())).stream().filter(x->x.packageCode().equals(code)).findFirst().orElseThrow(()->ApiExceptions.conflict("Package not eligible for Renewal"));
         var t=RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),p.discountRate(),g.policy.depositRate());
         if(t.netRent().precision()>14)throw ApiExceptions.conflict("Shared renewal amount exceeds supported precision");
         return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),p.discountRate(),t.subtotal(),t.discountAmount(),t.netRent(),t.depositAmount(),t.remainder(),p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate());

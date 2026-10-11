@@ -97,4 +97,16 @@ class OverdueServicePaginationTests {
             assertThat(result.data()).hasSize(3).allSatisfy(r -> {assertThat(r.overdueDays()).isEqualTo(days);assertThat(r.priority()).isEqualTo(days==1?"WARNING":days==7?"URGENT":"RECOVERY");});
         }
     }
+    @Test void inclusiveExpiryIsNotOverdueUntilFollowingDayAndPolicyMustMatchIt(){
+        var today=NOW.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
+        rentals.forEach(r->r.setContractEndDate(today));
+        assertThat(service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST").data()).isEmpty();
+        rentals.forEach(r->r.setContractEndDate(today.minusDays(1)));
+        assertThat(service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST").data())
+            .hasSize(3).allSatisfy(row->assertThat(row.overdueDays()).isEqualTo(1));
+        when(terms.term(any(),eq(NOW))).thenAnswer(a->{Rental r=a.getArgument(0);return Optional.of(new Term(
+            "TEST","v1",r.getContractEndDate().minusDays(1),3,6,7,8,NOW.plusSeconds(86400),NOW.plusSeconds(172800)));});
+        assertThatThrownBy(()->service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST"))
+            .hasMessageContaining("policy/date mapping inconsistent");
+    }
 }
