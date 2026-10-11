@@ -10,5 +10,10 @@ public record RentalBookingEvidence(UUID rentalId,UUID reservationId,String curr
     List<PaymentRecord> payments,boolean paymentsTruncated) {
     public record Amounts(BigDecimal netRentalAmount,BigDecimal reservationDepositAmount,BigDecimal securityDepositAmount,
         BigDecimal remainingRentalAmount,BigDecimal dueAtCheckIn,BigDecimal totalInitialObligation) {}
-    public record PaymentRecord(UUID id,String purpose,String status,BigDecimal amount,Instant processedAt,String verification) {}
+    public record PaymentRecord(UUID id,String purpose,String status,BigDecimal amount,Instant processedAt,String verification,
+        com.storagehub.service.ledger.PaymentReconciliationPreflight.Plan reconciliation) {
+        public PaymentRecord(UUID id,String purpose,String status,BigDecimal amount,Instant processedAt,String verification) {
+            this(id,purpose,status,amount,processedAt,verification,null);
+        }
+    }
 }

@@ -47,7 +47,11 @@ public class SupportService {
             where.append(" and t.facility.id in :scopes");params.put("scopes",scopes);
             if(audience==Audience.STAFF){where.append(" and t.assignedTo.id=:actor");params.put("actor",actor.userId());}
         }
-        if(q.facilityId()!=null){requireScope(actor,q.facilityId(),FacilityScopeLevel.READ);where.append(" and t.facility.id=:facility");params.put("facility",q.facilityId());}
+        if(q.facilityId()!=null){
+            if(audience!=Audience.CUSTOMER)requireScope(actor,q.facilityId(),audience==Audience.STAFF?FacilityScopeLevel.OPERATE:FacilityScopeLevel.READ);
+            // Customer visibility is already restricted to owned tickets above; no staff facility grant is required.
+            where.append(" and t.facility.id=:facility");params.put("facility",q.facilityId());
+        }
         if(q.staffId()!=null){where.append(" and t.assignedTo.id=:staff");params.put("staff",q.staffId());}
         if(q.status()!=null){where.append(" and t.status=:status");params.put("status",q.status());}
         if(!q.search().isEmpty()){where.append(" and (lower(t.subject) like :search escape '!' or lower(t.description) like :search escape '!')");params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");}

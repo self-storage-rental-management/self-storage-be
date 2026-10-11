@@ -66,7 +66,18 @@ class RenewalOperationIntegrationTests {
         public void release(Renewal n,UUID hold){releases++;}
         public RenewalOperationSources.Deposit deposit(Renewal n,RenewalQuoteResponse.Terms t,UUID actor,String key,Instant deadline){deposits++;if(advanceDeposit)clock.time=clock.time.plusSeconds(1);return new RenewalOperationSources.Deposit(UUID.randomUUID(),n.getId(),outcome,t.renewalDepositAmount(),"VND",outcome==RenewalOperationSources.Outcome.SUCCESS?clock.time:null);}
         public boolean safeToExpire(Renewal n){return true;}
-        public RenewalOperationSources.Statement statement(Renewal n,RenewalQuoteResponse.Terms t,Instant now){return new RenewalOperationSources.Statement(n.getId(),n.getId(),"TEST-v1",now.plusSeconds(300),t.remainingRentalAmount(),"VND",List.of(n.getId()));}
+        int statementMode;
+        public RenewalOperationSources.Statement statement(Renewal n,RenewalQuoteResponse.Terms t,Instant now){
+            return switch(statementMode){
+                case 1 -> null;
+                case 2 -> new RenewalOperationSources.Statement(n.getId(),n.getId(),"TEST-v1",now,t.remainingRentalAmount(),"VND",List.of(n.getId()));
+                case 3 -> new RenewalOperationSources.Statement(n.getId(),UUID.randomUUID(),"TEST-v1",now.plusSeconds(300),t.remainingRentalAmount(),"VND",List.of(n.getId()));
+                case 4 -> new RenewalOperationSources.Statement(n.getId(),n.getId(),"",now.plusSeconds(300),t.remainingRentalAmount(),"VND",List.of(n.getId()));
+                case 5 -> new RenewalOperationSources.Statement(n.getId(),n.getId(),"TEST-v1",now.plusSeconds(300),t.remainingRentalAmount(),"VND",List.of(n.getId(),n.getId()));
+                case 6 -> new RenewalOperationSources.Statement(n.getId(),n.getId(),"TEST-v1",now.plusSeconds(300),new BigDecimal("1.001"),"VND",List.of(n.getId()));
+                default -> new RenewalOperationSources.Statement(n.getId(),n.getId(),"TEST-v1",now.plusSeconds(300),t.remainingRentalAmount(),"VND",List.of(n.getId()));
+            };
+        }
         public RenewalOperationSources.Receipt cash(Renewal n,UUID statement,String receipt,UUID actor,String key,Instant now){cashes++;return new RenewalOperationSources.Receipt(UUID.randomUUID(),n.getId(),statement,new BigDecimal("80"),"VND",now);}
         public void requireFullyPaid(Renewal n,RenewalQuoteResponse.Terms t,Instant now){if(advanceCompletion)clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);if(!fullyPaid)throw ApiExceptions.conflict("TEST incomplete required payment");}
         public void require(ActorPrincipal a,Renewal n,String purpose,List<UUID> ids){if(unsafeEvidence)throw ApiExceptions.notFound("TEST inaccessible evidence");}
@@ -88,6 +99,35 @@ class RenewalOperationIntegrationTests {
     @Autowired TestDateEvidence dateEvidence;
     @BeforeEach void reset(){clock.time=NOW;ops.atomic=true;ops.authorized=true;ops.fullyPaid=true;ops.policyKnown=true;ops.slotKnown=true;ops.unsafeEvidence=false;ops.failConsume=false;ops.advanceDeposit=false;ops.advanceCompletion=false;ops.assignedIds=Set.of();ops.deposits=ops.cashes=ops.consumes=ops.releases=0;ops.outcome=RenewalOperationSources.Outcome.SUCCESS;sources.financeKnown=sources.termKnown=sources.atomic=true;sources.enqueues=sources.handoffs=0;}
     @Test void paymentEngineTimestampMayBeLaterThanCommandStart(){var n=fixture();ops.advanceDeposit=true;assertThat(service.deposit(actor(n,RoleCode.CUSTOMER),n.getId(),new RenewalOperationCommands.Version(version(n)),"advancing-clock").state().depositPaidAt()).isEqualTo(NOW.plusSeconds(1));}
+    @Test void invalidStatementsNeverReachCashWriterOrChangeVersion(){
+        var n=scheduled();var staff=actor(n,RoleCode.STAFF);var before=version(n);
+        try{for(int mode=1;mode<=6;mode++){
+            ops.statementMode=mode;
+            String key="invalid-statement-"+mode;
+            assertThatThrownBy(()->service.statement(staff,n.getId())).hasMessageContaining("Payable statement");
+            assertThatThrownBy(()->service.cash(staff,n.getId(),new Cash(n.getId(),"TEST",true,before),key)).hasMessageContaining("Payable statement");
+            assertThat(ops.cashes).isZero();assertThat(version(n)).isEqualTo(before);
+        }}finally{ops.statementMode=0;}
+    }
+    @Test void availableLedgerMustMatchStatementRentalAndActualObligations(){
+        var n=scheduled();var staff=actor(n,RoleCode.STAFF);
+        var original=org.springframework.test.util.ReflectionTestUtils.getField(service,"ledgers");
+        var provider=mock(org.springframework.beans.factory.ObjectProvider.class);
+        var ledger=mock(com.storagehub.service.ledger.LedgerStore.class);when(provider.getIfAvailable()).thenReturn(ledger);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"ledgers",provider);
+        try{
+            when(ledger.read(n.getRental().getId())).thenReturn(Optional.empty());
+            assertThatThrownBy(()->service.statement(staff,n.getId())).hasMessageContaining("ledger account missing");
+            var r=n.getRental();
+            when(ledger.read(r.getId())).thenReturn(Optional.of(new com.storagehub.service.ledger.LedgerStore.Snapshot(
+                r.getId(),UUID.randomUUID(),r.getFacility().getId(),0,List.of(),List.of(),List.of())));
+            assertThatThrownBy(()->service.statement(staff,n.getId())).hasMessageContaining("ledger binding invalid");
+            when(ledger.read(r.getId())).thenReturn(Optional.of(new com.storagehub.service.ledger.LedgerStore.Snapshot(
+                r.getId(),r.getCustomer().getId(),r.getFacility().getId(),0,List.of(),List.of(),List.of())));
+            assertThatThrownBy(()->service.statement(staff,n.getId())).hasMessageContaining("obligation missing");
+            assertThat(ops.cashes).isZero();
+        }finally{org.springframework.test.util.ReflectionTestUtils.setField(service,"ledgers",original);}
+    }
     @Test void slowFinancialVerificationCannotCompletePastDeadline(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrival");ops.advanceCompletion=true;assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST slow finance"),"slow")).hasMessageContaining("deadline");assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,6));}
     @Test void httpRejectsMissingHeadersInjectedAmountsAndManagerCompletion() throws Exception {
         var n=fixture();var actors=mock(ActorContext.class);when(actors.required()).thenReturn(actor(n,RoleCode.CUSTOMER));

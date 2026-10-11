@@ -32,11 +32,13 @@ import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.service.ledger.LedgerStore;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -59,6 +61,7 @@ public class CustomerReservationService {
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
+    private final ObjectProvider<LedgerStore> ledgerStores;
 
     @Autowired
     public CustomerReservationService(
@@ -71,7 +74,8 @@ public class CustomerReservationService {
         ReservationPricingSnapshotRepository snapshotRepository,
         ReservationGoodsItemRepository goodsItemRepository,
         AuditLogService auditLogService,
-        NotificationService notificationService
+        NotificationService notificationService,
+        ObjectProvider<LedgerStore> ledgerStores
     ) {
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
@@ -83,6 +87,25 @@ public class CustomerReservationService {
         this.goodsItemRepository = goodsItemRepository;
         this.auditLogService = auditLogService;
         this.notificationService = notificationService;
+        this.ledgerStores = ledgerStores;
+    }
+
+    /** Compatibility constructor retained for existing service tests and integrations. */
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        FileAssetRepository fileAssetRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService
+    ) {
+        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, fileAssetRepository, snapshotRepository, goodsItemRepository,
+            auditLogService, notificationService, null);
     }
 
     /** Compatibility constructor retained for service unit tests and existing integrations. */
@@ -171,6 +194,9 @@ public class CustomerReservationService {
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (ledgerStores != null && ledgerStores.getIfAvailable() != null) {
+            com.storagehub.service.ledger.FinancialContractSpecifications.validateInitial(snapshot);
+        }
         var existingRental = rentalRepository.findByReservation_Id(reservationId);
         Rental rental = existingRental.orElseGet(() -> {
             Rental created = new Rental();
@@ -184,6 +210,15 @@ public class CustomerReservationService {
             created.setMonthlyPrice(snapshot.getMonthlyPrice());
             return rentalRepository.saveAndFlush(created);
         });
+        // Open the subledger only for a Rental created by this confirmed receipt event.
+        // The ledger writer joins this method's transaction; existing/legacy Rentals are not backfilled.
+        if (existingRental.isEmpty() && ledgerStores != null) {
+            LedgerStore ledger = ledgerStores.getIfAvailable();
+            if (ledger != null) {
+                com.storagehub.service.ledger.FinancialContractSpecifications.initial(rental, snapshot);
+                ledger.open(rental.getId(), rental.getCustomer().getId(), rental.getFacility().getId());
+            }
+        }
 
         reservation.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
