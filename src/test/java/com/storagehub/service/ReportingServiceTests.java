@@ -63,7 +63,6 @@ class ReportingServiceTests {
     @Mock ActivityLogRepository activityLogRepository;
     @Mock AdminAuthorizationService authorizationService;
     @Mock FacilityScopeService facilityScopeService;
-    @Mock ReportingPaymentEvidence paymentEvidence;
 
     private ReportingService service;
 
@@ -84,8 +83,7 @@ class ReportingServiceTests {
             maintenanceTaskRepository,
             activityLogRepository,
             authorizationService,
-            facilityScopeService,
-            paymentEvidence
+            facilityScopeService
         );
 
         facilityId = UUID.randomUUID();
@@ -138,7 +136,6 @@ class ReportingServiceTests {
         when(storageUnitRepository.findByFacility_Id(facilityId)).thenReturn(List.of(u1, u2));
         when(rentalRepository.findByFacility_Id(facilityId)).thenReturn(List.of(rental));
         when(paymentRepository.findPaidPaymentsByFacility(facilityId)).thenReturn(List.of(payment));
-        when(paymentEvidence.isRealCollected(payment)).thenReturn(true);
         when(checkInRepository.countByReservation_Facility_IdAndStatusAndCheckedInAtBetween(eq(facilityId), eq(CheckInStatus.completed), any(), any()))
             .thenReturn(5L);
         when(returnCaseRepository.countByFacility_IdAndStatusNotIn(eq(facilityId), any()))
@@ -195,7 +192,6 @@ class ReportingServiceTests {
         p1.setPaidAt(Instant.now());
 
         when(paymentRepository.findByStatus(PaymentStatus.PAID)).thenReturn(List.of(p1));
-        when(paymentEvidence.isRealCollected(p1)).thenReturn(true);
         when(facilityRepository.findAll()).thenReturn(List.of(facility));
 
         BusinessRevenueReportResponse resp = service.getBusinessRevenueReport(businessActor, 6);

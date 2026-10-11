@@ -65,7 +65,6 @@ public class ReportingService {
     private final ActivityLogRepository activityLogRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
-    private final ReportingPaymentEvidence paymentEvidence;
 
     @Transactional(readOnly = true)
     public ManagerReportSummaryResponse getManagerSummary(ActorPrincipal actor, UUID facilityId) {
@@ -141,9 +140,7 @@ public class ReportingService {
             .count();
 
         List<Payment> paidPayments = paymentRepository.findPaidPaymentsByFacility(targetFacilityId);
-        paymentEvidence.requireReportable(paidPayments);
         BigDecimal collectedRevenue = paidPayments.stream()
-            .filter(paymentEvidence::isRealCollected)
             .map(Payment::getAmount)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -222,11 +219,7 @@ public class ReportingService {
         authorizationService.require(actor, SystemPermission.VIEW_REPORTS);
 
         int monthsToLookBack = months != null && months > 0 && months <= 24 ? months : 6;
-        List<Payment> paidHistory = paymentRepository.findByStatus(PaymentStatus.PAID);
-        paymentEvidence.requireReportable(paidHistory);
-        List<Payment> allPaid = paidHistory.stream()
-            .filter(paymentEvidence::isRealCollected)
-            .toList();
+        List<Payment> allPaid = paymentRepository.findByStatus(PaymentStatus.PAID);
 
         BigDecimal totalCollected = allPaid.stream()
             .map(Payment::getAmount)
