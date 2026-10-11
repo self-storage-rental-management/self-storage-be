@@ -2,11 +2,11 @@
 
 Ngày soạn: 11/10/2026, Asia/Saigon. Đây là hướng dẫn triển khai, không phải xác nhận DB chung đã được cập nhật.
 
-Cập nhật: ledger 2026101001 đã vào db/migration theo phê duyệt, BE sẽ tự phát hiện ở location mặc định; không còn cần db/integration-migration. Callback riêng chặn engine chưa chứng nhận/bảng trùng trước DDL ledger. Mục này thay thế hướng dẫn opt-in ledger trước đó; Payment vẫn opt-in.
+Cập nhật: DB mới dùng version develop `0909` VNPay và `1001` lịch nhận kho; ledger/outbox là Java `1103` ở location mặc định `db/migration`. DB cũ giữ SQL ledger `1001` qua bộ resource lịch sử được customizer tự chọn; không sửa history/checksum. `0910` chỉ resolve khi đã áp dụng. Không scan history root; standalone Flyway phải dùng `DevelopMigrationHistoryLocations.configure(...)`. Payment vẫn opt-in. Xem [báo cáo chuỗi hiện tại](DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md).
 
 ## Phạm vi
 
-Migration SQL `2026101001` thêm 6 bảng rental_ledger_* và notification_outbox, không ALTER/DROP bảng chung. Migration Payment opt-in mới `2026101101` bổ sung gateway_intent_id theo Entity hiện hành; mã legacy chỉ là định danh chưa xác minh, không backfill tiền/bằng chứng thanh toán. Không seed/cấp quyền, không sửa checksum SQL đã áp dụng, ngày thuê, tiền hoặc writer. Xem [PAYMENT_GATEWAY_MIGRATION.md](PAYMENT_GATEWAY_MIGRATION.md).
+Migration Java `2026101103` tạo 6 bảng rental_ledger_* và notification_outbox khi chưa có bảng integration; hoặc xác minh, không chạy lại ledger cũ có history `1001` đúng và fingerprint schema khớp. Bảng một phần/không có history phù hợp/cấu trúc lệch dừng, không tự repair. Payment opt-in `2026101101` bổ sung gateway_intent_id theo Entity hiện hành; mã legacy chỉ là định danh chưa xác minh, không backfill tiền/bằng chứng thanh toán. Alignment `1102` chỉ thêm các cột VNPay/lịch nhận kho thiếu sau preflight, không sửa giá trị hiện có. Không seed/cấp quyền, sửa checksum, ngày thuê, tiền hoặc writer. Xem [PAYMENT_GATEWAY_MIGRATION.md](PAYMENT_GATEWAY_MIGRATION.md).
 
 DB local đã xác minh MySQL 8.4.11. Prod đang cấu hình TiDbMySqlDialect, nên không suy DB chung là MySQL chỉ từ README/JDBC prefix. Guard chủ động từ chối TiDB và phiên bản chưa kiểm chứng; không bỏ guard để ép chạy.
 
@@ -53,7 +53,7 @@ WHERE table_schema=DATABASE() AND table_name IN (
 );
 ```
 
-Yêu cầu: migration 2026101001 và 2026101101 success=1, đủ 7 bảng integration và gateway_intent_id VARCHAR(100)/NOT NULL/UNIQUE, Flyway validate và Hibernate validate PASS; đối chiếu FK/index/CHECK và dữ liệu chung trước/sau. Không bật module nếu financial coverage/policy/hold/lifecycle/delivery vẫn thiếu. Không kết luận PAID mô phỏng là đã thu tiền thật.
+Yêu cầu: migration 2026101103 và 2026101101 success=1, history 0909/1001 phù hợp đúng script/checksum và 0910 chỉ nếu đã applied; đủ 7 bảng integration và gateway_intent_id VARCHAR(100)/NOT NULL/UNIQUE; Flyway validate và Hibernate validate PASS. Đối chiếu FK/index/CHECK và dữ liệu chung trước/sau. Không bật module nếu financial coverage/policy/hold/lifecycle/delivery vẫn thiếu. Không kết luận PAID mô phỏng là đã thu tiền thật.
 
 Khi bỏ profile rollout, giữ db/migration (đã chứa ledger); nếu đã áp dụng Payment thì giữ thêm db/paymentmigration cùng class Java tương ứng. Không cần location ledger cũ và không giữ SQL trùng. Giữ clean-disabled=true/ddl-auto=validate, không DROP bảng để rollback code. Default/staging/prod không tự thêm Payment.
 

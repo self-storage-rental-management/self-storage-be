@@ -29,6 +29,7 @@ public class ReservationResponse {
     private BigDecimal totalGoodsVolumeM3;
     private BigDecimal totalGoodsWeightKg;
     private Instant holdExpiresAt;
+    private Instant appointmentAt;
     private Instant createdAt;
 
     // Snapshot discount fields (bảo toàn lịch sử mã giảm giá trên hóa đơn / đơn đặt)
@@ -54,7 +55,7 @@ public class ReservationResponse {
              compatibilityResult, startDate, endDate, totalRentalAmount, reservationDepositAmount,
              securityDepositAmount, remainingRentalAmount, dueAtCheckIn, totalInitialObligation,
              totalGoodsVolumeM3, totalGoodsWeightKg, holdExpiresAt, createdAt,
-             null, 0, totalRentalAmount, BigDecimal.ZERO, BigDecimal.ZERO);
+             null, 0, totalRentalAmount, BigDecimal.ZERO, BigDecimal.ZERO, null);
     }
 
     public ReservationResponse(UUID id, String reservationCode, UUID quoteId, UUID facilityId,
@@ -68,6 +69,24 @@ public class ReservationResponse {
                                BigDecimal totalGoodsWeightKg, Instant holdExpiresAt, Instant createdAt,
                                String pricingPackageCode, int rentalMonths, BigDecimal grossRentalAmount,
                                BigDecimal discountRate, BigDecimal discountAmount) {
+        this(id, reservationCode, quoteId, facilityId, unitTypeId, status, goodsReviewStatus,
+             compatibilityResult, startDate, endDate, totalRentalAmount, reservationDepositAmount,
+             securityDepositAmount, remainingRentalAmount, dueAtCheckIn, totalInitialObligation,
+             totalGoodsVolumeM3, totalGoodsWeightKg, holdExpiresAt, createdAt, pricingPackageCode,
+             rentalMonths, grossRentalAmount, discountRate, discountAmount, null);
+    }
+
+    public ReservationResponse(UUID id, String reservationCode, UUID quoteId, UUID facilityId,
+                               UUID unitTypeId, ReservationStatus status,
+                               GoodsReviewStatus goodsReviewStatus,
+                               CompatibilityResult compatibilityResult, LocalDate startDate,
+                               LocalDate endDate, BigDecimal totalRentalAmount,
+                               BigDecimal reservationDepositAmount, BigDecimal securityDepositAmount,
+                               BigDecimal remainingRentalAmount, BigDecimal dueAtCheckIn,
+                               BigDecimal totalInitialObligation, BigDecimal totalGoodsVolumeM3,
+                               BigDecimal totalGoodsWeightKg, Instant holdExpiresAt, Instant createdAt,
+                               String pricingPackageCode, int rentalMonths, BigDecimal grossRentalAmount,
+                               BigDecimal discountRate, BigDecimal discountAmount, Instant appointmentAt) {
         this.id = id;
         this.reservationCode = reservationCode;
         this.quoteId = quoteId;
@@ -93,6 +112,7 @@ public class ReservationResponse {
         this.grossRentalAmount = grossRentalAmount;
         this.discountRate = discountRate;
         this.discountAmount = discountAmount;
+        this.appointmentAt = appointmentAt;
     }
 
     public UUID getId() { return id; }
@@ -115,6 +135,7 @@ public class ReservationResponse {
     public BigDecimal getTotalGoodsWeightKg() { return totalGoodsWeightKg; }
     public Instant getHoldExpiresAt() { return holdExpiresAt; }
     public Instant getCreatedAt() { return createdAt; }
+    public Instant getAppointmentAt() { return appointmentAt; }
 
     public String getPricingPackageCode() { return pricingPackageCode; }
     public int getRentalMonths() { return rentalMonths; }

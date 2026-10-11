@@ -26,7 +26,9 @@ public class RentalSupportSchemaRolloutConfiguration {
             var jdbc=new JdbcTemplate(datasource);
             long existing=jdbc.queryForObject("select count(*) from information_schema.tables where table_schema=database() and table_name in ('rental_ledger_accounts','rental_ledger_obligations','rental_ledger_receipts','rental_ledger_allocations','rental_ledger_refunds','rental_ledger_commands','notification_outbox')",Long.class);
             boolean installed=Arrays.stream(flyway.info().applied()).anyMatch(info -> info.getVersion()!=null
-                && "2026101001".equals(info.getVersion().toString())
+                && ("2026101103".equals(info.getVersion().toString())
+                    || "2026101001".equals(info.getVersion().toString()) && info.getScript()!=null
+                    && info.getScript().endsWith("V2026101001__create_rental_ledger_and_notification_outbox.sql"))
                 && (info.getState()==MigrationState.SUCCESS || info.getState()==MigrationState.OUT_OF_ORDER));
             if(existing>0 && (!installed || existing!=7))
                 throw new IllegalStateException("Schema rollout stopped: existing integration tables/history need reconciliation; no repair/reset performed");

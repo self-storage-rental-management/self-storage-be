@@ -14,8 +14,8 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.UserFacilityScope;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.FacilityRepository;
-import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.RoleRepository;
+import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
@@ -69,6 +69,7 @@ public class LocalDemoDataInitializer {
             facilities.size(), unitTypes.size(), unitCount, packageCount, userCount
         );
     }
+   
 
     private Map<String, Facility> seedFacilities() {
         Map<String, Facility> result = new HashMap<>();
@@ -199,7 +200,14 @@ public class LocalDemoDataInitializer {
             new DemoUserDefinition("customer@storagehub.demo", "Demo Customer", "+84 908 123 456", RoleCode.CUSTOMER, "Customer@1234!", "HCM-Q1-F01", FacilityScopeLevel.READ),
             new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "HCM-Q1-F01", FacilityScopeLevel.OPERATE),
             new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "HCM-Q1-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", null, null)
+            new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", null, null),
+            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", null, null),
+            new DemoUserDefinition("thanhthao725218@gmail.com", "Thanh Thao", "+84 900 000 002", RoleCode.CUSTOMER, "Customer@1234!", null, null),
+            new DemoUserDefinition("staff.bd@storagehub.demo", "Staff Binh Duong", "+84 900 000 003", RoleCode.STAFF, "Staff@1234!", "BD-F01", FacilityScopeLevel.OPERATE),
+            new DemoUserDefinition("staff.q1@storagehub.demo", "Staff Quan 1", "+84 900 000 004", RoleCode.STAFF, "Staff@1234!", "HCM-Q1-F01", FacilityScopeLevel.OPERATE),
+            new DemoUserDefinition("manager.bd@storagehub.demo", "Manager Binh Duong", "+84 900 000 005", RoleCode.MANAGER, "Manager@1234!", "BD-F01", FacilityScopeLevel.MANAGE),
+            new DemoUserDefinition("manager.q1@storagehub.demo", "Manager Quan 1", "+84 900 000 006", RoleCode.MANAGER, "Manager@1234!", "HCM-Q1-F01", FacilityScopeLevel.MANAGE),
+            new DemoUserDefinition("bo@storagehub.demo", "Business Owner", "+84 900 000 007", RoleCode.BUSINESS, "Business@1234!", null, null)
         )) {
             Role role = roleRepository.findByCode(definition.role())
                 .orElseThrow(() -> new IllegalStateException("Role has not been initialized: " + definition.role()));
@@ -266,6 +274,13 @@ public class LocalDemoDataInitializer {
 
     private record FacilityDefinition(String code, String name, String address, String city) {}
 
+    private record RentalPackageDefinition(
+        String code,
+        String name,
+        int rentalMonths,
+        BigDecimal discountRate
+    ) {}
+
     private record UnitTypeDefinition(
         String code,
         String name,
@@ -279,12 +294,6 @@ public class LocalDemoDataInitializer {
         String zone
     ) {}
 
-    private record RentalPackageDefinition(
-        String code,
-        String name,
-        int rentalMonths,
-        BigDecimal discountRate
-    ) {}
 
     private record DemoUserDefinition(
         String email,

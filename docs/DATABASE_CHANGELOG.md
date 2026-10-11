@@ -1,5 +1,25 @@
 # Database changelog
 
+## 2026-10-11 — Ưu tiên version develop, tương thích lịch sử đã áp dụng
+
+Mục này thay thế phương án reconcile bên dưới. DB mới dùng `2026100909=add_vnpay_payment_fields` và `2026101001=add_customer_checkin_appointment` của develop. Ledger/outbox dùng Java version mới `2026101103`; `2026101102` giữ nguyên để bổ sung cột thiếu cho DB cũ.
+
+SQL đã áp dụng được chuyển nguyên nội dung sang từng thư mục `db/migration-history/*`. `DevelopMigrationHistoryLocations` chỉ SELECT lịch sử trên datasource thực tế rồi chọn đúng biến thể; không sửa script/checksum/success trong DB. VNPay `0910` chỉ được resolve nếu đã áp dụng, không chạy mới để tránh thêm cột hai lần. Không scan cả thư mục history gốc.
+
+`1103` tạo đủ 7 bảng khi chưa có bảng integration; chỉ tái sử dụng ledger cũ có đúng bằng chứng `1001` và fingerprint schema MySQL 8.4 đã kiểm chứng. Bảng thiếu, cấu trúc lệch hoặc không có lịch sử phù hợp bị chặn, không tự repair/reset. Không backfill tiền, cấp quyền hoặc bật module. **Chỉ kiểm thử DB test, chưa rollout DB chung.**
+
+Chi tiết chuỗi, file và bằng chứng: [DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md](DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md).
+
+## 2026-10-11 — Reconcile migration trùng sau merge develop (DB test)
+
+Giữ nguyên migration đã kiểm chứng `2026100909=remove legacy rental end date`, `2026101001=create rental ledger and notification outbox`, cùng version/script/checksum. Ba SQL develop trùng được lưu nguyên nội dung ngoài default location tại `db/migration-archive/develop`, không tự thực thi.
+
+Thêm Java `db.migration.V2026101102__align_vnpay_and_customer_checkin_schema` để bổ sung cột VNPay và lịch nhận kho; preflight toàn bộ cột, chỉ thêm cột thiếu, không sửa giá trị hiện có/history hoặc tự đổi kiểu. Cột sai cấu trúc dừng; engine ngoài MySQL 8.4 chưa được chứng nhận.
+
+Đây là chuỗi tương thích với lịch sử DB test đã quan sát, **chưa rollout DB chung**. DB có version 0909/0910/1001 mang script khác phải đối chiếu và chuẩn bị resource tương thích riêng; không repair/delete history/baseline/ignore validation.
+
+Chi tiết, baseline compile và test: [DEVELOP_MIGRATION_RECONCILIATION_20261011.md](DEVELOP_MIGRATION_RECONCILIATION_20261011.md).
+
 Tài liệu này ghi các thay đổi schema trong môi trường local/demo. Local dùng Hibernate `ddl-auto=update` kết hợp Flyway cho các migration tương thích; staging/production dùng Flyway và Hibernate `ddl-auto=validate`:
 
 ```properties
@@ -153,7 +173,7 @@ Các cột cũ như `timezone`, `price_per_m3`, `area_m2`, `volume_m3` hoặc `r
 
 `AWAITING_PAYMENT` đến hạn chuyển sang `PAYMENT_GRACE` thay vì `EXPIRED`. Trong grace, Reservation vẫn trừ capacity. Hết `complaint_expires_at` mà chưa có complaint thì mới chuyển `EXPIRED`, đặt `archived_at` và giải phóng capacity.
 
-Đã xóa provider class, gateway interface, payment-intent/reconcile API, public webhook API, webhook entity/repository và cấu hình MoMo khỏi code. Các cột/bảng cũ có thể vẫn tồn tại trong MySQL local vì `ddl-auto=update` không drop schema; chúng không còn được map hoặc sử dụng và có thể xóa thủ công sau khi sao lưu dữ liệu cần thiết.
+Các cột/bảng thanh toán cũ có thể vẫn tồn tại trong MySQL local vì `ddl-auto=update` không drop schema; chúng không còn được map hoặc sử dụng và có thể xóa thủ công sau khi sao lưu dữ liệu cần thiết.
 
 ## 2026-10-02 — Payment complaint và Manager review
 

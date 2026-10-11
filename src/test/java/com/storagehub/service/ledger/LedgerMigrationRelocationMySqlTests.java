@@ -18,10 +18,16 @@ class LedgerMigrationRelocationMySqlTests {
             var jdbc=new JdbcTemplate(datasource);
             assertThat(jdbc.queryForObject("select checksum from flyway_schema_history where version='2026101001' and success=1",Integer.class)).isEqualTo(-1198625055);
             long before=jdbc.queryForObject("select count(*) from flyway_schema_history",Long.class);
-            var flyway=Flyway.configure().dataSource(datasource).locations("classpath:db/migration","classpath:db/paymentmigration")
-                .callbacks(new LedgerMigrationSafetyCallback()).baselineOnMigrate(false).cleanDisabled(true).load();
-            flyway.validate();assertThat(flyway.info().pending()).isEmpty();flyway.migrate();
-            assertThat(jdbc.queryForObject("select count(*) from flyway_schema_history",Long.class)).isEqualTo(before);
+            var flyway=com.storagehub.config.DevelopMigrationHistoryLocations.configure(Flyway.configure().dataSource(datasource).locations("classpath:db/migration","classpath:db/paymentmigration")
+                .callbacks(new LedgerMigrationSafetyCallback()).baselineOnMigrate(false).cleanDisabled(true).outOfOrder(false)).load();
+            var oldHistory=jdbc.queryForList("select version,script,checksum,success from flyway_schema_history order by installed_rank");
+            assertThat(flyway.getConfiguration().isValidateOnMigrate()).isTrue();
+            assertThat(flyway.info().pending()).allSatisfy(info -> assertThat(info.getVersion().toString()).isIn("2026101102","2026101103"));
+            int pending=flyway.info().pending().length;
+            flyway.migrate();flyway.validate();flyway.migrate();
+            assertThat(jdbc.queryForObject("select count(*) from flyway_schema_history",Long.class)).isEqualTo(before+pending);
+            assertThat(jdbc.queryForList("select version,script,checksum,success from flyway_schema_history order by installed_rank"))
+                .containsAll(oldHistory);
         }
     }
 }

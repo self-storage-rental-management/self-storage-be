@@ -13,7 +13,9 @@ public class LedgerMigrationSafetyCallback implements Callback {
     @Override public boolean supports(Event event, Context context) {
         return event == Event.BEFORE_EACH_MIGRATE && context.getMigrationInfo() != null
             && context.getMigrationInfo().getVersion() != null
-            && "2026101001".equals(context.getMigrationInfo().getVersion().toString());
+            && "2026101001".equals(context.getMigrationInfo().getVersion().toString())
+            && context.getMigrationInfo().getScript()!=null
+            && context.getMigrationInfo().getScript().endsWith("V2026101001__create_rental_ledger_and_notification_outbox.sql");
     }
     @Override public boolean canHandleInTransaction(Event event, Context context) { return true; }
     @Override public String getCallbackName() { return "rental-ledger-schema-safety"; }
