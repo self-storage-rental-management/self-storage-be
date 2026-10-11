@@ -74,7 +74,9 @@ class SharedRenewalEligibilitySourceTests {
         new ApplicationContextRunner().withBean(RenewalOperationalGuard.class,()->guard).withBean(RentalPeriodResolver.class,()->periods)
             .withUserConfiguration(SharedRenewalEligibilitySource.class).run(ctx->assertThat(ctx).doesNotHaveBean(RenewalSources.EligibilitySource.class));
         new ApplicationContextRunner().withBean(RenewalOperationalGuard.class,()->guard).withBean(RentalPeriodResolver.class,()->periods)
-            .withUserConfiguration(SharedRenewalEligibilitySource.class).withPropertyValues("storagehub.integration.renewal-operational-checks.enabled=true")
-            .run(ctx->{assertThat(ctx).hasSingleBean(RenewalSources.EligibilitySource.class);assertThat(ctx).doesNotHaveBean(RenewalEligibilityEvidenceSource.class);assertThat(ctx).doesNotHaveBean(RenewalSources.ExtensionHoldSource.class);assertThat(ctx).doesNotHaveBean(RenewalSources.ApprovalLifecycleSource.class);});
+            .withUserConfiguration(SharedRenewalEligibilitySource.class,SharedRenewalEligibilityEvidenceSource.class).withPropertyValues("storagehub.integration.renewal-operational-checks.enabled=true")
+            .run(ctx->{assertThat(ctx).hasSingleBean(RenewalSources.EligibilitySource.class);assertThat(ctx).hasSingleBean(RenewalEligibilityEvidenceSource.class);
+                assertThat(ctx.getBean(RenewalEligibilityEvidenceSource.class).read(rental,NOW)).isEmpty();
+                assertThat(ctx).doesNotHaveBean(RenewalSources.ExtensionHoldSource.class);assertThat(ctx).doesNotHaveBean(RenewalSources.ApprovalLifecycleSource.class);});
     }
 }

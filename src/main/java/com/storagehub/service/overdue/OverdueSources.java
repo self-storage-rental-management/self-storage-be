@@ -22,8 +22,11 @@ public final class OverdueSources {
         UUID enqueue(Rental rental,String caseRef,String content,String key,Instant now);
     }
     public record Handoff(UUID reference,String status) {}
+    public record RecoveryState(UUID rentalId,UUID facilityId,Instant checkedAt,boolean recoveryBlocked) {}
     public interface RecoverySource {
         default boolean atomic() {return false;}
+        /** Complete receiver-owned state, including externally initiated Recovery; absent is UNKNOWN. */
+        default Optional<RecoveryState> state(Rental rental,Instant now) { return Optional.empty(); }
         /** Authorized receiver rechecks policy/assets/Return state, deduplicates and persists actual receipt. */
         Handoff receive(Rental rental,String caseRef,String reason,String key,Instant now);
     }

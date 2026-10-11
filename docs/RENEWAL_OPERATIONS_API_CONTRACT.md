@@ -8,7 +8,7 @@ Ngày triển khai: 08/10/2026. Đường dẫn gốc `/api`, JWT Bearer, ApiRes
 
 ## Điều kiện tích hợp dùng chung
 
-Không cài đặt lớp triển khai chạy thực tế/giá trị mặc định cho các giao diện tích hợp trong `service/renewal/operations/RenewalOperationSources.java`.
+SafetySource có adapter persistence opt-in `TransactionalRenewalExtensionHoldSource`, dùng cùng holdRef của D2; chưa ready khi thiếu shared-writer protocol. Các nguồn lịch ký/Recovery/accounting/lifecycle vẫn giữ trạng thái thiếu nguồn, không cài đặt giá trị mặc định hoặc fake provider. Overload pre-approval `CalendarSource.feasible(Rental,now,cutoff)` mặc định UNKNOWN và không tạo Renewal giả để gọi lịch ký. Xem [trạng thái P0/P1, migration và kiểm thử](RENEWAL_P0_P1_IMPLEMENTATION_20261011.md).
 
 | Giao diện tích hợp  | Bảo đảm do chủ nguồn cung cấp                                                                                                                                                                                   | Hành vi khi thiếu                                                                                       |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
