@@ -38,6 +38,10 @@ Manager chỉ giám sát lịch sử và trạng thái credential. API cấp/thu
 
 Response dùng `PageResponse<CheckInResponse>`.
 
+Mỗi `CheckInResponse` trả thêm `declaredPackageCount`, là tổng số kiện từ
+`ReservationGoodsItem.quantity` do khách hàng khai báo. Giá trị này có thể là
+`null` với hồ sơ cũ chưa có hàng hóa chi tiết.
+
 ## 2. Schedule check-in
 
 `POST /api/staff/check-ins/reservations/{reservationId}/schedule`
@@ -93,12 +97,17 @@ Customer xem lại các tệp đã bàn giao bằng `GET /api/customer/reservati
 
 `POST /api/staff/check-ins/{checkInId}/complete`
 
-Request gồm checklist 8 mục, số đo thực tế, hàng hóa, `evidenceReferences`, `handedOverItems` và ghi chú như contract trước đây.
+Request gồm checklist 8 mục, số đo thực tế, số kiện thực tế, hàng hóa,
+`evidenceReferences`, `handedOverItems` và ghi chú như contract trước đây.
 
 Điều kiện chính:
 
 - Check-in `scheduled`, reservation `READY_FOR_CHECKIN`, assignment `ACTIVE`, unit `reserved`, không có Rental `ACTIVE`.
-- 8 checklist đều `true`, có bằng chứng hợp lệ và số đo không vượt capacity. Variance quá 5% phải có chấp nhận và lý do.
+- 8 checklist đều `true`, có bằng chứng hợp lệ và số đo không vượt capacity.
+- Staff phải đối chiếu `packageCount`, `actualMeasurements.weightKg` và
+  `actualMeasurements.actualVolumeM3` với dữ liệu khai báo. Số kiện phải khớp
+  tuyệt đối. Chênh lệch khối lượng hoặc thể tích quá 5% phải có chấp nhận và
+  lý do trong request.
 - Có ít nhất một credential ACTIVE đã cấp.
 
 Transaction transition:
