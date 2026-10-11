@@ -143,16 +143,27 @@ public class VnpayService {
         }
         String responseCode = query.getOrDefault("vnp_ResponseCode", "99");
         String transactionStatus = query.getOrDefault("vnp_TransactionStatus", responseCode);
+        // PAID is terminal for callback metadata, including late funds awaiting reconciliation.
+        // Keep the owner's duplicate response contract without letting a signed replay rewrite
+        // the accepted transaction or invalidate its financial provenance.
+        if (payment.getStatus() == PaymentStatus.PAID) {
+            boolean matches = java.util.Objects.equals(responseCode, payment.getGatewayResponseCode())
+                && java.util.Objects.equals(transactionStatus, payment.getGatewayTransactionStatus())
+                && replayFieldMatches(query.get("vnp_TransactionNo"), payment.getGatewayTransactionNo())
+                && replayFieldMatches(query.get("vnp_PayDate"), payment.getGatewayPayDate())
+                && replayFieldMatches(query.get("vnp_BankCode"), payment.getGatewayBankCode())
+                && replayFieldMatches(query.get("vnp_CardType"), payment.getGatewayCardType());
+            paymentRepository.saveAndFlush(payment);
+            return new CallbackResult("02", matches ? "Order already confirmed"
+                : "Order already confirmed; conflicting callback ignored",
+                payment.getId(), payment.getReservation().getId(), true);
+        }
         payment.setGatewayResponseCode(responseCode);
         payment.setGatewayTransactionStatus(transactionStatus);
         setIfPresent(query.get("vnp_TransactionNo"), payment::setGatewayTransactionNo);
         setIfPresent(query.get("vnp_BankCode"), payment::setGatewayBankCode);
         setIfPresent(query.get("vnp_CardType"), payment::setGatewayCardType);
         setIfPresent(query.get("vnp_PayDate"), payment::setGatewayPayDate);
-        if (payment.getStatus() == PaymentStatus.PAID) {
-            paymentRepository.saveAndFlush(payment);
-            return new CallbackResult("02", "Order already confirmed", payment.getId(), payment.getReservation().getId(), true);
-        }
         payment.setProcessedAt(Instant.now());
         boolean success = "00".equals(responseCode) && "00".equals(transactionStatus);
         Reservation reservation = payment.getReservation();
@@ -528,6 +539,10 @@ public class VnpayService {
 
     private void setIfPresent(String value, java.util.function.Consumer<String> setter) {
         if (value != null && !value.isBlank()) setter.accept(value);
+    }
+    private boolean replayFieldMatches(String incoming, String recorded) {
+        // Missing optional fields were previously no-ops; they must not enrich a PAID row either.
+        return incoming == null || incoming.isBlank() || java.util.Objects.equals(incoming, recorded);
     }
     private void resolveActiveComplaint(Reservation reservation, Instant resolvedAt) {
         if (reservation.getStatus() != ReservationStatus.PAYMENT_REVIEW) return;
