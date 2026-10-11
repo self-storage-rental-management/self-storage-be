@@ -14,6 +14,7 @@ public record CheckInResponse(
     UUID checkInId,
     CheckInStatus checkInStatus,
     Instant scheduledAt,
+    Instant appointmentAt,
     Instant checkedInAt,
     String readinessNote,
     String rejectionReason,

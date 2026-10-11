@@ -93,6 +93,10 @@ public class Reservation extends BaseEntity {
     @Column(nullable = false)
     private LocalDate endDate;
 
+    /** Customer-selected arrival time for storage handover. Staff can only consume this value. */
+    @Column
+    private Instant appointmentAt;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount = BigDecimal.ZERO;
 
