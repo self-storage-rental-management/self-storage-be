@@ -47,7 +47,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerReservationService {
 
     private final ReservationRepository reservationRepository;
-    private final CheckInRepository checkInRepository;
     private final PaymentRepository paymentRepository;
     private final RentalRepository rentalRepository;
     private final StorageUnitRepository storageUnitRepository;

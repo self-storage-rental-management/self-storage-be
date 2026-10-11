@@ -32,8 +32,12 @@ public class RenewalPolicyPublicationService {
         if(rows.isEmpty())return Optional.empty();
         if(rows.size()!=1)throw ApiExceptions.conflict("Renewal policy source is ambiguous");
         var p=decode(rows.getFirst(),facility);
-        if(applicableDate!=null&&(applicableDate.isBefore(p.effectiveFrom())||p.effectiveTo()!=null&&applicableDate.isAfter(p.effectiveTo())))return Optional.empty();
+        if(!appliesOn(p,applicableDate))return Optional.empty();
         return Optional.of(new Stored("system-setting:"+rows.getFirst().getId(),p));
+    }
+    /** Existing inclusive effectiveFrom/effectiveTo semantics, shared by readers and regression tests. */
+    static boolean appliesOn(PublishedRenewalPolicy policy,LocalDate date) {
+        return date==null||!date.isBefore(policy.effectiveFrom())&&(policy.effectiveTo()==null||!date.isAfter(policy.effectiveTo()));
     }
     @Transactional(readOnly=true)
     public PublishedRenewalPolicy get(ActorPrincipal actor,UUID facility) {

@@ -115,6 +115,28 @@ class RentalQueryServiceTests {
         var f=service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false).financialSummary();
         assertThat(f.completeness()).isEqualTo("COMPLETE");assertThat(f.securityDepositAmount()).isEqualByComparingTo("0");
     }
+    @Test void bookingEvidenceIsAdditiveAndDoesNotReplaceUnknownFinancialSummaryOrAccess() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        var actor=actor(RoleCode.CUSTOMER,false,Map.of());
+        var reader=mock(com.storagehub.service.rental.RentalBookingEvidenceReader.class);
+        var evidence=new com.storagehub.api.rental.RentalBookingEvidence(r.getId(),r.getReservation().getId(),"VND",null,List.of(),false);
+        when(reader.read(actor,r,false)).thenReturn(Optional.of(evidence));provider("bookingEvidenceReaders",reader);
+        var dto=service.detail(actor,r.getId(),false);
+        assertThat(dto.bookingEvidence()).isEqualTo(evidence);
+        assertThat(dto.financialSummary().completeness()).isEqualTo("UNKNOWN");
+        assertThat(dto.financialSummary().outstandingAmount()).isNull();assertThat(dto.access().status()).isNull();
+        verify(reader).read(actor,r,false);verify(repo,never()).save(any());
+    }
+    @Test void projectInclusiveDateSourceUsesStoredExpiryAsLastDayWithoutChangingMoney() {
+        var r=rental();when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+        provider("dateSources",(RentalReadSources.DateSource) value -> Optional.of(new RentalReadSources.Dates(
+            value.getId(),value.getStartDate(),value.getContractEndDate(),"project-inclusive-end:v1:test",value.getContractEndDate(),
+            com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE)));
+        var dto=service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false);
+        assertThat(dto.dateSemantics().lastPermittedDate()).isEqualTo(r.getContractEndDate());
+        assertThat(dto.dateSemantics().endExclusive()).isEqualTo(r.getContractEndDate().plusDays(1));
+        assertThat(dto.monthlyPrice()).isEqualTo(r.getMonthlyPrice());assertThat(dto.dataWarnings()).isEmpty();
+    }
     <T> void provider(String field,T value) {
         var factory=new org.springframework.beans.factory.support.DefaultListableBeanFactory();factory.registerSingleton("source",value);
         ReflectionTestUtils.setField(service,field,factory.getBeanProvider((Class<T>)value.getClass()));
