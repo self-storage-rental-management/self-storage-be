@@ -108,6 +108,16 @@ public class CustomerReservationController {
         );
     }
 
+    @PostMapping("/{reservationId}/receipt-confirmation")
+    public ApiResponse<ReservationDetailResponse> confirmReceipt(
+        @PathVariable UUID reservationId
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.confirmReceipt(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/check-in-appointment")
     public ApiResponse<ReservationResponse> setCheckInAppointment(
         @PathVariable UUID reservationId,

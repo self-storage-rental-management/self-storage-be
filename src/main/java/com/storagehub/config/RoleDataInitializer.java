@@ -23,6 +23,7 @@ public class RoleDataInitializer {
 
     private static final int INTERNAL_POLICY_VERSION = 3;
     private static final int POLICY_OWNERSHIP_VERSION = 4;
+    private static final int STAFF_RESERVATION_REVIEW_VERSION = 5;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -83,6 +84,16 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(POLICY_OWNERSHIP_VERSION);
                 }
+                // Reviewing OTHER goods is a facility Staff responsibility in the
+                // booking flow. Upgrade existing roles without replacing custom grants.
+                if (role.getPermissionsPolicyVersion() < STAFF_RESERVATION_REVIEW_VERSION) {
+                    if (code == RoleCode.STAFF) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.APPROVE_RESERVATIONS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(STAFF_RESERVATION_REVIEW_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -116,6 +127,7 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_FACILITIES,
                 SystemPermission.VIEW_UNITS,
                 SystemPermission.VIEW_RESERVATIONS,
+                SystemPermission.APPROVE_RESERVATIONS,
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_CHECKINS,
                 SystemPermission.PERFORM_CHECKIN,
