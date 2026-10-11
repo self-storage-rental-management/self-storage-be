@@ -33,6 +33,7 @@ class RentalBookingEvidenceJpaTests {
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void committedHttpReplayPreservesAcceptedAndLateMetadata(boolean late) throws Exception {
+        gatewayConfig.setEnabled(true);gatewayConfig.setTmnCode("TEST_ONLY");gatewayConfig.setHashSecret("test-only-no-external-gateway");
         var tx = new org.springframework.transaction.support.TransactionTemplate(transactions);
         var ids = tx.execute(status -> {
             var r = fixture(); snapshot(r); var p = payment(r, "VNPAY-", 0);

@@ -15,13 +15,28 @@ public class PaymentReconciliationPreflight {
     private final ObjectProvider<LedgerStore> ledgers;
     public Plan read(Payment p,Rental r,ReservationPricingSnapshot snapshot,PaymentProvenance.Classification classification) {
         String ref=p==null||p.getId()==null?null:"payment:"+p.getId();
-        if(p==null||p.getReservation()==null||p.getReservation().getCustomer()==null)return plan("SOURCE_IDENTITY_UNKNOWN",ref,null,null);
+        if(p==null||p.getId()==null||p.getReservation()==null||p.getReservation().getId()==null
+            ||p.getReservation().getCustomer()==null||p.getReservation().getCustomer().getId()==null
+            ||p.getReservation().getFacility()==null||p.getReservation().getFacility().getId()==null)
+            return plan("SOURCE_IDENTITY_UNKNOWN",ref,null,null);
         if(r==null)return plan("WAITING_RENTAL_ACTIVATION",ref,null,null);
-        if(!Objects.equals(p.getReservation().getId(),r.getReservation().getId()) || !Objects.equals(p.getReservation().getCustomer().getId(),r.getCustomer().getId()))
+        if(r.getId()==null||r.getReservation()==null||r.getReservation().getId()==null
+            ||r.getReservation().getCustomer()==null||r.getReservation().getCustomer().getId()==null
+            ||r.getReservation().getFacility()==null||r.getReservation().getFacility().getId()==null
+            ||r.getCustomer()==null||r.getCustomer().getId()==null||r.getFacility()==null||r.getFacility().getId()==null)
+            return plan("SOURCE_IDENTITY_UNKNOWN",ref,null,null);
+        if(!Objects.equals(p.getReservation().getId(),r.getReservation().getId())
+            ||!Objects.equals(p.getReservation().getCustomer().getId(),r.getCustomer().getId())
+            ||!Objects.equals(p.getReservation().getFacility().getId(),r.getFacility().getId())
+            ||!Objects.equals(r.getReservation().getCustomer().getId(),r.getCustomer().getId())
+            ||!Objects.equals(r.getReservation().getFacility().getId(),r.getFacility().getId()))
             return plan("CROSS_RENTAL_REJECTED",ref,null,null);
         String fingerprint=ref+":"+r.getId()+":"+r.getCustomer().getId()+":"+p.getPurpose()+":"+(p.getAmount()==null?"missing":p.getAmount().stripTrailingZeros().toPlainString());
         if(classification!=PaymentProvenance.Classification.VERIFIED)return plan("NON_VERIFIED_MONEY",ref,null,fingerprint);
         if(p.getPurpose()!=PaymentType.RESERVATION_DEPOSIT || snapshot==null)return plan("ALLOCATION_PURPOSE_UNRESOLVED",ref,null,fingerprint);
+        if(snapshot.getId()==null||snapshot.getReservation()==null
+            ||!Objects.equals(snapshot.getReservation().getId(),r.getReservation().getId()))
+            return plan("CONTRACT_SOURCE_MISMATCH",ref,null,fingerprint);
         var spec=FinancialContractSpecifications.initial(r,snapshot).getFirst();
         if(p.getAmount()==null || p.getAmount().signum()<=0 || p.getAmount().compareTo(snapshot.getReservationDepositAmount())!=0)
             return plan("CONTRACT_AMOUNT_MISMATCH",ref,null,fingerprint);
