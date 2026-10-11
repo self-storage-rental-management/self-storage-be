@@ -47,7 +47,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerReservationService {
 
     private final ReservationRepository reservationRepository;
-    private final CheckInRepository checkInRepository;
     private final PaymentRepository paymentRepository;
     private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
@@ -62,6 +61,8 @@ public class CustomerReservationService {
         ReservationRepository reservationRepository,
         PaymentRepository paymentRepository,
         CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
         FileAssetRepository fileAssetRepository,
         RentalRepository rentalRepository,
         StorageUnitRepository storageUnitRepository,
@@ -73,6 +74,8 @@ public class CustomerReservationService {
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
         this.checkInRepository = checkInRepository;
+        this.rentalRepository = rentalRepository;
+        this.storageUnitRepository = storageUnitRepository;
         this.fileAssetRepository = fileAssetRepository;
         this.rentalRepository = rentalRepository;
         this.storageUnitRepository = storageUnitRepository;
@@ -207,6 +210,72 @@ public class CustomerReservationService {
     public ReservationDetailResponse getDetail(ActorPrincipal actor, UUID reservationId) {
         Reservation reservation = findOwnedReservation(actor, reservationId);
         return toDetailResponse(reservation);
+    }
+
+    @Transactional
+    public ReservationDetailResponse confirmReceipt(ActorPrincipal actor, UUID reservationId) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customer actors can confirm unit receipt");
+        }
+
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(
+            reservationId, actor.userId()
+        ).orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+
+        if (reservation.getStatus() == ReservationStatus.COMPLETED) {
+            return toDetailResponse(reservation);
+        }
+        if (reservation.getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT) {
+            throw ApiExceptions.conflict("Reservation is not waiting for customer receipt confirmation");
+        }
+        if (reservation.getAssignedUnit() == null) {
+            throw ApiExceptions.conflict("Reservation has no assigned storage unit");
+        }
+
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Completed handover record was not found"));
+        if (checkIn.getStatus() != CheckInStatus.completed) {
+            throw ApiExceptions.conflict("Storage unit handover is not completed");
+        }
+
+        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        var existingRental = rentalRepository.findByReservation_Id(reservationId);
+        Rental rental = existingRental.orElseGet(() -> {
+            Rental created = new Rental();
+            created.setCustomer(reservation.getCustomer());
+            created.setFacility(reservation.getFacility());
+            created.setStorageUnit(reservation.getAssignedUnit());
+            created.setReservation(reservation);
+            created.setStatus(RentalStatus.active);
+            created.setStartDate(reservation.getStartDate());
+            created.setContractEndDate(reservation.getEndDate());
+            created.setMonthlyPrice(snapshot.getMonthlyPrice());
+            return rentalRepository.saveAndFlush(created);
+        });
+
+        reservation.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
+        storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
+        checkIn.setRental(rental);
+        checkInRepository.saveAndFlush(checkIn);
+        ReservationStatus previousStatus = reservation.getStatus();
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        Reservation saved = reservationRepository.saveAndFlush(reservation);
+
+        auditLogService.recordMutation(
+            saved.getCustomer(), "CUSTOMER_RECEIPT_CONFIRMED", "Reservation", saved.getId(),
+            saved.getFacility().getId(),
+            Map.of("status", previousStatus),
+            Map.of("status", saved.getStatus(), "rentalId", rental.getId(), "rentalPeriodEvidence",
+                com.storagehub.service.rental.period.RentalPeriodEvidence.receipt(rental, existingRental.isEmpty()))
+        );
+        notificationService.createNotification(
+            saved.getCustomer().getId(), NotificationType.CHECKIN,
+            "Đã xác nhận nhận kho",
+            "Đơn " + saved.getReservationCode() + " đã được xác nhận nhận kho và tạo hồ sơ thuê.",
+            saved.getId()
+        );
+        return toDetailResponse(saved);
     }
 
     @Transactional

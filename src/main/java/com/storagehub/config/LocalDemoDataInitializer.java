@@ -69,7 +69,6 @@ public class LocalDemoDataInitializer {
             facilities.size(), unitTypes.size(), unitCount, packageCount, userCount
         );
     }
-   
 
     private Map<String, Facility> seedFacilities() {
         Map<String, Facility> result = new HashMap<>();
@@ -293,7 +292,6 @@ public class LocalDemoDataInitializer {
         int floor,
         String zone
     ) {}
-
 
     private record DemoUserDefinition(
         String email,
