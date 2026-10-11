@@ -1,5 +1,9 @@
 # Đặc tả API vận hành gia hạn — D3
 
+## Bổ sung kiểm tra vận hành — 11/10/2026
+
+Khi `storagehub.integration.renewal-operational-checks.enabled=true`, các lần kiểm tra SafetySource của D3 đều qua `RenewalOperationalGuard`: trước/sau kết quả cọc, signing (lịch hẹn/arrival/CASH/completion), xác nhận ngoại lệ đổi lịch và ngay trước consume hold/kéo dài Rental. Chặn dữ liệu Return/bảo trì/Recovery handoff/booking cam kết đã biết; không viết hoặc hủy bản ghi của flow nguồn. Guard không tự cung cấp atomic SafetySource, calendar/office hours, giữ chỗ, accounting hoặc quyền. Các gate thiếu nguồn tiếp tục DEFERRED_SOURCE; retry/replay giữ nguyên vị trí trước kiểm tra cho lệnh đã thành công. Flag mặc định không đổi. Xem [báo cáo](RENEWAL_ELIGIBILITY_IMPLEMENTATION_20261011.md).
+
 Ngày triển khai: 08/10/2026. Đường dẫn gốc `/api`, JWT Bearer, ApiResponse/PageResponse chuẩn. Đây là phần triển khai BE theo hướng bổ sung, không phải tuyên bố rằng đã sẵn sàng triển khai xuyên role. Đọc cùng RENEWAL_API_CONTRACT.md (D2).
 
 ## Điều kiện tích hợp dùng chung

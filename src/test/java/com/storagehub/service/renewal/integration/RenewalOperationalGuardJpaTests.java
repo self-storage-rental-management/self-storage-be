@@ -50,6 +50,15 @@ class RenewalOperationalGuardJpaTests {
         var r=fixture();r.setStatus(RentalStatus.return_requested);em.flush();
         assertThatThrownBy(()->guard.requireNoKnownConflict(r)).hasMessageContaining("non-active rental");
     }
+    @Test void returnedTimestampBlocksEvenWhenStatusIsStillActive() {
+        var r=fixture();r.setActualReturnedAt(NOW);em.flush();
+        assertThatThrownBy(()->guard.requireNoKnownConflict(r)).hasMessageContaining("non-active rental");
+        assertThat(r.getStatus()).isEqualTo(RentalStatus.active);
+    }
+    @Test void completedTimestampBlocksEvenWhenStatusIsStillActive() {
+        var r=fixture();r.setCompletedAt(NOW);em.flush();
+        assertThatThrownBy(()->guard.requireNoKnownConflict(r)).hasMessageContaining("non-active rental");
+    }
     @Test void persistedReturnCaseBlocksEvenIfRentalWasNotUpdated() {
         var r=fixture();var rc=new ReturnCase();rc.setRental(r);rc.setFacility(r.getFacility());
         rc.setStorageUnit(r.getStorageUnit());rc.setCustomer(r.getCustomer());rc.setRequestedBy(r.getCustomer());

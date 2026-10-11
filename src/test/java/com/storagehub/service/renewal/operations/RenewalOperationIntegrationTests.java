@@ -173,6 +173,36 @@ class RenewalOperationIntegrationTests {
     private Renewal scheduled(){return scheduled(false);}
     private Renewal scheduled(boolean exclusive){var n=paid(exclusive);service.appointment(actor(n,RoleCode.CUSTOMER),n.getId(),new Appointment(NOW.plusSeconds(3600),null,version(n)),"appt-"+n.getId(),false);return n;}
     private ActorPrincipal actor(Renewal n,RoleCode role){return new ActorPrincipal(n.getRequestedBy().getId(),UUID.randomUUID(),Set.of(role),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),role==RoleCode.CUSTOMER?Map.of():Map.of(n.getRental().getFacility().getId(),FacilityScopeLevel.MANAGE));}
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"RETURNED","MAINTENANCE","RECOVERY","BOOKING"})
+    void d3GuardBlocksDepositAndCompletionWithoutWritingMoneyOrEndDate(String kind){
+        var factory=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        factory.addBean("guard",new com.storagehub.service.renewal.integration.RenewalOperationalGuard(em));
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"operationalGuards",factory.getBeanProvider(com.storagehub.service.renewal.integration.RenewalOperationalGuard.class));
+        try {
+            var n=fixture();var r=n.getRental();r.getStorageUnit().setStatus(StorageUnitStatus.occupied);em.flush();
+            var staff=actor(n,RoleCode.STAFF);var customer=actor(n,RoleCode.CUSTOMER);
+            service.deposit(customer,n.getId(),new RenewalOperationCommands.Version(version(n)),"before-conflict");
+            service.appointment(customer,n.getId(),new Appointment(NOW.plusSeconds(3600),null,version(n)),"appt",false);
+            var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
+            var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrival");
+            var pending=fixture();pending.getRental().getStorageUnit().setStatus(StorageUnitStatus.occupied);
+            for(var rental:List.of(r,pending.getRental()))switch(kind){
+                case "RETURNED" -> rental.setActualReturnedAt(NOW);
+                case "MAINTENANCE" -> {var task=new MaintenanceTask();task.setFacility(rental.getFacility());task.setStorageUnit(rental.getStorageUnit());task.setTitle("TEST");task.setReason("TEST");task.setReportedBy(rental.getCustomer());em.persist(task);}
+                case "RECOVERY" -> em.persist(new com.storagehub.service.overdue.OverdueFollowUp("RENTAL_TERM:"+rental.getId(),rental,"RECOVERY_HANDOFF","TEST",rental.getCustomer().getId(),NOW,UUID.randomUUID(),"TEST","1"));
+                case "BOOKING" -> {var other=new Reservation();other.setReservationCode("OTHER-"+rental.getId().toString().substring(0,8));other.setIdempotencyKey("OTHER-"+rental.getId());other.setCustomer(rental.getCustomer());other.setSourceQuote(rental.getReservation().getSourceQuote());other.setFacility(rental.getFacility());other.setUnitType(rental.getStorageUnit().getUnitType());other.setAssignedUnit(rental.getStorageUnit());other.setStartDate(rental.getStartDate());other.setEndDate(rental.getContractEndDate());other.setStatus(ReservationStatus.CONFIRMED);em.persist(other);}
+            }
+            em.flush();var oldEnd=r.getContractEndDate();int before=ops.deposits;
+            String expected=switch(kind){case "RETURNED" -> "return state changed";case "MAINTENANCE" -> "Active maintenance";case "RECOVERY" -> "Recovery handoff";default -> "Another booking";};
+            assertThatThrownBy(()->service.deposit(actor(pending,RoleCode.CUSTOMER),pending.getId(),new RenewalOperationCommands.Version(version(pending)),"blocked")).hasMessageContaining(expected);
+            assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"blocked")).hasMessageContaining(expected);
+            assertThat(ops.deposits).isEqualTo(before);assertThat(ops.consumes).isZero();assertThat(r.getContractEndDate()).isEqualTo(oldEnd);
+            assertThat(n.getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(pending.getStatus()).isEqualTo(RenewalStatus.approved);
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(service,"operationalGuards",new org.springframework.beans.factory.support.StaticListableBeanFactory().getBeanProvider(com.storagehub.service.renewal.integration.RenewalOperationalGuard.class));
+        }
+    }
     private Renewal fixture(){return fixture(false);}
     private Renewal fixture(boolean exclusive){
         String suffix=UUID.randomUUID().toString().substring(0,8);Facility f=new Facility();f.setCode(suffix);f.setName("TEST");f.setAddress("TEST");f.setCity("TEST");em.persist(f);

@@ -29,6 +29,8 @@ public class RenewalWorkflowService {
     private final ObjectProvider<Clock> clocks;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.renewal.integration.RenewalOperationalGuard> operationalGuards;
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}
     public List<RenewalCommands.Option> options(ActorPrincipal a,UUID rentalId){
         var r=owned(a,rentalId);var g=gate(r,now());return prices(r,g).stream().map(p->new RenewalCommands.Option(p.packageCode(),p.months())).toList();
@@ -139,6 +141,8 @@ public class RenewalWorkflowService {
     private User lockActor(ActorPrincipal a){var user=em.find(User.class,a.userId(),LockModeType.PESSIMISTIC_WRITE);if(user==null)throw ApiExceptions.unauthorized("Actor no longer exists");return user;}
     private record Gate(RenewalSources.Policy policy,RenewalSources.Eligibility eligibility,com.storagehub.service.rental.period.RentalPeriod period){}
     private Gate gate(Rental r,Instant now){
+        var guard=operationalGuards==null?null:operationalGuards.getIfAvailable();
+        if(guard!=null)guard.requireNoKnownConflict(r);
         if(r.getStatus()!=RentalStatus.active||r.getContractEndDate()==null)throw ApiExceptions.conflict("Move-out/non-active or incomplete rental blocks renewal");
         var period=periods==null?null:periods.require(r);if(period==null)throw deferred("Rental date provenance unknown");
         var source=policies.getIfAvailable();if(source==null)throw deferred("BO renewal policy missing");var p=source.read(r,period.endExclusive()).orElseThrow(()->deferred("BO renewal policy missing"));
