@@ -37,6 +37,8 @@ public class RenewalOperationService {
     private final ObjectProvider<EvidenceSource> evidences;
     private final ObjectProvider<RefundSource> refunds;
     @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.ledger.LedgerStore> ledgers;
+    @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.renewal.integration.RenewalOperationalGuard> operationalGuards;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
@@ -330,7 +332,26 @@ public class RenewalOperationService {
     }
     private AccountingSource accounting(){var s=accountingSources.getIfAvailable();if(s==null||!s.atomic())throw deferred("Shared transactional Renewal accounting missing");return s;}
     private void evidence(ActorPrincipal a,Renewal n,String purpose,List<UUID> ids){if(ids==null||ids.size()>10||ids.stream().anyMatch(Objects::isNull)||new HashSet<>(ids).size()!=ids.size())throw ApiExceptions.validation("Invalid evidence IDs",null);var s=evidences.getIfAvailable();if(s==null)throw deferred("Resource-linked evidence authorization missing");s.require(a,n,purpose,ids);}
-    private void validateStatement(Renewal n,Statement s){if(s==null||s.reference()==null||!n.getId().equals(s.renewalId())||s.version()==null||s.version().isBlank()||s.expiresAt()==null||!now().isBefore(s.expiresAt())||s.amount()==null||s.amount().signum()<0||!"VND".equals(s.currency())||s.requiredObligations()==null||s.requiredObligations().isEmpty()||s.requiredObligations().stream().anyMatch(Objects::isNull)||new HashSet<>(s.requiredObligations()).size()!=s.requiredObligations().size())throw deferred("Payable statement incomplete/stale");}
+    private void validateStatement(Renewal n,Statement s){
+        if(s==null||s.reference()==null||!n.getId().equals(s.renewalId())||s.version()==null||s.version().isBlank()||s.expiresAt()==null||!now().isBefore(s.expiresAt())||s.amount()==null||s.amount().signum()<0||!"VND".equals(s.currency())||s.requiredObligations()==null||s.requiredObligations().isEmpty()||s.requiredObligations().stream().anyMatch(Objects::isNull)||new HashSet<>(s.requiredObligations()).size()!=s.requiredObligations().size())throw deferred("Payable statement incomplete/stale");
+        try{if(s.amount().setScale(2,java.math.RoundingMode.UNNECESSARY).precision()>14)throw deferred("Payable statement amount unsupported");}
+        catch(ArithmeticException ex){throw deferred("Payable statement amount unsupported");}
+        var ledger=ledgers==null?null:ledgers.getIfAvailable();if(ledger==null)return;
+        var rental=n.getRental();var account=ledger.read(rental.getId()).orElseThrow(()->deferred("Payable statement ledger account missing"));
+        if(!Objects.equals(account.rentalId(),rental.getId())||account.revision()<0
+            ||!Objects.equals(account.customerId(),rental.getCustomer().getId())||!Objects.equals(account.facilityId(),rental.getFacility().getId()))throw deferred("Payable statement ledger binding invalid");
+        var accepted=terms(new Context(n,null,workflow(n)));
+        var specs=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(workflow(n).getAcceptedRevision(),accepted);
+        var total=java.math.BigDecimal.ZERO;
+        for(var id:s.requiredObligations()){
+            var obligation=account.obligations().stream().filter(o->o.id().equals(id)).findFirst().orElseThrow(()->deferred("Payable statement obligation missing"));
+            if(specs.stream().noneMatch(spec->Objects.equals(spec.renewalId(),obligation.renewalId())&&spec.kind()==obligation.kind()
+                &&spec.sourceReference().equals(obligation.sourceRef())&&spec.amount().compareTo(obligation.amount())==0))throw deferred("Payable statement obligation source mismatch");
+            total=total.add(obligation.outstanding());
+        }
+        if(total.compareTo(s.amount())!=0)throw deferred("Payable statement balance mismatch");
+        // Source version is opaque: certification of revision/version atomicity remains the accounting owner's protocol.
+    }
     private RenewalOperationEvent event(Context c,String kind,Object data){var e=new RenewalOperationEvent(c.renewal(),kind,now(),c.user().getId(),store.canonical(data));em.persist(e);em.flush();return e;}
     private Result finish(Context c,String op,String key,Object body,RenewalOperationEvent e,int status){em.lock(c.workflow(),LockModeType.PESSIMISTIC_FORCE_INCREMENT);em.flush();var result=new Result(projection(c.renewal()),eventResponse(e,Audience.MANAGER));audit.recordMutation(c.user(),op,"Renewal",c.renewal().getId(),c.renewal().getRental().getFacility().getId(),null,Map.of("eventId",e.getId(),"state",result.state()));store.remember(c.user(),op,key,c.renewal().getId(),body,status,result);return result;}
     private Optional<Result> replay(Context c,String op,String key,Object body){return store.replay(c.user(),op,key,c.renewal().getId(),body).map(r->decode(r.dataJson(),Result.class));}

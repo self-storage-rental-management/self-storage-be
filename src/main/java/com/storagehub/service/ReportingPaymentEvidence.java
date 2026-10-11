@@ -22,4 +22,18 @@ public class ReportingPaymentEvidence {
             && provenance.classify(payment) == PaymentProvenance.Classification.VERIFIED;
     }
 
+    /** Existing numeric DTO cannot express partial coverage or pending payout. Fail explicitly. */
+    public void requireReportable(java.util.List<Payment> payments) {
+        if (!realVnpayRevenueEnabled) throw com.storagehub.common.api.ApiExceptions.conflict(
+            "FIN_13_REVENUE_UNKNOWN: production revenue scope is not enabled; numeric zero would be misleading");
+        for (Payment payment : payments) {
+            var classification=provenance.classify(payment);
+            if(classification==PaymentProvenance.Classification.UNVERIFIED||classification==PaymentProvenance.Classification.DISPUTED
+                ||classification==PaymentProvenance.Classification.ATTEMPT)
+                throw com.storagehub.common.api.ApiExceptions.conflict("FIN_13_REVENUE_PARTIAL: unreconciled Payment evidence; UNKNOWN/PARTIAL reporting contract required");
+            if(classification==PaymentProvenance.Classification.VERIFIED&&payment.getRefundedAmount()!=null&&payment.getRefundedAmount().signum()>0)
+                throw com.storagehub.common.api.ApiExceptions.conflict("FIN_13_REFUND_UNRECONCILED: refund request acceptance is not executed payout evidence");
+        }
+    }
+
 }

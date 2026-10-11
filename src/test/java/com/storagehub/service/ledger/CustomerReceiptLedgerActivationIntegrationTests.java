@@ -71,6 +71,8 @@ class CustomerReceiptLedgerActivationIntegrationTests {
     @Autowired CustomerReservationService service;
     @Autowired RentalRepository rentals;
     @Autowired LedgerStore ledger;
+    @Autowired LedgerCoverageInventory coverageInventory;
+    @Autowired com.storagehub.service.ReturnSettlementService returns;
     @Autowired @org.springframework.beans.factory.annotation.Qualifier("activationAuditLogService") AuditLogService activationAudit;
     @MockitoBean(name = "seedSystemRoles") CommandLineRunner roleDataInitializer;
     @MockitoBean(name = "seedSystemSettings") CommandLineRunner systemSettingsInitializer;
@@ -217,6 +219,66 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         em.createNativeQuery("update renewal_quotes set terms_hash=:hash where id=:id").setParameter("hash","0".repeat(64)).setParameter("id",q.getId()).executeUpdate();em.clear();
         var changed=em.find(com.storagehub.service.renewal.persistence.RenewalAcceptedRevision.class,id);
         assertThatThrownBy(()->FinancialContractSpecifications.accepted(changed,t)).hasMessageContaining("hash mismatch");
+    }
+
+    @Test @Order(8)
+    void persistedInventoryExplainsEmptyAccountWithoutCertifyingZeroDebt() {
+        var f=fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT,CheckInStatus.completed,false);
+        service.confirmReceipt(f.actor(),f.reservationId());em.flush();em.clear();
+        var rental=rentals.findByReservation_Id(f.reservationId()).orElseThrow();
+        var inventory=coverageInventory.inspect(rental,ledger.read(rental.getId()));
+        assertThat(inventory.completeness()).isEqualTo("PARTIAL");
+        assertThat(inventory.gaps()).contains("INITIAL_OBLIGATION_UNPOSTED_OR_INVALID:RENT",
+            "INITIAL_OBLIGATION_UNPOSTED_OR_INVALID:SECURITY_DEPOSIT","BOOKING_PAYMENT_EVIDENCE_MISSING");
+        assertThat(inventory.gaps()).doesNotContain("BOOKING_SNAPSHOT_INVALID");
+        assertThat(inventory.consistentThroughApproval()).isFalse();
+    }
+
+    @Test @Order(9)
+    void committedReturnInspectionPreservesUnknownMoneyAndRejectedAcceptanceIsAtomic() throws Exception {
+        var f=fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT,CheckInStatus.completed,false);
+        var contract=em.createQuery("select p from ReservationPricingSnapshot p where p.reservation.id=:id",ReservationPricingSnapshot.class)
+            .setParameter("id",f.reservationId()).getSingleResult();
+        // Test contract requires a security deposit; this is not a payment fixture.
+        contract.setSecurityDepositAmount(new BigDecimal("50000"));
+        contract.setDueAtCheckIn(contract.getRemainingRentalAmount().add(contract.getSecurityDepositAmount()));
+        contract.setTotalInitialObligation(contract.getNetRentalAmount().add(contract.getSecurityDepositAmount()));em.flush();
+        service.confirmReceipt(f.actor(),f.reservationId());var rental=rentals.findByReservation_Id(f.reservationId()).orElseThrow();
+        var staff=user("return-staff");em.flush();
+        var staffActor=new ActorPrincipal(staff.getId(),UUID.randomUUID(),Set.of(RoleCode.STAFF),
+            Set.of(SystemPermission.PROCESS_RETURNS.code()),Map.of(f.facilityId(),FacilityScopeLevel.OPERATE));
+        var requested=returns.createCustomerReturnRequest(f.actor(),rental.getId(),
+            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1),"LOCAL_TEST_ONLY Return inspection"));
+        var inspected=returns.performInspection(staffActor,requested.id(),new com.storagehub.api.returns.ReturnInspectionRequest(
+            InventoryMatch.values()[0],DamageClassification.values()[0],BigDecimal.TEN,BigDecimal.ZERO,BigDecimal.ZERO,
+            BigDecimal.ZERO,BigDecimal.ZERO,"TEST inspection, no funds claimed",List.of(),true,true,true,StorageUnitStatus.available));
+        assertThat(inspected.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(inspected.netRefundAmount()).isNull();assertThat(inspected.amountDueFromCustomer()).isNull();
+        TestTransaction.flagForCommit();TestTransaction.end();
+        assertThatThrownBy(()->returns.customerConfirmSettlement(f.actor(),requested.id(),
+            new com.storagehub.api.returns.CustomerConfirmSettlementRequest(CustomerDecision.accepted,"TEST rejected acceptance")))
+            .hasMessageContaining("verified paid security deposit");
+        try(var connection=jdbc.getDataSource().getConnection();var p=connection.prepareStatement(
+            "select status,customer_confirmed,customer_confirmed_at,settlement_payment_id,completed_at from return_cases where id=?")) {
+            p.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(requested.id().getMostSignificantBits()).putLong(requested.id().getLeastSignificantBits()).array());
+            try(var result=p.executeQuery()){assertThat(result.next()).isTrue();assertThat(result.getString(1)).isEqualTo("awaiting_customer_confirmation");
+                assertThat(result.getBoolean(2)).isFalse();assertThat(result.getObject(3)).isNull();assertThat(result.getObject(4)).isNull();assertThat(result.getObject(5)).isNull();}
+        }
+        var actors=org.mockito.Mockito.mock(com.storagehub.security.ActorContext.class);
+        org.mockito.Mockito.when(actors.required()).thenReturn(f.actor());
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+            new com.storagehub.api.returns.CustomerReturnController(actors,returns))
+            .setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/customer/returns/"+requested.id()+"/confirm")
+            .contentType("application/json").content("{\"decision\":\"accepted\",\"note\":\"TEST\"}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/returns/"+requested.id()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.status").value("awaiting_customer_confirmation"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.settlementBlocker").value("FIN_06_HELD_DEPOSIT_EVIDENCE_REQUIRED"));
+        TestTransaction.start();em.clear();
+        assertThat(em.find(Rental.class,rental.getId()).getStatus()).isEqualTo(RentalStatus.return_inspection);
+        assertThat(ledger.read(rental.getId()).orElseThrow().revision()).isZero();
     }
 
     private Fixture fixture(ReservationStatus reservationStatus, CheckInStatus checkInStatus, boolean existingRental) {
