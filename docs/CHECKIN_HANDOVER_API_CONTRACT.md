@@ -11,7 +11,7 @@ CONFIRMED
   → AWAITING_CUSTOMER_RECEIPT (Staff handover completed)
 ```
 
-`Check-in & Handover` không tạo Rental và không chuyển Rental sang ACTIVE. Khách hàng xác nhận đã nhận kho ở flow kế tiếp; khi đó credential đang ACTIVE mới được liên kết với Rental. Trâm kết thúc ở `Reservation.AWAITING_CUSTOMER_RECEIPT`, `CheckIn.completed`, `UnitAssignment.COMPLETED` và `StorageUnit.assigned`.
+`Check-in & Handover` không tạo Rental và không chuyển Rental sang ACTIVE. Khách hàng xác nhận đã nhận kho ở flow kế tiếp. Khi đó, credential đang ACTIVE mới được liên kết với Rental. Trâm kết thúc ở `Reservation.AWAITING_CUSTOMER_RECEIPT`, `CheckIn.completed`, `UnitAssignment.COMPLETED` và `StorageUnit.assigned`.
 
 ## Phân quyền actor
 
@@ -21,8 +21,8 @@ CONFIRMED
 | Assignment | Actor có quyền assignment theo contract Assignment | `ASSIGN_UNITS`, facility scope |
 | Xem check-in/handover | Staff hoặc Manager | `VIEW_CHECKINS`, facility scope `READ` |
 | Lên lịch, no-show, reject, hoàn tất handover | Staff | `PERFORM_CHECKIN`, facility scope `OPERATE` |
-| Cấp hoặc thu hồi credential | **Staff** | `PERFORM_CHECKIN` khi cấp; `PROCESS_RETURNS` khi thu hồi; scope `OPERATE` |
-| Theo dõi lịch sử credential | Staff hoặc Manager | `VIEW_CHECKINS`, scope `READ`; Manager không có endpoint mutation |
+| Cấp hoặc thu hồi credential | **Staff** | `PERFORM_CHECKIN` khi cấp. `PROCESS_RETURNS` khi thu hồi. Scope `OPERATE` |
+| Theo dõi lịch sử credential | Staff hoặc Manager | `VIEW_CHECKINS`, scope `READ`. Manager không có endpoint mutation |
 
 Manager chỉ giám sát lịch sử và trạng thái credential. API cấp/thu hồi từ chối actor Manager dù Manager có quyền xem check-in.
 
@@ -33,8 +33,8 @@ Manager chỉ giám sát lịch sử và trạng thái credential. API cấp/thu
 - Chỉ trả reservation ở `UNIT_RESERVED`, `READY_FOR_CHECKIN` hoặc `AWAITING_CUSTOMER_RECEIPT` có assignment hợp lệ.
 - `q` tìm theo mã reservation, khách hàng, email hoặc mã unit.
 - `status`: `UNSCHEDULED`, `scheduled`, `no_show`, `completed`.
-- Lịch hiển thị lấy từ `Reservation.appointmentAt`, do Customer đặt; Staff không được đổi giá trị này.
-- Reservation cũ chưa có `appointmentAt` được hỗ trợ một lần qua request tương thích khi schedule; dữ liệu sau đó được ghim vào reservation. Reservation mới phải có appointment của Customer.
+- Lịch hiển thị lấy từ `Reservation.appointmentAt`, do Customer đặt. Staff không được đổi giá trị này.
+- Reservation cũ chưa có `appointmentAt` được hỗ trợ một lần qua request tương thích khi schedule. Dữ liệu sau đó được ghim vào reservation. Reservation mới phải có appointment của Customer.
 
 Response dùng `PageResponse<CheckInResponse>`.
 
@@ -52,7 +52,7 @@ Response dùng `PageResponse<CheckInResponse>`.
 ```
 
 - Reservation phải là `UNIT_RESERVED` hoặc `READY_FOR_CHECKIN`, có assignment `ACTIVE` và unit `reserved`.
-- Với reservation có `appointmentAt`, BE bỏ qua `scheduledAt` của Staff và dùng đúng lịch Customer đã đặt. Không áp dụng quy tắc “lịch phải ở tương lai”; khách đến sớm vẫn được bàn giao.
+- Với reservation có `appointmentAt`, BE bỏ qua `scheduledAt` của Staff và dùng đúng lịch Customer đã đặt. Không áp dụng quy tắc “lịch phải ở tương lai”. Khách đến sớm vẫn được bàn giao.
 - Hai cờ hợp đồng/thanh toán là xác nhận nghiệp vụ, không thay đổi dữ liệu hợp đồng hoặc payment của actor khác.
 - Kết quả: tạo/cập nhật `CheckIn.scheduled`, chuyển reservation sang `READY_FOR_CHECKIN`.
 
@@ -75,11 +75,11 @@ Staff cấp một hoặc nhiều loại: `PIN` (access code), `CARD`, `KEY`, `LO
 
 - Actor phải là Staff, có `PERFORM_CHECKIN` và scope `OPERATE`.
 - Check-in đang `scheduled`, reservation `READY_FOR_CHECKIN`, assignment còn `ACTIVE`, unit `reserved`, chưa có Rental `ACTIVE`.
-- Không được có hai credential ACTIVE cùng loại cho một reservation; request lặp lại cùng `type + reference` trả lại credential hiện tại (idempotent).
+- Không được có hai credential ACTIVE cùng loại cho một reservation. Request lặp lại cùng `type + reference` trả lại credential hiện tại (idempotent).
 
-BE lưu `issuedAt` và `issuedBy` bắt buộc; `reference` là số seri/mã hiển thị; `secret` chỉ lưu SHA-256 và không trả PIN thô. Credential liên kết với reservation, facility, unit và customer. Khi Customer xác nhận receipt tạo Rental, credential được liên kết thêm với Rental.
+BE lưu bắt buộc `issuedAt` và `issuedBy`. `reference` là số seri hoặc mã hiển thị. `secret` chỉ lưu SHA-256 và không trả PIN thô. Credential liên kết với reservation, facility, unit và customer. Khi Customer xác nhận receipt tạo Rental, credential được liên kết thêm với Rental.
 
-Checklist handover phải có `accessHandedOver = true`; BE yêu cầu reservation có ít nhất một credential ACTIVE trước khi hoàn tất.
+Checklist handover phải có `accessHandedOver = true`. BE yêu cầu reservation có ít nhất một credential ACTIVE trước khi hoàn tất.
 
 ## 4. Upload hợp đồng và bằng chứng
 
@@ -87,7 +87,7 @@ Checklist handover phải có `accessHandedOver = true`; BE yêu cầu reservati
 
 `GET /api/files/{assetId}` cho actor có quyền đọc check-in và facility tương ứng.
 
-Customer xem lại các tệp đã bàn giao bằng `GET /api/customer/reservations/{reservationId}/check-in-documents`; mỗi `assetId` trả về được mở/tải qua `GET /api/files/{assetId}` sau khi hệ thống kiểm tra reservation thuộc về Customer đó. UI hiển thị tệp đầu tiên là hợp đồng đã ký và các tệp tiếp theo là bằng chứng bàn giao.
+Customer xem lại các tệp đã bàn giao bằng `GET /api/customer/reservations/{reservationId}/check-in-documents`. Mỗi `assetId` trả về được mở hoặc tải qua `GET /api/files/{assetId}` sau khi hệ thống kiểm tra reservation thuộc về Customer đó. UI hiển thị tệp đầu tiên là hợp đồng đã ký và các tệp tiếp theo là bằng chứng bàn giao.
 
 ## 5. Hoàn tất physical handover
 
@@ -98,7 +98,7 @@ Request gồm checklist 8 mục, số đo thực tế, hàng hóa, `evidenceRefe
 Điều kiện chính:
 
 - Check-in `scheduled`, reservation `READY_FOR_CHECKIN`, assignment `ACTIVE`, unit `reserved`, không có Rental `ACTIVE`.
-- 8 checklist đều `true`, có bằng chứng hợp lệ, số đo không vượt capacity; variance quá 5% phải có chấp nhận và lý do.
+- 8 checklist đều `true`, có bằng chứng hợp lệ và số đo không vượt capacity. Variance quá 5% phải có chấp nhận và lý do.
 - Có ít nhất một credential ACTIVE đã cấp.
 
 Transaction transition:
@@ -118,8 +118,8 @@ Không tạo Rental tại endpoint này.
 
 Response là mảng `CredentialAlert`:
 
-- `action=ISSUE`: check-in đã sẵn sàng nhưng chưa có credential ACTIVE; Staff phải cấp trong Bàn giao & Nhận kho.
-- `action=REVOKE`: return case đang mở có credential ACTIVE; Staff phải thu hồi trong Nghiệm thu Trả kho.
+- `action=ISSUE`: check-in đã sẵn sàng nhưng chưa có credential ACTIVE. Staff phải cấp trong Bàn giao & Nhận kho.
+- `action=REVOKE`: return case đang mở có credential ACTIVE. Staff phải thu hồi trong Nghiệm thu Trả kho.
 
 Màn hình `Nhiệm vụ hằng ngày` hiển thị hai loại cảnh báo này cùng deadline/lý do và điều hướng tới đúng màn hình nghiệp vụ.
 
@@ -133,9 +133,9 @@ revokedAt = now
 revokedBy = Staff actor
 ```
 
-Có thể thu hồi thủ công từng credential qua `POST /api/staff/access-credentials/{credentialId}/revoke` với body `{ "reason": "Thu hồi trong nghiệm thu trả kho" }`. Request chỉ Staff được phép gọi; gọi lại credential đã `REVOKED` trả trạng thái hiện tại.
+Có thể thu hồi thủ công từng credential qua `POST /api/staff/access-credentials/{credentialId}/revoke` với body `{ "reason": "Thu hồi trong nghiệm thu trả kho" }`. Request chỉ Staff được phép gọi. Gọi lại credential đã `REVOKED` sẽ trả trạng thái hiện tại.
 
-Thông tin `returnedKey`, `returnedCard`, `returnedLock` trong `ReturnInspectionRequest` tiếp tục ghi nhận đối chiếu vật lý; `revokedAt` là bằng chứng vô hiệu hóa quyền truy cập trên hệ thống.
+Thông tin `returnedKey`, `returnedCard`, `returnedLock` trong `ReturnInspectionRequest` tiếp tục ghi nhận đối chiếu vật lý. `revokedAt` là bằng chứng vô hiệu hóa quyền truy cập trên hệ thống.
 
 ## 8. Manager credential history
 
@@ -145,9 +145,9 @@ Manager chỉ nhận projection lịch sử gồm loại, reference, `issuedAt`,
 
 ## 9. No-show và reject
 
-- `POST /api/staff/check-ins/{checkInId}/no-show`: chỉ khi lịch đã đến hạn; giữ assignment/unit để có thể lên lịch lại.
-- `POST /api/staff/check-ins/{checkInId}/reject`: yêu cầu bằng chứng; hủy assignment, giải phóng unit hoặc chuyển maintenance theo disposition; không tạo Rental.
-- Nếu reservation bị hủy trước handover, flow cancelled-reservation unit release xử lý assignment/unit; check-in completed vẫn là blocker.
+- `POST /api/staff/check-ins/{checkInId}/no-show`: chỉ khi lịch đã đến hạn. Giữ assignment/unit để có thể lên lịch lại.
+- `POST /api/staff/check-ins/{checkInId}/reject`: yêu cầu bằng chứng. Hủy assignment, giải phóng unit hoặc chuyển maintenance theo disposition. Không tạo Rental.
+- Nếu reservation bị hủy trước handover, flow cancelled-reservation unit release xử lý assignment/unit. Check-in completed vẫn là blocker.
 
 ## Audit và thông báo
 
