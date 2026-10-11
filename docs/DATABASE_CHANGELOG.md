@@ -179,7 +179,7 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - `ddl-auto=update` can create additive tables on startup. Do not start against team/shared DB until schema/lock/permission owners approve. H2 test schema creation is isolated and not production migration evidence.
 - Contracts: `RENEWAL_OPERATIONS_API_CONTRACT.md`, `OVERDUE_API_CONTRACT.md`.
 
-## 2026-10-08 — D5 Support workflow (rollout pending)
+## 2026-10-08 — Support workflow (rollout pending)
 
 - Five additive tables: `support_workflow_states`, `support_messages`, `support_workflow_events`, `support_escalations`, `support_command_receipts`.
 - Reuse existing `support_tickets` / `SupportTicketStatus` unchanged; no shared table ALTER, policy/permission seed, delete, rewrite or legacy backfill.
@@ -188,3 +188,49 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - File authorization/binding, SLA/calendar/close policy and trusted module results require owner adapters. Default STAFF lacks `MANAGE_SUPPORT`; no implicit grant in D5.
 - `ddl-auto=update` may create additive tables on startup. Shared DB startup remains subject to schema/permission owner approval; isolated H2 tests are not MySQL/TiDB migration evidence.
 - API contract: `SUPPORT_API_CONTRACT.md`. No public auto-close endpoint or automatically enabled scheduler.
+
+## 2026-10-11 — Sổ tài chính hồ sơ thuê và hàng đợi thông báo
+
+Migration: `src/main/resources/db/integration-migration/V2026101001__create_rental_ledger_and_notification_outbox.sql`.
+Đã áp dụng vào DB test `storagehub_local` ngày 10/10/2026; **chưa áp dụng/xác minh trên DB chung của team**. Không sửa nội dung hoặc checksum migration đã áp dụng.
+
+Thêm 7 bảng theo tên nghiệp vụ:
+
+- `rental_ledger_accounts`: liên kết Rental/Customer/Facility và revision.
+- `rental_ledger_obligations`: khoản phải thanh toán, hạn và nguồn nghĩa vụ.
+- `rental_ledger_receipts`: khoản thu, phương thức và bằng chứng.
+- `rental_ledger_allocations`: phân bổ khoản thu vào nghĩa vụ cùng Rental.
+- `rental_ledger_refunds`: quyết định dành tiền hoàn và ghi nhận chi hoàn, không đồng nhất hai trạng thái.
+- `rental_ledger_commands`: khóa chống xử lý trùng khi retry.
+- `notification_outbox`: hàng đợi, retry, liên kết notification và biên nhận; đang chờ/đã tạo inbox không đồng nghĩa đã được người nhận xác nhận.
+
+Chỉ CREATE bảng/index/CHECK/UNIQUE/FK, không ALTER/DROP bảng của Booking/Payment/Return/Auth, không cấp quyền, seed policy hoặc backfill số dư. JDBC dùng UUID CHAR(36); generated BINARY(16) nối FK tới ID bảng chung, không đổi kiểu ID hiện hữu. FK có thể hạn chế xóa bản ghi cha khi đã có ledger/outbox; phải kiểm thử flow xóa/lưu trữ trên bản sao DB đích.
+
+Các bảng này dùng JDBC trực tiếp; `ddl-auto=update` không tự tạo chúng. Profile opt-in mới `rental-support-schema` đăng ký cả hai Flyway locations, giữ `ddl-auto=validate`, tắt clean/baseline-on-migrate và seed/backfill local. Ledger/communication không tự bật chỉ vì schema được tạo. Cấu hình mặc định, staging và prod hiện có không bị sửa để tự chạy migration này.
+
+Profile yêu cầu `STORAGEHUB_DB_URL`, `STORAGEHUB_DB_USERNAME`, `STORAGEHUB_DB_PASSWORD` và tên DB mong đợi `STORAGEHUB_SCHEMA_ROLLOUT_DATABASE`. Trước Flyway, kiểm tra trực tiếp `SELECT VERSION(), DATABASE()` và tên engine trên chính connection; chỉ cho MySQL 8.4 đã được kiểm chứng, dừng nếu trỏ nhầm DB/TiDB/engine-version chưa chứng nhận. Nếu thấy bảng integration nhưng lịch sử/schema không đủ, dừng đối chiếu, không repair/reset/IF NOT EXISTS để che lỗi.
+
+`application-prod.properties` hiện dùng `TiDbMySqlDialect`; đây là dấu hiệu cần xác minh DB đích, **không phải bằng chứng đã kiểm thử migration trên TiDB**. Chưa rollout trên TiDB hoặc production. MySQL DDL có thể auto-commit; sao lưu và thử trên bản sao DB chung trước, không hứa rollback DDL toàn bộ.
+
+Quy trình và lệnh: [RENTAL_SUPPORT_SCHEMA_ROLLOUT.md](RENTAL_SUPPORT_SCHEMA_ROLLOUT.md). Test: `RentalSupportSchemaRolloutTests` (profile/identity/engine), `RentalIntegrationMySqlSchemaTests` (MySQL thật, migration/guard/FK/retry). Kết quả từng lần chạy phải ghi trong báo cáo, không coi test SKIP là PASS.
+
+## 2026-10-11 — Payment gateway intent (migration opt-in)
+
+Entity Payment yêu cầu gatewayIntentId nhưng migration nền chưa tạo cột. Bổ sung Java migration 2026101101 tại src/main/java/db/paymentmigration, location classpath:db/paymentmigration; profile rental-support-schema dùng đủ ba locations, không thay defaults/staging/prod hoặc migration cũ.
+
+- gateway_intent_id VARCHAR(100), NOT NULL, full-column UNIQUE; giữ charset/collation và mã hiện có, tương thích writer SimulatedPaymentService.
+- Chỉ NULL/blank nhận LEGACY-UNVERIFIED + hex Payment ID; đây không phải chứng cứ tiền thật hoặc simulation. Reader giữ UNVERIFIED; không đổi tiền/trạng thái/timestamps/idempotency/version, không seed/cấp quyền.
+- Type/length/default/generated metadata lạ, trùng reference hoặc tên index xung đột: dừng trước sửa, không cắt/ghi đè chứng cứ. MySQL DDL có thể auto-commit; backup và kiểm thử bản sao vẫn cần thiết.
+- Chỉ áp dụng DB test MySQL 8.4, chưa cập nhật storagehub_local/DB chung hoặc chứng nhận TiDB. Java migration checksum mặc định null; giữ version/source đã rollout bất biến.
+
+Chi tiết dữ liệu cũ/rollout: [PAYMENT_GATEWAY_MIGRATION.md](PAYMENT_GATEWAY_MIGRATION.md). Test: 8 ca Payment migration MySQL và 6 ca full schema, cùng regression writer/profile/reader. Startup/API và giới hạn E2E ghi riêng trong báo cáo FE.
+
+## 2026-10-11 — Đưa 7 bảng ledger/outbox vào Flyway chung
+
+Theo phê duyệt, chuyển nguyên V2026101001__create_rental_ledger_and_notification_outbox.sql từ db/integration-migration vào db/migration. Version, checksum Flyway -1198625055 và SHA256 0E7AD29986D1CFB6E5E5DD3380CC464067EF16E83A13A52B3D0EAF370426766F không đổi. Không giữ SQL trùng, ALTER/DROP/seed/backfill số dư hoặc cấp quyền. Comment opt-in trong SQL là lịch sử, giữ để không sửa checksum.
+
+BE dùng location mặc định sẽ phát hiện migration khi khởi động. DB đã áp dụng validate được ở vị trí mới, không chạy CREATE lại. Callback chỉ trước ledger pending kiểm engine MySQL 8.4 đã chứng nhận và bảng trùng; TiDB/engine-version chưa chứng nhận bị chặn trước DDL ledger. Những migration nền khác có thể đã chạy trước đó, nên backup/kiểm history/bản sao vẫn cần thiết.
+
+Ledger/communication vẫn mặc định tắt; Payment 2026101101 vẫn opt-in. Profile rollout hiện dùng db/migration + db/paymentmigration. Không đổi defaults/staging/prod, ddl-auto, writer/Entity, quyền hoặc seed script. Chưa trực tiếp cập nhật DB chung. Các ghi chú opt-in ledger trước đây là lịch sử, thay thế bởi mục này.
+
+Test PASS 60 ca: default discovery, upgrade giữ dữ liệu cũ, collision preflight, relocation history, full schema và JDBC regression. Báo cáo FE: docs/LEDGER_COMMON_MIGRATION_REPORT_20261011.md.

@@ -22,6 +22,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.DateSource {
     private final EntityManager em;
     private final ObjectMapper mapper;
+    /** Current project rule, explicitly enabled locally; historical evidence is not rewritten. */
+    @org.springframework.beans.factory.annotation.Value("${storagehub.integration.rental-period.inclusive-end:false}")
+    private boolean inclusiveEnd;
 
     public Optional<RentalReadSources.Dates> read(Rental r) {
         if (!linked(r)) return Optional.empty();
@@ -42,6 +45,8 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
             if (!completed.isEmpty()) return Optional.empty();
             period = receipt(r);
         }
+        if (inclusiveEnd) period = period.flatMap(p -> RentalPeriod.verified(p.rentalId(), p.startDate(),
+            p.storedEndDate(), RentalPeriod.Convention.INCLUSIVE, "project-inclusive-end:v1:" + p.reference()));
         return period.map(p -> new RentalReadSources.Dates(p.rentalId(), p.startDate(), p.lastPermittedDate(),
             p.reference(), p.storedEndDate(), p.convention()));
     }
@@ -57,6 +62,14 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
             || !same(r.getFacility().getId(), log.getFacility())) return Optional.empty();
         var root = json(log.getAfterStateJson());
         var d = root.path("rentalPeriodEvidence");
+        // Approved current convention may apply to a legacy confirmed handover without versioned metadata.
+        // It establishes today's rule, not a fabricated historical audit or a backfilled DB date.
+        if (inclusiveEnd && d.isMissingNode() && "COMPLETED".equals(root.path("status").asText())
+            && id(root, "rentalId", r.getId())
+            && Objects.equals(r.getStartDate(), r.getReservation().getStartDate())
+            && Objects.equals(r.getContractEndDate(), r.getReservation().getEndDate()))
+            return RentalPeriod.verified(r.getId(), r.getStartDate(), r.getContractEndDate(),
+                RentalPeriod.Convention.INCLUSIVE, "legacy-receipt:" + log.getId());
         if (!"COMPLETED".equals(root.path("status").asText()) || !id(root, "rentalId", r.getId())
             || !"CUSTOMER_RECEIPT_PERIOD_V1".equals(d.path("schema").asText())
             || !d.path("rentalCreated").isBoolean() || !d.path("rentalCreated").booleanValue()
