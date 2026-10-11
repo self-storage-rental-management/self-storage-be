@@ -141,18 +141,18 @@ public class VnpayService {
         if (receivedAmount != amountMinor(payment.getAmount())) {
             return new CallbackResult("04", "Invalid amount", payment.getId(), payment.getReservation().getId(), false);
         }
-        if (payment.getStatus() == PaymentStatus.PAID) {
-            return new CallbackResult("02", "Order already confirmed", payment.getId(), payment.getReservation().getId(), true);
-        }
-
         String responseCode = query.getOrDefault("vnp_ResponseCode", "99");
         String transactionStatus = query.getOrDefault("vnp_TransactionStatus", responseCode);
         payment.setGatewayResponseCode(responseCode);
         payment.setGatewayTransactionStatus(transactionStatus);
-        payment.setGatewayTransactionNo(query.get("vnp_TransactionNo"));
-        payment.setGatewayBankCode(query.get("vnp_BankCode"));
-        payment.setGatewayCardType(query.get("vnp_CardType"));
-        payment.setGatewayPayDate(query.get("vnp_PayDate"));
+        setIfPresent(query.get("vnp_TransactionNo"), payment::setGatewayTransactionNo);
+        setIfPresent(query.get("vnp_BankCode"), payment::setGatewayBankCode);
+        setIfPresent(query.get("vnp_CardType"), payment::setGatewayCardType);
+        setIfPresent(query.get("vnp_PayDate"), payment::setGatewayPayDate);
+        if (payment.getStatus() == PaymentStatus.PAID) {
+            paymentRepository.saveAndFlush(payment);
+            return new CallbackResult("02", "Order already confirmed", payment.getId(), payment.getReservation().getId(), true);
+        }
         payment.setProcessedAt(Instant.now());
         boolean success = "00".equals(responseCode) && "00".equals(transactionStatus);
         Reservation reservation = payment.getReservation();
@@ -170,9 +170,13 @@ public class VnpayService {
             }
             markPaid(payment, gatewayPaidAt);
         } else {
+            PaymentStatus previousStatus = payment.getStatus();
             payment.setStatus(PaymentStatus.FAILED);
             payment.setFailureCode(responseCode);
             payment.setFailureReason("VNPAY transaction was not successful");
+            if (previousStatus != PaymentStatus.FAILED) {
+                notifyPaymentFailure(payment);
+            }
             expireGraceReservationAfterFinalFailure(payment, reservation);
         }
         paymentRepository.saveAndFlush(payment);
@@ -463,6 +467,7 @@ public class VnpayService {
         if (deadline == null || !deadline.isAfter(Instant.now())) throw ApiExceptions.conflict("Reservation payment deadline has expired");
     }
     private void markPaid(Payment payment, Instant gatewayPaidAt) {
+        PaymentStatus previousStatus = payment.getStatus();
         Instant paidAt = payment.getPaidAt() != null ? payment.getPaidAt() : gatewayPaidAt;
         payment.setStatus(PaymentStatus.PAID);
         payment.setPaidAt(paidAt);
@@ -477,6 +482,30 @@ public class VnpayService {
             reservation.setConfirmedAt(paidAt);
             reservationRepository.saveAndFlush(reservation);
         }
+        if (previousStatus != PaymentStatus.PAID) {
+            notificationService.createNotification(
+                reservation.getCustomer().getId(), NotificationType.PAYMENT,
+                "Thanh toán thành công",
+                "VNPay đã xác nhận thanh toán cọc cho đơn "
+                    + reservation.getReservationCode() + ".",
+                reservation.getId()
+            );
+        }
+    }
+
+    private void notifyPaymentFailure(Payment payment) {
+        Reservation reservation = payment.getReservation();
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Thanh toán chưa thành công",
+            "Giao dịch VNPay của đơn " + reservation.getReservationCode()
+                + " chưa thành công. Bạn có thể thử lại nếu đơn vẫn còn thời hạn.",
+            reservation.getId()
+        );
+    }
+
+    private void setIfPresent(String value, java.util.function.Consumer<String> setter) {
+        if (value != null && !value.isBlank()) setter.accept(value);
     }
     private void resolveActiveComplaint(Reservation reservation, Instant resolvedAt) {
         if (reservation.getStatus() != ReservationStatus.PAYMENT_REVIEW) return;
@@ -490,12 +519,17 @@ public class VnpayService {
         complaintRepository.saveAndFlush(complaint);
     }
     private void markQueryFailure(Payment payment, String code, String reason) {
+        PaymentStatus previousStatus = payment.getStatus();
         payment.setStatus(PaymentStatus.FAILED);
         payment.setProcessedAt(Instant.now());
         payment.setFailureCode(code);
         payment.setFailureReason(reason);
+        if (previousStatus != PaymentStatus.FAILED) {
+            notifyPaymentFailure(payment);
+        }
     }
     private void markLatePaymentForReconciliation(Payment payment, Instant gatewayPaidAt) {
+        PaymentStatus previousStatus = payment.getStatus();
         payment.setStatus(PaymentStatus.PAID);
         payment.setPaidAt(gatewayPaidAt);
         payment.setProcessedAt(Instant.now());
@@ -503,6 +537,16 @@ public class VnpayService {
         payment.setFailureReason(
             "VNPAY recorded money after the reservation deadline; manual financial reconciliation is required"
         );
+        if (previousStatus != PaymentStatus.PAID) {
+            Reservation reservation = payment.getReservation();
+            notificationService.createNotification(
+                reservation.getCustomer().getId(), NotificationType.PAYMENT,
+                "Thanh toán đang được đối soát",
+                "VNPay ghi nhận tiền của đơn " + reservation.getReservationCode()
+                    + " sau thời hạn. StorageHub đang đối soát giao dịch.",
+                reservation.getId()
+            );
+        }
     }
     private Instant paymentDeadline(Reservation reservation) {
         Instant deadline = reservation.getPaymentExpiresAt() != null
