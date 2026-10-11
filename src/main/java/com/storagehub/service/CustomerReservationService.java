@@ -48,6 +48,7 @@ public class CustomerReservationService {
 
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
+    private final CheckInRepository checkInRepository;
     private final RentalRepository rentalRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final FileAssetRepository fileAssetRepository;
