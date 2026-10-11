@@ -16,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service @RequiredArgsConstructor @Transactional(readOnly=true)
 public class RentalBookingEvidenceReader {
     private final EntityManager em;
+    private final com.storagehub.service.PaymentProvenance provenance;
+    private final com.storagehub.service.ledger.PaymentReconciliationPreflight preflight;
     public Optional<RentalBookingEvidence> read(ActorPrincipal actor,Rental rental,boolean manager) {
         if(actor==null)throw ApiExceptions.unauthorized("Authentication required");
         if(rental==null || rental.getCustomer()==null || rental.getFacility()==null || rental.getReservation()==null)
@@ -53,8 +55,8 @@ public class RentalBookingEvidenceReader {
             .setParameter("id",reservation.getId()).setMaxResults(21).getResultList();
         for(var p:rows)if(!"VND".equals(p.getCurrency()) || !money(p.getAmount()) || p.getPurpose()==null || p.getStatus()==null)
             throw ApiExceptions.conflict("Booking payment record is inconsistent");
-        var payments=rows.stream().limit(20).map(p->new RentalBookingEvidence.PaymentRecord(p.getId(),p.getPurpose().name(),p.getStatus().name(),
-            p.getAmount(),p.getProcessedAt(),p.getGatewayIntentId()!=null && p.getGatewayIntentId().startsWith("SIMULATED-")?"SIMULATED":"UNVERIFIED")).toList();
+        var payments=rows.stream().limit(20).map(p->{var classification=provenance.classify(p);return new RentalBookingEvidence.PaymentRecord(p.getId(),p.getPurpose().name(),p.getStatus().name(),
+            p.getAmount(),p.getProcessedAt(),classification.name(),preflight.read(p,rental,snapshots.isEmpty()?null:snapshots.getFirst(),classification));}).toList();
         // Do not return gateway intent, idempotency key, failure details or other internal identifiers.
         return Optional.of(new RentalBookingEvidence(rental.getId(),reservation.getId(),"VND",amounts,payments,rows.size()>20));
     }

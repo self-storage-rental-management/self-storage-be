@@ -85,6 +85,7 @@ class SupportWorkflowIntegrationTests {
     @Autowired TestReceiver receiver;
     @Autowired TestNotice notice;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    @Autowired javax.sql.DataSource datasource;
     Facility facility,otherFacility;
     User customer,otherCustomer,manager,staff,otherStaff,foreignStaff;
     ActorPrincipal c,m,s,s2;
@@ -133,6 +134,52 @@ class SupportWorkflowIntegrationTests {
         assertThatThrownBy(()->service.detail(actor(otherCustomer,RoleCode.CUSTOMER,null),CUSTOMER,t.id())).isInstanceOf(ApiException.class);
         var foreign=actor(foreignStaff,RoleCode.STAFF,otherFacility);
         assertThatThrownBy(()->service.detail(foreign,STAFF,t.id())).isInstanceOf(ApiException.class);
+    }
+    @Test void customerCanFilterOwnedTicketsByFacilityWithoutStaffScope(){
+        var owned=create();
+        service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Other","Other owner",otherFacility.getId(),null,List.of()),"other-facility");
+        var params=new LinkedMultiValueMap<String,String>();params.add("facilityId",facility.getId().toString());
+        var ownFacility=SupportQuery.parseCustomerList(params);
+        assertThat(service.list(c,CUSTOMER,ownFacility,"test").data()).extracting(SupportResponse::id).containsExactly(owned.id());
+        params.set("facilityId",otherFacility.getId().toString());
+        assertThat(service.list(c,CUSTOMER,SupportQuery.parseCustomerList(params),"test").pagination().totalItems()).isZero();
+        assertThatThrownBy(()->service.list(m,MANAGER,SupportQuery.parse(params,true,false),"test"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("scope");
+    }
+    @Test void customerSupportHttpFacilityFilterPreservesOwnership() throws Exception {
+        var owned=create();
+        service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Other","Other owner",otherFacility.getId(),null,List.of()),"other-http");
+        var context=mock(ActorContext.class);when(context.required()).thenReturn(c);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerSupportController(context,service))
+            .setControllerAdvice(new SupportRequestAdvice(new ObjectMapper().findAndRegisterModules()),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/support-workflows")
+                .param("facilityId",facility.getId().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data[0].id").value(owned.id().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("pagination.totalItems").value(1));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/support-workflows")
+                .param("facilityId",otherFacility.getId().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("pagination.totalItems").value(0));
+    }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void customerFacilityHttpFilterHasCommittedDatabaseReadback() throws Exception {
+        var owned=create();
+        service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Other","Other owner",otherFacility.getId(),null,List.of()),"other-committed");
+        var context=mock(ActorContext.class);when(context.required()).thenReturn(c);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerSupportController(context,service))
+            .setControllerAdvice(new SupportRequestAdvice(new ObjectMapper().findAndRegisterModules()),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/support-workflows")
+                .param("facilityId",facility.getId().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data[0].id").value(owned.id().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("pagination.totalItems").value(1));
+        try(var connection=datasource.getConnection();
+            var statement=connection.prepareStatement("select count(*) from support_tickets");var rows=statement.executeQuery()){
+            rows.next();assertThat(rows.getLong(1)).isEqualTo(2);
+        }
+        assertThat(service.detail(c,CUSTOMER,owned.id()).id()).isEqualTo(owned.id());
     }
     @Test void legacyNullFacilityIsNotImplicitlyTriagedOrBackfilled(){
         var legacy=new SupportTicket();legacy.setCustomer(customer);legacy.setSubject("Legacy");legacy.setDescription("Unscoped");em.persist(legacy);em.flush();

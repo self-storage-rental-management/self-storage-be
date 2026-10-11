@@ -33,7 +33,7 @@ class RenewalWorkflowIntegrationTests {
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
         @Bean ActorContext actorContext(){return mock(ActorContext.class);}
         @Bean TestClock clock(){return new TestClock();}
-        @Bean RenewalSources.PolicySource policy(){return (r,d)->Optional.of(new RenewalSources.Policy("test-policy","v1",Duration.ofMinutes(30),Duration.ofHours(24),30,new BigDecimal("0.2"),Set.of(PACKAGE)));}
+        @Bean TestPolicy policy(){return new TestPolicy();}
         @Bean TestEligibility eligibility(){return new TestEligibility();}
         @Bean TestPrice prices(){return new TestPrice();}
         @Bean TestFinance finance(){return new TestFinance();}
@@ -43,6 +43,10 @@ class RenewalWorkflowIntegrationTests {
     static class TestPrice implements RenewalSources.PricingSource {
         BigDecimal rate=new BigDecimal("100");
         public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,BigDecimal.ZERO,"VND",2)));}
+    }
+    static class TestPolicy implements RenewalSources.PolicySource {
+        String version="v1";
+        public Optional<RenewalSources.Policy> read(Rental r,LocalDate date){return Optional.of(new RenewalSources.Policy("test-policy",version,Duration.ofMinutes(30),Duration.ofHours(24),30,new BigDecimal("0.2"),Set.of(PACKAGE)));}
     }
     static class TestEligibility implements RenewalSources.EligibilitySource {
         boolean unknown;
@@ -70,10 +74,13 @@ class RenewalWorkflowIntegrationTests {
             return UUID.fromString("00000000-0000-0000-0000-000000000002");}
     }
     @Autowired EntityManager em;@Autowired RenewalWorkflowService commands;@Autowired RenewalReadService reads;
-    @Autowired TestPrice pricing;@Autowired TestEligibility eligibility;@Autowired TestFinance finance;@Autowired TestHold hold;
+    @Autowired TestPrice pricing;@Autowired TestPolicy policy;@Autowired TestEligibility eligibility;@Autowired TestFinance finance;@Autowired TestHold hold;
     @Autowired TestLifecycle lifecycle;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    @Autowired javax.sql.DataSource datasource;
     @Autowired TestClock clock;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
+    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";}
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
         var r=fixture();var a=customer(r);var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads,commands))
@@ -178,6 +185,10 @@ class RenewalWorkflowIntegrationTests {
         var body=new RenewalCommands.Submit(quote.id(),"test");var created=commands.submit(customer,r.getId(),body,"submit");
         assertThat(created.version()).isZero();assertThat(created.acceptedRevision()).isEqualTo(1);assertThat(created.reviewState()).isEqualTo("READY");
         assertThat(commands.submit(customer,r.getId(),body,"submit")).isEqualTo(created);
+        var revision=em.find(RenewalWorkflow.class,created.id()).getAcceptedRevision();
+        var specs=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(revision,quote.terms());
+        assertThat(specs).hasSize(2);assertThat(specs.getFirst().sourceReference()).contains(revision.getId().toString(),quote.id().toString());
+        verifyNoInteractions(ledgerWrites);
         var decision=new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,created.version());
         var approved=commands.decision(manager,created.id(),decision,"approve");
         assertThat(approved.status()).isEqualTo(RenewalStatus.approved);assertThat(approved.approvedPaymentDeadline()).isEqualTo(NOW.plusSeconds(86400));
@@ -195,6 +206,54 @@ class RenewalWorkflowIntegrationTests {
         assertThat(updated.acceptedRevision()).isEqualTo(2);assertThat(updated.amount()).isEqualByComparingTo("200");
         assertThat(commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,updated.version()),"approve").status()).isEqualTo(RenewalStatus.approved);
         assertThat(em.createQuery("select count(x) from RenewalAcceptedRevision x",Long.class).getSingleResult()).isEqualTo(2);
+    }
+    @Test void staleQuoteCannotBeSubmittedOrAcceptedAsRevision(){
+        var r=fixture();var a=customer(r);
+        var stale=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        pricing.rate=new BigDecimal("150");
+        assertThatThrownBy(()->commands.submit(a,r.getId(),new RenewalCommands.Submit(stale.id(),null),"stale-submit"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("new quote and Customer confirmation");
+        assertThat(em.createQuery("select count(n) from Renewal n",Long.class).getSingleResult()).isZero();
+        var fresh=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(fresh.id(),null),"fresh-submit");
+        assertThat(n.amount()).isEqualByComparingTo("150");
+        var revision=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        policy.version="v2";
+        assertThatThrownBy(()->commands.edit(a,n.id(),new RenewalCommands.Edit(revision.id(),"consent",n.version()),"stale-edit"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("new quote and Customer confirmation");
+        assertThat(reads.detail(a,n.id(),false).acceptedRevision()).isEqualTo(1);
+        var revised=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        assertThat(commands.edit(a,n.id(),new RenewalCommands.Edit(revised.id(),"consent",n.version()),"fresh-edit").acceptedRevision()).isEqualTo(2);
+    }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void stalePolicyQuoteHttpRejectsAndFreshQuoteCommitsWithJdbcReadback() throws Exception {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        var r=tx.execute(s->fixture());var a=customer(r);var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands))
+            .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        String path="/api/customer/rentals/"+r.getId();
+        var quoted=mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"))
+            .andExpect(status().isOk()).andReturn();
+        String staleId=new ObjectMapper().readTree(quoted.getResponse().getContentAsString()).path("data").path("id").asText();
+        policy.version="v2";
+        mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","stale-policy").contentType("application/json")
+            .content("{\"renewalQuoteId\":\""+staleId+"\"}"))
+            .andExpect(status().isConflict());
+        try(var connection=datasource.getConnection();var statement=connection.prepareStatement("select count(*) from renewals")){
+            try(var rows=statement.executeQuery()){rows.next();assertThat(rows.getLong(1)).isZero();}
+        }
+        var fresh=mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"))
+            .andExpect(status().isOk()).andReturn();
+        String freshId=new ObjectMapper().readTree(fresh.getResponse().getContentAsString()).path("data").path("id").asText();
+        var submitted=mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","fresh-policy").contentType("application/json")
+            .content("{\"renewalQuoteId\":\""+freshId+"\"}"))
+            .andExpect(status().isCreated()).andReturn();
+        String requestId=new ObjectMapper().readTree(submitted.getResponse().getContentAsString()).path("data").path("id").asText();
+        try(var connection=datasource.getConnection();var statement=connection.prepareStatement("select count(*) from renewals")){
+            try(var rows=statement.executeQuery()){rows.next();assertThat(rows.getLong(1)).isEqualTo(1);}
+        }
+        assertThat(reads.detail(a,UUID.fromString(requestId),false).acceptedQuoteId()).isEqualTo(UUID.fromString(freshId));
     }
     @Test void pendingCancellationReleasesSlotKeepsHistoryAndReplays(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
@@ -219,6 +278,18 @@ class RenewalWorkflowIntegrationTests {
     @Test void financialUnknownBlocksApprovalBeforeHold(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");finance.unknown=true;
         assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve")).isInstanceOf(ApiException.class);assertThat(hold.calls).isZero();
+    }
+    @Test void financialReadbackIsPartialWhenApprovalConsistencyIsUnavailable(){
+        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit-financial-partial");
+        finance.consistent=false;
+        var managerView=reads.detail(manager(r),n.id(),true);
+        assertThat(managerView.financialCheck().completeness()).isEqualTo("PARTIAL");
+        assertThat(managerView.allowedActions()).doesNotContain("APPROVE");
+        assertThat(managerView.disabledReasons()).anyMatch(reason->reason.contains("not certified through approval"));
+        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve-financial-partial"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("Consistent financial source missing");
+        assertThat(hold.calls).isZero();
     }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings={"RETURNED","MAINTENANCE","RECOVERY","BOOKING"})
@@ -254,15 +325,80 @@ class RenewalWorkflowIntegrationTests {
         }
     }
     private ActorPrincipal customer(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());}
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"MATCH","REFERENCE","VERSION","CUTOFF","MISSING_POLICY","EXPIRED_POLICY","RECOVERY","UNKNOWN_CALENDAR"})
+    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void publishedPolicyAndBoundEligibilityGateHttpQuoteWithCommittedReadback(String kind) throws Exception {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        var r=tx.execute(s->{var rental=fixture();rental.getStorageUnit().setStatus(StorageUnitStatus.occupied);em.flush();return rental;});
+        if(!kind.equals("MISSING_POLICY"))tx.executeWithoutResult(s->{
+            var setting=new SystemSetting();setting.setSettingKey(com.storagehub.service.renewal.integration.RenewalPolicyPublicationService.key(r.getFacility().getId()));
+            setting.setGroupName("TEST");setting.setLabel("TEST");setting.setSettingType("text");
+            var policy=new PublishedRenewalPolicy("RENEWAL_POLICY_V1",r.getFacility().getId(),1,"test-published-v1",r.getCustomer().getId(),NOW.minusSeconds(1),
+                LocalDate.of(2026,10,1),kind.equals("EXPIRED_POLICY")?LocalDate.of(2026,10,5):LocalDate.of(2026,11,30),30,24,30,new BigDecimal("0.2"),Set.of(PACKAGE),
+                new PublishedRenewalPolicy.Signing(60,60),new PublishedRenewalPolicy.Term("CALENDAR_DAYS","Asia/Ho_Chi_Minh",1,3,7,8,LocalTime.of(17,0),LocalTime.of(8,0)));
+            try{setting.setValue(mapper.writeValueAsString(policy));}catch(Exception e){throw new IllegalStateException(e);}em.persist(setting);
+        });
+        var periods=(com.storagehub.service.rental.period.RentalPeriodResolver)org.springframework.test.util.ReflectionTestUtils.getField(commands,"periods");
+        var published=new com.storagehub.service.renewal.integration.PublishedRenewalPolicyAdapters(
+            new com.storagehub.service.renewal.integration.RenewalPolicyPublicationService(em,mapper,null,null),periods,em,mapper,null);
+        var factory=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        factory.addBean("policy",(RenewalSources.PolicySource)(rental,start)->published.read(rental,start));
+        var termCalls=new java.util.concurrent.atomic.AtomicInteger();
+        factory.addBean("term",(com.storagehub.service.overdue.OverdueSources.TermSource)(rental,at)->published.term(rental,at).map(t->{
+            if(termCalls.incrementAndGet()!=2)return t;
+            return new com.storagehub.service.overdue.OverdueSources.Term(kind.equals("REFERENCE")?"OTHER":t.policyRef(),kind.equals("VERSION")?"v2":t.policyVersion(),
+                t.lastPermittedDate(),t.warningThroughDay(),t.seriousThroughDay(),t.urgentThroughDay(),t.recoveryFromDay(),
+                kind.equals("CUTOFF")?t.recoveryCutoff().minusSeconds(1):t.recoveryCutoff(),t.recoveryStart());
+        }));
+        // External receiver/calendar are TEST-ONLY boundary fixtures; published policy and DB services are real.
+        factory.addBean("recovery",new com.storagehub.service.overdue.OverdueSources.RecoverySource(){
+            public com.storagehub.service.overdue.OverdueSources.Handoff receive(Rental rental,String ref,String reason,String key,Instant at){throw new UnsupportedOperationException();}
+            public Optional<com.storagehub.service.overdue.OverdueSources.RecoveryState> state(Rental rental,Instant at){return Optional.of(new com.storagehub.service.overdue.OverdueSources.RecoveryState(rental.getId(),rental.getFacility().getId(),at,kind.equals("RECOVERY")));}
+        });
+        var calendar=mock(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class);
+        when(calendar.atomic()).thenReturn(true);when(calendar.feasible(any(Rental.class),any(),any())).thenReturn(kind.equals("UNKNOWN_CALENDAR")?Optional.empty():Optional.of(true));factory.addBean("calendar",calendar);
+        var coverage=new com.storagehub.service.renewal.integration.SharedRenewalEligibilityEvidenceSource(factory.getBeanProvider(com.storagehub.service.overdue.OverdueSources.RecoverySource.class),factory.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class),factory.getBeanProvider(com.storagehub.service.overdue.OverdueSources.TermSource.class));
+        factory.addBean("coverage",coverage);
+        factory.addBean("eligibility",new com.storagehub.service.renewal.integration.SharedRenewalEligibilitySource(new com.storagehub.service.renewal.integration.RenewalOperationalGuard(em),periods,factory.getBeanProvider(com.storagehub.service.overdue.OverdueSources.TermSource.class),factory.getBeanProvider(com.storagehub.service.renewal.integration.RenewalEligibilityEvidenceSource.class)));
+        var oldPolicy=org.springframework.test.util.ReflectionTestUtils.getField(commands,"policies");var oldEligibility=org.springframework.test.util.ReflectionTestUtils.getField(commands,"eligibility");
+        try{
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"policies",factory.getBeanProvider(RenewalSources.PolicySource.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"eligibility",factory.getBeanProvider(RenewalSources.EligibilitySource.class));
+            var context=mock(ActorContext.class);when(context.required()).thenReturn(customer(r));
+            var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands))
+                .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+            var result=mvc.perform(post("/api/customer/rentals/"+r.getId()+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"));
+            if(kind.equals("MATCH"))result.andExpect(status().isOk()).andExpect(jsonPath("data.renewalPolicyVersion").value("test-published-v1"));
+            else result.andExpect(status().isConflict());
+            tx.executeWithoutResult(s->{em.clear();assertThat(em.find(Rental.class,r.getId()).getContractEndDate()).isEqualTo(r.getContractEndDate());
+                var rows=em.createQuery("select q from RenewalQuote q where q.rental.id=:id",RenewalQuote.class).setParameter("id",r.getId()).getResultList();
+                assertThat(rows).hasSize(kind.equals("MATCH")?1:0);
+                if(!rows.isEmpty())assertThat(rows.getFirst().getTermsJson()).contains("test-published-v1","system-setting:");
+            });
+            try(var connection=datasource.getConnection();var statement=connection.prepareStatement("select terms_json from renewal_quotes where rental_id=?")){
+                var uuid=r.getId();statement.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(uuid.getMostSignificantBits()).putLong(uuid.getLeastSignificantBits()).array());
+                try(var rows=statement.executeQuery()){
+                    if(kind.equals("MATCH")){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).contains("test-published-v1","system-setting:");}
+                    assertThat(rows.next()).isFalse();
+                }
+            }
+        }finally{
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"policies",oldPolicy);org.springframework.test.util.ReflectionTestUtils.setField(commands,"eligibility",oldEligibility);
+        }
+    }
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.
     private Rental fixture(){
-        Facility f=new Facility();f.setCode("TEST");f.setName("Test");f.setAddress("Test");f.setCity("Test");em.persist(f);
-        User u=new User();u.setEmail("fixture@test.invalid");u.setFullName("Test Customer");u.setPasswordHash("test-only");em.persist(u);
+        String fixtureKey=UUID.randomUUID().toString().substring(0,8);
+        Facility f=new Facility();f.setCode("TEST-"+fixtureKey);f.setName("Test");f.setAddress("Test");f.setCity("Test");em.persist(f);
+        User u=new User();u.setEmail(fixtureKey+"@test.invalid");u.setFullName("Test Customer");u.setPasswordHash("test-only");em.persist(u);
         UnitType t=new UnitType();t.setFacility(f);t.setCode("M");t.setName("Medium");t.setLengthM(BigDecimal.ONE);t.setWidthM(BigDecimal.ONE);t.setHeightM(BigDecimal.ONE);t.setMonthlyPrice(new BigDecimal("100"));t.setMaxLoadKg(BigDecimal.ONE);t.setRackLengthM(BigDecimal.ONE);t.setRackWidthM(BigDecimal.ONE);t.setRackHeightM(BigDecimal.ONE);em.persist(t);
-        StorageUnit unit=new StorageUnit();unit.setFacility(f);unit.setUnitType(t);unit.setCode("TEST-1");em.persist(unit);
+        StorageUnit unit=new StorageUnit();unit.setFacility(f);unit.setUnitType(t);unit.setCode("TEST-"+fixtureKey);em.persist(unit);
         ReservationQuote q=new ReservationQuote();q.setCustomer(u);q.setFacility(f);q.setUnitType(t);q.setPricingPackageCode("TEST");q.setPolicyVersion("test-only");q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,11,1));q.setRentalMonths(1);q.setMonthlyPrice(new BigDecimal("100"));q.setSubtotal(new BigDecimal("100"));q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(new BigDecimal("100"));q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(new BigDecimal("100"));q.setDueAtCheckIn(new BigDecimal("100"));q.setTotalInitialObligation(new BigDecimal("100"));q.setQuotedAt(NOW);q.setExpiresAt(NOW.plusSeconds(1800));em.persist(q);
-        Reservation res=new Reservation();res.setReservationCode("TEST");res.setCustomer(u);res.setSourceQuote(q);res.setIdempotencyKey("TEST");res.setFacility(f);res.setUnitType(t);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());em.persist(res);
+        Reservation res=new Reservation();res.setReservationCode("TEST-"+fixtureKey);res.setCustomer(u);res.setSourceQuote(q);res.setIdempotencyKey("TEST-"+fixtureKey);res.setFacility(f);res.setUnitType(t);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());em.persist(res);
         Rental r=new Rental();r.setCustomer(u);r.setFacility(f);r.setStorageUnit(unit);r.setReservation(res);r.setStartDate(q.getStartDate());r.setContractEndDate(LocalDate.of(2026,10,31));r.setMonthlyPrice(new BigDecimal("100"));em.persist(r);em.flush();return r;
     }
 }

@@ -26,7 +26,7 @@ class SharedRenewalEligibilitySourceTests {
         period=RentalPeriod.verified(rental.getId(),rental.getStartDate(),rental.getContractEndDate(),RentalPeriod.Convention.INCLUSIVE,"TEST-only").orElseThrow();
         guard=mock(RenewalOperationalGuard.class);periods=mock(RentalPeriodResolver.class);when(periods.read(rental)).thenReturn(Optional.of(period));
         term=new OverdueSources.Term("TEST-BO","v1",period.lastPermittedDate(),1,3,7,8,NOW.plusSeconds(86400),NOW.plusSeconds(90000));
-        evidence=Optional.of(new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),unit.getId(),facility.getId(),NOW,false,true));
+        evidence=Optional.of(new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),unit.getId(),facility.getId(),NOW,false,true,term.policyRef(),term.policyVersion(),term.recoveryCutoff()));
         factory=new StaticListableBeanFactory();factory.addBean("terms",(OverdueSources.TermSource)(r,n)->Optional.ofNullable(term));
         factory.addBean("coverage",(RenewalEligibilityEvidenceSource)(r,n)->evidence);
         source=adapter(factory);
@@ -48,7 +48,7 @@ class SharedRenewalEligibilitySourceTests {
         assertThat(adapter(new StaticListableBeanFactory()).read(rental,NOW)).isEmpty();
     }
     @Test void definitiveRecoveryAndUnfeasibleEvidenceAreNotAvailable(){
-        evidence=Optional.of(new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),rental.getStorageUnit().getId(),rental.getFacility().getId(),NOW,true,false));
+        evidence=Optional.of(new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),rental.getStorageUnit().getId(),rental.getFacility().getId(),NOW,true,false,term.policyRef(),term.policyVersion(),term.recoveryCutoff()));
         assertThat(source.read(rental,NOW)).contains(new RenewalSources.Eligibility(true,true,false,term.recoveryCutoff()));
     }
     @Test void cutoffEqualityBlocksEvenWithoutPositiveCoverage(){
@@ -63,6 +63,16 @@ class SharedRenewalEligibilitySourceTests {
     @Test void inconsistentPolicyIsBlockedNotSilentlyUnknown(){
         term=new OverdueSources.Term("TEST","v1",period.lastPermittedDate().plusDays(1),1,3,7,8,NOW.plusSeconds(100),NOW.plusSeconds(200));
         assertThatThrownBy(()->source.read(rental,NOW)).hasMessageContaining("mapping inconsistent");
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"REFERENCE","VERSION","CUTOFF","LEGACY"})
+    void policyDriftOrUnboundEvidenceCannotCertifyEligibility(String kind){
+        evidence=Optional.of(kind.equals("LEGACY")
+            ?new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),rental.getStorageUnit().getId(),rental.getFacility().getId(),NOW,false,true)
+            :new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),rental.getStorageUnit().getId(),rental.getFacility().getId(),NOW,false,true,
+                kind.equals("REFERENCE")?"OTHER":term.policyRef(),kind.equals("VERSION")?"v2":term.policyVersion(),
+                kind.equals("CUTOFF")?term.recoveryCutoff().plusSeconds(1):term.recoveryCutoff()));
+        assertThatThrownBy(()->source.read(rental,NOW)).hasMessageContaining("policy evidence changed or is incomplete");
     }
     @Test void guardAndInfrastructureExceptionsPropagate(){
         doThrow(ApiExceptions.conflict("Recovery handoff blocks renewal")).when(guard).requireNoKnownConflict(rental);
