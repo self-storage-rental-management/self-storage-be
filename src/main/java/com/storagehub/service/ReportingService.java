@@ -141,6 +141,7 @@ public class ReportingService {
             .count();
 
         List<Payment> paidPayments = paymentRepository.findPaidPaymentsByFacility(targetFacilityId);
+        paymentEvidence.requireReportable(paidPayments);
         BigDecimal collectedRevenue = paidPayments.stream()
             .filter(paymentEvidence::isRealCollected)
             .map(Payment::getAmount)
@@ -221,7 +222,9 @@ public class ReportingService {
         authorizationService.require(actor, SystemPermission.VIEW_REPORTS);
 
         int monthsToLookBack = months != null && months > 0 && months <= 24 ? months : 6;
-        List<Payment> allPaid = paymentRepository.findByStatus(PaymentStatus.PAID).stream()
+        List<Payment> paidHistory = paymentRepository.findByStatus(PaymentStatus.PAID);
+        paymentEvidence.requireReportable(paidHistory);
+        List<Payment> allPaid = paidHistory.stream()
             .filter(paymentEvidence::isRealCollected)
             .toList();
 

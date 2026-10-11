@@ -9,6 +9,27 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 class ReportingPaymentEvidenceTests {
+    @Test void disabledScopeIsUnknownRatherThanZeroEvenForEmptyHistory() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->new ReportingPaymentEvidence(classifier(),false)
+            .requireReportable(java.util.List.of())).hasMessageContaining("REVENUE_UNKNOWN");
+    }
+    @Test void mixedEvidenceRejectsUnverifiedAndPendingRefundInsteadOfReportingFalseNetRevenue() {
+        var source=classifier();var verified=paidGatewayPayment();var sandbox=paidGatewayPayment();var simulated=paidGatewayPayment();var unknown=paidGatewayPayment();
+        org.mockito.Mockito.when(source.classify(verified)).thenReturn(PaymentProvenance.Classification.VERIFIED);
+        org.mockito.Mockito.when(source.classify(sandbox)).thenReturn(PaymentProvenance.Classification.SANDBOX);
+        org.mockito.Mockito.when(source.classify(simulated)).thenReturn(PaymentProvenance.Classification.SIMULATED);
+        org.mockito.Mockito.when(source.classify(unknown)).thenReturn(PaymentProvenance.Classification.UNVERIFIED);
+        var evidence=new ReportingPaymentEvidence(source,true);
+        evidence.requireReportable(java.util.List.of(verified,sandbox,simulated));
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->evidence.requireReportable(java.util.List.of(verified,unknown)))
+            .hasMessageContaining("REVENUE_PARTIAL");
+        verified.setRefundedAmount(new java.math.BigDecimal("10"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->evidence.requireReportable(java.util.List.of(verified)))
+            .hasMessageContaining("REFUND_UNRECONCILED");
+        org.mockito.Mockito.when(source.classify(unknown)).thenReturn(PaymentProvenance.Classification.DISPUTED);
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->evidence.requireReportable(java.util.List.of(unknown)))
+            .hasMessageContaining("REVENUE_PARTIAL");
+    }
     @Test void reportingUsesSharedClassificationAndExplicitProductionFlag() {
         var source=org.mockito.Mockito.mock(PaymentProvenance.class);var payment=paidGatewayPayment();
         var enabled=new ReportingPaymentEvidence(source,true);

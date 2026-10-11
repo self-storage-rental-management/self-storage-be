@@ -23,7 +23,7 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
     private record Verified(LedgerStore.Snapshot snapshot,LedgerCoverageSource.Coverage proof) {}
     private Optional<Verified> verified(Rental rental,Instant now) {
         var source=coverage.getIfAvailable();if(source==null)return Optional.empty();
-        return store.read(rental.getId()).filter(snapshot->rental.getCustomer()!=null&&rental.getFacility()!=null
+        return store.read(rental.getId()).filter(snapshot->Objects.equals(snapshot.rentalId(),rental.getId())&&snapshot.revision()>=0&&rental.getCustomer()!=null&&rental.getFacility()!=null
             &&Objects.equals(snapshot.customerId(),rental.getCustomer().getId())&&Objects.equals(snapshot.facilityId(),rental.getFacility().getId())).flatMap(snapshot->source.verify(rental,snapshot,now).filter(p->
             Objects.equals(p.rentalId(),rental.getId())&&p.ledgerRevision()==snapshot.revision()&&p.sourceRef()!=null&&!p.sourceRef().isBlank()
             &&p.verifiedAt()!=null&&!p.verifiedAt().isAfter(now)&&p.billingMode()!=null).map(p->new Verified(snapshot,p)));

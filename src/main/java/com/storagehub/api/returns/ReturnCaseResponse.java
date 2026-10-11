@@ -39,6 +39,7 @@ public record ReturnCaseResponse(
     boolean returnedLock,
     StorageUnitStatus proposedUnitStatus,
     // Fees & settlement
+    // Contract amount, null when unknown. A positive value does not prove paid/held funds.
     BigDecimal depositAmount,
     BigDecimal damageFee,
     BigDecimal cleaningFee,
@@ -46,6 +47,7 @@ public record ReturnCaseResponse(
     BigDecimal overdueFee,
     BigDecimal outstandingFee,
     BigDecimal totalDeductions,
+    // Null until held-deposit/settlement evidence is reconciled; never a zero-balance assertion.
     BigDecimal netRefundAmount,
     BigDecimal amountDueFromCustomer,
     Integer overdueDays,
@@ -62,5 +64,7 @@ public record ReturnCaseResponse(
     // Finalization
     String settlementPaymentId,
     Instant settlementPaidAt,
-    Instant completedAt
+    Instant completedAt,
+    // Diagnostic only; no new lifecycle state and no authority to execute payment or payout.
+    String settlementBlocker
 ) {}
