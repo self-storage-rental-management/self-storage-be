@@ -13,6 +13,7 @@ class LedgerMigrationSafetyCallbackTests {
     @Test void supportsOnlyBeforeTheLedgerVersionAndDoesNotHandleOtherMigrations() {
         var callback=new LedgerMigrationSafetyCallback();var context=mock(Context.class);var info=mock(MigrationInfo.class);
         when(context.getMigrationInfo()).thenReturn(info);when(info.getVersion()).thenReturn(MigrationVersion.fromVersion("2026101001"));
+        when(info.getScript()).thenReturn("V2026101001__create_rental_ledger_and_notification_outbox.sql");
         assertThat(callback.supports(Event.BEFORE_EACH_MIGRATE,context)).isTrue();
         assertThat(callback.supports(Event.AFTER_EACH_MIGRATE,context)).isFalse();
         when(info.getVersion()).thenReturn(MigrationVersion.fromVersion("2026101101"));
@@ -23,6 +24,7 @@ class LedgerMigrationSafetyCallbackTests {
     @Test void unverifiedTiDbStopsBeforeLedgerDdlWithoutClosingFlywayConnection() throws Exception {
         var callback=new LedgerMigrationSafetyCallback();var context=mock(Context.class);var info=mock(MigrationInfo.class);
         when(context.getMigrationInfo()).thenReturn(info);when(info.getVersion()).thenReturn(MigrationVersion.fromVersion("2026101001"));
+        when(info.getScript()).thenReturn("V2026101001__create_rental_ledger_and_notification_outbox.sql");
         var connection=mock(Connection.class);var statement=mock(Statement.class);var database=mock(ResultSet.class);var identity=mock(ResultSet.class);
         when(context.getConnection()).thenReturn(connection);when(connection.createStatement()).thenReturn(statement);
         when(statement.executeQuery("select database()")).thenReturn(database);when(database.next()).thenReturn(true,false);

@@ -35,10 +35,10 @@ class RentalIntegrationMySqlSchemaTests {
         assertThat(jdbc.queryForObject("select count(*) from information_schema.tables where table_schema=database()",Long.class))
             .as("Refuse to migrate an existing or shared schema; use a fresh isolated test DB")
             .isZero();
-        flyway=Flyway.configure().dataSource(datasource)
+        flyway=com.storagehub.config.DevelopMigrationHistoryLocations.configure(Flyway.configure().dataSource(datasource)
             .locations("classpath:db/migration","classpath:db/paymentmigration")
             .callbacks(new com.storagehub.config.LedgerMigrationSafetyCallback())
-            .outOfOrder(true).cleanDisabled(true).load();
+            .outOfOrder(false).cleanDisabled(true)).load();
         String expectedDatabase=url.substring(url.indexOf("/storagehub_schema_test_")+1).split("\\?",2)[0];
         new com.storagehub.config.RentalSupportSchemaRolloutConfiguration()
             .rentalSupportSchemaMigration(expectedDatabase).migrate(flyway);
@@ -54,7 +54,7 @@ class RentalIntegrationMySqlSchemaTests {
         assertThat(jdbc.queryForObject("select count(*) from information_schema.tables where table_schema=database() and table_name in ('rental_ledger_accounts','rental_ledger_obligations','rental_ledger_receipts','rental_ledger_allocations','rental_ledger_refunds','rental_ledger_commands','notification_outbox')",Long.class))
             .isEqualTo(7);
         assertThat(jdbc.queryForObject("select count(*) from information_schema.tables where table_schema=database() and (table_name like 'duong_ledger_%' or table_name='duong_notification_outbox')",Long.class)).isZero();
-        assertThat(jdbc.queryForObject("select count(*) from flyway_schema_history where version='2026101001' and success=1",Long.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from flyway_schema_history where version='2026101103' and success=1",Long.class)).isEqualTo(1);
     }
     @Test void paymentGatewayMigrationInstallsColumnAndUniqueIndex() {
         assertThat(jdbc.queryForObject("select count(*) from flyway_schema_history where version='2026101101' and success=1",Long.class)).isEqualTo(1);

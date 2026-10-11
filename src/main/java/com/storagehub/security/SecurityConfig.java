@@ -69,7 +69,9 @@ public class SecurityConfig {
                 .requestMatchers(
                     HttpMethod.GET,
                     "/api/public/facilities",
-                    "/api/public/unit-types"
+                    "/api/public/unit-types",
+                    "/api/public/payments/vnpay/return",
+                    "/api/public/payments/vnpay/ipn"
                 ).permitAll()
                 .requestMatchers(
                     "/swagger-ui.html",

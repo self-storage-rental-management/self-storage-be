@@ -8,12 +8,16 @@ import com.storagehub.security.ActorContext;
 import com.storagehub.service.CustomerReservationService;
 import com.storagehub.service.ReservationCompatibilityService;
 import com.storagehub.service.ReservationEmailVerificationService;
-import com.storagehub.service.SimulatedPaymentService;
-import com.storagehub.api.payment.SimulatedPaymentResponse;
+import com.storagehub.service.VnpayService;
+import com.storagehub.api.payment.VnpayPaymentUrlResponse;
+import com.storagehub.api.payment.VnpayTransactionResponse;
 import com.storagehub.api.payment.CreatePaymentComplaintRequest;
 import com.storagehub.api.payment.PaymentComplaintResponse;
+import com.storagehub.api.file.FileAssetResponse;
+import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.service.PaymentComplaintService;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import java.time.LocalDate;
 import java.util.List;
@@ -38,7 +42,7 @@ public class CustomerReservationController {
     private final com.storagehub.service.ReservationCreationService creationService;
     private final CustomerReservationService customerReservationService;
     private final ReservationEmailVerificationService emailVerificationService;
-    private final SimulatedPaymentService simulatedPaymentService;
+    private final VnpayService vnpayService;
     private final PaymentComplaintService paymentComplaintService;
 
     @PostMapping("/compatibility-check")
@@ -104,12 +108,23 @@ public class CustomerReservationController {
         );
     }
 
-    @PostMapping("/{reservationId}/receipt-confirmation")
-    public ApiResponse<ReservationDetailResponse> confirmReceipt(
+    @PostMapping("/{reservationId}/check-in-appointment")
+    public ApiResponse<ReservationResponse> setCheckInAppointment(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody CheckInAppointmentRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.setCheckInAppointment(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @GetMapping("/{reservationId}/check-in-documents")
+    public ApiResponse<List<FileAssetResponse>> listCheckInDocuments(
         @PathVariable UUID reservationId
     ) {
         return new ApiResponse<>(
-            customerReservationService.confirmReceipt(actorContext.required(), reservationId),
+            customerReservationService.listCheckInDocuments(actorContext.required(), reservationId),
             CorrelationIdContext.current()
         );
     }
@@ -147,22 +162,27 @@ public class CustomerReservationController {
     }
 
     @GetMapping("/{reservationId}/payment")
-    public ApiResponse<SimulatedPaymentResponse> getPayment(
+    public ApiResponse<VnpayTransactionResponse> getPayment(
         @PathVariable UUID reservationId
     ) {
         return new ApiResponse<>(
-            simulatedPaymentService.getPayment(actorContext.required(), reservationId),
+            vnpayService.get(actorContext.required(), reservationId),
             CorrelationIdContext.current()
         );
     }
 
-    @PostMapping("/{reservationId}/simulated-payment")
-    public ApiResponse<SimulatedPaymentResponse> simulatePayment(
+    @PostMapping("/{reservationId}/vnpay/payment-url")
+    public ApiResponse<VnpayPaymentUrlResponse> createVnpayPaymentUrl(
         @PathVariable UUID reservationId,
-        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey
+        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+        HttpServletRequest request
     ) {
         return new ApiResponse<>(
-            simulatedPaymentService.pay(actorContext.required(), reservationId, idempotencyKey),
+            vnpayService.createPaymentUrl(
+                actorContext.required(), reservationId, idempotencyKey,
+                request.getHeader("X-Forwarded-For") != null
+                    ? request.getHeader("X-Forwarded-For") : request.getRemoteAddr()
+            ),
             CorrelationIdContext.current()
         );
     }
