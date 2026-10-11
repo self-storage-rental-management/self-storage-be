@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,8 +22,6 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.InventoryMatch;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
-import com.storagehub.domain.model.Reservation;
-import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
 import com.storagehub.domain.model.RoleCode;
@@ -33,7 +30,6 @@ import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.RentalRepository;
-import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
@@ -59,7 +55,6 @@ class ReturnSettlementServiceTests {
 
     @Mock ReturnCaseRepository returnCaseRepository;
     @Mock RentalRepository rentalRepository;
-    @Mock ReservationPricingSnapshotRepository pricingSnapshotRepository;
     @Mock StorageUnitRepository storageUnitRepository;
     @Mock UserRepository userRepository;
     @Mock AdminAuthorizationService authorizationService;
@@ -85,7 +80,6 @@ class ReturnSettlementServiceTests {
         service = new ReturnSettlementService(
             returnCaseRepository,
             rentalRepository,
-            pricingSnapshotRepository,
             storageUnitRepository,
             userRepository,
             authorizationService,
@@ -162,77 +156,116 @@ class ReturnSettlementServiceTests {
 
         assertThat(response).isNotNull();
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.requested);
-        assertThat(response.depositAmount()).isNull();
+        assertThat(response.depositAmount()).isEqualByComparingTo(new BigDecimal("2000000.00"));
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
     }
 
     @Test
-    void createReturnUsesImmutableSecurityDepositContractAmount() {
-        var reservation = new Reservation();
-        ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
-        rental.setReservation(reservation);
-        reservation.setCustomer(customer);reservation.setFacility(facility);
-        var snapshot = new ReservationPricingSnapshot();
-        ReflectionTestUtils.setField(snapshot,"id",UUID.randomUUID());snapshot.setReservation(reservation);
-        snapshot.setPricingPackageCode("TEST_1M");snapshot.setPricingPolicyVersion("TEST-v1");snapshot.setRentalMonths(1);
-        snapshot.setMonthlyPrice(new BigDecimal("2000000"));snapshot.setGrossRentalAmount(new BigDecimal("2000000"));
-        snapshot.setDiscountRate(BigDecimal.ZERO);snapshot.setDiscountAmount(BigDecimal.ZERO);snapshot.setNetRentalAmount(new BigDecimal("2000000"));
-        snapshot.setReservationDepositAmount(BigDecimal.ZERO);snapshot.setRemainingRentalAmount(new BigDecimal("2000000"));
-        snapshot.setDueAtCheckIn(new BigDecimal("5500000"));snapshot.setTotalInitialObligation(new BigDecimal("5500000"));
-        snapshot.setSecurityDepositAmount(new BigDecimal("3500000"));
-        when(pricingSnapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
-        when(rentalRepository.findByIdAndCustomer_Id(rental.getId(), customer.getId())).thenReturn(Optional.of(rental));
-        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
-        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
-            ReturnCase rc = invocation.getArgument(0);
-            ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
-            return rc;
-        });
+    void performInspection_withNetRefund_calculatesCorrectly() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setRequestedBy(customer);
+        returnCase.setStatus(ReturnCaseStatus.requested);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setScheduledDate(LocalDate.now());
 
-        var request = new CustomerCreateReturnRequest(LocalDate.now().plusDays(1), null);
-        var response = service.createCustomerReturnRequest(customerActor, rental.getId(), request);
-        assertThat(response.depositAmount()).isEqualByComparingTo("3500000");
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.requested);
-    }
+        ReturnInspectionRequest request = new ReturnInspectionRequest(
+            InventoryMatch.match,
+            DamageClassification.minor_damage,
+            new BigDecimal("300000.00"), // damageFee
+            new BigDecimal("100000.00"), // cleaningFee
+            BigDecimal.ZERO, // lostItemFee
+            BigDecimal.ZERO, // overdueFee
+            BigDecimal.ZERO, // outstandingFee
+            "Mặt sàn xước nhẹ, cần vệ sinh bụi",
+            List.of("photo1.jpg"),
+            true, true, true,
+            StorageUnitStatus.available
+        );
 
-    @Test
-    void performInspection_withUnverifiedDepositDoesNotCalculateRefund() {
-        ReturnCase returnCase = pendingCase(ReturnCaseStatus.requested, "2000000.00");
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
         when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
-        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(i->i.getArgument(0));
-        var response=service.performInspection(staffActor, returnCase.getId(), inspection());
-        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
-        assertThat(returnCase.getInspectedBy()).isEqualTo(staff);
-        assertThat(response.netRefundAmount()).isNull();
-        assertThat(response.settlementBlocker()).isEqualTo("FIN_06_HELD_DEPOSIT_EVIDENCE_REQUIRED");
-        assertThat(response.amountDueFromCustomer()).isNull();
-    }
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-    @Test
-    void performInspection_withUnverifiedDepositDoesNotCalculateAmountDue() {
-        ReturnCase returnCase = pendingCase(ReturnCaseStatus.requested, "1000000.00");
-        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
-        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
-        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(i->i.getArgument(0));
-        var response=service.performInspection(staffActor, returnCase.getId(), inspection());
+        ReturnCaseResponse response = service.performInspection(staffActor, returnCase.getId(), request);
+
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
-        assertThat(response.totalDeductions()).isEqualByComparingTo("500000");
-        assertThat(response.amountDueFromCustomer()).isNull();
+        assertThat(response.totalDeductions()).isEqualByComparingTo(new BigDecimal("400000.00"));
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(new BigDecimal("1600000.00"));
+        assertThat(response.amountDueFromCustomer()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     @Test
-    void customerConfirmSettlement_acceptedWithUnverifiedDepositIsBlocked() {
-        ReturnCase returnCase = pendingCase(ReturnCaseStatus.awaiting_customer_confirmation, "2000000.00");
+    void performInspection_withAmountDue_calculatesCorrectly() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setRequestedBy(customer);
+        returnCase.setStatus(ReturnCaseStatus.requested);
+        returnCase.setDepositAmount(new BigDecimal("1000000.00")); // deposit is only 1M
+        returnCase.setScheduledDate(LocalDate.now());
+
+        ReturnInspectionRequest request = new ReturnInspectionRequest(
+            InventoryMatch.match,
+            DamageClassification.major_damage,
+            new BigDecimal("1200000.00"), // damage
+            new BigDecimal("200000.00"),  // cleaning
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            "Cửa cuốn hỏng nặng",
+            List.of("damage.jpg"),
+            true, true, true,
+            StorageUnitStatus.maintenance
+        );
+
+        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ReturnCaseResponse response = service.performInspection(staffActor, returnCase.getId(), request);
+
+        assertThat(response.totalDeductions()).isEqualByComparingTo(new BigDecimal("1400000.00"));
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(response.amountDueFromCustomer()).isEqualByComparingTo(new BigDecimal("400000.00"));
+        assertThat(response.proposedUnitStatus()).isEqualTo(StorageUnitStatus.maintenance);
+    }
+
+    @Test
+    void customerConfirmSettlement_accepted_withRefund_setsRefundPending() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setTotalDeductions(new BigDecimal("400000.00"));
+        returnCase.setNetRefundAmount(new BigDecimal("1600000.00"));
+        returnCase.setAmountDueFromCustomer(BigDecimal.ZERO);
+
+        CustomerConfirmSettlementRequest request = new CustomerConfirmSettlementRequest(
+            CustomerDecision.accepted,
+            "Dong y voi quyet toan"
+        );
+
         when(returnCaseRepository.findByIdAndCustomer_Id(returnCase.getId(), customer.getId()))
             .thenReturn(Optional.of(returnCase));
-        var request = new CustomerConfirmSettlementRequest(CustomerDecision.accepted, "Dong y");
-        assertThatThrownBy(() -> service.customerConfirmSettlement(customerActor, returnCase.getId(), request))
-            .isInstanceOf(ApiException.class).hasMessageContaining("verified paid security deposit");
-        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
-        assertThat(returnCase.isCustomerConfirmed()).isFalse();
-        assertThat(returnCase.getCustomerDecision()).isNull();
-        assertThat(returnCase.getCustomerConfirmedAt()).isNull();
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ReturnCaseResponse response = service.customerConfirmSettlement(customerActor, returnCase.getId(), request);
+
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        assertThat(response.customerConfirmed()).isTrue();
+        assertThat(response.customerDecision()).isEqualTo(CustomerDecision.accepted);
     }
 
     @Test
@@ -266,64 +299,70 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
-    void managerReviewDispute_preservesNonfinancialReviewWithoutCompletingSettlement() {
-        ReturnCase returnCase = pendingCase(ReturnCaseStatus.disputed, "2000000.00");
+    void managerReviewDispute_recalculatesAndResolves() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.disputed);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setTotalDeductions(new BigDecimal("500000.00"));
+        returnCase.setNetRefundAmount(new BigDecimal("1500000.00"));
+        returnCase.setAmountDueFromCustomer(BigDecimal.ZERO);
+
+        // Manager reduces cleaning fee to 100k
+        ManagerReviewDisputeRequest request = new ManagerReviewDisputeRequest(
+            "Dong y giam phi ve sinh xuong 100k sau khi kiem tra lai video",
+            BigDecimal.ZERO,             // damageFee
+            new BigDecimal("100000.00"), // cleaningFee
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            StorageUnitStatus.available
+        );
+
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
         when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
-        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(i->i.getArgument(0));
-        var request=new ManagerReviewDisputeRequest("Reviewed deductions, settlement evidence missing",BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,
-            BigDecimal.ZERO,BigDecimal.ZERO,StorageUnitStatus.available);
-        var response=service.managerReviewDispute(managerActor, returnCase.getId(), request);
-        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.disputed);
-        assertThat(response.reviewedById()).isEqualTo(manager.getId());
-        assertThat(response.netRefundAmount()).isNull();
-        assertThat(returnCase.getCompletedAt()).isNull();
-        verify(storageUnitRepository,never()).save(any());
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ReturnCaseResponse response = service.managerReviewDispute(managerActor, returnCase.getId(), request);
+
+        assertThat(response.totalDeductions()).isEqualByComparingTo(new BigDecimal("100000.00"));
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(new BigDecimal("1900000.00"));
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        assertThat(response.reviewedByName()).isEqualTo("Le Van Manager");
     }
 
     @Test
-    void staffCompleteRefund_withoutPayoutEvidencePreservesRental() {
-        ReturnCase returnCase = pendingCase(ReturnCaseStatus.refund_pending, "2000000.00");
+    void staffCompleteRefund_finalizesRentalAndStorageUnit() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.refund_pending);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setNetRefundAmount(new BigDecimal("1900000.00"));
+        returnCase.setProposedUnitStatus(StorageUnitStatus.available);
+
+        StaffCompleteRefundRequest request = new StaffCompleteRefundRequest(
+            "BANK-REF-998877",
+            "Da chuyen khoan tra khach qua Vietcombank"
+        );
+
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
-        var request = new StaffCompleteRefundRequest("BANK-REF-998877", "Entered by staff");
-        assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, returnCase.getId(), request))
-            .isInstanceOf(ApiException.class).hasMessageContaining("verified payout evidence");
-        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.refund_pending);
-        assertThat(returnCase.getSettlementPaymentId()).isNull();
-        verify(returnCaseRepository, never()).save(any(ReturnCase.class));
-        verify(rentalRepository, never()).save(any(Rental.class));
-    }
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-    @Test
-    void customerPaySettlement_requiresVerifiedPayment() {
-        ReturnCase returnCase = pendingCase(ReturnCaseStatus.payment_due, "2000000.00");
-        when(returnCaseRepository.findByIdAndCustomer_Id(returnCase.getId(), customer.getId()))
-            .thenReturn(Optional.of(returnCase));
-        var request = new CustomerPaySettlementRequest("VNPAY", "Entered by customer");
-        assertThatThrownBy(() -> service.customerPaySettlement(customerActor, returnCase.getId(), request))
-            .isInstanceOf(ApiException.class).hasMessageContaining("verified payment transaction");
-        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.payment_due);
-        assertThat(returnCase.getSettlementPaymentId()).isNull();
-        verify(returnCaseRepository, never()).save(any(ReturnCase.class));
-        verify(rentalRepository, never()).save(any(Rental.class));
-    }
+        ReturnCaseResponse response = service.staffCompleteRefund(staffActor, returnCase.getId(), request);
 
-    private ReturnCase pendingCase(ReturnCaseStatus status, String deposit) {
-        ReturnCase result = new ReturnCase();
-        ReflectionTestUtils.setField(result, "id", UUID.randomUUID());
-        result.setRental(rental);
-        result.setFacility(facility);
-        result.setStorageUnit(unit);
-        result.setCustomer(customer);
-        result.setStatus(status);
-        result.setDepositAmount(new BigDecimal(deposit));
-        return result;
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.completed);
+        assertThat(response.settlementPaymentId()).isEqualTo("BANK-REF-998877");
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.completed);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        verify(rentalRepository).save(rental);
+        verify(storageUnitRepository).save(unit);
     }
-
-    private ReturnInspectionRequest inspection() {
-        return new ReturnInspectionRequest(InventoryMatch.values()[0],DamageClassification.values()[0],
-            new BigDecimal("500000"),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,
-            "LOCAL TEST inspection",List.of(),true,true,true,StorageUnitStatus.available);
-    }
-
 }

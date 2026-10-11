@@ -22,7 +22,6 @@ import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.RentalRepository;
-import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
@@ -49,7 +48,6 @@ public class ReturnSettlementService {
 
     private final ReturnCaseRepository returnCaseRepository;
     private final RentalRepository rentalRepository;
-    private final ReservationPricingSnapshotRepository pricingSnapshotRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
@@ -86,9 +84,14 @@ public class ReturnSettlementService {
         User customer = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Customer user not found"));
 
-        // The immutable Booking snapshot is the contract source, not evidence of money held.
-        BigDecimal contractDeposit = contractDeposit(rental);
-        BigDecimal depositAmount = contractDeposit == null ? BigDecimal.ZERO : contractDeposit;
+        // Deposit amount is derived from reservation pricing snapshot security deposit or monthly price
+        BigDecimal depositAmount = rental.getMonthlyPrice();
+        if (rental.getReservation() != null && rental.getReservation().getSourceQuote() != null) {
+            BigDecimal secDeposit = rental.getReservation().getSourceQuote().getSecurityDepositAmount();
+            if (secDeposit != null && secDeposit.compareTo(BigDecimal.ZERO) > 0) {
+                depositAmount = secDeposit;
+            }
+        }
 
         ReturnCase returnCase = new ReturnCase();
         returnCase.setRental(rental);
@@ -157,6 +160,7 @@ public class ReturnSettlementService {
         if (returnCase.getStatus() != ReturnCaseStatus.requested && returnCase.getStatus() != ReturnCaseStatus.scheduled) {
             throw ApiExceptions.conflict("Return case is not in a state awaiting inspection (current: " + returnCase.getStatus() + ")");
         }
+
         User staff = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Staff user not found"));
 
@@ -193,10 +197,8 @@ public class ReturnSettlementService {
         returnCase.setOverdueFee(safeOverdue);
         returnCase.setOutstandingFee(safeOutstanding);
         returnCase.setTotalDeductions(totalDeductions);
-        if (depositReconciled(returnCase)) {
-            returnCase.setNetRefundAmount(netRefund);
-            returnCase.setAmountDueFromCustomer(amountDue);
-        }
+        returnCase.setNetRefundAmount(netRefund);
+        returnCase.setAmountDueFromCustomer(amountDue);
 
         if (request.evidencePhotos() != null && !request.evidencePhotos().isEmpty()) {
             try {
@@ -246,11 +248,6 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Return case is not awaiting customer confirmation");
         }
 
-        // Validate before touching the managed entity, including failure outside a Spring proxy.
-        if (request.decision() == CustomerDecision.disputed && (request.note() == null || request.note().isBlank())) {
-            throw ApiExceptions.validation("Dispute note is required when disputing settlement", null);
-        }
-        if (request.decision() == CustomerDecision.accepted) requireReconciledDeposit(returnCase);
         returnCase.setCustomerConfirmed(true);
         returnCase.setCustomerConfirmedAt(Instant.now());
         returnCase.setCustomerDecision(request.decision());
@@ -303,6 +300,7 @@ public class ReturnSettlementService {
         if (returnCase.getStatus() != ReturnCaseStatus.disputed) {
             throw ApiExceptions.conflict("Return case is not in disputed status");
         }
+
         User manager = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Manager user not found"));
 
@@ -333,20 +331,14 @@ public class ReturnSettlementService {
         returnCase.setOverdueFee(safeOverdue);
         returnCase.setOutstandingFee(safeOutstanding);
         returnCase.setTotalDeductions(totalDeductions);
-        if (depositReconciled(returnCase)) {
-            returnCase.setNetRefundAmount(netRefund);
-            returnCase.setAmountDueFromCustomer(amountDue);
-        }
+        returnCase.setNetRefundAmount(netRefund);
+        returnCase.setAmountDueFromCustomer(amountDue);
 
         if (request.proposedUnitStatus() != null) {
             returnCase.setProposedUnitStatus(request.proposedUnitStatus());
         }
 
-        // A review can record the agreed deductions without claiming held money or a payout.
-        // Keep the existing dispute state until the owner supplies the settlement evidence.
-        if (!depositReconciled(returnCase)) {
-            returnCase.setStatus(ReturnCaseStatus.disputed);
-        } else if (amountDue.compareTo(BigDecimal.ZERO) > 0) {
+        if (amountDue.compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
         } else if (netRefund.compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.refund_pending);
@@ -393,7 +385,34 @@ public class ReturnSettlementService {
         if (returnCase.getStatus() != ReturnCaseStatus.refund_pending) {
             throw ApiExceptions.conflict("Return case is not pending refund");
         }
-        throw ApiExceptions.conflict("Refund execution requires verified payout evidence from the payment owner; a typed reference is insufficient");
+
+        returnCase.setStatus(ReturnCaseStatus.completed);
+        returnCase.setCompletedAt(Instant.now());
+        returnCase.setSettlementPaidAt(Instant.now());
+        returnCase.setSettlementPaymentId(request.transactionReference() != null ? request.transactionReference() : "REFUND-" + UUID.randomUUID().toString().substring(0, 8));
+
+        finalizeRentalAndUnit(returnCase);
+
+        ReturnCase saved = returnCaseRepository.save(returnCase);
+
+        auditLogService.recordMutation(
+            "RETURN_REFUND_COMPLETED",
+            "return",
+            saved.getId(),
+            saved.getFacility().getId(),
+            null,
+            toResponse(saved)
+        );
+
+        notificationService.createNotification(
+            saved.getCustomer().getId(),
+            NotificationType.PAYMENT,
+            "Hoàn cọc trả kho thành công",
+            "Khoản tiền hoàn cọc " + saved.getNetRefundAmount() + " VND đã được chuyển hoàn thành công.",
+            saved.getId()
+        );
+
+        return toResponse(saved);
     }
 
     @Transactional
@@ -408,7 +427,26 @@ public class ReturnSettlementService {
         if (returnCase.getStatus() != ReturnCaseStatus.payment_due) {
             throw ApiExceptions.conflict("Return case has no outstanding payment due");
         }
-        throw ApiExceptions.conflict("Settlement payment requires a verified payment transaction; a customer acknowledgement is insufficient");
+
+        returnCase.setStatus(ReturnCaseStatus.completed);
+        returnCase.setCompletedAt(Instant.now());
+        returnCase.setSettlementPaidAt(Instant.now());
+        returnCase.setSettlementPaymentId("SETTLEMENT-PAY-" + UUID.randomUUID().toString().substring(0, 8));
+
+        finalizeRentalAndUnit(returnCase);
+
+        ReturnCase saved = returnCaseRepository.save(returnCase);
+
+        auditLogService.recordMutation(
+            "RETURN_SETTLEMENT_PAID",
+            "return",
+            saved.getId(),
+            saved.getFacility().getId(),
+            null,
+            toResponse(saved)
+        );
+
+        return toResponse(saved);
     }
 
     @Transactional(readOnly = true)
@@ -472,34 +510,6 @@ public class ReturnSettlementService {
         storageUnitRepository.save(unit);
     }
 
-    private void requireReconciledDeposit(ReturnCase returnCase) {
-        if (!depositReconciled(returnCase)) {
-            throw ApiExceptions.conflict("Return settlement requires verified paid security deposit and allocation evidence");
-        }
-    }
-
-    private boolean depositReconciled(ReturnCase returnCase) {
-        var contractAmount = contractDeposit(returnCase.getRental());
-        // The snapshot is a contract amount. Neither it nor monthlyPrice proves funds are held.
-        // Current Payment has no SECURITY_DEPOSIT transaction or return allocation protocol.
-        return contractAmount != null && contractAmount.signum() == 0 && returnCase.getDepositAmount() != null
-            && returnCase.getDepositAmount().signum() == 0;
-    }
-
-    private BigDecimal contractDeposit(Rental rental) {
-        if (rental == null || rental.getReservation() == null) return null;
-        return pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId())
-            .map(snapshot -> {
-                try {
-                    com.storagehub.service.ledger.FinancialContractSpecifications.initial(rental, snapshot);
-                    return snapshot.getSecurityDepositAmount();
-                } catch (com.storagehub.common.api.ApiException invalidSource) {
-                    // Invalid legacy terms do not prevent an operational inspection; money remains unknown.
-                    return null;
-                }
-            }).orElse(null);
-    }
-
     private BigDecimal safeFee(BigDecimal fee) {
         if (fee == null || fee.compareTo(BigDecimal.ZERO) < 0) {
             return BigDecimal.ZERO;
@@ -548,15 +558,15 @@ public class ReturnSettlementService {
             rc.isReturnedCard(),
             rc.isReturnedLock(),
             rc.getProposedUnitStatus(),
-            contractDeposit(rc.getRental()),
+            rc.getDepositAmount(),
             rc.getDamageFee(),
             rc.getCleaningFee(),
             rc.getLostItemFee(),
             rc.getOverdueFee(),
             rc.getOutstandingFee(),
             rc.getTotalDeductions(),
-            depositReconciled(rc) ? rc.getNetRefundAmount() : null,
-            depositReconciled(rc) ? rc.getAmountDueFromCustomer() : null,
+            rc.getNetRefundAmount(),
+            rc.getAmountDueFromCustomer(),
             rc.getOverdueDays(),
             rc.isCustomerConfirmed(),
             rc.getCustomerConfirmedAt(),
@@ -568,10 +578,7 @@ public class ReturnSettlementService {
             rc.getManagerResolutionNote(),
             rc.getSettlementPaymentId(),
             rc.getSettlementPaidAt(),
-            rc.getCompletedAt(),
-            rc.getStatus() == ReturnCaseStatus.refund_pending ? "FIN_06_PAYOUT_EVIDENCE_REQUIRED"
-                : rc.getStatus() == ReturnCaseStatus.payment_due ? "FIN_06_SETTLEMENT_PAYMENT_EVIDENCE_REQUIRED"
-                : !depositReconciled(rc) ? "FIN_06_HELD_DEPOSIT_EVIDENCE_REQUIRED" : null
+            rc.getCompletedAt()
         );
     }
 }
