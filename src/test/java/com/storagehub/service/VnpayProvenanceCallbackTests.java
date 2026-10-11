@@ -14,6 +14,8 @@ import java.util.*;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /** Signed test callbacks only: no external gateway or production credentials. */
@@ -55,11 +57,66 @@ class VnpayProvenanceCallbackTests {
         verify(audit, never()).recordMutation(isNull(), eq(PaymentProvenance.CALLBACK_ACTION), eq("Payment"),
             any(), any(), isNull(), any());
     }
+    static java.util.stream.Stream<Map<String, String>> conflictingReplays() {
+        return java.util.stream.Stream.of(
+            Map.of("vnp_TransactionNo", "another-transaction"),
+            Map.of("vnp_TransactionStatus", "02"),
+            Map.of("vnp_ResponseCode", "24"),
+            Map.of("vnp_PayDate", "20261011100000"),
+            Map.of("vnp_BankCode", "OTHER_BANK"),
+            Map.of("vnp_CardType", "OTHER_CARD"));
+    }
+    List<Object> acceptedMetadata(Payment p) {
+        return Arrays.asList(p.getGatewayIntentId(), p.getGatewayResponseCode(), p.getGatewayTransactionStatus(),
+            p.getGatewayTransactionNo(), p.getGatewayPayDate(), p.getGatewayBankCode(), p.getGatewayCardType(),
+            p.getPaidAt(), p.getProcessedAt(), p.getFailureCode(), p.getFailureReason(),
+            p.getStatus(), p.getReservation().getStatus());
+    }
+    @ParameterizedTest @MethodSource("conflictingReplays")
+    void conflictingSignedReplayCannotRewriteAcceptedTransaction(Map<String, String> changes) throws Exception {
+        var p = fixture();
+        var q = callback(Map.of("vnp_BankCode", "TEST_BANK", "vnp_CardType", "ATM"));
+        service.processCallback(q); var before = acceptedMetadata(p);
+        var result = service.processCallback(callback(changes));
+        assertThat(result.rspCode()).isEqualTo("02");
+        assertThat(result.message()).contains("conflicting callback ignored");
+        assertThat(result.success()).isTrue(); // Preserve the owner's already-PAID response semantics.
+        assertThat(acceptedMetadata(p)).isEqualTo(before);
+        verify(audit, times(1)).recordMutation(isNull(), eq(PaymentProvenance.CALLBACK_ACTION), eq("Payment"),
+            eq(p.getId()), any(), isNull(), any());
+        verify(notifications, times(1)).createNotification(any(), any(), any(), any(), any());
+    }
+    @ParameterizedTest @MethodSource("conflictingReplays")
+    void conflictingReplayCannotRewriteLateReconciliationFunds(Map<String, String> changes) throws Exception {
+        var p = fixture(); p.getReservation().setStatus(ReservationStatus.PAYMENT_GRACE);
+        service.processCallback(callback(Map.of("vnp_PayDate", "20261011100000")));
+        var before = acceptedMetadata(p); clearInvocations(notifications);
+        assertThat(service.processCallback(callback(changes)).rspCode()).isEqualTo("02");
+        assertThat(acceptedMetadata(p)).isEqualTo(before);
+        assertThat(p.getFailureCode()).isEqualTo("PAYMENT_AFTER_DEADLINE");
+        assertThat(p.getReservation().getStatus()).isEqualTo(ReservationStatus.EXPIRED);
+        noProof(); verifyNoInteractions(notifications);
+    }
+    @Test void invalidChecksumReplayCannotTouchAcceptedMetadata() throws Exception {
+        var p = fixture(); service.processCallback(callback(Map.of()));
+        var before = acceptedMetadata(p); clearInvocations(payments, audit, notifications);
+        var q = callback(Map.of("vnp_TransactionNo", "tampered")); q.put("vnp_SecureHash", "invalid");
+        assertThat(service.processCallback(q).rspCode()).isEqualTo("97");
+        assertThat(acceptedMetadata(p)).isEqualTo(before);
+        verifyNoInteractions(payments, audit, notifications);
+    }
+    @Test void replayCannotEnrichMissingAcceptedOptionalMetadata() throws Exception {
+        var p = fixture(); service.processCallback(callback(Map.of()));
+        var before = acceptedMetadata(p);
+        service.processCallback(callback(Map.of("vnp_BankCode", "NEW_BANK", "vnp_CardType", "ATM")));
+        assertThat(acceptedMetadata(p)).isEqualTo(before);
+    }
     @Test void duplicateAuthenticatedCallbackWritesOneProofAndKeepsDevelopReplayPersistence() throws Exception {
         var p = fixture(); var q = callback(Map.of());
         assertThat(service.processCallback(q).success()).isTrue();
         assertThat(service.processCallback(q).rspCode()).isEqualTo("02");
-        verify(payments, times(2)).saveAndFlush(p);
+        assertThat(service.processCallback(q).message()).isEqualTo("Order already confirmed");
+        verify(payments, times(3)).saveAndFlush(p);
         verify(audit, times(1)).recordMutation(isNull(), eq(PaymentProvenance.CALLBACK_ACTION), eq("Payment"),
             eq(p.getId()), eq(p.getReservation().getFacility().getId()), isNull(), argThat(value -> {
                 var proof = (Map<?, ?>) value;
