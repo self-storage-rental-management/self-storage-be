@@ -34,18 +34,18 @@ public class LedgerStore {
 
     public void open(UUID rental,UUID customer,UUID facility) {
         writeTransaction();required(rental);required(customer);required(facility);
-        var rows=jdbc.queryForList("select customer_id,facility_id from duong_ledger_accounts where rental_id=? for update",s(rental));
-        if(rows.isEmpty())jdbc.update("insert into duong_ledger_accounts(rental_id,customer_id,facility_id,revision) values(?,?,?,0)",s(rental),s(customer),s(facility));
+        var rows=jdbc.queryForList("select customer_id,facility_id from rental_ledger_accounts where rental_id=? for update",s(rental));
+        if(rows.isEmpty())jdbc.update("insert into rental_ledger_accounts(rental_id,customer_id,facility_id,revision) values(?,?,?,0)",s(rental),s(customer),s(facility));
         else if(!s(customer).equals(value(rows.getFirst(),"customer_id"))||!s(facility).equals(value(rows.getFirst(),"facility_id")))throw ApiExceptions.conflict("Ledger resource binding changed");
     }
     public Optional<Snapshot> read(UUID rental) {
         required(rental);
-        var accounts=jdbc.queryForList("select revision,customer_id,facility_id from duong_ledger_accounts where rental_id=?",s(rental));
+        var accounts=jdbc.queryForList("select revision,customer_id,facility_id from rental_ledger_accounts where rental_id=?",s(rental));
         if(accounts.isEmpty())return Optional.empty();var account=accounts.getFirst();long revision=Long.parseLong(value(account,"revision"));
-        var obligations=jdbc.query("select o.*,coalesce((select sum(a.amount) from duong_ledger_allocations a join duong_ledger_receipts p on p.id=a.receipt_id where a.obligation_id=o.id and p.method<>'SIMULATED'),0) as allocated,coalesce((select sum(f.amount) from duong_ledger_refunds f where f.obligation_id=o.id and f.status='EXECUTED'),0) as refunded from duong_ledger_obligations o where o.rental_id=? order by o.due_at_ms,o.id",(r,i)->obligation(r),s(rental));
-        var receipts=jdbc.query("select * from duong_ledger_receipts where rental_id=? order by received_at_ms,id",(r,i)->receipt(r),s(rental));
-        var refunds=jdbc.query("select * from duong_ledger_refunds where rental_id=? order by id",(r,i)->refund(r),s(rental));
-        long after=jdbc.queryForObject("select revision from duong_ledger_accounts where rental_id=?",Long.class,s(rental));
+        var obligations=jdbc.query("select o.*,coalesce((select sum(a.amount) from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where a.obligation_id=o.id and p.method<>'SIMULATED'),0) as allocated,coalesce((select sum(f.amount) from rental_ledger_refunds f where f.obligation_id=o.id and f.status='EXECUTED'),0) as refunded from rental_ledger_obligations o where o.rental_id=? order by o.due_at_ms,o.id",(r,i)->obligation(r),s(rental));
+        var receipts=jdbc.query("select * from rental_ledger_receipts where rental_id=? order by received_at_ms,id",(r,i)->receipt(r),s(rental));
+        var refunds=jdbc.query("select * from rental_ledger_refunds where rental_id=? order by id",(r,i)->refund(r),s(rental));
+        long after=jdbc.queryForObject("select revision from rental_ledger_accounts where rental_id=?",Long.class,s(rental));
         if(after!=revision)throw ApiExceptions.conflict("Ledger changed during read, reload the account");
         return Optional.of(new Snapshot(rental,uuid(value(account,"customer_id")),uuid(value(account,"facility_id")),after,List.copyOf(obligations),List.copyOf(receipts),List.copyOf(refunds)));
     }
@@ -54,12 +54,12 @@ public class LedgerStore {
         long revision=lock(rental);money(amount,true);required(kind);required(due);text(source,200);
         String fingerprint=hash(List.of(s(rental),renewal==null?"":s(renewal),kind.name(),amount.toPlainString(),due.toEpochMilli(),source).toString());
         var replay=replay(rental,actor,"CHARGE",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
-        var existing=jdbc.query("select * from duong_ledger_obligations where rental_id=? and source_ref=? and kind=?",(r,i)->obligationWithoutTotals(r),s(rental),source,kind.name());
+        var existing=jdbc.query("select * from rental_ledger_obligations where rental_id=? and source_ref=? and kind=?",(r,i)->obligationWithoutTotals(r),s(rental),source,kind.name());
         UUID id;
         if(!existing.isEmpty()) {
             var old=existing.getFirst();if(!Objects.equals(old.renewalId(),renewal)||old.amount().compareTo(amount)!=0||old.dueAt().toEpochMilli()!=due.toEpochMilli())throw ApiExceptions.conflict("Source charge was already posted with different terms");id=old.id();
         }else {
-            id=UUID.randomUUID();jdbc.update("insert into duong_ledger_obligations(id,rental_id,renewal_id,kind,amount,due_at_ms,source_ref) values(?,?,?,?,?,?,?)",s(id),s(rental),renewal==null?null:s(renewal),kind.name(),amount,due.toEpochMilli(),source);bump(rental);
+            id=UUID.randomUUID();jdbc.update("insert into rental_ledger_obligations(id,rental_id,renewal_id,kind,amount,due_at_ms,source_ref) values(?,?,?,?,?,?,?)",s(id),s(rental),renewal==null?null:s(renewal),kind.name(),amount,due.toEpochMilli(),source);bump(rental);
         }
         remember(rental,actor,"CHARGE",key,fingerprint,id);return id;
     }
@@ -71,14 +71,14 @@ public class LedgerStore {
         if(ordered.values().stream().reduce(BigDecimal.ZERO,BigDecimal::add).compareTo(amount)!=0)throw ApiExceptions.validation("Receipt amount must equal allocated amount",null);
         String fingerprint=hash(List.of(s(rental),method.name(),amount.toPlainString(),ordered.toString(),evidenceRef,s(evidenceFile)).toString());
         var replay=replay(rental,actor,"RECEIPT",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
-        if(jdbc.queryForObject("select count(*) from duong_ledger_receipts where evidence_ref=?",Long.class,evidenceRef)!=0)throw ApiExceptions.conflict("Receipt evidence was already used");
+        if(jdbc.queryForObject("select count(*) from rental_ledger_receipts where evidence_ref=?",Long.class,evidenceRef)!=0)throw ApiExceptions.conflict("Receipt evidence was already used");
         var snapshot=read(rental).orElseThrow();
         for(var entry:ordered.entrySet()) {
             var o=snapshot.obligations().stream().filter(v->v.id().equals(entry.getKey())).findFirst().orElseThrow(()->ApiExceptions.notFound("Obligation not found in this rental"));
             if(method!=Method.SIMULATED&&entry.getValue().compareTo(o.outstanding())>0)throw ApiExceptions.conflict("Receipt exceeds the unpaid obligation");
         }
-        UUID id=UUID.randomUUID();jdbc.update("insert into duong_ledger_receipts(id,rental_id,method,amount,evidence_ref,evidence_file_id,actor_id,received_at_ms) values(?,?,?,?,?,?,?,?)",s(id),s(rental),method.name(),amount,evidenceRef,s(evidenceFile),s(actor),receivedAt.toEpochMilli());
-        ordered.forEach((o,value)->jdbc.update("insert into duong_ledger_allocations(receipt_id,obligation_id,rental_id,amount) values(?,?,?,?)",s(id),s(o),s(rental),value));
+        UUID id=UUID.randomUUID();jdbc.update("insert into rental_ledger_receipts(id,rental_id,method,amount,evidence_ref,evidence_file_id,actor_id,received_at_ms) values(?,?,?,?,?,?,?,?)",s(id),s(rental),method.name(),amount,evidenceRef,s(evidenceFile),s(actor),receivedAt.toEpochMilli());
+        ordered.forEach((o,value)->jdbc.update("insert into rental_ledger_allocations(receipt_id,obligation_id,rental_id,amount) values(?,?,?,?)",s(id),s(o),s(rental),value));
         bump(rental);remember(rental,actor,"RECEIPT",key,fingerprint,id);return id;
     }
     public UUID reserveRefund(UUID rental,UUID receipt,UUID obligation,BigDecimal amount,String decisionRef,
@@ -86,31 +86,31 @@ public class LedgerStore {
         long revision=lock(rental);required(receipt);required(obligation);money(amount,false);text(decisionRef,200);
         String fingerprint=hash(List.of(s(rental),s(receipt),s(obligation),amount.toPlainString(),decisionRef).toString());
         var replay=replay(rental,actor,"RESERVE_REFUND",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
-        var paid=jdbc.query("select a.amount from duong_ledger_allocations a join duong_ledger_receipts p on p.id=a.receipt_id where p.rental_id=? and p.id=? and a.obligation_id=? and p.method<>'SIMULATED'",(r,i)->r.getBigDecimal(1),s(rental),s(receipt),s(obligation));
+        var paid=jdbc.query("select a.amount from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where p.rental_id=? and p.id=? and a.obligation_id=? and p.method<>'SIMULATED'",(r,i)->r.getBigDecimal(1),s(rental),s(receipt),s(obligation));
         if(paid.isEmpty())throw ApiExceptions.notFound("Actual allocated receipt not found");
-        BigDecimal reserved=jdbc.queryForObject("select coalesce(sum(amount),0) from duong_ledger_refunds where receipt_id=? and obligation_id=? and status in ('RESERVED','EXECUTED')",BigDecimal.class,s(receipt),s(obligation));
+        BigDecimal reserved=jdbc.queryForObject("select coalesce(sum(amount),0) from rental_ledger_refunds where receipt_id=? and obligation_id=? and status in ('RESERVED','EXECUTED')",BigDecimal.class,s(receipt),s(obligation));
         if(amount.add(reserved).compareTo(paid.getFirst())>0)throw ApiExceptions.conflict("Refund exceeds available paid funds");
-        UUID id=UUID.randomUUID();jdbc.update("insert into duong_ledger_refunds(id,rental_id,receipt_id,obligation_id,amount,status,decision_ref) values(?,?,?,?,?,'RESERVED',?)",s(id),s(rental),s(receipt),s(obligation),amount,decisionRef);
+        UUID id=UUID.randomUUID();jdbc.update("insert into rental_ledger_refunds(id,rental_id,receipt_id,obligation_id,amount,status,decision_ref) values(?,?,?,?,?,'RESERVED',?)",s(id),s(rental),s(receipt),s(obligation),amount,decisionRef);
         bump(rental);remember(rental,actor,"RESERVE_REFUND",key,fingerprint,id);return id;
     }
     /** Only an executor with actual payout evidence may call this; approval is never a transfer. */
     public UUID executeRefund(UUID rental,UUID refund,String payoutRef,UUID actor,String key,long expectedRevision) {
         long revision=lock(rental);required(refund);text(payoutRef,200);String fingerprint=hash(List.of(s(rental),s(refund),payoutRef).toString());
         var replay=replay(rental,actor,"EXECUTE_REFUND",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
-        var rows=jdbc.query("select * from duong_ledger_refunds where rental_id=? and id=?",(r,i)->refund(r),s(rental),s(refund));
+        var rows=jdbc.query("select * from rental_ledger_refunds where rental_id=? and id=?",(r,i)->refund(r),s(rental),s(refund));
         if(rows.isEmpty())throw ApiExceptions.notFound("Refund reservation not found");if(!rows.getFirst().status().equals("RESERVED"))throw ApiExceptions.conflict("Refund is not awaiting execution");
-        if(jdbc.queryForObject("select count(*) from duong_ledger_refunds where payout_ref=?",Long.class,payoutRef)!=0)throw ApiExceptions.conflict("Payout evidence was already used");
-        jdbc.update("update duong_ledger_refunds set status='EXECUTED',payout_ref=? where id=?",payoutRef,s(refund));bump(rental);remember(rental,actor,"EXECUTE_REFUND",key,fingerprint,refund);return refund;
+        if(jdbc.queryForObject("select count(*) from rental_ledger_refunds where payout_ref=?",Long.class,payoutRef)!=0)throw ApiExceptions.conflict("Payout evidence was already used");
+        jdbc.update("update rental_ledger_refunds set status='EXECUTED',payout_ref=? where id=?",payoutRef,s(refund));bump(rental);remember(rental,actor,"EXECUTE_REFUND",key,fingerprint,refund);return refund;
     }
-    private long lock(UUID rental){writeTransaction();required(rental);var rows=jdbc.query("select revision from duong_ledger_accounts where rental_id=? for update",(r,i)->r.getLong(1),s(rental));if(rows.isEmpty())throw ApiExceptions.conflict("Ledger account has not been opened");return rows.getFirst();}
+    private long lock(UUID rental){writeTransaction();required(rental);var rows=jdbc.query("select revision from rental_ledger_accounts where rental_id=? for update",(r,i)->r.getLong(1),s(rental));if(rows.isEmpty())throw ApiExceptions.conflict("Ledger account has not been opened");return rows.getFirst();}
     private Optional<UUID> replay(UUID rental,UUID actor,String operation,String key,String fingerprint) {
         required(actor);text(key,128);
-        var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from duong_ledger_commands where actor_id=? and operation=? and key_hash=?",s(actor),operation,hash(key));
+        var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from rental_ledger_commands where actor_id=? and operation=? and key_hash=?",s(actor),operation,hash(key));
         if(rows.isEmpty())return Optional.empty();var row=rows.getFirst();
         if(!s(rental).equals(value(row,"rental_id"))||!fingerprint.equals(value(row,"payload_hash")))throw ApiExceptions.conflict("Idempotency key belongs to a different request");return Optional.of(UUID.fromString(value(row,"result_id")));
     }
-    private void remember(UUID rental,UUID actor,String op,String key,String fingerprint,UUID result){jdbc.update("insert into duong_ledger_commands(actor_id,operation,key_hash,rental_id,payload_hash,result_id) values(?,?,?,?,?,?)",s(actor),op,hash(key),s(rental),fingerprint,s(result));}
-    private void bump(UUID rental){jdbc.update("update duong_ledger_accounts set revision=revision+1 where rental_id=?",s(rental));}
+    private void remember(UUID rental,UUID actor,String op,String key,String fingerprint,UUID result){jdbc.update("insert into rental_ledger_commands(actor_id,operation,key_hash,rental_id,payload_hash,result_id) values(?,?,?,?,?,?)",s(actor),op,hash(key),s(rental),fingerprint,s(result));}
+    private void bump(UUID rental){jdbc.update("update rental_ledger_accounts set revision=revision+1 where rental_id=?",s(rental));}
     private static String value(Map<String,Object> row,String key){Object v=row.get(key);if(v==null)v=row.get(key.toUpperCase(Locale.ROOT));return v==null?null:v.toString();}
     private static void writeTransaction(){if(!TransactionSynchronizationManager.isActualTransactionActive()||TransactionSynchronizationManager.isCurrentTransactionReadOnly())throw new IllegalStateException("Ledger writes require a caller write transaction");}
     private static void version(long actual,long expected){if(expected<0||actual!=expected)throw ApiExceptions.conflict("Ledger revision changed, reload before submitting");}
