@@ -8,8 +8,15 @@ import org.springframework.util.MultiValueMap;
 public record SupportQuery(int page,int size,SupportTicketStatus status,UUID facilityId,UUID staffId,
                            String search,String sort,boolean descending) {
     public static SupportQuery parse(MultiValueMap<String,String> values,boolean manager,boolean timeline) {
+        return parse(values,manager,timeline,false);
+    }
+    public static SupportQuery parseCustomerList(MultiValueMap<String,String> values) {
+        return parse(values,false,false,true);
+    }
+    private static SupportQuery parse(MultiValueMap<String,String> values,boolean manager,boolean timeline,boolean customerList) {
         Set<String> allowed=timeline?Set.of("page","size"):manager
             ?Set.of("page","size","status","facilityId","staffId","search","sort")
+            :customerList?Set.of("page","size","status","facilityId","search","sort")
             :Set.of("page","size","status","search","sort");
         if(values.entrySet().stream().anyMatch(e->!allowed.contains(e.getKey())||e.getValue().size()!=1))throw invalid();
         try {
