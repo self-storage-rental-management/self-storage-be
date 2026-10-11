@@ -79,6 +79,7 @@ public class RenewalWorkflowService {
             n.setStatus(RenewalStatus.rejected);wf.reviewed(user,now,body.reason(),null,null);store.releaseSlot(wf);
         }else{
             var g=gate(r,now);var accepted=decode(wf.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);requireSnapshot(r,accepted);
+            com.storagehub.service.ledger.FinancialContractSpecifications.accepted(wf.getAcceptedRevision(),accepted);
             if(!store.canonical(accepted).equals(store.canonical(terms(r,g,accepted.pricingPackageCode()))))throw ApiExceptions.conflict("Terms changed: new quote and Customer confirmation required");
             var f=finance.getIfAvailable();if(f==null||!f.consistentThroughApproval())throw deferred("Consistent financial source missing");var state=f.read(r).orElseThrow(()->deferred("Financial state UNKNOWN"));
             if(state.checkedAt()==null||state.checkedAt().isAfter(now)||state.dueObligations()==null)throw deferred("Financial state incomplete");
@@ -175,6 +176,7 @@ public class RenewalWorkflowService {
         return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),p.discountRate(),t.subtotal(),t.discountAmount(),t.netRent(),t.depositAmount(),t.remainder(),p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate());
     }
     private void requireSnapshot(Rental r,RenewalQuoteResponse.Terms t){if(!Objects.equals(r.getContractEndDate(),t.oldEndDate())||r.getStorageUnit()==null||r.getStorageUnit().getUnitType()==null||!Objects.equals(r.getStorageUnit().getId(),t.storageUnitId())||!Objects.equals(r.getFacility().getId(),t.facilityId())||!Objects.equals(r.getStorageUnit().getUnitType().getId(),t.unitTypeId()))throw ApiExceptions.conflict("Rental allocation/end changed; requote required");
+        com.storagehub.service.ledger.FinancialContractSpecifications.validateRenewal(t);
         if(periods==null)throw deferred("Rental date provenance unknown");
         com.storagehub.service.rental.period.RenewalPeriodCompatibility.require(periods.require(r),t);
     }

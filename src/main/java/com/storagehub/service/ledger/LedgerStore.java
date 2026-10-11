@@ -49,6 +49,12 @@ public class LedgerStore {
         if(after!=revision)throw ApiExceptions.conflict("Ledger changed during read, reload the account");
         return Optional.of(new Snapshot(rental,uuid(value(account,"customer_id")),uuid(value(account,"facility_id")),after,List.copyOf(obligations),List.copyOf(receipts),List.copyOf(refunds)));
     }
+    public Optional<UUID> receiptEvidenceRental(String reference) {
+        text(reference,200);
+        var rows=jdbc.queryForList("select rental_id from rental_ledger_receipts where evidence_ref=?",String.class,reference);
+        if(rows.size()>1)throw ApiExceptions.conflict("Payment evidence has duplicate ledger receipts");
+        return rows.isEmpty()?Optional.empty():Optional.of(UUID.fromString(rows.getFirst()));
+    }
     public UUID charge(UUID rental,UUID renewal,Kind kind,BigDecimal amount,Instant due,String source,
         UUID actor,String key,long expectedRevision) {
         long revision=lock(rental);money(amount,true);required(kind);required(due);text(source,200);
