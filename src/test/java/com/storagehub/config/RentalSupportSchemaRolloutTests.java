@@ -52,7 +52,7 @@ class RentalSupportSchemaRolloutTests {
     @Test void profileIsOptInAndDoesNotEnableFeaturesOrUnsafeSchemaModes() throws Exception {
         assertThat(RentalSupportSchemaRolloutConfiguration.class.getAnnotation(Profile.class).value()).containsExactly("rental-support-schema");
         var p=new Properties();try(var stream=getClass().getResourceAsStream("/application-rental-support-schema.properties")){p.load(stream);}
-        assertThat(p.getProperty("spring.flyway.locations")).isEqualTo("classpath:db/migration,classpath:db/paymentmigration");
+        assertThat(p.getProperty("spring.flyway.locations")).isEqualTo("classpath:db/migration,classpath:db/paymentmigration,classpath:db/renewal-hold-migration");
         assertThat(p.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
         for(var key:new String[]{"spring.flyway.baseline-on-migrate","spring.flyway.out-of-order","app.bootstrap-demo-data.enabled",
             "storagehub.integration.ledger.enabled","storagehub.integration.communication.enabled"})assertThat(p.getProperty(key)).isEqualTo("false");

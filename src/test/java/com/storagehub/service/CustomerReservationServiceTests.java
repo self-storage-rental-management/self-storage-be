@@ -69,8 +69,7 @@ class CustomerReservationServiceTests {
     @BeforeEach
     void setUp() {
         service = new CustomerReservationService(
-            reservationRepository, checkInRepository, paymentRepository,
-            rentalRepository, storageUnitRepository, snapshotRepository,
+            reservationRepository, paymentRepository, snapshotRepository,
             goodsItemRepository, auditLogService, notificationService
         );
 
