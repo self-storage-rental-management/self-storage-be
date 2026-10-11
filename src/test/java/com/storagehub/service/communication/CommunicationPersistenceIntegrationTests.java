@@ -31,7 +31,7 @@ import org.springframework.transaction.support.TransactionTemplate;
     "server.address=127.0.0.1",
     "spring.datasource.url=jdbc:h2:mem:duong-communication-integration;MODE=MySQL;DB_CLOSE_DELAY=-1",
     "spring.sql.init.mode=always",
-    "spring.sql.init.schema-locations=classpath:duong-ledger-test-schema.sql,classpath:duong-notification-test-schema.sql",
+    "spring.sql.init.schema-locations=classpath:rental-ledger-test-schema.sql,classpath:notification-outbox-test-schema.sql",
     "storagehub.integration.ledger.enabled=true",
     "storagehub.integration.communication.enabled=true",
     "storagehub.integration.communication.worker-initial-delay-ms=86400000",
@@ -82,7 +82,7 @@ class CommunicationPersistenceIntegrationTests {
     private ActorPrincipal actor(User u,RoleCode role){var grants=new HashSet<String>();u.getRoles().forEach(r->r.getEffectivePermissions().forEach(p->grants.add(p.getCode())));return new ActorPrincipal(u.getId(),UUID.randomUUID(),Set.of(role),grants,role==RoleCode.STAFF?Map.of(facility,FacilityScopeLevel.OPERATE):Map.of());}
     private CommunicationPolicyService.Policy publish(long revision){return policies.publish(businessActor,facility,new CommunicationPolicyService.Input(revision,LocalDate.now().minusDays(1),null,60,7,true));}
     private UUID resolve(){support.resolve(staffActor,ticket,new SupportCommands.Resolution("Đã kiểm tra yêu cầu",List.of(),version),"resolve-"+ticket);return tx.execute(s->{var t=em.find(SupportTicket.class,ticket);var state=em.find(SupportState.class,ticket);var event=em.createQuery("select e from SupportEvent e where e.ticket.id=:id and e.type='RESOLVED'",SupportEvent.class).setParameter("id",ticket).getSingleResult();assertThat(event.getRecordedAt()).isEqualTo(state.getResolvedAt());assertThat(t.getStatus()).isEqualTo(SupportTicketStatus.resolved);return event.getId();});}
-    private UUID notice(){return tx.execute(s->{Object id=em.createNativeQuery("select id from duong_notification_outbox where resource_id=:id").setParameter("id",ticket.toString()).getResultStream().findFirst().orElseThrow();return UUID.fromString(id.toString());});}
+    private UUID notice(){return tx.execute(s->{Object id=em.createNativeQuery("select id from notification_outbox where resource_id=:id").setParameter("id",ticket.toString()).getResultStream().findFirst().orElseThrow();return UUID.fromString(id.toString());});}
     private Optional<SupportSources.ReviewNotice> proof(UUID event){return tx.execute(s->{var t=em.find(SupportTicket.class,ticket);var st=em.find(SupportState.class,ticket);var now=clock.instant();return source.reviewNotice(t,event,policies.read(t,st,now).orElseThrow(),now);});}
     private long notifications(){return tx.execute(s->em.createQuery("select count(n) from Notification n where n.user.id=:u and n.relatedEntityId=:t",Long.class).setParameter("u",customer).setParameter("t",ticket).getSingleResult());}
 
