@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +33,10 @@ public class ReservationExpirationService {
     private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
     private final AuditLogService auditLogService;
+    private final VnpayService vnpayService;
+
+    @Value("${app.reservation.complaint-window-minutes:30}")
+    private long complaintWindowMinutes = 30;
 
     @Transactional
     public int expireDueReservations() {
@@ -40,10 +45,10 @@ public class ReservationExpirationService {
             .findTop100ByStatusInAndHoldExpiresAtLessThanEqualOrderByHoldExpiresAtAsc(
                 EXPIRABLE_STATUSES, now
             );
-        int expiredCount = 0;
+        int transitionCount = 0;
         for (Reservation reservation : reservations) {
             if (expireReservation(reservation, now)) {
-                expiredCount++;
+                transitionCount++;
             }
         }
         List<Reservation> paymentDue = reservationRepository
@@ -51,8 +56,8 @@ public class ReservationExpirationService {
                 ReservationStatus.AWAITING_PAYMENT, now
             );
         for (Reservation reservation : paymentDue) {
-            if (expireReservation(reservation, now)) {
-                expiredCount++;
+            if (moveToGraceOrExpire(reservation, now)) {
+                transitionCount++;
             }
         }
         List<Reservation> graceDue = reservationRepository
@@ -61,10 +66,67 @@ public class ReservationExpirationService {
             );
         for (Reservation reservation : graceDue) {
             if (expireReservation(reservation, now)) {
-                expiredCount++;
+                transitionCount++;
             }
         }
-        return expiredCount;
+        return transitionCount;
+    }
+
+    private boolean moveToGraceOrExpire(Reservation reservation, Instant now) {
+        List<Payment> unresolvedPayments = paymentRepository.findAllByReservation_IdAndStatusIn(
+            reservation.getId(), EXPIRABLE_PAYMENT_STATUSES
+        );
+        if (unresolvedPayments.isEmpty()) {
+            return expireReservation(reservation, now);
+        }
+
+        boolean hasUnknownResult = false;
+        for (Payment payment : unresolvedPayments) {
+            VnpayService.ReconciliationOutcome outcome = vnpayService.reconcileAtPaymentDeadline(payment);
+            if (outcome == VnpayService.ReconciliationOutcome.SUCCESS) {
+                paymentRepository.saveAndFlush(payment);
+                return true;
+            }
+            if (outcome == VnpayService.ReconciliationOutcome.UNKNOWN) {
+                hasUnknownResult = true;
+            }
+        }
+        if (!hasUnknownResult) {
+            paymentRepository.saveAll(unresolvedPayments);
+            return expireReservation(reservation, now);
+        }
+
+        ReservationStatus previousStatus = reservation.getStatus();
+        reservation.setStatus(ReservationStatus.PAYMENT_GRACE);
+        reservation.setComplaintExpiresAt(now.plus(java.time.Duration.ofMinutes(complaintWindowMinutes)));
+        reservationRepository.saveAndFlush(reservation);
+
+        for (Payment payment : unresolvedPayments) {
+            if (payment.getStatus() != PaymentStatus.PENDING
+                && payment.getStatus() != PaymentStatus.PROCESSING) continue;
+            payment.setStatus(PaymentStatus.NOT_RECEIVED);
+            payment.setProcessedAt(now);
+            payment.setFailureCode("VNPAY_RESULT_NOT_RECEIVED");
+            payment.setFailureReason("The reservation deadline passed before VNPAY returned a final result");
+        }
+        paymentRepository.saveAll(unresolvedPayments);
+
+        auditLogService.recordMutation(
+            null, "RESERVATION_PAYMENT_GRACE_STARTED", "Reservation", reservation.getId(),
+            reservation.getFacility().getId(),
+            Map.of("status", previousStatus),
+            Map.of("status", ReservationStatus.PAYMENT_GRACE,
+                "complaintExpiresAt", reservation.getComplaintExpiresAt())
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Chưa nhận được kết quả thanh toán",
+            "Đơn " + reservation.getReservationCode()
+                + " đang chờ đối soát VNPay. Nếu tài khoản đã bị trừ tiền, bạn có "
+                + complaintWindowMinutes + " phút để gửi khiếu nại kèm bằng chứng.",
+            reservation.getId()
+        );
+        return true;
     }
 
     private boolean expireReservation(Reservation reservation, Instant now) {
