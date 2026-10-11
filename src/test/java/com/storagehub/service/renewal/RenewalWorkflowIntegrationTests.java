@@ -34,7 +34,7 @@ class RenewalWorkflowIntegrationTests {
         @Bean ActorContext actorContext(){return mock(ActorContext.class);}
         @Bean TestClock clock(){return new TestClock();}
         @Bean RenewalSources.PolicySource policy(){return (r,d)->Optional.of(new RenewalSources.Policy("test-policy","v1",Duration.ofMinutes(30),Duration.ofHours(24),30,new BigDecimal("0.2"),Set.of(PACKAGE)));}
-        @Bean RenewalSources.EligibilitySource eligibility(){return (r,n)->Optional.of(new RenewalSources.Eligibility(true,false,true,NOW.plusSeconds(172800)));}
+        @Bean TestEligibility eligibility(){return new TestEligibility();}
         @Bean TestPrice prices(){return new TestPrice();}
         @Bean TestFinance finance(){return new TestFinance();}
         @Bean TestHold hold(){return new TestHold();}
@@ -43,6 +43,10 @@ class RenewalWorkflowIntegrationTests {
     static class TestPrice implements RenewalSources.PricingSource {
         BigDecimal rate=new BigDecimal("100");
         public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,BigDecimal.ZERO,"VND",2)));}
+    }
+    static class TestEligibility implements RenewalSources.EligibilitySource {
+        boolean unknown;
+        public Optional<RenewalSources.Eligibility> read(Rental r,Instant now){return unknown?Optional.empty():Optional.of(new RenewalSources.Eligibility(true,false,true,NOW.plusSeconds(172800)));}
     }
     static class TestFinance implements RenewalSources.FinancialSource {
         boolean unknown=false;boolean debt=false;boolean consistent=true;
@@ -66,7 +70,7 @@ class RenewalWorkflowIntegrationTests {
             return UUID.fromString("00000000-0000-0000-0000-000000000002");}
     }
     @Autowired EntityManager em;@Autowired RenewalWorkflowService commands;@Autowired RenewalReadService reads;
-    @Autowired TestPrice pricing;@Autowired TestFinance finance;@Autowired TestHold hold;
+    @Autowired TestPrice pricing;@Autowired TestEligibility eligibility;@Autowired TestFinance finance;@Autowired TestHold hold;
     @Autowired TestLifecycle lifecycle;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired TestClock clock;
@@ -86,7 +90,14 @@ class RenewalWorkflowIntegrationTests {
         mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","http").contentType("application/json").content(body)).andExpect(status().isCreated());
         assertThat(em.createQuery("select count(x) from Renewal x",Long.class).getSingleResult()).isEqualTo(1);
     }
-    @BeforeEach void resetSources(){pricing.rate=new BigDecimal("100");finance.unknown=false;finance.debt=false;finance.consistent=true;lifecycle.available=true;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;}
+    @BeforeEach void resetSources(){pricing.rate=new BigDecimal("100");eligibility.unknown=false;finance.unknown=false;finance.debt=false;finance.consistent=true;lifecycle.available=true;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;}
+    @Test void optionsRemainReadableWhenEligibilityIsUnknownButQuoteStaysBlocked(){
+        var r=fixture();var actor=customer(r);eligibility.unknown=true;
+        assertThat(commands.options(actor,r.getId())).containsExactly(new RenewalCommands.Option("TEST",1));
+        assertThatThrownBy(()->commands.quote(actor,r.getId(),new RenewalCommands.Quote("TEST")))
+            .isInstanceOf(ApiException.class).hasMessageContaining("Eligibility UNKNOWN");
+        assertThat(em.createQuery("select count(q) from RenewalQuote q",Long.class).getSingleResult()).isZero();
+    }
     @Test void approvalRequiresFinanceConsistencyAndDownstreamLifecycle(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
         var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
