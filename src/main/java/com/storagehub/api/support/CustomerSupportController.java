@@ -27,9 +27,9 @@ public class CustomerSupportController {
     @PostMapping @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary="Create owned Support ticket",description="Subject1–200, description1–4000, max10 distinct evidence UUIDs. Facility required without owned link. Evidence source missing rejects attachments, not text-only tickets. Customer cannot choose priority/internal visibility.")
     public ApiResponse<SupportResponse> create(@Valid @RequestBody SupportCommands.Create body,@RequestHeader("Idempotency-Key") String key){return response(service.create(actors.required(),body,key));}
-    @GetMapping @Operation(summary="List my Support tickets",description="page0,size20(max100),status,search,sort=createdAt|updatedAt|subject|id,asc|desc. Ownership before pagination; legacy null-facility records require separate authorized triage.")
-    @Parameters({@Parameter(name="page"),@Parameter(name="size"),@Parameter(name="status"),@Parameter(name="search"),@Parameter(name="sort")})
-    public PageResponse<SupportResponse> list(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.list(actors.required(),CUSTOMER,SupportQuery.parse(q,false,false),CorrelationIdContext.current());}
+    @GetMapping @Operation(summary="List my Support tickets",description="page0,size20(max100),status,facilityId,search,sort=createdAt|updatedAt|subject|id,asc|desc. Ownership before pagination; legacy null-facility records require separate authorized triage.")
+    @Parameters({@Parameter(name="page"),@Parameter(name="size"),@Parameter(name="status"),@Parameter(name="facilityId"),@Parameter(name="search"),@Parameter(name="sort")})
+    public PageResponse<SupportResponse> list(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.list(actors.required(),CUSTOMER,SupportQuery.parseCustomerList(q),CorrelationIdContext.current());}
     @GetMapping("/{id}") @Operation(summary="Read my Support detail",description="Messages are paginated separately; SLA/calendar unavailable is UNKNOWN, not zero or within SLA.")
     public ApiResponse<SupportResponse> detail(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){SupportQuery.none(q);return response(service.detail(actors.required(),CUSTOMER,id));}
     @GetMapping("/{id}/messages") @Operation(summary="Read public Support messages only",description="page,size. Internal messages and their counts/file references are excluded before pagination.")

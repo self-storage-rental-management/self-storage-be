@@ -143,16 +143,27 @@ public class VnpayService {
         }
         String responseCode = query.getOrDefault("vnp_ResponseCode", "99");
         String transactionStatus = query.getOrDefault("vnp_TransactionStatus", responseCode);
+        // PAID is terminal for callback metadata, including late funds awaiting reconciliation.
+        // Keep the owner's duplicate response contract without letting a signed replay rewrite
+        // the accepted transaction or invalidate its financial provenance.
+        if (payment.getStatus() == PaymentStatus.PAID) {
+            boolean matches = java.util.Objects.equals(responseCode, payment.getGatewayResponseCode())
+                && java.util.Objects.equals(transactionStatus, payment.getGatewayTransactionStatus())
+                && replayFieldMatches(query.get("vnp_TransactionNo"), payment.getGatewayTransactionNo())
+                && replayFieldMatches(query.get("vnp_PayDate"), payment.getGatewayPayDate())
+                && replayFieldMatches(query.get("vnp_BankCode"), payment.getGatewayBankCode())
+                && replayFieldMatches(query.get("vnp_CardType"), payment.getGatewayCardType());
+            paymentRepository.saveAndFlush(payment);
+            return new CallbackResult("02", matches ? "Order already confirmed"
+                : "Order already confirmed; conflicting callback ignored",
+                payment.getId(), payment.getReservation().getId(), true);
+        }
         payment.setGatewayResponseCode(responseCode);
         payment.setGatewayTransactionStatus(transactionStatus);
         setIfPresent(query.get("vnp_TransactionNo"), payment::setGatewayTransactionNo);
         setIfPresent(query.get("vnp_BankCode"), payment::setGatewayBankCode);
         setIfPresent(query.get("vnp_CardType"), payment::setGatewayCardType);
         setIfPresent(query.get("vnp_PayDate"), payment::setGatewayPayDate);
-        if (payment.getStatus() == PaymentStatus.PAID) {
-            paymentRepository.saveAndFlush(payment);
-            return new CallbackResult("02", "Order already confirmed", payment.getId(), payment.getReservation().getId(), true);
-        }
         payment.setProcessedAt(Instant.now());
         boolean success = "00".equals(responseCode) && "00".equals(transactionStatus);
         Reservation reservation = payment.getReservation();
@@ -181,6 +192,28 @@ public class VnpayService {
         }
         paymentRepository.saveAndFlush(payment);
         boolean reservationConfirmed = success && reservation.getStatus() == ReservationStatus.CONFIRMED;
+        // An IPN acknowledgement is not accepted Booking credit. Late funds remain unreconciled.
+        // Replays and query/complaint transitions do not create callback proof.
+        if (reservationConfirmed && payment.getStatus() == PaymentStatus.PAID
+            && payment.getPurpose() == PaymentType.RESERVATION_DEPOSIT
+            && !"PAYMENT_AFTER_DEADLINE".equals(payment.getFailureCode())
+            && "VNPAY".equals(payment.getGatewayProvider())
+            && properties.getTmnCode().equals(query.get("vnp_TmnCode"))
+            && query.get("vnp_PayDate") != null
+            && payment.getPaidAt().equals(parseGatewayPayDate(query.get("vnp_PayDate")))
+            && java.util.Objects.equals(query.get("vnp_TransactionNo"), payment.getGatewayTransactionNo())
+            && payment.getGatewayTransactionNo()!=null && !payment.getGatewayTransactionNo().isBlank()) {
+            var proof=new java.util.LinkedHashMap<String,Object>();
+            proof.put("paymentId",payment.getId());proof.put("reservationId",reservation.getId());
+            proof.put("customerId",reservation.getCustomer().getId());proof.put("intentId",payment.getGatewayIntentId());
+            proof.put("transactionNo",payment.getGatewayTransactionNo());proof.put("purpose",payment.getPurpose());
+            proof.put("currency",payment.getCurrency());proof.put("amount",payment.getAmount());proof.put("signatureVerified",true);
+            proof.put("bookingPaymentAccepted",true);
+            proof.put("gatewayPaidAt",parseGatewayPayDate(payment.getGatewayPayDate()).toString());
+            proof.put("paymentDeadline",paymentDeadline(reservation).toString());
+            proof.put("environment",PaymentProvenance.environment(properties.getPayUrl(),properties.getApiUrl()));
+            auditLogService.recordMutation((User)null,PaymentProvenance.CALLBACK_ACTION,"Payment",payment.getId(),reservation.getFacility().getId(),null,proof);
+        }
         return new CallbackResult("00", "Confirm Success", payment.getId(), reservation.getId(), reservationConfirmed);
     }
 
@@ -507,6 +540,10 @@ public class VnpayService {
     private void setIfPresent(String value, java.util.function.Consumer<String> setter) {
         if (value != null && !value.isBlank()) setter.accept(value);
     }
+    private boolean replayFieldMatches(String incoming, String recorded) {
+        // Missing optional fields were previously no-ops; they must not enrich a PAID row either.
+        return incoming == null || incoming.isBlank() || java.util.Objects.equals(incoming, recorded);
+    }
     private void resolveActiveComplaint(Reservation reservation, Instant resolvedAt) {
         if (reservation.getStatus() != ReservationStatus.PAYMENT_REVIEW) return;
         PaymentComplaint complaint = complaintRepository.findByReservation_Id(reservation.getId()).orElse(null);
@@ -559,7 +596,8 @@ public class VnpayService {
     private Instant parseGatewayPayDate(String value) {
         if (value == null || value.isBlank()) return null;
         try {
-            return LocalDateTime.parse(value, DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
+            return LocalDateTime.parse(value, DateTimeFormatter.ofPattern("uuuuMMddHHmmss")
+                .withResolverStyle(java.time.format.ResolverStyle.STRICT))
                 .atZone(ZONE)
                 .toInstant();
         } catch (DateTimeParseException exception) {

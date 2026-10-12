@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> {
+    List<ActivityLog> findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc(String entityType, UUID entityId, String action);
 
     @EntityGraph(attributePaths = {"actor", "facility"})
     @Query("""

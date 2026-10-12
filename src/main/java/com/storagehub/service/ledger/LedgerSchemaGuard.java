@@ -10,7 +10,10 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name="storagehub.integration.ledger.enabled",havingValue="true")
 public class LedgerSchemaGuard implements InitializingBean {
     private final JdbcTemplate jdbc;
-    public LedgerSchemaGuard(JdbcTemplate jdbc){this.jdbc=jdbc;}
+    private final boolean gateway;
+    public LedgerSchemaGuard(JdbcTemplate jdbc){this(jdbc,false);}
+    @org.springframework.beans.factory.annotation.Autowired
+    public LedgerSchemaGuard(JdbcTemplate jdbc,@org.springframework.beans.factory.annotation.Value("${storagehub.integration.sandbox-reconciliation.enabled:false}") boolean gateway){this.jdbc=jdbc;this.gateway=gateway;}
     public void afterPropertiesSet(){
         for(String query:new String[]{
             "select rental_id,customer_id,facility_id,revision from rental_ledger_accounts where 1=0",
@@ -19,5 +22,6 @@ public class LedgerSchemaGuard implements InitializingBean {
             "select receipt_id,obligation_id,rental_id,amount from rental_ledger_allocations where 1=0",
             "select id,rental_id,receipt_id,obligation_id,amount,status,decision_ref,payout_ref from rental_ledger_refunds where 1=0",
             "select actor_id,operation,key_hash,rental_id,payload_hash,result_id from rental_ledger_commands where 1=0"})jdbc.queryForList(query);
+        if(gateway)jdbc.queryForList("select receipt_id,payment_id,proof_log_id,environment,transaction_no from rental_ledger_gateway_evidence where 1=0");
     }
 }

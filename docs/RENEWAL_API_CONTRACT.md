@@ -8,9 +8,9 @@ Adapter đọc ngày từ RentalPeriodResolver và cutoff từ TermSource của 
 
 `TransactionalRenewalExtensionHoldSource` triển khai cả D2 ExtensionHoldSource và D3 SafetySource, opt-in bằng hai flag `renewal-extension-holds.enabled` và `renewal-operational-checks.enabled` trong namespace `storagehub.integration`. JDBC giữ cùng transaction với caller, khóa Rental → Unit → hold, unique theo renewal, không tự reclaim hold hết hạn, recheck khi retain/consume/release. Chưa bật runtime: thiếu implementation `RenewalSharedWriterProtocol` thì atomic/participatesInTransaction=false. Không dùng local guard hoặc flag thay thế shared-writer protocol. Migration additive nằm riêng tại `db/renewal-hold-migration`, không thuộc Flyway mặc định, không tự cập nhật DB chung.
 
-Ngày áp dụng policy đã được xác nhận: D2/D3 dùng ngày bắt đầu kỳ gia hạn; cutoff cho eligibility và D4 dùng ngày kiểm tra tại Asia/Ho_Chi_Minh. effectiveFrom/effectiveTo bao gồm cả hai ngày biên. Future-only policy không được dùng làm policy quá hạn hiện hành; thiếu policy hiện hành vẫn UNKNOWN. Publication hiện chỉ giữ một snapshot mỗi cơ sở, chưa lưu lịch sử phiên bản có hiệu lực khác nhau. Chi tiết trạng thái P0/P1: [báo cáo bổ sung](RENEWAL_P0_P1_IMPLEMENTATION_20261011.md).
+Ngày áp dụng policy đã được xác nhận: D2/D3 dùng ngày bắt đầu kỳ gia hạn; cutoff cho eligibility và D4 dùng ngày kiểm tra tại Asia/Ho_Chi_Minh. effectiveFrom/effectiveTo bao gồm cả hai ngày biên. Future-only policy không được dùng làm policy quá hạn hiện hành; thiếu policy hiện hành vẫn UNKNOWN. Publication hiện chỉ giữ một snapshot mỗi cơ sở, chưa lưu lịch sử phiên bản có hiệu lực khác nhau.
 
-Không đổi default flag hoặc tự bật module trong môi trường đang chạy. Xem [báo cáo implementation/test và giới hạn](RENEWAL_ELIGIBILITY_IMPLEMENTATION_20261011.md).
+Không đổi default flag hoặc tự bật module trong môi trường đang chạy.
 
 ## Bổ sung hoàn thiện theo hướng mở rộng — 06/10/2026
 

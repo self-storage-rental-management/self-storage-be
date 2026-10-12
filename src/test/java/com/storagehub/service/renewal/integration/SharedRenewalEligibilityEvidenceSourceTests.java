@@ -31,7 +31,7 @@ class SharedRenewalEligibilityEvidenceSourceTests {
     }
     @Test void combinesReceiverStateAndActualRentalCalendarWithinCurrentCutoff() {
         var e=source.read(rental,NOW).orElseThrow();
-        assertThat(e).isEqualTo(new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),rental.getStorageUnit().getId(),rental.getFacility().getId(),NOW,false,true));
+        assertThat(e).isEqualTo(new RenewalEligibilityEvidenceSource.Evidence(rental.getId(),rental.getStorageUnit().getId(),rental.getFacility().getId(),NOW,false,true,"TEST","v1",CUTOFF));
         verify(calendar).feasible(rental,NOW,CUTOFF);
     }
     @Test void realRecoveryBlockRemainsBlockedEvenWithAvailableSigningSlot() {
