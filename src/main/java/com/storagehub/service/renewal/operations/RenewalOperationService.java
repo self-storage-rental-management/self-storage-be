@@ -157,7 +157,7 @@ public class RenewalOperationService {
         if(!Objects.equals(s.getArrivalRef(),body.arrivalRef()))throw ApiExceptions.conflict("Current server-recorded arrival required");
         var arrival=linked(c.renewal(),body.arrivalRef(),"ARRIVAL");
         if(arrival.getOccurredAt().isAfter(now())||arrival.getOccurredAt().isAfter(s.getEffectiveSigningDeadline()))throw ApiExceptions.conflict("Arrival outside deadline");
-        currentAppointment(c,s,s.getAppointmentRef());evidence(actor,c.renewal(),"SIGNED_RENEWAL",List.of(body.signedDocumentFileId()));
+        currentAppointment(c,s,s.getAppointmentRef());evidence(actor,c.renewal(),"SIGNED_CONTRACT",List.of(body.signedDocumentFileId()));
         var terms=terms(c);accounting().requireFullyPaid(c.renewal(),terms,now());
         var safety=safety();var finalCutoff=checkSafety(c.renewal(),terms,c.workflow().getExtensionHoldRef(),now());
         if(finalCutoff==null)throw deferred("Recovery cutoff unavailable at completion");
