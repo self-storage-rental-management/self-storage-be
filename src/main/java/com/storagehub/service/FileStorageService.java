@@ -5,6 +5,7 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.config.FileProperties;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.FileAsset;
+import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.PaymentComplaint;
 import com.storagehub.domain.model.RoleCode;
@@ -13,6 +14,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.PaymentComplaintRepository;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
@@ -50,6 +52,7 @@ public class FileStorageService {
     private final ReservationGoodsItemRepository reservationGoodsItemRepository;
     private final UserRepository userRepository;
     private final PaymentComplaintRepository paymentComplaintRepository;
+    private final MaintenanceTaskRepository maintenanceTaskRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
@@ -160,6 +163,13 @@ public class FileStorageService {
                 return;
             }
         }
+        if ("MAINTENANCE_TASK".equals(asset.getEntityType()) && asset.getEntityId() != null) {
+            var task = maintenanceTaskRepository.findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            authorizationService.require(actor, SystemPermission.VIEW_UNITS);
+            facilityScopeService.assertCanRead(actor, task.getFacility().getId());
+            return;
+        }
         throw ApiExceptions.notFound("File was not found");
     }
 
@@ -189,7 +199,7 @@ public class FileStorageService {
         }
         String normalized = entityType.trim().toUpperCase(java.util.Locale.ROOT);
         if(com.storagehub.service.integration.DuongFileEvidence.handles(normalized))return normalized;
-        if (!Set.of("CONTRACT", "CHECK_IN", "RETURN_CASE", "SUPPORT_TICKET", "RESERVATION_GOODS_ITEM", "OTHER").contains(normalized)) {
+        if (!Set.of("CONTRACT", "CHECK_IN", "RETURN_CASE", "SUPPORT_TICKET", "RESERVATION_GOODS_ITEM", "MAINTENANCE_TASK", "OTHER").contains(normalized)) {
             throw ApiExceptions.validation("entityType is not supported", null);
         }
         return normalized;
@@ -215,6 +225,21 @@ public class FileStorageService {
             facilityScopeService.assertCanOperate(actor, checkIn.getReservation().getFacility().getId());
             if (checkIn.getStatus() != CheckInStatus.scheduled) {
                 throw ApiExceptions.conflict("Evidence can only be uploaded for a scheduled check-in");
+            }
+            return;
+        }
+        if ("MAINTENANCE_TASK".equals(entityType)) {
+            if (entityId == null) {
+                throw ApiExceptions.validation("entityId is required for maintenance evidence", null);
+            }
+            if (contentType == null || !contentType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+                throw ApiExceptions.validation("Maintenance evidence must be an image", null);
+            }
+            var task = maintenanceTaskRepository.findById(entityId)
+                .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
+            facilityScopeService.assertCanOperate(actor, task.getFacility().getId());
+            if (task.getStatus() == MaintenanceTaskStatus.completed || task.getStatus() == MaintenanceTaskStatus.cancelled) {
+                throw ApiExceptions.conflict("Evidence can only be uploaded while the maintenance task is active");
             }
             return;
         }
