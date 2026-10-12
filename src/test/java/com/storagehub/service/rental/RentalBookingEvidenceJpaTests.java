@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 /** SQL-backed rollback tests; these fixtures exist only inside the H2 test transaction. */
-@DataJpaTest @ActiveProfiles("test") @Import({RentalBookingEvidenceReader.class,com.storagehub.service.PaymentProvenance.class,com.storagehub.service.VnpayService.class,com.storagehub.service.AuditLogService.class,com.storagehub.service.ledger.PaymentReconciliationPreflight.class,RentalBookingEvidenceJpaTests.JsonConfig.class})
+@DataJpaTest(properties={"storagehub.project.payment-environment=VNPAY_SANDBOX","storagehub.project.sandbox-recognition-enabled=true"}) @ActiveProfiles("test") @Import({RentalBookingEvidenceReader.class,com.storagehub.service.RentalQueryService.class,com.storagehub.service.PaymentProvenance.class,com.storagehub.service.VnpayService.class,com.storagehub.service.AuditLogService.class,com.storagehub.service.ledger.PaymentReconciliationPreflight.class,com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy.class,RentalBookingEvidenceJpaTests.JsonConfig.class})
 class RentalBookingEvidenceJpaTests {
     @org.springframework.boot.test.context.TestConfiguration static class JsonConfig {
         @org.springframework.context.annotation.Bean com.fasterxml.jackson.databind.ObjectMapper mapper(){return new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();}
@@ -25,6 +25,7 @@ class RentalBookingEvidenceJpaTests {
     }
     @Autowired EntityManager em;
     @Autowired RentalBookingEvidenceReader reader;
+    @Autowired com.storagehub.service.RentalQueryService rentalReads;
     @Autowired com.storagehub.service.VnpayService gateway;
     @Autowired com.storagehub.config.VnpayProperties gatewayConfig;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
@@ -76,10 +77,21 @@ class RentalBookingEvidenceJpaTests {
             assertThat(p.getReservation().getStatus()).isEqualTo(late ? ReservationStatus.EXPIRED : ReservationStatus.CONFIRMED);
             var evidence = reader.read(customer(r), r, false).orElseThrow();
             assertThat(evidence.payments().getFirst().verification()).isEqualTo(late ? "UNVERIFIED" : "SANDBOX");
+            assertThat(evidence.payments().getFirst().projectRecognition().eligibleForReconciliation()).isEqualTo(!late);
+            assertThat(evidence.payments().getFirst().reconciliation().status()).isEqualTo(late ? "NON_VERIFIED_MONEY" : "LEDGER_ACCOUNT_MISSING");
             assertThat(em.createQuery("select count(a) from ActivityLog a where a.action=:action and a.entityId=:payment", Long.class)
                 .setParameter("action", com.storagehub.service.PaymentProvenance.CALLBACK_ACTION).setParameter("payment", p.getId()).getSingleResult())
                 .isEqualTo(late ? 0 : 1);
         });
+        var context=org.mockito.Mockito.mock(com.storagehub.security.ActorContext.class);
+        org.mockito.Mockito.when(context.required()).thenReturn(tx.execute(status->customer(em.find(Rental.class,ids.get(1)))));
+        var rentalHttp=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+            new com.storagehub.api.rental.CustomerRentalReadController(context,rentalReads)).build();
+        var readback=rentalHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/rental-records/"+ids.get(1)))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn().getResponse();
+        var data=new com.fasterxml.jackson.databind.ObjectMapper().readTree(readback.getContentAsString()).path("data");
+        assertThat(data.path("bookingEvidence").path("payments").get(0).path("projectRecognition").path("eligibleForReconciliation").asBoolean()).isEqualTo(!late);
+        assertThat(data.path("financialSummary").path("completeness").asText()).isEqualTo("UNKNOWN");
         // Separate JDBC connection observes committed production-service writes, outside the JPA transaction.
         try (var c = datasource.getConnection(); var s = c.prepareStatement(
                 "select gateway_transaction_no,gateway_pay_date,gateway_response_code,gateway_transaction_status,failure_code from payments where gateway_intent_id=?")) {
@@ -117,7 +129,7 @@ class RentalBookingEvidenceJpaTests {
             .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.RspCode").value("02"));
         em.flush();em.clear();
         var rental=em.find(Rental.class,r.getId());var evidence=reader.read(customer(rental),rental,false).orElseThrow();
-        assertThat(evidence.payments().getFirst().verification()).isEqualTo("SANDBOX");assertThat(evidence.payments().getFirst().reconciliation().status()).isEqualTo("NON_VERIFIED_MONEY");
+        assertThat(evidence.payments().getFirst().verification()).isEqualTo("SANDBOX");assertThat(evidence.payments().getFirst().reconciliation().status()).isEqualTo("LEDGER_ACCOUNT_MISSING");
         assertThat(em.createQuery("select count(a) from ActivityLog a where a.action=:action and a.entityId=:payment",Long.class).setParameter("action",com.storagehub.service.PaymentProvenance.CALLBACK_ACTION).setParameter("payment",p.getId()).getSingleResult()).isEqualTo(1);
     }
     private static final Instant NOW=Instant.parse("2026-10-10T00:00:00Z");
