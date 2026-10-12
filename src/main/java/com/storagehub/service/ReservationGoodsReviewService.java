@@ -1,11 +1,13 @@
 package com.storagehub.service;
 
+import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationReviewDecision;
 import com.storagehub.api.reservation.ReservationReviewRequest;
 import com.storagehub.api.reservation.ReservationReviewResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
+import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Reservation;
@@ -14,6 +16,7 @@ import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.UserRepository;
@@ -37,14 +40,15 @@ public class ReservationGoodsReviewService {
 
     private final ReservationRepository reservationRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
+    private final FileAssetRepository fileAssetRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
 
-    @Value("${app.reservation.payment-window-minutes:1440}")
-    private long paymentWindowMinutes = 1440;
+    @Value("${app.reservation.payment-window-minutes:360}")
+    private long paymentWindowMinutes = 360;
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationReviewResponse> listPending(
@@ -195,7 +199,7 @@ public class ReservationGoodsReviewService {
                 "page must be >= 0 and size must be between 1 and 100", null
             );
         }
-        return PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "goodsReviewDueAt"));
+        return PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt"));
     }
 
     private ReservationReviewResponse toResponse(Reservation reservation) {
@@ -211,6 +215,7 @@ public class ReservationGoodsReviewService {
         response.setStartDate(reservation.getStartDate());
         response.setEndDate(reservation.getEndDate());
         response.setGoodsCondition(reservation.getGoodsCondition());
+        response.setReservationNotes(reservation.getNotes());
         response.setReviewDueAt(reservation.getGoodsReviewDueAt());
         response.setReviewedAt(reservation.getGoodsReviewedAt());
         response.setReviewNote(reservation.getGoodsReviewNote());
@@ -238,6 +243,16 @@ public class ReservationGoodsReviewService {
         response.setRequiresStaffReview(item.isRequiresStaffReview());
         response.setReviewStatus(item.getReviewStatus());
         response.setReviewNote(item.getReviewNote());
+        response.setImages(fileAssetRepository
+            .findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("RESERVATION_GOODS_ITEM", item.getId())
+            .stream()
+            .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
+            .map(asset -> new FileAssetResponse(
+                asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
+                asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(),
+                asset.getStatus(), asset.getCreatedAt()
+            ))
+            .toList());
         return response;
     }
 

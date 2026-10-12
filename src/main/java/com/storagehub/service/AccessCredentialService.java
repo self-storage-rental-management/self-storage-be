@@ -4,6 +4,7 @@ import com.storagehub.api.credential.AccessCredentialResponse;
 import com.storagehub.api.credential.CredentialAlertResponse;
 import com.storagehub.api.credential.IssueAccessCredentialRequest;
 import com.storagehub.api.credential.RevokeAccessCredentialRequest;
+import com.storagehub.api.credential.ReissueAccessCredentialRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.AccessCredential;
@@ -19,6 +20,7 @@ import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.SystemPermission;
@@ -63,6 +65,7 @@ public class AccessCredentialService {
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
 
     @Transactional
     public AccessCredentialResponse issue(
@@ -140,6 +143,88 @@ public class AccessCredentialService {
         auditLogService.recordMutation(
             staff, "ACCESS_CREDENTIAL_REVOKED", "AccessCredential", saved.getId(),
             saved.getFacility().getId(), Map.of("status", AccessCredentialStatus.ACTIVE), toResponse(saved)
+        );
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public AccessCredentialResponse reissue(
+        ActorPrincipal actor,
+        UUID rentalId,
+        ReissueAccessCredentialRequest request
+    ) {
+        requireStaff(actor);
+        authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
+        if (!Boolean.TRUE.equals(request.identityVerified())) {
+            throw ApiExceptions.validation("Customer identity verification is required", null);
+        }
+        String verificationMethod = clean(request.verificationMethod());
+        String reason = clean(request.reason());
+        String reference = clean(request.reference());
+        if (verificationMethod == null || reason == null || reference == null
+            || !List.of("ID_DOCUMENT", "CUSTOMER_ACCOUNT", "AUTHORIZED_REPRESENTATIVE", "OTHER").contains(verificationMethod)) {
+            throw ApiExceptions.validation("Verification method, reason and replacement reference are required", null);
+        }
+
+        Rental rental = rentalRepository.findByIdForUpdate(rentalId)
+            .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
+        facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
+        if (rental.getStatus() != RentalStatus.active) {
+            throw ApiExceptions.conflict("Access credentials can only be reissued for an active rental");
+        }
+
+        AccessCredential current = credentialRepository.findByIdForUpdate(request.credentialId())
+            .orElseThrow(() -> ApiExceptions.notFound("Access credential was not found"));
+        if (current.getRental() == null || !rental.getId().equals(current.getRental().getId())
+            || !rental.getCustomer().getId().equals(current.getCustomer().getId())
+            || !rental.getFacility().getId().equals(current.getFacility().getId())) {
+            throw ApiExceptions.notFound("Access credential was not found for this rental");
+        }
+        if (current.getStatus() != AccessCredentialStatus.ACTIVE) {
+            throw ApiExceptions.conflict("Access credential is no longer active");
+        }
+
+        User staff = requireActor(actor);
+        revokeEntity(current, staff, reason);
+        AccessCredential revoked = credentialRepository.saveAndFlush(current);
+
+        AccessCredential replacement = new AccessCredential();
+        replacement.setReservation(rental.getReservation());
+        replacement.setRental(rental);
+        replacement.setFacility(rental.getFacility());
+        replacement.setStorageUnit(rental.getStorageUnit());
+        replacement.setCustomer(rental.getCustomer());
+        replacement.setType(current.getType());
+        replacement.setStatus(AccessCredentialStatus.ACTIVE);
+        replacement.setReference(reference);
+        replacement.setSecretHash(hashSecret(request.secret()));
+        replacement.setIssuedBy(staff);
+        replacement.setIssuedAt(Instant.now());
+        replacement.setNote(clean(request.note()));
+        AccessCredential saved = credentialRepository.saveAndFlush(replacement);
+
+        Map<String, Object> auditContext = Map.of(
+            "rentalId", rental.getId().toString(),
+            "replacedCredentialId", revoked.getId().toString(),
+            "identityVerified", true,
+            "verificationMethod", verificationMethod,
+            "reason", reason
+        );
+        auditLogService.recordMutation(
+            staff, "ACCESS_CREDENTIAL_REISSUE_REVOKED", "AccessCredential", revoked.getId(),
+            rental.getFacility().getId(), Map.of("status", AccessCredentialStatus.ACTIVE),
+            Map.of("status", AccessCredentialStatus.REVOKED, "reissue", auditContext)
+        );
+        auditLogService.recordMutation(
+            staff, "ACCESS_CREDENTIAL_REISSUED", "AccessCredential", saved.getId(),
+            rental.getFacility().getId(), auditContext, toResponse(saved)
+        );
+        notificationService.createNotification(
+            rental.getCustomer().getId(), NotificationType.CHECKIN,
+            "Quyền truy cập gian kho đã được thay mới",
+            "Nhân viên đã thay quyền " + saved.getType() + " cho gian " + rental.getStorageUnit().getCode()
+                + ". Mã tham chiếu mới: " + saved.getReference() + ". Nếu bạn không yêu cầu thao tác này, hãy liên hệ cơ sở.",
+            rental.getId()
         );
         return toResponse(saved);
     }

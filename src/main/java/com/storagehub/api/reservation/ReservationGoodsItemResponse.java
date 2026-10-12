@@ -1,8 +1,10 @@
 package com.storagehub.api.reservation;
 
+import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 public class ReservationGoodsItemResponse {
@@ -23,6 +25,7 @@ public class ReservationGoodsItemResponse {
     private boolean requiresStaffReview;
     private GoodsReviewStatus reviewStatus;
     private String reviewNote;
+    private List<FileAssetResponse> images = List.of();
 
     public ReservationGoodsItemResponse() {
     }
@@ -59,4 +62,6 @@ public class ReservationGoodsItemResponse {
     public void setReviewStatus(GoodsReviewStatus reviewStatus) { this.reviewStatus = reviewStatus; }
     public String getReviewNote() { return reviewNote; }
     public void setReviewNote(String reviewNote) { this.reviewNote = reviewNote; }
+    public List<FileAssetResponse> getImages() { return images; }
+    public void setImages(List<FileAssetResponse> images) { this.images = images == null ? List.of() : images; }
 }

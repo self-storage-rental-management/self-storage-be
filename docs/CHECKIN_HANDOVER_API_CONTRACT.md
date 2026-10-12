@@ -21,7 +21,7 @@ CONFIRMED
 | Assignment | Actor có quyền assignment theo contract Assignment | `ASSIGN_UNITS`, facility scope |
 | Xem check-in/handover | Staff hoặc Manager | `VIEW_CHECKINS`, facility scope `READ` |
 | Lên lịch, no-show, reject, hoàn tất handover | Staff | `PERFORM_CHECKIN`, facility scope `OPERATE` |
-| Cấp hoặc thu hồi credential | **Staff** | `PERFORM_CHECKIN` khi cấp. `PROCESS_RETURNS` khi thu hồi. Scope `OPERATE` |
+| Cấp, thu hồi hoặc thay mới credential | **Staff** | `PERFORM_CHECKIN` khi cấp lúc handover. `PROCESS_RETURNS` khi thu hồi/thay mới. Scope `OPERATE` |
 | Theo dõi lịch sử credential | Staff hoặc Manager | `VIEW_CHECKINS`, scope `READ`. Manager không có endpoint mutation |
 
 Manager chỉ giám sát lịch sử và trạng thái credential. API cấp/thu hồi từ chối actor Manager dù Manager có quyền xem check-in.
@@ -86,6 +86,29 @@ Staff cấp một hoặc nhiều loại: `PIN` (access code), `CARD`, `KEY`, `LO
 BE lưu bắt buộc `issuedAt` và `issuedBy`. `reference` là số seri hoặc mã hiển thị. `secret` chỉ lưu SHA-256 và không trả PIN thô. Credential liên kết với reservation, facility, unit và customer. Khi Customer xác nhận receipt tạo Rental, credential được liên kết thêm với Rental.
 
 Checklist handover phải có `accessHandedOver = true`. BE yêu cầu reservation có ít nhất một credential ACTIVE trước khi hoàn tất.
+
+## 3.1 Reissue credential khi Rental đang hoạt động
+
+Staff xử lý trường hợp khách mất chìa khóa/thẻ, lộ PIN hoặc cần thay khóa bằng:
+
+`POST /api/staff/rentals/{rentalId}/credentials/reissue`
+
+```json
+{
+  "credentialId": "credential-cũ",
+  "identityVerified": true,
+  "verificationMethod": "ID_DOCUMENT",
+  "reason": "Khách báo mất chìa khóa tại quầy",
+  "reference": "KEY-NEW-001",
+  "secret": null,
+  "note": "Đã bàn giao chìa khóa mới"
+}
+```
+
+- Rental phải ở trạng thái `active`, credential cũ phải là credential ACTIVE đang liên kết đúng Rental, khách hàng và cơ sở.
+- `identityVerified` bắt buộc là `true`; `verificationMethod` và `reason` được ghi trong audit để chứng minh bước xác minh tại quầy. Không lưu giấy tờ định danh hoặc PIN thô.
+- Trong cùng transaction, credential cũ chuyển sang `REVOKED`, credential mới giữ nguyên loại và liên kết với Rental đang hoạt động.
+- BE ghi audit cho cả lần thu hồi và cấp mới, đồng thời gửi thông báo cho Customer. Response chỉ trả `reference`, không trả secret.
 
 ## 4. Upload hợp đồng và bằng chứng
 
@@ -189,6 +212,6 @@ Manager chỉ nhận projection lịch sử gồm loại, reference, `issuedAt`,
 
 ## Audit và thông báo
 
-Audit events tối thiểu: `CHECKIN_SCHEDULED`, `ACCESS_CREDENTIAL_ISSUED`, `CHECKIN_HANDOVER_COMPLETED`, `ACCESS_CREDENTIAL_REVOKED`, `CHECKIN_NO_SHOW`, `CHECKIN_REJECTED`. Audit ghi actor, entity, before/after state và correlation ID.
+Audit events tối thiểu: `CHECKIN_SCHEDULED`, `ACCESS_CREDENTIAL_ISSUED`, `ACCESS_CREDENTIAL_REVOKED`, `ACCESS_CREDENTIAL_REISSUE_REVOKED`, `ACCESS_CREDENTIAL_REISSUED`, `CHECKIN_HANDOVER_COMPLETED`, `CHECKIN_NO_SHOW`, `CHECKIN_REJECTED`. Audit ghi actor, entity, before/after state và correlation ID.
 
 Customer nhận thông báo khi lịch được xác nhận, handover chờ receipt, no-show hoặc reject. Việc tạo Rental ACTIVE chỉ xảy ra sau customer receipt confirmation ở module kế tiếp.
