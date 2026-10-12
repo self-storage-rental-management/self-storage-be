@@ -94,7 +94,35 @@ public class LedgerCoverageInventory {
             if(workflow!=null&&workflow.getAcceptedRevision()!=null&&!revision.getId().equals(workflow.getAcceptedRevision().getId()))continue;
             var terms=mapper.readValue(revision.getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
             var spec=FinancialContractSpecifications.accepted(revision,terms).getFirst();
-            if(workflow!=null&&Set.of(RenewalStatus.pending,RenewalStatus.rejected).contains(workflow.getRenewal().getStatus())
+            if (terms.renewalDepositAmount() != null && terms.renewalDepositAmount().signum() == 0) {
+                if(workflow!=null&&workflow.getPaymentDeadline()!=null&&workflow.getExtensionHoldRef()!=null) {
+                    var matches=snapshot==null?List.<LedgerStore.Obligation>of():snapshot.obligations().stream().filter(o->
+                        o.kind()==spec.kind()&&Objects.equals(o.renewalId(),spec.renewalId())&&spec.sourceReference().equals(o.sourceRef())
+                        &&o.amount().compareTo(spec.amount())==0&&o.dueAt().toEpochMilli()==workflow.getPaymentDeadline().toEpochMilli()).toList();
+                    if(matches.size()!=1||!ledger.renewalFullRentCommandMatches(matches.getFirst(),spec,rental.getCustomer().getId()))
+                        gaps.add("RENEWAL_FULL_RENT_OBLIGATION_UNPOSTED_OR_INVALID");
+                    else {
+                        acceptedSpecifications.add(spec);
+                        for(var payment:payments.findAllByRenewal_IdOrderByCreatedAtAsc(spec.renewalId())) {
+                            if(payment.getRenewalRevision()==null||!revision.getId().equals(payment.getRenewalRevision().getId()))continue;
+                            boolean eligible=sandboxPolicy.evaluate(payment,provenance.classify(payment)).eligibleForReconciliation();
+                            var candidates=snapshot.receipts().stream().filter(p->("payment:"+payment.getId()).equals(p.evidenceRef())).toList();
+                            boolean linked=eligible&&payment.getRenewalEvidenceRef()!=null&&candidates.size()==1
+                                &&candidates.getFirst().method()==LedgerStore.Method.VNPAY_SANDBOX
+                                &&candidates.getFirst().amount().compareTo(payment.getAmount())==0
+                                &&candidates.getFirst().receivedAt().toEpochMilli()==payment.getPaidAt().toEpochMilli()
+                                &&ledger.renewalReceiptMatches(rental.getId(),candidates.getFirst(),new LedgerStore.GatewayProof(
+                                    payment.getId(),payment.getRenewalEvidenceRef(),payment.getGatewayTransactionNo()),matches.getFirst());
+                            if(linked)validatedReceipts.add(candidates.getFirst().id());
+                            if(payment.getStatus()==PaymentStatus.PAID&&!linked)gaps.add("SANDBOX_PAYMENT_NOT_RECONCILED");
+                            evidence.add(new PaymentEvidence(payment.getId(),provenance.classify(payment).name(),linked,
+                                payment.getRefundedAmount()!=null&&payment.getRefundedAmount().signum()>0,eligible));
+                        }
+                    }
+                }
+                continue;
+            }
+            if(workflow!=null&&Set.of(RenewalStatus.pending,RenewalStatus.accepted,RenewalStatus.rejected).contains(workflow.getRenewal().getStatus())
                 &&workflow.getPaymentDeadline()==null&&workflow.getExtensionHoldRef()==null){
                 deposits.add(new RenewalDepositEvidence(spec.renewalId(),revision.getId(),"NOT_EFFECTIVE",null));continue;
             }

@@ -27,3 +27,6 @@ DDL MySQL có thể auto-commit. Backup, thử phục hồi và kiểm thử b�
 - `RentalSupportSchemaRolloutTests`, `SimulatedPaymentServiceTests`, `RentalBookingEvidenceJpaTests`: cấu hình, writer hiện hữu và nghĩa của mã legacy.
 
 Kết quả startup/HTTP và test cụ thể: báo cáo FE `docs/PAYMENT_GATEWAY_MIGRATION_REPORT_20261011.md`. Migration PASS không chứng minh full E2E hoặc dữ liệu tài chính đã đầy đủ.
+# Renewal reconciliation migration — 12/10/2026
+
+`V2026101204__renewal_payment_reconciliation.sql` adds durable work metadata and binding constraints to the shared Payment table. See [rollout and authority boundaries](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle). This migration preserves monetary history and accepted quotes and must follow 2026101203. Isolated Flyway/H2 migrate/replay was tested; MySQL rollout requires a separately configured test schema. No shared database migration was executed.

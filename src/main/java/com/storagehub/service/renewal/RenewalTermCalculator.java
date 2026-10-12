@@ -20,8 +20,11 @@ public final class RenewalTermCalculator {
             BigDecimal subtotal = money(price.multiply(BigDecimal.valueOf(packageMonths)));
             BigDecimal discount = money(subtotal.multiply(discountRate));
             BigDecimal net = money(subtotal.subtract(discount));
-            BigDecimal deposit = money(net.multiply(depositRate));
-            return new Terms(start,end,end.minusDays(1),subtotal,discount,net,deposit,money(net.subtract(deposit)));
+            // Renewal is paid as one full-period amount. Keep depositRate in the
+            // signature for compatibility with already-published policy records,
+            // but do not create a Renewal deposit for new quotes.
+            BigDecimal deposit = BigDecimal.ZERO.setScale(2);
+            return new Terms(start,end,end.minusDays(1),subtotal,discount,net,deposit,net);
         } catch (DateTimeException | ArithmeticException e) {
             throw ApiExceptions.conflict("Shared renewal period is outside supported date or money bounds");
         }
