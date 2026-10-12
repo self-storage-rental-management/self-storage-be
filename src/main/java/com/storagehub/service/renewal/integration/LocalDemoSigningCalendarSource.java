@@ -82,6 +82,8 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
         Facility facility = em.find(Facility.class, facilityId, LockModeType.PESSIMISTIC_WRITE);
         if (facility == null) throw ApiExceptions.conflict("Signing facility is unavailable");
         em.refresh(facility, LockModeType.PESSIMISTIC_WRITE);
+        if (facility.getStatus() != com.storagehub.domain.model.FacilityStatus.active)
+            throw ApiExceptions.conflict("Signing facility is not active");
 
         if (!slot.start().isAfter(now) || !slot.end().equals(slot.start().plus(SLOT_LENGTH))
             || !isBusinessSlot(slot.start())
