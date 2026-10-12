@@ -11,6 +11,36 @@ import static org.mockito.Mockito.*;
 import static org.assertj.core.api.Assertions.*;
 
 class LedgerFinancialAdaptersTests {
+    @Test void partialOverdueProjectionRequiresMatchedUnadjustedDebtAndCorrectAccountBinding() {
+        var rental=new Rental();var customer=new User();var facility=new Facility();
+        for(var entity:List.of(rental,customer,facility))ReflectionTestUtils.setField(entity,"id",UUID.randomUUID());
+        rental.setCustomer(customer);rental.setFacility(facility);
+        var store=mock(LedgerStore.class);var inventory=mock(LedgerCoverageInventory.class);
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("inventory",inventory);
+        var adapters=new LedgerFinancialAdapters(store,beans.getBeanProvider(LedgerCoverageSource.class),beans.getBeanProvider(Clock.class));
+        ReflectionTestUtils.setField(adapters,"inventories",beans.getBeanProvider(LedgerCoverageInventory.class));
+        var now=Instant.parse("2026-10-12T00:00:00Z");var id=UUID.randomUUID();var renewal=UUID.randomUUID();
+        var zero=java.math.BigDecimal.ZERO;var amount=java.math.BigDecimal.TEN;
+        var debt=new LedgerStore.Obligation(id,renewal,LedgerStore.Kind.RENEWAL_DEPOSIT,amount,now.minusSeconds(1),"source",zero,zero,amount);
+        var snapshot=new LedgerStore.Snapshot(rental.getId(),customer.getId(),facility.getId(),1,List.of(debt),List.of(),List.of());
+        when(store.read(rental.getId())).thenReturn(Optional.of(snapshot));
+        var match=new LedgerCoverageInventory.RenewalDepositEvidence(renewal,UUID.randomUUID(),"MATCHED",id);
+        when(inventory.inspect(rental,Optional.of(snapshot))).thenReturn(new LedgerCoverageInventory.Inventory(rental.getId(),1L,"PARTIAL",List.of(),List.of(),false,List.of(match)));
+        assertThat(adapters.read(rental,now).orElseThrow().completeness()).isEqualTo("PARTIAL");
+        assertThat(adapters.read(rental,now).orElseThrow().obligations()).hasSize(1);
+        assertThat(adapters.approval(rental)).isEmpty();assertThat(adapters.read(rental)).isEmpty();
+        when(inventory.inspect(rental,Optional.of(snapshot))).thenReturn(new LedgerCoverageInventory.Inventory(rental.getId(),1L,"PARTIAL",List.of("RENEWAL_TERMINAL_ACCOUNTING_UNRECONCILED"),List.of(),false,List.of(match)));
+        assertThat(adapters.read(rental,now)).isEmpty();
+        when(inventory.inspect(rental,Optional.of(snapshot))).thenReturn(new LedgerCoverageInventory.Inventory(rental.getId(),1L,"PARTIAL",List.of(),List.of(),false,List.of()));
+        assertThat(adapters.read(rental,now).orElseThrow().obligations()).isEmpty();
+        for(var unsafe:List.of(
+            new LedgerStore.Snapshot(rental.getId(),UUID.randomUUID(),facility.getId(),1,List.of(debt),List.of(),List.of()),
+            new LedgerStore.Snapshot(rental.getId(),customer.getId(),UUID.randomUUID(),1,List.of(debt),List.of(),List.of()),
+            new LedgerStore.Snapshot(rental.getId(),customer.getId(),facility.getId(),1,List.of(debt),List.of(new LedgerStore.Receipt(UUID.randomUUID(),LedgerStore.Method.VNPAY_SANDBOX,amount,"test",null,now)),List.of()),
+            new LedgerStore.Snapshot(rental.getId(),customer.getId(),facility.getId(),1,List.of(debt),List.of(),List.of(new LedgerStore.Refund(UUID.randomUUID(),UUID.randomUUID(),id,amount,"PENDING","test",null))))) {
+            when(store.read(rental.getId())).thenReturn(Optional.of(unsafe));assertThat(adapters.read(rental,now)).isEmpty();
+        }
+    }
     @Test void bindingRevisionAndCertificationTimeMustMatchBeforeFinancialProjection() {
         var rental=new Rental();var customer=new User();var facility=new Facility();
         for(var entity:List.of(rental,customer,facility))ReflectionTestUtils.setField(entity,"id",UUID.randomUUID());

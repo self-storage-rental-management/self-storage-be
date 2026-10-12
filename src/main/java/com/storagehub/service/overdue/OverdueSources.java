@@ -8,7 +8,9 @@ import java.util.*;
 public final class OverdueSources {
     private OverdueSources() {}
     public record Obligation(UUID id,UUID rentalId,Instant dueAt,BigDecimal outstanding,String currency) {}
-    public record Finance(Instant checkedAt,List<Obligation> obligations) {}
+    public record Finance(Instant checkedAt,List<Obligation> obligations,String completeness) {
+        public Finance(Instant checkedAt,List<Obligation> obligations){this(checkedAt,obligations,"COMPLETE");}
+    }
     public interface FinancialSource { Optional<Finance> read(Rental rental,Instant now); }
     public record Term(String policyRef,String policyVersion,LocalDate lastPermittedDate,
         int warningThroughDay,int seriousThroughDay,int urgentThroughDay,int recoveryFromDay,
