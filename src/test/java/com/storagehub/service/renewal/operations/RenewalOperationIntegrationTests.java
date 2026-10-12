@@ -140,6 +140,7 @@ class RenewalOperationIntegrationTests {
     }
     private ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
     @org.junit.jupiter.api.io.TempDir java.nio.file.Path evidenceRoot;
+    @Autowired org.springframework.context.ApplicationContext applicationContext;
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void completionConsumesRealBoundSignedContractWithCommittedReadback() throws Exception {
         var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
@@ -186,13 +187,38 @@ class RenewalOperationIntegrationTests {
                 assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).expectedVersion()).isEqualTo(arrival.state().expectedVersion());
                 tx.executeWithoutResult(s->assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(oldEnd));
             }
-            var document=persistSignedFile(tx,n.getId(),assigned,n.getId(),"SIGNED_CONTRACT");
+            var storage=new com.storagehub.service.FileStorageService(properties,
+                applicationContext.getBean(com.storagehub.domain.repo.FileAssetRepository.class),applicationContext.getBean(com.storagehub.domain.repo.CheckInRepository.class),
+                applicationContext.getBean(com.storagehub.domain.repo.ReservationGoodsItemRepository.class),applicationContext.getBean(com.storagehub.domain.repo.UserRepository.class),
+                applicationContext.getBean(com.storagehub.domain.repo.PaymentComplaintRepository.class),mock(com.storagehub.service.AdminAuthorizationService.class),mock(com.storagehub.service.FacilityScopeService.class),mock(AuditLogService.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(storage,"duongEvidence",beans.getBeanProvider(com.storagehub.service.integration.DuongFileEvidence.class));
+            var storageProxy=new org.springframework.aop.framework.ProxyFactory(storage);storageProxy.setProxyTargetClass(true);
+            var attributes=new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource();storageProxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(transactions,attributes));
+            var fileHttp=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new com.storagehub.api.file.FileController(actors,(com.storagehub.service.FileStorageService)storageProxy.getProxy())).setControllerAdvice(new GlobalExceptionHandler()).build();
+            byte[] uploadedBytes={(byte)0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a};
+            var upload=fileHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/files")
+                .file(new org.springframework.mock.web.MockMultipartFile("file","signed.png","image/png",uploadedBytes)).param("entityType","DUONG_RENEWAL_SIGNED_CONTRACT").param("entityId",n.getId().toString()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data.entityType").value("DUONG_RENEWAL_SIGNED_CONTRACT"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data.entityId").value(n.getId().toString())).andReturn();
+            var document=UUID.fromString(mapper().readTree(upload.getResponse().getContentAsString()).path("data").path("id").asText());
+            var downloadPath="/api/files/"+document;
+            when(actors.required()).thenReturn(actor(n,RoleCode.CUSTOMER));
+            fileHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(downloadPath)).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+            fileHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/files").file(new org.springframework.mock.web.MockMultipartFile("file","signed.png","image/png",uploadedBytes)).param("entityType","DUONG_RENEWAL_SIGNED_CONTRACT").param("entityId",n.getId().toString())).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+            when(actors.required()).thenReturn(staff);
             var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),document,"TEST signed contract");
             var request=org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path+"/completion").header("Idempotency-Key","bound-completion").contentType("application/json").content(mapper().writeValueAsString(body));
             http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
             http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
             http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data.phase").value("COMPLETED"));
             tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(LocalDate.of(2026,11,6));realEvidence.requireDownload(actor(n,RoleCode.CUSTOMER),em.find(FileAsset.class,document));});
+            when(actors.required()).thenReturn(actor(n,RoleCode.CUSTOMER));
+            fileHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(downloadPath))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(uploadedBytes))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("X-Content-SHA256",java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(uploadedBytes))));
+            when(actors.required()).thenReturn(staff);
             tx.executeWithoutResult(s->em.createQuery("delete from UserFacilityScope s where s.user.id=:id").setParameter("id",assigned).executeUpdate());
             http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
             try(var connection=datasource.getConnection();var query=connection.prepareStatement("select payload_json from renewal_operation_events where renewal_id=? and kind='COMPLETION'")){
