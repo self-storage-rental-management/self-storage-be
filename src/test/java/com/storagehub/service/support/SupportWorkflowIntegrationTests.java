@@ -85,6 +85,7 @@ class SupportWorkflowIntegrationTests {
     @Autowired TestReceiver receiver;
     @Autowired TestNotice notice;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    @Autowired javax.sql.DataSource datasource;
     Facility facility,otherFacility;
     User customer,otherCustomer,manager,staff,otherStaff,foreignStaff;
     ActorPrincipal c,m,s,s2;
@@ -104,6 +105,31 @@ class SupportWorkflowIntegrationTests {
         scope(manager,facility,FacilityScopeLevel.MANAGE);scope(staff,facility,FacilityScopeLevel.OPERATE);
         scope(otherStaff,facility,FacilityScopeLevel.OPERATE);scope(foreignStaff,otherFacility,FacilityScopeLevel.OPERATE);em.flush();
         c=actor(customer,RoleCode.CUSTOMER,null);m=actor(manager,RoleCode.MANAGER,facility);s=actor(staff,RoleCode.STAFF,facility);s2=actor(otherStaff,RoleCode.STAFF,facility);
+    }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void assignedStaffNameComesFromCommittedAssignmentInHttpListAndDetail() throws Exception {
+        var created=service.create(c,new Create("Assignee name readback","TEST ONLY",facility.getId(),null,List.of()),"name-create");
+        assertThat(created.assignedStaffName()).isNull();
+        service.assign(m,created.id(),new Assignment(staff.getId(),created.version(),"TEST assignment"),"name-assign");
+        new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(tx->{
+            em.find(User.class,staff.getId()).setFullName("Assigned Staff Readback");
+        });
+        var context=mock(ActorContext.class);when(context.required()).thenReturn(m);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new ManagerSupportController(context,service))
+            .setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        var detail=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/support-tickets/"+created.id())).andReturn().getResponse();
+        assertThat(detail.getStatus()).isEqualTo(200);
+        assertThat(mapper.readTree(detail.getContentAsString()).path("data").path("assignedStaffName").asText()).isEqualTo("Assigned Staff Readback");
+        var list=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/support-tickets")
+            .param("facilityId",facility.getId().toString()).param("search","Assignee name readback")).andReturn().getResponse();
+        assertThat(list.getStatus()).isEqualTo(200);
+        assertThat(mapper.readTree(list.getContentAsString()).path("data").get(0).path("assignedStaffName").asText()).isEqualTo("Assigned Staff Readback");
+        try(var connection=datasource.getConnection();var sql=connection.prepareStatement("select u.full_name from support_tickets t join users u on u.id=t.assigned_to where t.id=?")) {
+            sql.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(created.id().getMostSignificantBits()).putLong(created.id().getLeastSignificantBits()).array());
+            try(var rows=sql.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).isEqualTo("Assigned Staff Readback");}
+        }
     }
     @Test void createDerivesHonestUnknownSlaAndIdempotentResult(){
         var body=new Create("Access question","Please help",facility.getId(),null,List.of());
@@ -133,6 +159,52 @@ class SupportWorkflowIntegrationTests {
         assertThatThrownBy(()->service.detail(actor(otherCustomer,RoleCode.CUSTOMER,null),CUSTOMER,t.id())).isInstanceOf(ApiException.class);
         var foreign=actor(foreignStaff,RoleCode.STAFF,otherFacility);
         assertThatThrownBy(()->service.detail(foreign,STAFF,t.id())).isInstanceOf(ApiException.class);
+    }
+    @Test void customerCanFilterOwnedTicketsByFacilityWithoutStaffScope(){
+        var owned=create();
+        service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Other","Other owner",otherFacility.getId(),null,List.of()),"other-facility");
+        var params=new LinkedMultiValueMap<String,String>();params.add("facilityId",facility.getId().toString());
+        var ownFacility=SupportQuery.parseCustomerList(params);
+        assertThat(service.list(c,CUSTOMER,ownFacility,"test").data()).extracting(SupportResponse::id).containsExactly(owned.id());
+        params.set("facilityId",otherFacility.getId().toString());
+        assertThat(service.list(c,CUSTOMER,SupportQuery.parseCustomerList(params),"test").pagination().totalItems()).isZero();
+        assertThatThrownBy(()->service.list(m,MANAGER,SupportQuery.parse(params,true,false),"test"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("scope");
+    }
+    @Test void customerSupportHttpFacilityFilterPreservesOwnership() throws Exception {
+        var owned=create();
+        service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Other","Other owner",otherFacility.getId(),null,List.of()),"other-http");
+        var context=mock(ActorContext.class);when(context.required()).thenReturn(c);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerSupportController(context,service))
+            .setControllerAdvice(new SupportRequestAdvice(new ObjectMapper().findAndRegisterModules()),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/support-workflows")
+                .param("facilityId",facility.getId().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data[0].id").value(owned.id().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("pagination.totalItems").value(1));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/support-workflows")
+                .param("facilityId",otherFacility.getId().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("pagination.totalItems").value(0));
+    }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void customerFacilityHttpFilterHasCommittedDatabaseReadback() throws Exception {
+        var owned=create();
+        service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Other","Other owner",otherFacility.getId(),null,List.of()),"other-committed");
+        var context=mock(ActorContext.class);when(context.required()).thenReturn(c);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerSupportController(context,service))
+            .setControllerAdvice(new SupportRequestAdvice(new ObjectMapper().findAndRegisterModules()),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/customer/support-workflows")
+                .param("facilityId",facility.getId().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data[0].id").value(owned.id().toString()))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("pagination.totalItems").value(1));
+        try(var connection=datasource.getConnection();
+            var statement=connection.prepareStatement("select count(*) from support_tickets");var rows=statement.executeQuery()){
+            rows.next();assertThat(rows.getLong(1)).isEqualTo(2);
+        }
+        assertThat(service.detail(c,CUSTOMER,owned.id()).id()).isEqualTo(owned.id());
     }
     @Test void legacyNullFacilityIsNotImplicitlyTriagedOrBackfilled(){
         var legacy=new SupportTicket();legacy.setCustomer(customer);legacy.setSubject("Legacy");legacy.setDescription("Unscoped");em.persist(legacy);em.flush();

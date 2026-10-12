@@ -64,6 +64,23 @@ class LedgerStoreJdbcTests {
     @Test void allocationMustExactlyMatchReceiptAndResource(){UUID o=charge("100");for(var allocation:List.of(Map.of(o,BigDecimal.TEN),Map.of(UUID.randomUUID(),new BigDecimal("20"))))assertThatThrownBy(()->tx.execute(s->store.receive(rental,LedgerStore.Method.CASH,new BigDecimal("20"),allocation,"proof",UUID.randomUUID(),actor,"a",revision(),NOW))).isInstanceOf(ApiException.class);assertThat(store.read(rental).orElseThrow().receipts()).isEmpty();}
     @Test void overpaymentIsNotSilentlyAllocated(){UUID o=charge("100");assertThatThrownBy(()->receive(o,"101",LedgerStore.Method.CASH,"proof","a")).isInstanceOf(ApiException.class);}
     @Test void simulationNeverReducesDebtOrHeldDeposit(){UUID o=charge("100");receive(o,"100",LedgerStore.Method.SIMULATED,"simulation","sim");assertThat(store.read(rental).orElseThrow().knownOutstanding()).isEqualByComparingTo("100");receive(o,"100",LedgerStore.Method.CASH,"actual","real");assertThat(store.read(rental).orElseThrow().knownOutstanding()).isZero();}
+    @Test void sandboxReceiptRequiresGatewayPathAndCountsProjectAllocationOnce(){
+        UUID o=charge("100");var proof=new LedgerStore.GatewayProof(UUID.randomUUID(),UUID.randomUUID(),"TEST-SANDBOX");
+        assertThatThrownBy(()->tx.execute(s->store.receive(rental,LedgerStore.Method.VNPAY_SANDBOX,BigDecimal.TEN,Map.of(o,BigDecimal.TEN),"fake",UUID.randomUUID(),actor,"bypass",revision(),NOW))).isInstanceOf(ApiException.class);
+        UUID first=tx.execute(s->store.receiveSandbox(rental,BigDecimal.TEN,Map.of(o,BigDecimal.TEN),proof,actor,"sandbox",revision(),NOW));
+        UUID replayed=tx.execute(s->store.receiveSandbox(rental,BigDecimal.TEN,Map.of(o,BigDecimal.TEN),proof,actor,"sandbox",0,NOW));assertThat(replayed).isEqualTo(first);
+        assertThat(store.read(rental).orElseThrow().knownOutstanding()).isEqualByComparingTo("90");
+        assertThat(store.read(rental).orElseThrow().receipts().getFirst().evidenceFileId()).isNull();
+        assertThatThrownBy(()->tx.execute(s->store.reserveRefund(rental,first,o,BigDecimal.ONE,"production-payout",actor,"refund-sandbox",revision()))).isInstanceOf(ApiException.class);
+    }
+    @Test void duplicateGatewayTransactionRollsBackReceiptAndRevision(){
+        UUID o=charge("100");var proof=new LedgerStore.GatewayProof(UUID.randomUUID(),UUID.randomUUID(),"TEST-SAME-TXN");
+        tx.execute(s->store.receiveSandbox(rental,BigDecimal.TEN,Map.of(o,BigDecimal.TEN),proof,actor,"first",revision(),NOW));
+        long before=revision();
+        assertThatThrownBy(()->tx.execute(s->store.receiveSandbox(rental,BigDecimal.TEN,Map.of(o,BigDecimal.TEN),new LedgerStore.GatewayProof(UUID.randomUUID(),UUID.randomUUID(),"TEST-SAME-TXN"),actor,"duplicate",before,NOW))).isInstanceOf(ApiException.class);
+        assertThat(revision()).isEqualTo(before);assertThat(store.read(rental).orElseThrow().receipts()).hasSize(1);
+        assertThat(store.read(rental).orElseThrow().knownOutstanding()).isEqualByComparingTo("90");
+    }
     @Test void simulationCannotBeRefunded(){UUID o=charge("100");UUID p=receive(o,"100",LedgerStore.Method.SIMULATED,"sim","sim");assertThatThrownBy(()->tx.execute(s->store.reserveRefund(rental,p,o,BigDecimal.TEN,"decision",actor,"r",revision()))).isInstanceOf(ApiException.class);}
     @Test void reservationIsNotPayoutAndCannotOverReserve(){
         UUID o=charge("100"),p=receive(o,"100",LedgerStore.Method.CASH,"paid","p");
@@ -99,6 +116,11 @@ class LedgerStoreJdbcTests {
     }
     @Test void staleOrWrongResourceCoverageIsRejected(){for(boolean wrong:List.of(false,true)){var a=adapters((r,s,n)->Optional.of(new LedgerCoverageSource.Coverage(wrong?UUID.randomUUID():r.getId(),wrong?s.revision():s.revision()+1,"proof",n,true,true,false,RentalReadSources.BillingMode.OTHER)));assertThat(a.read(fakeRental())).isEmpty();}}
     @Test void enabledWithoutSchemaFailsWithoutCreatingTables(){var empty=new JdbcTemplate(new DriverManagerDataSource("jdbc:h2:mem:empty-"+UUID.randomUUID(),"sa",""));assertThatThrownBy(()->new LedgerSchemaGuard(empty).afterPropertiesSet()).isInstanceOf(org.springframework.dao.DataAccessException.class);new LedgerSchemaGuard(jdbc).afterPropertiesSet();}
+    @Test void legacyLedgerStartupDoesNotRequireGatewaySchemaUntilWriterRollout(){
+        jdbc.execute("drop table rental_ledger_gateway_evidence");
+        new LedgerSchemaGuard(jdbc,false).afterPropertiesSet();
+        assertThatThrownBy(()->new LedgerSchemaGuard(jdbc,true).afterPropertiesSet()).isInstanceOf(org.springframework.dao.DataAccessException.class);
+    }
     @Test void disabledFeatureDoesNotRegisterLedgerOrRequireNewSchema(){new ApplicationContextRunner().withUserConfiguration(LedgerStore.class,LedgerSchemaGuard.class,LedgerFinancialAdapters.class,LedgerApprovalFinancialAdapter.class,LedgerQueryService.class,com.storagehub.api.rental.RentalLedgerController.class).run(c->{assertThat(c).hasNotFailed();assertThat(c).doesNotHaveBean(LedgerStore.class);assertThat(c).doesNotHaveBean(LedgerFinancialAdapters.class);});}
     @Test void duplicateChargeComparesThePersistedMillisecondPrecision(){Instant due=NOW.plusNanos(123456789);UUID first=tx.execute(s->store.charge(rental,null,LedgerStore.Kind.RENT,BigDecimal.TEN,due,"same-source",actor,"a",revision()));UUID second=tx.execute(s->store.charge(rental,null,LedgerStore.Kind.RENT,BigDecimal.TEN,due,"same-source",actor,"b",revision()));assertThat(second).isEqualTo(first);assertThat(store.read(rental).orElseThrow().obligations()).hasSize(1);}
     LedgerFinancialAdapters adapters(LedgerCoverageSource source){var beans=new DefaultListableBeanFactory();if(source!=null)beans.registerSingleton("coverage",source);beans.registerSingleton("clock",Clock.fixed(NOW,ZoneOffset.UTC));return new LedgerFinancialAdapters(store,beans.getBeanProvider(LedgerCoverageSource.class),beans.getBeanProvider(Clock.class));}

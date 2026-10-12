@@ -28,10 +28,16 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
         UUID reservationId,
         PaymentType purpose
     );
+    Optional<Payment> findTopByReservation_IdAndPurposeAndGatewayTransactionNo(
+        UUID reservationId,
+        PaymentType purpose,
+        String gatewayTransactionNo
+    );
     List<Payment> findAllByReservation_IdAndStatusIn(
         UUID reservationId,
         Collection<com.storagehub.domain.model.PaymentStatus> statuses
     );
+    List<Payment> findAllByReservation_IdOrderByCreatedAtAsc(UUID reservationId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""

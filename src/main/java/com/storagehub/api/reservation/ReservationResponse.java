@@ -31,6 +31,12 @@ public class ReservationResponse {
     private Instant holdExpiresAt;
     private Instant appointmentAt;
     private Instant createdAt;
+    private UUID assignedUnitId;
+    private String assignedUnitCode;
+    private String assignedUnitStatus;
+    private String customerName;
+    private String customerEmail;
+    private String customerPhone;
 
     // Snapshot discount fields (bảo toàn lịch sử mã giảm giá trên hóa đơn / đơn đặt)
     private String pricingPackageCode;
@@ -136,6 +142,18 @@ public class ReservationResponse {
     public Instant getHoldExpiresAt() { return holdExpiresAt; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getAppointmentAt() { return appointmentAt; }
+    public UUID getAssignedUnitId() { return assignedUnitId; }
+    public void setAssignedUnitId(UUID assignedUnitId) { this.assignedUnitId = assignedUnitId; }
+    public String getAssignedUnitCode() { return assignedUnitCode; }
+    public void setAssignedUnitCode(String assignedUnitCode) { this.assignedUnitCode = assignedUnitCode; }
+    public String getAssignedUnitStatus() { return assignedUnitStatus; }
+    public void setAssignedUnitStatus(String assignedUnitStatus) { this.assignedUnitStatus = assignedUnitStatus; }
+    public String getCustomerName() { return customerName; }
+    public void setCustomerName(String customerName) { this.customerName = customerName; }
+    public String getCustomerEmail() { return customerEmail; }
+    public void setCustomerEmail(String customerEmail) { this.customerEmail = customerEmail; }
+    public String getCustomerPhone() { return customerPhone; }
+    public void setCustomerPhone(String customerPhone) { this.customerPhone = customerPhone; }
 
     public String getPricingPackageCode() { return pricingPackageCode; }
     public int getRentalMonths() { return rentalMonths; }
