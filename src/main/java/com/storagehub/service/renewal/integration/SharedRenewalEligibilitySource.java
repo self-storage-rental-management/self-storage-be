@@ -46,6 +46,9 @@ public class SharedRenewalEligibilitySource implements RenewalSources.Eligibilit
             if(!Objects.equals(e.rentalId(),rental.getId())||!Objects.equals(e.unitId(),rental.getStorageUnit().getId())
                 ||!Objects.equals(e.facilityId(),rental.getFacility().getId())||!Objects.equals(e.checkedAt(),now))
                 throw ApiExceptions.conflict("DEFERRED_SOURCE: Eligibility evidence is stale or belongs to another rental");
+            if(!Objects.equals(e.policyRef(),t.policyRef())||!Objects.equals(e.policyVersion(),t.policyVersion())
+                ||!Objects.equals(e.recoveryCutoff(),t.recoveryCutoff()))
+                throw ApiExceptions.conflict("DEFERRED_SOURCE: Eligibility policy evidence changed or is incomplete; reload required");
             return new RenewalSources.Eligibility(true,e.recoveryBlocked(),e.feasible(),t.recoveryCutoff());
         });
     }

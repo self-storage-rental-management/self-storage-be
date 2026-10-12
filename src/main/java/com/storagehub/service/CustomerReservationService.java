@@ -6,6 +6,7 @@ import com.storagehub.api.reservation.ReservationDetailResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationResponse;
 import com.storagehub.api.file.FileAssetResponse;
+import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Reservation;
@@ -32,11 +33,13 @@ import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.service.ledger.LedgerStore;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -46,16 +49,20 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CustomerReservationService {
 
+    @Autowired
+    private AccessCredentialService accessCredentialService;
+
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
     private final CheckInRepository checkInRepository;
+    private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
     private final StorageUnitRepository storageUnitRepository;
-    private final FileAssetRepository fileAssetRepository;
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
+    private final ObjectProvider<LedgerStore> ledgerStores;
 
     @Autowired
     public CustomerReservationService(
@@ -68,7 +75,8 @@ public class CustomerReservationService {
         ReservationPricingSnapshotRepository snapshotRepository,
         ReservationGoodsItemRepository goodsItemRepository,
         AuditLogService auditLogService,
-        NotificationService notificationService
+        NotificationService notificationService,
+        ObjectProvider<LedgerStore> ledgerStores
     ) {
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
@@ -80,6 +88,25 @@ public class CustomerReservationService {
         this.goodsItemRepository = goodsItemRepository;
         this.auditLogService = auditLogService;
         this.notificationService = notificationService;
+        this.ledgerStores = ledgerStores;
+    }
+
+    /** Compatibility constructor retained for existing service tests and integrations. */
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        FileAssetRepository fileAssetRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService
+    ) {
+        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, fileAssetRepository, snapshotRepository, goodsItemRepository,
+            auditLogService, notificationService, null);
     }
 
     /** Compatibility constructor retained for service unit tests and existing integrations. */
@@ -91,11 +118,11 @@ public class CustomerReservationService {
         AuditLogService auditLogService,
         NotificationService notificationService
     ) {
-        this(reservationRepository, paymentRepository, null, null, null, null, snapshotRepository,
-            goodsItemRepository, auditLogService, notificationService);
+        this(reservationRepository, paymentRepository, null, null, null, null,
+            snapshotRepository, goodsItemRepository, auditLogService, notificationService);
     }
 
-    /** Compatibility constructor retained for receipt-confirmation service tests. */
+    /** Compatibility constructor retained for the handover/receipt service tests. */
     public CustomerReservationService(
         ReservationRepository reservationRepository,
         CheckInRepository checkInRepository,
@@ -107,9 +134,9 @@ public class CustomerReservationService {
         AuditLogService auditLogService,
         NotificationService notificationService
     ) {
-        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
-            storageUnitRepository, null, snapshotRepository, goodsItemRepository,
-            auditLogService, notificationService);
+        this(reservationRepository, paymentRepository, checkInRepository,
+            rentalRepository, storageUnitRepository, null, snapshotRepository,
+            goodsItemRepository, auditLogService, notificationService);
     }
 
     @Transactional(readOnly = true)
@@ -140,6 +167,15 @@ public class CustomerReservationService {
         return toDetailResponse(reservation);
     }
 
+    @Transactional(readOnly = true)
+    public List<CustomerPaymentReceiptResponse> listPayments(ActorPrincipal actor, UUID reservationId) {
+        Reservation reservation = findOwnedReservation(actor, reservationId);
+        return paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
+            .stream()
+            .map(payment -> toPaymentResponse(payment, reservation.getStatus()))
+            .toList();
+    }
+
     @Transactional
     public ReservationDetailResponse confirmReceipt(ActorPrincipal actor, UUID reservationId) {
         if (!actor.hasRole(RoleCode.CUSTOMER)) {
@@ -168,6 +204,9 @@ public class CustomerReservationService {
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (ledgerStores != null && ledgerStores.getIfAvailable() != null) {
+            com.storagehub.service.ledger.FinancialContractSpecifications.validateInitial(snapshot);
+        }
         var existingRental = rentalRepository.findByReservation_Id(reservationId);
         Rental rental = existingRental.orElseGet(() -> {
             Rental created = new Rental();
@@ -181,11 +220,23 @@ public class CustomerReservationService {
             created.setMonthlyPrice(snapshot.getMonthlyPrice());
             return rentalRepository.saveAndFlush(created);
         });
+        // Open the subledger only for a Rental created by this confirmed receipt event.
+        // The ledger writer joins this method's transaction; existing/legacy Rentals are not backfilled.
+        if (existingRental.isEmpty() && ledgerStores != null) {
+            LedgerStore ledger = ledgerStores.getIfAvailable();
+            if (ledger != null) {
+                com.storagehub.service.ledger.FinancialContractSpecifications.initial(rental, snapshot);
+                ledger.open(rental.getId(), rental.getCustomer().getId(), rental.getFacility().getId());
+            }
+        }
 
         reservation.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
         checkIn.setRental(rental);
         checkInRepository.saveAndFlush(checkIn);
+        if (accessCredentialService != null) {
+            accessCredentialService.attachToRental(reservation, rental);
+        }
         ReservationStatus previousStatus = reservation.getStatus();
         reservation.setStatus(ReservationStatus.COMPLETED);
         Reservation saved = reservationRepository.saveAndFlush(reservation);
@@ -242,6 +293,16 @@ public class CustomerReservationService {
         return fileAssetRepository.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("CHECK_IN", checkIn.getId())
             .stream()
             .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
+            .sorted((left, right) -> {
+                boolean leftContract = left.getOriginalName() != null
+                    && left.getOriginalName().toLowerCase().startsWith("hop-dong-da-ky-");
+                boolean rightContract = right.getOriginalName() != null
+                    && right.getOriginalName().toLowerCase().startsWith("hop-dong-da-ky-");
+                if (leftContract == rightContract) {
+                    return 0;
+                }
+                return leftContract ? -1 : 1;
+            })
             .map(asset -> new FileAssetResponse(
                 asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
                 asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(), asset.getStatus(), asset.getCreatedAt()
@@ -336,7 +397,7 @@ public class CustomerReservationService {
         ReservationPricingSnapshot snapshot = snapshotRepository
             .findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-        return new ReservationResponse(
+        ReservationResponse response = new ReservationResponse(
             reservation.getId(), reservation.getReservationCode(), reservation.getSourceQuote().getId(),
             reservation.getFacility().getId(), reservation.getUnitType().getId(), reservation.getStatus(),
             reservation.getGoodsReviewStatus(), reservation.getCompatibilityResult(),
@@ -348,6 +409,15 @@ public class CustomerReservationService {
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
+        response.setCustomerName(reservation.getCustomer().getFullName());
+        response.setCustomerEmail(reservation.getCustomer().getEmail());
+        response.setCustomerPhone(reservation.getCustomer().getPhone());
+        if (reservation.getAssignedUnit() != null) {
+            response.setAssignedUnitId(reservation.getAssignedUnit().getId());
+            response.setAssignedUnitCode(reservation.getAssignedUnit().getCode());
+            response.setAssignedUnitStatus(reservation.getAssignedUnit().getStatus().name());
+        }
+        return response;
     }
 
     private ReservationDetailResponse toDetailResponse(Reservation reservation) {
@@ -368,7 +438,24 @@ public class CustomerReservationService {
         response.setCancelledAt(reservation.getCancelledAt());
         response.setCancelReason(reservation.getCancelReason());
         response.setGoodsItems(goodsItems);
+        response.setPayments(paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
+            .stream()
+            .map(payment -> toPaymentResponse(payment, reservation.getStatus()))
+            .toList());
         return response;
+    }
+
+    private CustomerPaymentReceiptResponse toPaymentResponse(Payment payment, ReservationStatus reservationStatus) {
+        return new CustomerPaymentReceiptResponse(
+            payment.getId(), payment.getReservation().getId(), payment.getGatewayIntentId(),
+            payment.getGatewayTransactionNo(), payment.getAmount(), payment.getCurrency(),
+            payment.getRefundedAmount(), payment.getStatus(), payment.getPurpose(), reservationStatus,
+            payment.getGatewayResponseCode(), payment.getGatewayTransactionStatus(),
+            payment.getGatewayPayDate(), payment.getGatewayBankCode(),
+            payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
+            payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
+            payment.getInitiatedBy().getFullName()
+        );
     }
 
     private ReservationGoodsItemResponse toGoodsItemResponse(ReservationGoodsItem item) {

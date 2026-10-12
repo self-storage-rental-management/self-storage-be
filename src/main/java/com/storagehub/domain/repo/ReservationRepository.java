@@ -180,6 +180,15 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         Pageable pageable
     );
 
+    List<Reservation> findByFacility_IdInAndStatusInAndAssignedUnitIsNotNull(
+        java.util.Collection<UUID> facilityIds,
+        java.util.Collection<ReservationStatus> statuses
+    );
+
+    List<Reservation> findByStatusInAndAssignedUnitIsNotNull(
+        java.util.Collection<ReservationStatus> statuses
+    );
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     List<Reservation> findTop100ByStatusInAndHoldExpiresAtLessThanEqualOrderByHoldExpiresAtAsc(
         java.util.Collection<ReservationStatus> statuses,
