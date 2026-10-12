@@ -162,12 +162,15 @@ class PaymentComplaintServiceTests {
     @Test
     void managerApproveConfirmsReservation() {
         reservation.setStatus(ReservationStatus.PAYMENT_REVIEW);
+        ReservationPricingSnapshot snapshot = new ReservationPricingSnapshot();
+        snapshot.setRentalMonths(2);
         when(complaintRepository.findById(complaint.getId())).thenReturn(Optional.of(complaint));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(complaintRepository.findByIdForUpdate(complaint.getId())).thenReturn(Optional.of(complaint));
         when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
         when(paymentRepository.findReservationPaymentsForUpdate(reservation.getId(), PaymentType.RESERVATION_DEPOSIT))
             .thenReturn(List.of(payment));
+        when(snapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
         when(complaintRepository.saveAndFlush(complaint)).thenReturn(complaint);
 
         service.decide(managerActor, complaint.getId(),
@@ -176,6 +179,11 @@ class PaymentComplaintServiceTests {
         assertThat(complaint.getStatus()).isEqualTo(PaymentComplaintStatus.APPROVED);
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(reservation.getStartDate()).isEqualTo(
+            payment.getPaidAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+                .toLocalDate().plusDays(1)
+        );
+        assertThat(reservation.getEndDate()).isEqualTo(reservation.getStartDate().plusMonths(2));
     }
 
     @Test
