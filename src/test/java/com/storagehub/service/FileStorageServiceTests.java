@@ -15,6 +15,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.PaymentComplaintRepository;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
@@ -40,6 +41,7 @@ class FileStorageServiceTests {
     @Mock ReservationGoodsItemRepository goodsItemRepository;
     @Mock UserRepository userRepository;
     @Mock PaymentComplaintRepository paymentComplaintRepository;
+    @Mock MaintenanceTaskRepository maintenanceTaskRepository;
     @Mock AdminAuthorizationService authorizationService;
     @Mock FacilityScopeService facilityScopeService;
     @Mock AuditLogService auditLogService;
@@ -57,7 +59,7 @@ class FileStorageServiceTests {
         properties.setStoragePath(temporaryDirectory.toString());
         service = new FileStorageService(
             properties, fileAssetRepository, checkInRepository, goodsItemRepository, userRepository,
-            paymentComplaintRepository, authorizationService, facilityScopeService, auditLogService
+            paymentComplaintRepository, maintenanceTaskRepository, authorizationService, facilityScopeService, auditLogService
         );
         customer = entity(new User());
         actor = new ActorPrincipal(customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
