@@ -197,7 +197,7 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - Review-only DDL: `docs/sql/renewal-operations-overdue-schema.sql`; NOT an enabled migration and NOT executed by this task.
 - Runtime uses actual owner policy/accounting/calendar/assignment/evidence/hold/Recovery adapters. Until installed, related operations fail closed; no fake paid/balance/capacity/payout state.
 - `ddl-auto=update` can create additive tables on startup. Do not start against team/shared DB until schema/lock/permission owners approve. H2 test schema creation is isolated and not production migration evidence.
-- Contracts: `RENEWAL_OPERATIONS_API_CONTRACT.md`, `OVERDUE_API_CONTRACT.md`.
+- Contracts: `RENEWAL_API_CONTRACT.md#signing-and-operations-api`, `OVERDUE_API_CONTRACT.md`.
 
 ## 2026-10-08 — Support workflow (rollout pending)
 

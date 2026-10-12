@@ -569,7 +569,7 @@ public class CustomerReservationService {
             payment.getGatewayPayDate(), payment.getGatewayBankCode(),
             payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
             payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
-            payment.getInitiatedBy().getFullName()
+            payment.getInitiatedBy().getFullName(), payment.getCreatedAt()
         );
     }
 
