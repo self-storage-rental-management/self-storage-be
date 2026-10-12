@@ -21,7 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @ConditionalOnProperty(name="storagehub.integration.ledger.enabled",havingValue="true")
 public class LedgerStore {
     public enum Kind { RENT, SECURITY_DEPOSIT, RENEWAL_DEPOSIT, RENEWAL_REMAINDER }
-    public enum Method { CASH, VERIFIED_BANK, SIMULATED }
+    public enum Method { CASH, VERIFIED_BANK, SIMULATED, VNPAY_SANDBOX }
     public record Obligation(UUID id,UUID renewalId,Kind kind,BigDecimal amount,Instant dueAt,
         String sourceRef,BigDecimal allocated,BigDecimal refunded,BigDecimal outstanding) {}
     public record Receipt(UUID id,Method method,BigDecimal amount,String evidenceRef,UUID evidenceFileId,Instant receivedAt) {}
@@ -71,11 +71,31 @@ public class LedgerStore {
     }
     public UUID receive(UUID rental,Method method,BigDecimal amount,Map<UUID,BigDecimal> allocations,
         String evidenceRef,UUID evidenceFile,UUID actor,String key,long expectedRevision,Instant receivedAt) {
-        long revision=lock(rental);required(method);money(amount,false);text(evidenceRef,200);required(evidenceFile);required(receivedAt);
+        if(method==Method.VNPAY_SANDBOX)throw ApiExceptions.validation("Sandbox receipts require authenticated gateway evidence",null);
+        required(evidenceFile);
+        return receiveCore(rental,method,amount,allocations,evidenceRef,evidenceFile,actor,key,expectedRevision,receivedAt);
+    }
+    record GatewayProof(UUID paymentId,UUID proofLogId,String transactionNo) {}
+    UUID receiveSandbox(UUID rental,BigDecimal amount,Map<UUID,BigDecimal> allocations,GatewayProof proof,
+        UUID actor,String key,long expectedRevision,Instant paidAt) {
+        required(proof);required(proof.paymentId());required(proof.proofLogId());text(proof.transactionNo(),128);
+        UUID receipt=receiveCore(rental,Method.VNPAY_SANDBOX,amount,allocations,"payment:"+proof.paymentId(),null,actor,key,expectedRevision,paidAt);
+        var old=jdbc.queryForList("select payment_id,proof_log_id,transaction_no from rental_ledger_gateway_evidence where receipt_id=?",s(receipt));
+        if(!old.isEmpty()) {
+            var row=old.getFirst();if(!s(proof.paymentId()).equals(value(row,"payment_id"))||!s(proof.proofLogId()).equals(value(row,"proof_log_id"))||!proof.transactionNo().equals(value(row,"transaction_no")))throw ApiExceptions.conflict("Gateway receipt evidence changed");
+        }else {
+            try {jdbc.update("insert into rental_ledger_gateway_evidence(receipt_id,payment_id,proof_log_id,environment,transaction_no) values(?,?,?,'SANDBOX',?)",s(receipt),s(proof.paymentId()),s(proof.proofLogId()),proof.transactionNo());}
+            catch(org.springframework.dao.DuplicateKeyException duplicate){throw ApiExceptions.conflict("Gateway transaction evidence was already allocated");}
+        }
+        return receipt;
+    }
+    private UUID receiveCore(UUID rental,Method method,BigDecimal amount,Map<UUID,BigDecimal> allocations,
+        String evidenceRef,UUID evidenceFile,UUID actor,String key,long expectedRevision,Instant receivedAt) {
+        long revision=lock(rental);required(method);money(amount,false);text(evidenceRef,200);required(receivedAt);
         if(allocations==null||allocations.isEmpty()||allocations.size()>100)throw ApiExceptions.validation("Explicit payment allocations required",null);
         var ordered=new TreeMap<UUID,BigDecimal>();allocations.forEach((id,value)->{required(id);money(value,false);ordered.put(id,value);});
         if(ordered.values().stream().reduce(BigDecimal.ZERO,BigDecimal::add).compareTo(amount)!=0)throw ApiExceptions.validation("Receipt amount must equal allocated amount",null);
-        String fingerprint=hash(List.of(s(rental),method.name(),amount.toPlainString(),ordered.toString(),evidenceRef,s(evidenceFile)).toString());
+        String fingerprint=hash(List.of(s(rental),method.name(),amount.toPlainString(),ordered.toString(),evidenceRef,evidenceFile==null?"GATEWAY":s(evidenceFile)).toString());
         var replay=replay(rental,actor,"RECEIPT",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
         if(jdbc.queryForObject("select count(*) from rental_ledger_receipts where evidence_ref=?",Long.class,evidenceRef)!=0)throw ApiExceptions.conflict("Receipt evidence was already used");
         var snapshot=read(rental).orElseThrow();
@@ -83,7 +103,7 @@ public class LedgerStore {
             var o=snapshot.obligations().stream().filter(v->v.id().equals(entry.getKey())).findFirst().orElseThrow(()->ApiExceptions.notFound("Obligation not found in this rental"));
             if(method!=Method.SIMULATED&&entry.getValue().compareTo(o.outstanding())>0)throw ApiExceptions.conflict("Receipt exceeds the unpaid obligation");
         }
-        UUID id=UUID.randomUUID();jdbc.update("insert into rental_ledger_receipts(id,rental_id,method,amount,evidence_ref,evidence_file_id,actor_id,received_at_ms) values(?,?,?,?,?,?,?,?)",s(id),s(rental),method.name(),amount,evidenceRef,s(evidenceFile),s(actor),receivedAt.toEpochMilli());
+        UUID id=UUID.randomUUID();jdbc.update("insert into rental_ledger_receipts(id,rental_id,method,amount,evidence_ref,evidence_file_id,actor_id,received_at_ms) values(?,?,?,?,?,?,?,?)",s(id),s(rental),method.name(),amount,evidenceRef,evidenceFile==null?null:s(evidenceFile),s(actor),receivedAt.toEpochMilli());
         ordered.forEach((o,value)->jdbc.update("insert into rental_ledger_allocations(receipt_id,obligation_id,rental_id,amount) values(?,?,?,?)",s(id),s(o),s(rental),value));
         bump(rental);remember(rental,actor,"RECEIPT",key,fingerprint,id);return id;
     }
@@ -92,7 +112,7 @@ public class LedgerStore {
         long revision=lock(rental);required(receipt);required(obligation);money(amount,false);text(decisionRef,200);
         String fingerprint=hash(List.of(s(rental),s(receipt),s(obligation),amount.toPlainString(),decisionRef).toString());
         var replay=replay(rental,actor,"RESERVE_REFUND",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
-        var paid=jdbc.query("select a.amount from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where p.rental_id=? and p.id=? and a.obligation_id=? and p.method<>'SIMULATED'",(r,i)->r.getBigDecimal(1),s(rental),s(receipt),s(obligation));
+        var paid=jdbc.query("select a.amount from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where p.rental_id=? and p.id=? and a.obligation_id=? and p.method in ('CASH','VERIFIED_BANK')",(r,i)->r.getBigDecimal(1),s(rental),s(receipt),s(obligation));
         if(paid.isEmpty())throw ApiExceptions.notFound("Actual allocated receipt not found");
         BigDecimal reserved=jdbc.queryForObject("select coalesce(sum(amount),0) from rental_ledger_refunds where receipt_id=? and obligation_id=? and status in ('RESERVED','EXECUTED')",BigDecimal.class,s(receipt),s(obligation));
         if(amount.add(reserved).compareTo(paid.getFirst())>0)throw ApiExceptions.conflict("Refund exceeds available paid funds");
