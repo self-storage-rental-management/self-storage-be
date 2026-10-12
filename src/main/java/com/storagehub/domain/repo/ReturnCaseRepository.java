@@ -3,6 +3,7 @@ package com.storagehub.domain.repo;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.ArrayList;
 import java.util.Locale;
@@ -53,4 +54,11 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
     long countByFacility_IdAndStatusNotIn(UUID facilityId, Collection<ReturnCaseStatus> statuses);
 
     long countByStatusNotIn(Collection<ReturnCaseStatus> statuses);
+
+    List<ReturnCase> findByFacility_IdInAndStatusIn(
+        Collection<UUID> facilityIds,
+        Collection<ReturnCaseStatus> statuses
+    );
+
+    List<ReturnCase> findByStatusIn(Collection<ReturnCaseStatus> statuses);
 }

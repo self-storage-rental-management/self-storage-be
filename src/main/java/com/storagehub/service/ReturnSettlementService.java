@@ -40,11 +40,15 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
 public class ReturnSettlementService {
+
+    @Autowired
+    private AccessCredentialService accessCredentialService;
 
     private final ReturnCaseRepository returnCaseRepository;
     private final RentalRepository rentalRepository;
@@ -199,6 +203,14 @@ public class ReturnSettlementService {
         returnCase.setTotalDeductions(totalDeductions);
         returnCase.setNetRefundAmount(netRefund);
         returnCase.setAmountDueFromCustomer(amountDue);
+
+        if (accessCredentialService != null) {
+            accessCredentialService.revokeForRental(
+                actor,
+                returnCase.getRental(),
+                "Thu hồi credential trong nghiệm thu trả kho"
+            );
+        }
 
         if (request.evidencePhotos() != null && !request.evidencePhotos().isEmpty()) {
             try {
