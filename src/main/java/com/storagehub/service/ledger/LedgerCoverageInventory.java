@@ -4,6 +4,7 @@ import com.storagehub.domain.model.*;
 import com.storagehub.domain.repo.*;
 import com.storagehub.service.PaymentProvenance;
 import com.storagehub.service.renewal.persistence.RenewalAcceptedRevision;
+import com.storagehub.service.renewal.persistence.RenewalWorkflow;
 import com.storagehub.api.renewal.RenewalQuoteResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -18,8 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 @ConditionalOnProperty(name="storagehub.integration.ledger.enabled",havingValue="true")
 public class LedgerCoverageInventory {
     public record PaymentEvidence(UUID paymentId,String provenance,boolean linkedReceipt,boolean refundUnreconciled,boolean eligibleForReconciliation) {}
+    public record RenewalDepositEvidence(UUID renewalId,UUID acceptedRevisionId,String status,UUID obligationId) {}
     public record Inventory(UUID rentalId,Long ledgerRevision,String completeness,List<String> gaps,
-        List<PaymentEvidence> payments,boolean consistentThroughApproval) {}
+        List<PaymentEvidence> payments,boolean consistentThroughApproval,List<RenewalDepositEvidence> renewalDeposits) {}
     private final ReservationPricingSnapshotRepository pricing;
     private final PaymentRepository payments;
     private final PaymentProvenance provenance;
@@ -86,12 +88,34 @@ public class LedgerCoverageInventory {
         var revisions=em.createQuery("select a from RenewalAcceptedRevision a where a.renewal.rental.id=:id",RenewalAcceptedRevision.class)
             .setParameter("id",rental.getId()).getResultList();
         var acceptedSpecifications=new ArrayList<FinancialContractSpecifications.Specification>();
+        var deposits=new ArrayList<RenewalDepositEvidence>();
         for(var revision:revisions)try{
+            var workflow=em.find(RenewalWorkflow.class,revision.getRenewal().getId());
+            if(workflow!=null&&workflow.getAcceptedRevision()!=null&&!revision.getId().equals(workflow.getAcceptedRevision().getId()))continue;
             var terms=mapper.readValue(revision.getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
-            // Accepted terms are inventory candidates, not proof that the obligation is effective.
-            acceptedSpecifications.addAll(FinancialContractSpecifications.accepted(revision,terms));
-            gaps.add("RENEWAL_EFFECTIVE_EVENT_UNCERTIFIED");
-        }catch(Exception ex){gaps.add("RENEWAL_ACCEPTED_SOURCE_INVALID");}
+            var spec=FinancialContractSpecifications.accepted(revision,terms).getFirst();
+            if(workflow!=null&&Set.of(RenewalStatus.pending,RenewalStatus.rejected).contains(workflow.getRenewal().getStatus())
+                &&workflow.getPaymentDeadline()==null&&workflow.getExtensionHoldRef()==null){
+                deposits.add(new RenewalDepositEvidence(spec.renewalId(),revision.getId(),"NOT_EFFECTIVE",null));continue;
+            }
+            boolean approved=workflow!=null&&workflow.getRenewal()!=null&&workflow.getAcceptedRevision()!=null
+                &&spec.rentalId().equals(rental.getId())&&spec.renewalId().equals(workflow.getRenewal().getId())
+                &&revision.getId().equals(workflow.getAcceptedRevision().getId())&&workflow.getReviewer()!=null
+                &&workflow.getReviewedAt()!=null&&workflow.getPaymentDeadline()!=null&&workflow.getExtensionHoldRef()!=null
+                &&!workflow.getReviewedAt().isBefore(revision.getAcceptedAt())&&workflow.getPaymentDeadline().isAfter(workflow.getReviewedAt())
+                &&workflow.getRenewal().getStatus()!=RenewalStatus.pending&&workflow.getRenewal().getStatus()!=RenewalStatus.rejected;
+            var matches=snapshot==null?List.<LedgerStore.Obligation>of():snapshot.obligations().stream().filter(o->
+                o.kind()==spec.kind()&&Objects.equals(o.renewalId(),spec.renewalId())&&spec.sourceReference().equals(o.sourceRef())
+                &&o.amount().compareTo(spec.amount())==0&&approved&&o.dueAt().toEpochMilli()==workflow.getPaymentDeadline().toEpochMilli()).toList();
+            boolean matched=approved&&matches.size()==1&&ledger.renewalDepositCommandMatches(matches.getFirst(),spec,workflow.getReviewer().getId());
+            deposits.add(new RenewalDepositEvidence(spec.renewalId(),revision.getId(),matched?"MATCHED":approved?"UNPOSTED_OR_INVALID":"APPROVAL_UNCERTIFIED",matched?matches.getFirst().id():null));
+            if(matched)acceptedSpecifications.add(spec);
+            else gaps.add(approved?"RENEWAL_DEPOSIT_UNPOSTED_OR_INVALID":"RENEWAL_APPROVAL_UNCERTIFIED");
+            if(approved){
+                gaps.add("RENEWAL_REMAINDER_EFFECTIVE_EVENT_UNCERTIFIED");
+                if(Set.of(RenewalStatus.cancelled,RenewalStatus.payment_expired,RenewalStatus.payment_failed).contains(workflow.getRenewal().getStatus()))gaps.add("RENEWAL_TERMINAL_ACCOUNTING_UNRECONCILED");
+            }
+        }catch(com.fasterxml.jackson.core.JsonProcessingException|com.storagehub.common.api.ApiException ex){gaps.add("RENEWAL_ACCEPTED_SOURCE_INVALID");}
         for(var spec:specifications)if(snapshot==null||snapshot.obligations().stream().filter(o->
             o.kind()==spec.kind()&&Objects.equals(o.renewalId(),spec.renewalId())&&spec.sourceReference().equals(o.sourceRef())
                 &&o.amount().compareTo(spec.amount())==0).count()!=1)gaps.add("INITIAL_OBLIGATION_UNPOSTED_OR_INVALID:"+spec.kind());
@@ -106,6 +130,6 @@ public class LedgerCoverageInventory {
         }
         gaps.add("SECURITY_DEPOSIT_HELD_SOURCE_UNCERTIFIED");gaps.add("HISTORICAL_WRITER_COVERAGE_UNCERTIFIED");
         return new Inventory(rental.getId(),snapshot==null?null:snapshot.revision(),snapshot==null?"UNKNOWN":"PARTIAL",
-            List.copyOf(gaps),List.copyOf(evidence),false);
+            List.copyOf(gaps),List.copyOf(evidence),false,List.copyOf(deposits));
     }
 }

@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.renewal.*;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.*;
+import com.storagehub.domain.model.Role;
 import com.storagehub.security.*;
 import com.storagehub.service.AuditLogService;
 import com.storagehub.service.renewal.persistence.*;
@@ -79,6 +80,9 @@ class RenewalWorkflowIntegrationTests {
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired javax.sql.DataSource datasource;
     @Autowired TestClock clock;
+    @Autowired com.storagehub.domain.repo.ReservationPricingSnapshotRepository pricingSnapshots;
+    @Autowired com.storagehub.domain.repo.PaymentRepository paymentHistory;
+    @Autowired com.storagehub.domain.repo.ActivityLogRepository activityLogs;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
     @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";}
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
@@ -404,6 +408,8 @@ class RenewalWorkflowIntegrationTests {
                 var q=tx.execute(st->commands.quote(customer(rental),rental.getId(),new RenewalCommands.Quote("TEST")));
                 assertThat(ledger.read(rental.getId())).isEmpty();
                 var n=tx.execute(st->commands.submit(customer(rental),rental.getId(),new RenewalCommands.Submit(q.id(),null),"deposit-submit"));
+                var inventory=new com.storagehub.service.ledger.LedgerCoverageInventory(pricingSnapshots,paymentHistory,mock(com.storagehub.service.PaymentProvenance.class),em,new ObjectMapper().findAndRegisterModules(),new com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy("VNPAY_SANDBOX",true),ledger,activityLogs);
+                var pending=tx.execute(st->inventory.inspect(em.find(Rental.class,rental.getId()),ledger.read(rental.getId())));assertThat(pending.renewalDeposits().getFirst().status()).isEqualTo("NOT_EFFECTIVE");
                 var context=mock(ActorContext.class);when(context.required()).thenReturn(manager(rental));
                 var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new ManagerRenewalController(context,reads,commands)).setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
                 String path="/api/manager/renewals/"+n.id();String body=new ObjectMapper().writeValueAsString(new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()));
@@ -414,10 +420,30 @@ class RenewalWorkflowIntegrationTests {
                 http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)).andExpect(status().isOk()).andExpect(jsonPath("data.approvedPaymentDeadline").value(NOW.plusSeconds(86400).toString()));
                 var stored=ledger.read(rental.getId()).orElseThrow();assertThat(stored.revision()).isEqualTo(1);assertThat(stored.obligations()).hasSize(1);var deposit=stored.obligations().getFirst();
                 assertThat(deposit.kind()).isEqualTo(com.storagehub.service.ledger.LedgerStore.Kind.RENEWAL_DEPOSIT);assertThat(deposit.amount()).isEqualByComparingTo("20");assertThat(deposit.dueAt()).isEqualTo(NOW.plusSeconds(86400));assertThat(deposit.renewalId()).isEqualTo(n.id());assertThat(deposit.sourceRef()).startsWith("renewal-accepted:");
+                var customerContext=mock(ActorContext.class);when(customerContext.required()).thenReturn(customer(rental));
+                var query=new com.storagehub.service.ledger.LedgerQueryService(ledger,em,new com.storagehub.service.integration.DuongResourceAccess(em),inventory);
+                var ledgerHttp=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new com.storagehub.api.rental.RentalLedgerController(customerContext,transactionalLedgerQuery(query))).setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
+                String ledgerPath="/api/customer/rentals/"+rental.getId()+"/ledger";
+                // Ledger GET authorization checks the persisted Customer role, not the mocked ActorContext alone.
+                tx.executeWithoutResult(st->{var user=em.find(User.class,rental.getCustomer().getId());var roles=em.createQuery("select r from Role r where r.code=:code",Role.class).setParameter("code",RoleCode.CUSTOMER).getResultList();var role=roles.isEmpty()?new Role():roles.getFirst();if(roles.isEmpty()){role.setCode(RoleCode.CUSTOMER);role.setName("TEST Customer");em.persist(role);}user.setRoles(new HashSet<>(Set.of(role)));});
+                ledgerHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(ledgerPath)).andExpect(status().isOk()).andExpect(jsonPath("data.coverageInventory.renewalDeposits[0].status").value("MATCHED"));
+                var jdbc=new org.springframework.jdbc.core.JdbcTemplate(datasource);
+                for(String mutation:List.of("update rental_ledger_obligations set due_at_ms=due_at_ms+1 where id=?","update rental_ledger_obligations set amount=amount+1 where id=?","delete from rental_ledger_commands where result_id=?")) {
+                    tx.executeWithoutResult(st->jdbc.update(mutation,deposit.id().toString()));
+                    ledgerHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(ledgerPath)).andExpect(status().isOk()).andExpect(jsonPath("data.coverageInventory.renewalDeposits[0].status").value("UNPOSTED_OR_INVALID")).andExpect(jsonPath("data.completeness").value("PARTIAL"));
+                    if(mutation.contains("due_at_ms"))tx.executeWithoutResult(st->jdbc.update("update rental_ledger_obligations set due_at_ms=? where id=?",deposit.dueAt().toEpochMilli(),deposit.id().toString()));
+                    else if(mutation.contains("amount+1"))tx.executeWithoutResult(st->jdbc.update("update rental_ledger_obligations set amount=? where id=?",deposit.amount(),deposit.id().toString()));
+                }
                 tx.executeWithoutResult(st->{em.clear();assertThat(em.find(Rental.class,rental.getId()).getContractEndDate()).isEqualTo(rental.getContractEndDate());});
                 try(var connection=datasource.getConnection();var sql=connection.prepareStatement("select kind,amount,due_at_ms,source_ref from rental_ledger_obligations where rental_id=?")) {sql.setString(1,rental.getId().toString());try(var rows=sql.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).isEqualTo("RENEWAL_DEPOSIT");assertThat(rows.getBigDecimal(2)).isEqualByComparingTo("20");assertThat(rows.getLong(3)).isEqualTo(NOW.plusSeconds(86400).toEpochMilli());assertThat(rows.getString(4)).isEqualTo(deposit.sourceRef());assertThat(rows.next()).isFalse();}}
             }finally{org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",previous);}
         }
+    }
+    private com.storagehub.service.ledger.LedgerQueryService transactionalLedgerQuery(com.storagehub.service.ledger.LedgerQueryService query) {
+        var proxy=new org.springframework.aop.framework.ProxyFactory(query);proxy.setProxyTargetClass(true);
+        var attributes=new org.springframework.transaction.interceptor.MatchAlwaysTransactionAttributeSource();var attribute=new org.springframework.transaction.interceptor.DefaultTransactionAttribute();attribute.setReadOnly(true);attributes.setTransactionAttribute(attribute);
+        proxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(transactions,attributes));
+        return (com.storagehub.service.ledger.LedgerQueryService)proxy.getProxy();
     }
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.
