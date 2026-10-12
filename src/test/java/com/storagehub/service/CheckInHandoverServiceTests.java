@@ -22,6 +22,7 @@ import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FileAsset;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
+import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnit;
@@ -33,7 +34,10 @@ import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
+import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.RentalRepository;
+import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
@@ -63,6 +67,9 @@ class CheckInHandoverServiceTests {
     @Mock private CheckInRepository checkInRepository;
     @Mock private FileAssetRepository fileAssetRepository;
     @Mock private RentalRepository rentalRepository;
+    @Mock private PaymentRepository paymentRepository;
+    @Mock private ReservationGoodsItemRepository goodsItemRepository;
+    @Mock private ReservationPricingSnapshotRepository pricingSnapshotRepository;
     @Mock private UserRepository userRepository;
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private FacilityScopeService facilityScopeService;
@@ -81,7 +88,8 @@ class CheckInHandoverServiceTests {
     void setUp() {
         service = new CheckInHandoverService(
             reservationRepository, storageUnitRepository, assignmentRepository,
-            checkInRepository, fileAssetRepository, rentalRepository, userRepository, authorizationService,
+            checkInRepository, fileAssetRepository, rentalRepository, paymentRepository,
+            goodsItemRepository, pricingSnapshotRepository, userRepository, authorizationService,
             facilityScopeService, auditLogService, notificationService, new ObjectMapper()
         );
         staff = entityWithId(new User());
@@ -233,6 +241,29 @@ class CheckInHandoverServiceTests {
             ),
             null, base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
             base.goodsCategory(), base.evidenceReferences(), base.handedOverItems(), base.notes()
+        );
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), changed))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("variance is not accepted");
+    }
+
+    @Test
+    void requiresAcceptedAndExplainedPackageCountDifference() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+        ReservationGoodsItem declaredItem = entityWithId(new ReservationGoodsItem());
+        declaredItem.setQuantity(3);
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of(declaredItem));
+        CompleteCheckInRequest base = validCompletionRequest();
+        CompleteCheckInRequest changed = new CompleteCheckInRequest(
+            base.checklist(), new CheckInMeasurements(
+                new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
+                new BigDecimal("100"), BigDecimal.ONE, false
+            ), null, base.initialUnitCondition(),
+            base.goodsCondition(), 2, base.goodsCategory(), base.evidenceReferences(),
+            base.handedOverItems(), base.notes()
         );
 
         assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), changed))
