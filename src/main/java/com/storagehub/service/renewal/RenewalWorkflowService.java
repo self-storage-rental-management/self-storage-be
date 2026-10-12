@@ -31,6 +31,8 @@ public class RenewalWorkflowService {
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.renewal.integration.RenewalOperationalGuard> operationalGuards;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositObligationWriter> depositWriters;
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}
     public List<RenewalCommands.Option> options(ActorPrincipal a,UUID rentalId){
         var r=owned(a,rentalId);var context=policyPeriod(r);
@@ -90,6 +92,7 @@ public class RenewalWorkflowService {
             UUID hold=h.acquire(r,id,accepted.extensionStartDate(),accepted.extensionEndExclusive(),deadline);
             if(hold==null)throw deferred("Shared hold returned no authoritative reference");
             n.setStatus(RenewalStatus.approved);wf.reviewed(user,now,body.reason(),deadline,hold);
+            var writer=depositWriters.getIfAvailable();if(writer!=null)writer.approved(wf,accepted);
         }
         return finish(user,"decision",key,id,body,n,200,before);
     }
