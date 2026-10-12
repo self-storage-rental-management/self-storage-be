@@ -23,6 +23,12 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
         """)
     List<UUID> findRenewalReconciliationCandidates(@Param("now") java.time.Instant now,
         org.springframework.data.domain.Pageable page);
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"reservation", "initiatedBy"})
+    org.springframework.data.domain.Page<Payment> findAllByReservation_Customer_Id(
+        UUID customerId, org.springframework.data.domain.Pageable pageable
+    );
+
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
     Optional<Payment> findByGatewayIntentId(String gatewayIntentId);
 
