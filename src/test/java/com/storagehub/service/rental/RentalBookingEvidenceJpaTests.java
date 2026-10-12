@@ -14,9 +14,18 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 /** SQL-backed rollback tests; these fixtures exist only inside the H2 test transaction. */
-@DataJpaTest(properties={"storagehub.project.payment-environment=VNPAY_SANDBOX","storagehub.project.sandbox-recognition-enabled=true"}) @ActiveProfiles("test") @Import({RentalBookingEvidenceReader.class,com.storagehub.service.RentalQueryService.class,com.storagehub.service.PaymentProvenance.class,com.storagehub.service.VnpayService.class,com.storagehub.service.AuditLogService.class,com.storagehub.service.ledger.PaymentReconciliationPreflight.class,com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy.class,RentalBookingEvidenceJpaTests.JsonConfig.class})
+@DataJpaTest(properties={"storagehub.project.payment-environment=VNPAY_SANDBOX","storagehub.project.sandbox-recognition-enabled=true","storagehub.integration.ledger.enabled=true","storagehub.integration.sandbox-reconciliation.enabled=true"}) @ActiveProfiles("test") @Import({RentalBookingEvidenceReader.class,com.storagehub.service.ledger.SandboxPaymentReconciliationService.class,com.storagehub.service.integration.DuongResourceAccess.class,com.storagehub.service.ledger.LedgerQueryService.class,com.storagehub.service.ledger.LedgerCoverageInventory.class,com.storagehub.service.RentalQueryService.class,com.storagehub.service.PaymentProvenance.class,com.storagehub.service.VnpayService.class,com.storagehub.service.AuditLogService.class,com.storagehub.service.ledger.PaymentReconciliationPreflight.class,com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy.class,RentalBookingEvidenceJpaTests.JsonConfig.class})
 class RentalBookingEvidenceJpaTests {
     @org.springframework.boot.test.context.TestConfiguration static class JsonConfig {
+        @org.springframework.context.annotation.Bean(destroyMethod="close") java.sql.Connection ledgerTestSchema(javax.sql.DataSource datasource)throws Exception {
+            var connection=datasource.getConnection();
+            // H2 CHECK optimization retains the DDL session comparator. Keep that TEST session open until context close.
+            if(connection.getMetaData().getURL().startsWith("jdbc:h2:"))new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("rental-ledger-test-schema.sql")).populate(connection);
+            return connection;
+        }
+        @org.springframework.context.annotation.Bean com.storagehub.service.ledger.LedgerStore ledger(org.springframework.jdbc.core.JdbcTemplate jdbc,java.sql.Connection ledgerTestSchema) {
+            return new com.storagehub.service.ledger.LedgerStore(jdbc);
+        }
         @org.springframework.context.annotation.Bean com.fasterxml.jackson.databind.ObjectMapper mapper(){return new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();}
         @org.springframework.context.annotation.Bean com.storagehub.config.VnpayProperties gateway(){var p=new com.storagehub.config.VnpayProperties();p.setEnabled(true);p.setTmnCode("TEST_ONLY");p.setHashSecret("test-only-no-external-gateway");return p;}
         @org.springframework.context.annotation.Bean com.storagehub.security.ActorContext actors(){return org.mockito.Mockito.mock(com.storagehub.security.ActorContext.class);}
@@ -30,6 +39,66 @@ class RentalBookingEvidenceJpaTests {
     @Autowired com.storagehub.config.VnpayProperties gatewayConfig;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired javax.sql.DataSource datasource;
+    @Autowired com.storagehub.service.ledger.LedgerStore ledger;
+    @Autowired com.storagehub.service.ledger.SandboxPaymentReconciliationService reconciliation;
+    @Autowired com.storagehub.service.ledger.LedgerQueryService ledgerReads;
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void authenticatedSandboxReceiptAllocatesRentAndReplaysWithCommittedHttpJdbcReadback() throws Exception {
+        gatewayConfig.setEnabled(true);gatewayConfig.setTmnCode("TEST_ONLY");gatewayConfig.setHashSecret("test-only-no-external-gateway");
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        var data=tx.execute(status->{
+            var rental=fixture();var snapshot=snapshot(rental);var p=payment(rental,"VNPAY-",0);p.setStatus(PaymentStatus.PENDING);p.setGatewayProvider("VNPAY");p.setPaidAt(null);
+            rental.getReservation().setStatus(ReservationStatus.AWAITING_PAYMENT);rental.getReservation().setPaymentExpiresAt(Instant.parse("2026-10-10T02:00:00Z"));
+            var permissions=new HashSet<Permission>();for(var grant:List.of(SystemPermission.VIEW_RENTALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS)) {
+                var found=em.createQuery("select p from Permission p where p.code=:code",Permission.class).setParameter("code",grant.code()).getResultList();
+                var perm=found.isEmpty()?new Permission():found.getFirst();if(found.isEmpty()){perm.setCode(grant.code());perm.setName("TEST");em.persist(perm);}permissions.add(perm);
+            }
+            var roles=em.createQuery("select r from Role r where r.code=:code",Role.class).setParameter("code",RoleCode.MANAGER).getResultList();
+            var role=roles.isEmpty()?new Role():roles.getFirst();if(roles.isEmpty()){role.setCode(RoleCode.MANAGER);role.setName("TEST Manager");role.setPermissions(permissions);em.persist(role);}
+            var user=new User();user.setEmail(UUID.randomUUID()+"@test.invalid");user.setFullName("TEST Manager");user.setPasswordHash("TEST-ONLY");user.setRoles(new HashSet<>(Set.of(role)));em.persist(user);
+            var scope=new UserFacilityScope();scope.setUser(user);scope.setFacility(rental.getFacility());scope.setScopeLevel(FacilityScopeLevel.MANAGE);em.persist(scope);em.flush();
+            ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId());
+            var spec=com.storagehub.service.ledger.FinancialContractSpecifications.initial(rental,snapshot).getFirst();
+            ledger.charge(rental.getId(),null,com.storagehub.service.ledger.LedgerStore.Kind.RENT,spec.amount(),NOW,spec.sourceReference(),user.getId(),"TEST-ONLY-charge",0);
+            return List.of(rental.getId(),p.getId(),user.getId(),rental.getFacility().getId());
+        });
+        var params=new TreeMap<String,String>();params.put("vnp_TxnRef",tx.execute(s->em.find(Payment.class,data.get(1)).getGatewayIntentId()));
+        params.put("vnp_TmnCode",gatewayConfig.getTmnCode());params.put("vnp_Amount","2000");params.put("vnp_ResponseCode","00");params.put("vnp_TransactionStatus","00");
+        params.put("vnp_TransactionNo","TEST-ONLY-RECEIPT-"+UUID.randomUUID());params.put("vnp_PayDate","20261010080000");
+        var encoded=params.entrySet().stream().map(e->java.net.URLEncoder.encode(e.getKey(),java.nio.charset.StandardCharsets.UTF_8)+"="+java.net.URLEncoder.encode(e.getValue(),java.nio.charset.StandardCharsets.UTF_8)).reduce((a,b)->a+"&"+b).orElseThrow();
+        var mac=javax.crypto.Mac.getInstance("HmacSHA512");mac.init(new javax.crypto.spec.SecretKeySpec(gatewayConfig.getHashSecret().getBytes(java.nio.charset.StandardCharsets.UTF_8),"HmacSHA512"));params.put("vnp_SecureHash",HexFormat.of().formatHex(mac.doFinal(encoded.getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        assertThat(gateway.processCallback(params).rspCode()).isEqualTo("00");
+        var actor=new ActorPrincipal(data.get(2),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.VIEW_PAYMENTS.code(),SystemPermission.MANAGE_PAYMENTS.code()),Map.of(data.get(3),FacilityScopeLevel.MANAGE));
+        var context=org.mockito.Mockito.mock(com.storagehub.security.ActorContext.class);org.mockito.Mockito.when(context.required()).thenReturn(actor);
+        var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new com.storagehub.api.rental.SandboxPaymentReconciliationController(context,reconciliation),new com.storagehub.api.rental.RentalLedgerController(context,ledgerReads))
+            .setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        String path="/api/manager/rentals/"+data.get(0)+"/sandbox-payments/"+data.get(1)+"/reconciliation";
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();String receipt=null;
+        for(int i=0;i<2;i++) {
+            var result=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).header("Idempotency-Key","TEST-ONLY-reconcile").contentType("application/json").content("{\"expectedRevision\":1}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn().getResponse();
+            var id=mapper.readTree(result.getContentAsString()).path("data").path("receiptId").asText();if(receipt!=null)assertThat(id).isEqualTo(receipt);receipt=id;
+        }
+        http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).header("Idempotency-Key","different-key").contentType("application/json").content("{\"expectedRevision\":2}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict());
+        var read=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/rentals/"+data.get(0)+"/ledger"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn().getResponse();
+        var view=mapper.readTree(read.getContentAsString()).path("data");assertThat(view.path("completeness").asText()).isEqualTo("PARTIAL");
+        assertThat(view.path("receipts").get(0).path("method").asText()).isEqualTo("VNPAY_SANDBOX");
+        assertThat(view.path("obligations").get(0).path("outstanding").decimalValue()).isEqualByComparingTo("80");
+        assertThat(view.path("sandboxReconciliationEnabled").asBoolean()).isTrue();
+        assertThat(view.path("coverageInventory").path("payments").get(0).path("linkedReceipt").asBoolean()).isTrue();
+        var simulated=tx.execute(status->payment(em.find(Rental.class,data.get(0)),"SIMULATED-",9).getId());
+        http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/manager/rentals/"+data.get(0)+"/sandbox-payments/"+simulated+"/reconciliation")
+            .header("Idempotency-Key","reject-simulation").contentType("application/json").content("{\"expectedRevision\":2}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict());
+        org.mockito.Mockito.when(context.required()).thenReturn(new ActorPrincipal(data.get(2),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of()));
+        http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).header("Idempotency-Key","forbidden").contentType("application/json").content("{\"expectedRevision\":2}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+        try(var connection=datasource.getConnection();var sql=connection.prepareStatement("select p.method,p.evidence_file_id,g.payment_id from rental_ledger_receipts p join rental_ledger_gateway_evidence g on g.receipt_id=p.id where p.rental_id=?")) {
+            sql.setString(1,data.get(0).toString());try(var rows=sql.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).isEqualTo("VNPAY_SANDBOX");assertThat(rows.getString(2)).isNull();assertThat(rows.getString(3)).isEqualTo(data.get(1).toString());assertThat(rows.next()).isFalse();}
+        }
+    }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
