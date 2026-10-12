@@ -47,6 +47,17 @@ public class AccessCredentialController {
         );
     }
 
+    @PostMapping("/staff/rentals/{rentalId}/credentials/reissue")
+    public ApiResponse<AccessCredentialResponse> reissue(
+        @PathVariable UUID rentalId,
+        @Valid @RequestBody ReissueAccessCredentialRequest request
+    ) {
+        return new ApiResponse<>(
+            service.reissue(actorContext.required(), rentalId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     /** Staff and Manager can monitor history; only Staff may mutate credentials. */
     @GetMapping({"/staff/access-credentials", "/manager/access-credentials"})
     public PageResponse<AccessCredentialResponse> list(
