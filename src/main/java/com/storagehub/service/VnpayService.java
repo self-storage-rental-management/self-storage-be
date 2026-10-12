@@ -652,7 +652,10 @@ public class VnpayService {
         return new VnpayTransactionResponse(payment.getId(), payment.getReservation().getId(), payment.getGatewayIntentId(),
             payment.getGatewayTransactionNo(), payment.getAmount(), payment.getCurrency(), payment.getRefundedAmount(), payment.getStatus(),
             payment.getReservation().getStatus(), payment.getGatewayResponseCode(), payment.getGatewayTransactionStatus(),
-            payment.getGatewayPayDate(), message, payment.getProcessedAt(), payment.getLastReconciledAt());
+            payment.getGatewayPayDate(), message, payment.getProcessedAt(), payment.getLastReconciledAt(),
+            payment.getPurpose(), payment.getGatewayBankCode() == null || payment.getGatewayBankCode().isBlank()
+                ? "VNPAY" : payment.getGatewayBankCode(),
+            payment.getPaidAt(), payment.getInitiatedBy().getFullName());
     }
     private String message(Payment payment) {
         return payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully"
