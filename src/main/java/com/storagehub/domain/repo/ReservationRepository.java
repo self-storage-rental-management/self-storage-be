@@ -97,6 +97,32 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 
     @Query("""
         select reservation from Reservation reservation
+        left join reservation.assignedUnit assignedUnit
+        where reservation.status in :activeStatuses
+          and (:facilityId is null or reservation.facility.id = :facilityId)
+          and (:status is null or reservation.status = :status)
+          and (:scoped = false or reservation.facility.id in :facilityIds)
+          and (:q is null
+               or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
+               or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
+               or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
+               or lower(coalesce(assignedUnit.code, '')) like lower(concat('%', :q, '%')))
+        order by case when reservation.appointmentAt is null then 1 else 0 end,
+                 reservation.appointmentAt asc,
+                 reservation.createdAt asc
+        """)
+    Page<Reservation> findStaffActiveReservations(
+        @Param("activeStatuses") java.util.Collection<ReservationStatus> activeStatuses,
+        @Param("facilityId") UUID facilityId,
+        @Param("status") ReservationStatus status,
+        @Param("q") String q,
+        @Param("scoped") boolean scoped,
+        @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    );
+
+    @Query("""
+        select reservation from Reservation reservation
         where reservation.status = com.storagehub.domain.model.ReservationStatus.CONFIRMED
           and reservation.assignedUnit is null
           and (:facilityId is null or reservation.facility.id = :facilityId)
