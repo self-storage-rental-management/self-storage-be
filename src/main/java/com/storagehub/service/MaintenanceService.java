@@ -328,11 +328,9 @@ public class MaintenanceService {
         MaintenanceTask saved = maintenanceTaskRepository.save(task);
 
         boolean makeAvailable = request.makeUnitAvailable() == null || request.makeUnitAvailable();
-        if (makeAvailable) {
-            StorageUnit unit = saved.getStorageUnit();
-            unit.setStatus(StorageUnitStatus.available);
-            storageUnitRepository.save(unit);
-        }
+        StorageUnit unit = saved.getStorageUnit();
+        unit.setStatus(makeAvailable ? StorageUnitStatus.available : StorageUnitStatus.maintenance);
+        storageUnitRepository.save(unit);
 
         auditLogService.recordMutation(
             "MAINTENANCE_TASK_COMPLETED",
