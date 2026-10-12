@@ -59,7 +59,8 @@ class RenewalOperationIntegrationTests {
         public void requireFacilityFault(Renewal n,UUID incident,UUID actor){}
         public Optional<RenewalOperationSources.Slot> slot(Renewal n,Instant start){return slotKnown?Optional.of(new RenewalOperationSources.Slot("TEST-SLOT",start,start.plusSeconds(3600))):Optional.empty();}
         public boolean feasible(Renewal n,Instant start,Instant deadline){return slotKnown;}
-        public void reserve(Renewal n,RenewalOperationSources.Slot slot,Instant now){}
+        boolean slowReservation;
+        public void reserve(Renewal n,RenewalOperationSources.Slot slot,Instant now){if(slowReservation){var marker=new ActivityLog();marker.setAction("TEST_CALENDAR_RESERVE");marker.setEntityType("TestCalendarReservation");marker.setEntityId(n.getId());marker.setCorrelationId("test-calendar-rollback");em.persist(marker);em.flush();clock.time=slot.start().plusSeconds(1);}}
         public Instant check(Renewal n,RenewalQuoteResponse.Terms terms,UUID hold,Instant now){if(hold==null)throw ApiExceptions.conflict("TEST missing hold");return NOW.plus(Duration.ofDays(6));}
         public void retain(Renewal n,UUID hold,Instant deadline){}
         public void consume(Renewal n,UUID hold){consumes++;if(failConsume){var marker=new ActivityLog();marker.setAction("TEST_ROLLBACK_HOLD");marker.setEntityType("TestD3Hold");marker.setEntityId(n.getId());marker.setCorrelationId("test-only-rollback");em.persist(marker);em.flush();throw new IllegalStateException("TEST hold consume failed");}}
@@ -98,7 +99,46 @@ class RenewalOperationIntegrationTests {
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired TestDateEvidence dateEvidence;
     @Autowired javax.sql.DataSource datasource;
-    @BeforeEach void reset(){clock.time=NOW;ops.atomic=true;ops.authorized=true;ops.fullyPaid=true;ops.policyKnown=true;ops.slotKnown=true;ops.unsafeEvidence=false;ops.failConsume=false;ops.advanceDeposit=false;ops.advanceCompletion=false;ops.assignedIds=Set.of();ops.deposits=ops.cashes=ops.consumes=ops.releases=0;ops.outcome=RenewalOperationSources.Outcome.SUCCESS;sources.financeKnown=sources.termKnown=sources.atomic=true;sources.enqueues=sources.handoffs=0;}
+    @BeforeEach void reset(){clock.time=NOW;ops.slowReservation=false;ops.atomic=true;ops.authorized=true;ops.fullyPaid=true;ops.policyKnown=true;ops.slotKnown=true;ops.unsafeEvidence=false;ops.failConsume=false;ops.advanceDeposit=false;ops.advanceCompletion=false;ops.assignedIds=Set.of();ops.deposits=ops.cashes=ops.consumes=ops.releases=0;ops.outcome=RenewalOperationSources.Outcome.SUCCESS;sources.financeKnown=sources.termKnown=sources.atomic=true;sources.enqueues=sources.handoffs=0;}
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void slowCalendarReservationRollsBackWithCommittedHttpReadback(boolean edit) throws Exception {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        var n=tx.execute(s->edit?scheduled():paid());var customer=actor(n,RoleCode.CUSTOMER);
+        var before=service.detail(customer,n.getId(),RenewalOperationService.Audience.CUSTOMER);
+        var oldEnd=n.getRental().getContractEndDate();
+        var actors=mock(ActorContext.class);when(actors.required()).thenReturn(customer);
+        var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalOperationController(actors,service)).setControllerAdvice(new GlobalExceptionHandler()).build();
+        var path="/api/customer/renewals/"+n.getId()+"/appointment";
+        var body=new Appointment(NOW.plusSeconds(10800),edit?"TEST reschedule":null,before.expectedVersion());
+        ops.slowReservation=true;
+        var request=edit?org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(path):org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path);
+        http.perform(request.header("Idempotency-Key","slow-calendar").contentType("application/json").content(mapper().writeValueAsString(body)))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("error.message").value("Appointment expired during reservation"));
+        http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data.expectedVersion").value(before.expectedVersion().intValue()));
+        var after=service.detail(customer,n.getId(),RenewalOperationService.Audience.CUSTOMER);
+        assertThat(after.appointmentRef()).isEqualTo(before.appointmentRef());assertThat(after.appointmentStart()).isEqualTo(before.appointmentStart());
+        assertThat(after.appointmentEnd()).isEqualTo(before.appointmentEnd());assertThat(after.arrivalRef()).isEqualTo(before.arrivalRef());
+        tx.executeWithoutResult(s->{
+            assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(oldEnd);
+            assertThat(em.createQuery("select count(e) from ActivityLog e where e.entityId=:id and e.entityType='TestCalendarReservation'",Long.class).setParameter("id",n.getId()).getSingleResult()).isZero();
+            assertThat(em.createQuery("select count(e) from RenewalIdempotency e where e.resourceId=:id and e.operation=:op",Long.class).setParameter("id",n.getId()).setParameter("op",edit?"d3_reschedule":"d3_appointment").getSingleResult()).isZero();
+        });
+        try(var connection=datasource.getConnection();var query=connection.prepareStatement("select count(*) from renewal_operation_events where renewal_id=? and kind='APPOINTMENT'")){
+            query.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(n.getId().getMostSignificantBits()).putLong(n.getId().getLeastSignificantBits()).array());
+            try(var rows=query.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getLong(1)).isEqualTo(edit?1:0);}
+        }
+        ops.slowReservation=false;
+        // Failed key has no persisted command; a new valid slot can be submitted with it.
+        var retry=new Appointment(clock.time.plusSeconds(3600),edit?"TEST retry":null,before.expectedVersion());
+        var accepted=service.appointment(customer,n.getId(),retry,"slow-calendar",edit);
+        assertThat(accepted.state().appointmentStart()).isEqualTo(retry.appointmentAt());
+        assertThat(service.appointment(customer,n.getId(),retry,"slow-calendar",edit)).isEqualTo(accepted);
+    }
+    private ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
     @Test void missingAppointmentPeriodCannotRecordArrival() {
         var n=scheduled();var state=em.find(RenewalOperationState.class,n.getId());
         state.appointment(state.getAppointmentRef(),state.getAppointmentStart(),null);em.flush();

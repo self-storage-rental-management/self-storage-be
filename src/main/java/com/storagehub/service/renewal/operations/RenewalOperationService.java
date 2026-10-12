@@ -112,6 +112,8 @@ public class RenewalOperationService {
         if(s.getArrivalRef()!=null)throw ApiExceptions.conflict("Arrival recorded; facility incident review is required to reschedule");
         var slot=slot(c.renewal(),body.appointmentAt(),s.getEffectiveSigningDeadline());
         calendar().reserve(c.renewal(),slot,now());
+        // Calendar reservation joins this transaction; a slow source must not commit a past slot.
+        if(now().isAfter(slot.start()))throw ApiExceptions.conflict("Appointment expired during reservation");
         var e=event(c,"APPOINTMENT",slot);s.appointment(e.getId(),slot.start(),slot.end());c.renewal().setStatus(RenewalStatus.appointment_scheduled);
         return finish(c,op,key,body,e,200);
     }
