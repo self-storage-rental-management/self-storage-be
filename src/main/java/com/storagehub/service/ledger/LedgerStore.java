@@ -70,11 +70,28 @@ public class LedgerStore {
             &&rentSource.equals(value(allocation,"source_ref"))&&receipt.amount().compareTo(new BigDecimal(value(allocation,"amount")))==0;
     }
     boolean renewalDepositCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID reviewer) {
+        return renewalChargeCommandMatches(obligation,spec,reviewer,"renewal-deposit:");
+    }
+    boolean renewalFullRentCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID customer) {
+        return renewalChargeCommandMatches(obligation,spec,customer,"renewal-full-rent:");
+    }
+    private boolean renewalChargeCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID reviewer,String prefix) {
         String fingerprint=hash(List.of(s(spec.rentalId()),s(spec.renewalId()),spec.kind().name(),spec.amount().toPlainString(),obligation.dueAt().toEpochMilli(),spec.sourceReference()).toString());
         String acceptedId=spec.sourceReference().split(":")[1];
-        var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from rental_ledger_commands where actor_id=? and operation='CHARGE' and key_hash=?",s(reviewer),hash("renewal-deposit:"+acceptedId));
+        var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from rental_ledger_commands where actor_id=? and operation='CHARGE' and key_hash=?",s(reviewer),hash(prefix+acceptedId));
         return rows.size()==1&&s(spec.rentalId()).equals(value(rows.getFirst(),"rental_id"))
             &&s(obligation.id()).equals(value(rows.getFirst(),"result_id"))&&fingerprint.equals(value(rows.getFirst(),"payload_hash"));
+    }
+    boolean renewalReceiptMatches(UUID rental,Receipt receipt,GatewayProof proof,Obligation obligation) {
+        var rows=jdbc.queryForList("select payment_id,proof_log_id,environment,transaction_no from rental_ledger_gateway_evidence where receipt_id=?",s(receipt.id()));
+        if(rows.size()!=1)return false;
+        var row=rows.getFirst();
+        if(!s(proof.paymentId()).equals(value(row,"payment_id"))||!s(proof.proofLogId()).equals(value(row,"proof_log_id"))
+            ||!"SANDBOX".equals(value(row,"environment"))||!Objects.equals(proof.transactionNo(),value(row,"transaction_no")))return false;
+        var allocations=jdbc.queryForList("select obligation_id,rental_id,amount from rental_ledger_allocations where receipt_id=?",s(receipt.id()));
+        return allocations.size()==1&&s(obligation.id()).equals(value(allocations.getFirst(),"obligation_id"))
+            &&s(rental).equals(value(allocations.getFirst(),"rental_id"))
+            &&receipt.amount().compareTo(new BigDecimal(value(allocations.getFirst(),"amount")))==0;
     }
     public UUID charge(UUID rental,UUID renewal,Kind kind,BigDecimal amount,Instant due,String source,
         UUID actor,String key,long expectedRevision) {

@@ -238,6 +238,72 @@ class SupportWorkflowIntegrationTests {
         assertThat(service.accept(s,t.id(),new SupportCommands.Version(t.version()),"accept").version()).isEqualTo(accepted.version());
         assertThatThrownBy(()->service.accept(s,t.id(),new SupportCommands.Version(t.version()),"stale")).isInstanceOf(ApiException.class).hasMessageContaining("stale");
     }
+    @Test void unassignedQueueExposesOnlySafeMetadataAndClaimIsAtomicAndReplayable(){
+        var created=create();
+        var queue=service.queue(s,query,"test");
+        assertThat(queue.data()).extracting(SupportQueueItem::id).containsExactly(created.id());
+        assertThat(queue.data().get(0).version()).isEqualTo(created.version());
+        var claimed=service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-once");
+        assertThat(claimed.status()).isEqualTo(SupportTicketStatus.in_progress);
+        assertThat(claimed.assignedStaffId()).isEqualTo(staff.getId());
+        assertThat(claimed.acceptedAt()).isEqualTo(NOW);
+        assertThat(claimed.assignmentRevision()).isEqualTo(1);
+        assertThat(service.queue(s2,query,"test").data()).isEmpty();
+        assertThat(service.list(s,STAFF,query,"test").data()).extracting(SupportResponse::id).containsExactly(created.id());
+        long events=count("SupportEvent");
+        assertThat(service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-once").version()).isEqualTo(claimed.version());
+        assertThat(count("SupportEvent")).isEqualTo(events);
+        assertThatThrownBy(()->service.claim(s2,created.id(),new SupportCommands.Version(created.version()),"other-claim"))
+            .isInstanceOf(ApiException.class);
+    }
+    @Test void queueAndClaimRespectCurrentFacilityAndPermission(){
+        var created=create();
+        var foreign=actor(foreignStaff,RoleCode.STAFF,otherFacility);
+        assertThat(service.queue(foreign,query,"test").data()).isEmpty();
+        assertThatThrownBy(()->service.claim(foreign,created.id(),new SupportCommands.Version(created.version()),"foreign"))
+            .isInstanceOf(ApiException.class);
+        assertThat(service.summary(m,facility.getId()).unassignedOpen()).isEqualTo(1);
+        assertThat(service.summary(m,facility.getId()).counts().get("open")).isEqualTo(1);
+        assertThatThrownBy(()->service.summary(m,otherFacility.getId())).isInstanceOf(ApiException.class);
+        em.createQuery("delete from UserFacilityScope x where x.user.id=:id").setParameter("id",staff.getId()).executeUpdate();em.flush();
+        assertThat(service.queue(s,query,"test").data()).isEmpty();
+        assertThatThrownBy(()->service.claim(s,created.id(),new SupportCommands.Version(created.version()),"revoked"))
+            .isInstanceOf(ApiException.class);
+    }
+    @Test void assignedOrStaleTicketCannotBeClaimed(){
+        var created=create();
+        var assigned=service.assign(m,created.id(),new Assignment(staff.getId(),created.version(),"exception"),"assign-before-claim");
+        assertThat(service.queue(s2,query,"test").data()).isEmpty();
+        assertThatThrownBy(()->service.claim(s2,created.id(),new SupportCommands.Version(created.version()),"claim-assigned"))
+            .isInstanceOf(ApiException.class);
+        assertThat(service.accept(s,created.id(),new SupportCommands.Version(assigned.version()),"legacy-accept").status())
+            .isEqualTo(SupportTicketStatus.in_progress);
+    }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void concurrentClaimsHaveOneWinnerAndFailedNotificationRollsBack() throws Exception {
+        var created=create();
+        doThrow(new IllegalStateException("Test-only delivery failure")).when(notifications)
+            .createNotification(eq(customer.getId()),eq(NotificationType.SUPPORT),anyString(),anyString(),eq(created.id()));
+        assertThatThrownBy(()->service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-failed"))
+            .isInstanceOf(IllegalStateException.class);
+        reset(notifications);
+        assertThat(service.detail(c,CUSTOMER,created.id()).assignedStaffId()).isNull();
+        assertThat(service.queue(s,query,"test").pagination().totalItems()).isEqualTo(1);
+        var start=new java.util.concurrent.CountDownLatch(1);
+        var pool=java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var first=pool.submit(()->{start.await();try{return service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-staff-1");}catch(ApiException e){return null;}});
+            var second=pool.submit(()->{start.await();try{return service.claim(s2,created.id(),new SupportCommands.Version(created.version()),"claim-staff-2");}catch(ApiException e){return null;}});
+            start.countDown();
+            var a=first.get(30,java.util.concurrent.TimeUnit.SECONDS);
+            var b=second.get(30,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat((a==null?0:1)+(b==null?0:1)).isEqualTo(1);
+            var winner=a==null?b:a;
+            assertThat(service.detail(c,CUSTOMER,created.id()).assignedStaffId()).isEqualTo(winner.assignedStaffId());
+            assertThat(service.queue(s,query,"test").data()).isEmpty();
+        } finally {pool.shutdownNow();}
+    }
     @Test void managerCannotImpersonateAssignedStaffToComplete(){
         var t=active();
         assertThatThrownBy(()->service.resolve(m,t.id(),new Resolution("Manager done",List.of(),t.version()),"manager-complete")).isInstanceOf(ApiException.class);
