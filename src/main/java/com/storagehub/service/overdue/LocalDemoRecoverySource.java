@@ -37,9 +37,10 @@ public class LocalDemoRecoverySource implements OverdueSources.RecoverySource {
     @Override
     public java.util.Optional<OverdueSources.RecoveryState> state(Rental rental, Instant now) {
         requireContext(rental, now);
-        // Locking read avoids treating an older REPEATABLE_READ snapshot as current evidence.
+        // This method is also called from read-only Renewal projections, so it must not lock rows.
+        // Recovery writes and Renewal decisions serialize on the Rental row before changing/checking state.
         List<RecoveryRow> states = jdbc.query(
-            "select facility_id,status from renewal_demo_recovery_cases where rental_id=? order by received_at desc for update",
+            "select facility_id,status from renewal_demo_recovery_cases where rental_id=? order by received_at desc",
             (rs, row) -> new RecoveryRow(uuid(rs.getBytes("facility_id")), rs.getString("status")), bytes(rental.getId()));
         if (states.stream().anyMatch(row -> !row.facilityId().equals(rental.getFacility().getId()))) {
             throw ApiExceptions.conflict("DEFERRED_SOURCE: Recovery record belongs to another facility");

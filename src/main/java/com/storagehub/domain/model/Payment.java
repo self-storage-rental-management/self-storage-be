@@ -26,9 +26,20 @@ public class Payment extends BaseEntity {
     @JoinColumn(name = "initiated_by", nullable = false)
     private User initiatedBy;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "reservation_id", nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reservation_id")
     private Reservation reservation;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "renewal_id")
+    private Renewal renewal;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "renewal_revision_id")
+    private com.storagehub.service.renewal.persistence.RenewalAcceptedRevision renewalRevision;
+
+    @Column(name = "payment_deadline")
+    private Instant paymentDeadline;
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;

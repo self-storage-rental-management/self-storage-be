@@ -28,6 +28,14 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
         UUID reservationId,
         PaymentType purpose
     );
+    Optional<Payment> findTopByRenewal_IdAndPurposeOrderByCreatedAtDesc(UUID renewalId, PaymentType purpose);
+    Optional<Payment> findTopByRenewal_IdAndRenewalRevision_IdAndPurposeOrderByCreatedAtDesc(
+        UUID renewalId, UUID renewalRevisionId, PaymentType purpose);
+    List<Payment> findAllByRenewal_IdAndStatusIn(UUID renewalId,
+        Collection<com.storagehub.domain.model.PaymentStatus> statuses);
+    List<Payment> findAllByRenewal_IdOrderByCreatedAtAsc(UUID renewalId);
+    boolean existsByRenewal_IdAndStatusIn(UUID renewalId,
+        Collection<com.storagehub.domain.model.PaymentStatus> statuses);
     Optional<Payment> findTopByReservation_IdAndPurposeAndGatewayTransactionNo(
         UUID reservationId,
         PaymentType purpose,
@@ -53,8 +61,11 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     @Query("""
         select p from Payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
         where p.status = com.storagehub.domain.model.PaymentStatus.PAID
-          and (:facilityId is null or p.reservation.facility.id = :facilityId)
+          and (:facilityId is null or reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
         """)
     List<Payment> findPaidPaymentsByFacility(@Param("facilityId") UUID facilityId);
 

@@ -71,8 +71,9 @@ public class TransactionalRenewalExtensionHoldSource implements RenewalSources.E
     }
     @Override public UUID acquire(Rental rental,UUID renewalId,LocalDate start,LocalDate end,Instant expiresAt) {
         var r=lock(rental);var at=now();var n=em.find(Renewal.class,renewalId);
-        if(n==null||!Objects.equals(n.getRental().getId(),r.getId())||n.getStatus()!=RenewalStatus.pending)
-            throw ApiExceptions.conflict("Hold is not bound to a pending renewal");
+        if(n==null||!Objects.equals(n.getRental().getId(),r.getId())
+            ||(n.getStatus()!=RenewalStatus.pending&&n.getStatus()!=RenewalStatus.accepted))
+            throw ApiExceptions.conflict("Hold is not bound to an unstarted Renewal");
         var cutoff=verify(r,start,end,at);
         if(expiresAt!=null)expiresAt=expiresAt.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         if(expiresAt==null||!expiresAt.isAfter(at)||expiresAt.isAfter(cutoff))throw ApiExceptions.conflict("Hold expiry outside cutoff");
