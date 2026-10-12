@@ -20,6 +20,7 @@ public class ReservationReviewResponse {
     private LocalDate startDate;
     private LocalDate endDate;
     private String goodsCondition;
+    private String reservationNotes;
     private Instant reviewDueAt;
     private Instant reviewedAt;
     private String reviewNote;
@@ -50,6 +51,8 @@ public class ReservationReviewResponse {
     public void setEndDate(LocalDate endDate) { this.endDate = endDate; }
     public String getGoodsCondition() { return goodsCondition; }
     public void setGoodsCondition(String goodsCondition) { this.goodsCondition = goodsCondition; }
+    public String getReservationNotes() { return reservationNotes; }
+    public void setReservationNotes(String reservationNotes) { this.reservationNotes = reservationNotes; }
     public Instant getReviewDueAt() { return reviewDueAt; }
     public void setReviewDueAt(Instant reviewDueAt) { this.reviewDueAt = reviewDueAt; }
     public Instant getReviewedAt() { return reviewedAt; }
