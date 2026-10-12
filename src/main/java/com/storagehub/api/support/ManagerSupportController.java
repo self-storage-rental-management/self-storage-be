@@ -25,6 +25,8 @@ public class ManagerSupportController {
     @GetMapping @Operation(summary="Read scoped Support queue",description="page,size,status,facilityId,staffId,search,sort. Filter/scope applied before count/pagination.")
     @Parameters({@Parameter(name="page"),@Parameter(name="size"),@Parameter(name="status"),@Parameter(name="facilityId"),@Parameter(name="staffId"),@Parameter(name="search"),@Parameter(name="sort")})
     public PageResponse<SupportResponse> list(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.list(actors.required(),MANAGER,SupportQuery.parse(q,true,false),CorrelationIdContext.current());}
+    @GetMapping("/summary") @Operation(summary="Facility-scoped Support status counts")
+    public ApiResponse<SupportStatusSummary> summary(@RequestParam UUID facilityId){return response(service.summary(actors.required(),facilityId));}
     @GetMapping("/staff-options") @Operation(summary="Read eligible Staff IDs at a managed facility",description="Active STAFF with persisted VIEW_SUPPORT + MANAGE_SUPPORT and OPERATE scope. No name-based matching or automatic permission grants. page,size only besides facilityId.")
     public PageResponse<SupportResponse.StaffOption> staff(@RequestParam UUID facilityId,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){var copy=new org.springframework.util.LinkedMultiValueMap<>(q);if(copy.get("facilityId").size()!=1)throw ApiExceptions.validation("Repeated facilityId",null);copy.remove("facilityId");return service.staffOptions(actors.required(),facilityId,SupportQuery.parse(copy,false,true),CorrelationIdContext.current());}
     @GetMapping("/{id}") @Operation(summary="Read scoped Support detail")
