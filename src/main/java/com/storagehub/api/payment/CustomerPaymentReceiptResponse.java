@@ -27,6 +27,7 @@ public record CustomerPaymentReceiptResponse(
     Instant paidAt,
     Instant lastReconciledAt,
     String initiatedByName,
-    Instant createdAt
+    Instant createdAt,
+    String reservationCode
 ) {
 }
