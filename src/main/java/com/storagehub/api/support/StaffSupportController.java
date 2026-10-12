@@ -26,6 +26,10 @@ public class StaffSupportController {
     @GetMapping @Operation(summary="Read my assigned Support tickets",description="page,size,status,search,sort. Scope and current assignee before pagination.")
     @Parameters({@Parameter(name="page"),@Parameter(name="size"),@Parameter(name="status"),@Parameter(name="search"),@Parameter(name="sort")})
     public PageResponse<SupportResponse> list(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.list(actors.required(),STAFF,SupportQuery.parse(q,false,false),CorrelationIdContext.current());}
+    @GetMapping("/queue") @Operation(summary="Read safe unassigned Support queue at my authorized Facilities")
+    public PageResponse<SupportQueueItem> queue(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.queue(actors.required(),SupportQuery.parse(q,false,false),CorrelationIdContext.current());}
+    @PostMapping("/{id}/claim") @Operation(summary="Atomically claim and accept an unassigned Support ticket")
+    public ApiResponse<SupportResponse> claim(@PathVariable UUID id,@Valid @RequestBody SupportCommands.Version body,@RequestHeader("Idempotency-Key") String key){return response(service.claim(actors.required(),id,body,key));}
     @GetMapping("/{id}") @Operation(summary="Read current assigned Support detail")
     public ApiResponse<SupportResponse> detail(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){SupportQuery.none(q);return response(service.detail(actors.required(),STAFF,id));}
     @PostMapping("/{id}/accept") @Operation(summary="Accept current assignment",description="open→in_progress, expectedVersion, actor/timestamp persisted per assignment revision.")
