@@ -45,7 +45,7 @@ class LedgerCoverageInventoryTests {
         var em=mock(EntityManager.class);var query=mock(TypedQuery.class);
         when(em.createQuery(anyString(),eq(RenewalAcceptedRevision.class))).thenReturn(query);
         when(query.setParameter(eq("id"),any())).thenReturn(query);when(query.getResultList()).thenReturn(List.of());
-        return new LedgerCoverageInventory(pricing,payments,mock(PaymentProvenance.class),em,new ObjectMapper(),new SandboxPaymentRecognitionPolicy("VNPAY_SANDBOX",true));
+        return new LedgerCoverageInventory(pricing,payments,mock(PaymentProvenance.class),em,new ObjectMapper(),new SandboxPaymentRecognitionPolicy("VNPAY_SANDBOX",true),mock(LedgerStore.class),mock(ActivityLogRepository.class));
     }
     private Rental rental() {
         var r=new Rental();var customer=new User();var facility=new Facility();var reservation=new Reservation();
