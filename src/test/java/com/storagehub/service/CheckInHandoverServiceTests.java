@@ -272,6 +272,31 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void requiresAcceptedAndExplainedDeclaredDimensionDifference() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+        ReservationGoodsItem declaredItem = entityWithId(new ReservationGoodsItem());
+        declaredItem.setQuantity(12);
+        declaredItem.setLengthCm(new BigDecimal("12"));
+        declaredItem.setWidthCm(new BigDecimal("12"));
+        declaredItem.setHeightCm(new BigDecimal("12"));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of(declaredItem));
+        CompleteCheckInRequest base = validCompletionRequest();
+        CompleteCheckInRequest changed = new CompleteCheckInRequest(
+            base.checklist(), new CheckInMeasurements(
+                new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
+                new BigDecimal("100"), BigDecimal.ONE, false
+            ), null, base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
+            base.goodsCategory(), base.evidenceReferences(), base.handedOverItems(), base.notes()
+        );
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), changed))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("variance is not accepted");
+    }
+
+    @Test
     void rejectsCheckInAndReleasesUnitWithoutCreatingRental() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);

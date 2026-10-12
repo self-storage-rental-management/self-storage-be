@@ -24,6 +24,7 @@ public class RoleDataInitializer {
     private static final int INTERNAL_POLICY_VERSION = 3;
     private static final int POLICY_OWNERSHIP_VERSION = 4;
     private static final int STAFF_RESERVATION_REVIEW_VERSION = 5;
+    private static final int STAFF_TRAM_WORKFLOW_VERSION = 6;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -94,6 +95,18 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(STAFF_RESERVATION_REVIEW_VERSION);
                 }
+                // The confirmed-reservation to handover workflow is operated
+                // from the Staff portal. Preserve custom grants while adding
+                // physical unit assignment to existing Staff roles.
+                if (role.getPermissionsPolicyVersion() < STAFF_TRAM_WORKFLOW_VERSION) {
+                    if (code == RoleCode.STAFF) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.APPROVE_RESERVATIONS));
+                        updated.add(permissions.get(SystemPermission.ASSIGN_UNITS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(STAFF_TRAM_WORKFLOW_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -128,6 +141,7 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_UNITS,
                 SystemPermission.VIEW_RESERVATIONS,
                 SystemPermission.APPROVE_RESERVATIONS,
+                SystemPermission.ASSIGN_UNITS,
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_CHECKINS,
                 SystemPermission.PERFORM_CHECKIN,
