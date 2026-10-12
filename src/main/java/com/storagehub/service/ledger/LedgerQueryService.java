@@ -21,11 +21,13 @@ public class LedgerQueryService {
     public record Refund(UUID id,BigDecimal amount,String status) {}
     /** Known rows are not a claim that ALL project obligations have been reconciled. */
     public record View(UUID rentalId,String completeness,String currency,Long revision,
-        List<Charge> obligations,List<Payment> receipts,List<Refund> refunds,String reason,LedgerCoverageInventory.Inventory coverageInventory) {}
+        List<Charge> obligations,List<Payment> receipts,List<Refund> refunds,String reason,LedgerCoverageInventory.Inventory coverageInventory,boolean sandboxReconciliationEnabled) {}
     private final LedgerStore ledger;
     private final EntityManager em;
     private final DuongResourceAccess access;
     private final LedgerCoverageInventory inventory;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.integration.sandbox-reconciliation.enabled:false}")
+    private boolean sandboxReconciliationEnabled;
     public View read(ActorPrincipal actor,UUID id,RoleCode role) {
         if(actor==null)throw ApiExceptions.unauthorized("Authentication required");
         var rental=em.find(Rental.class,id);if(rental==null||rental.getCustomer()==null||rental.getFacility()==null)throw ApiExceptions.notFound("Rental not found");
@@ -37,7 +39,7 @@ public class LedgerQueryService {
             s.obligations().stream().map(o->new Charge(o.id(),o.renewalId(),o.kind().name(),o.amount(),o.dueAt(),o.outstanding())).toList(),
             s.receipts().stream().map(p->new Payment(p.id(),p.method().name(),p.amount(),p.receivedAt(),p.method()==LedgerStore.Method.SIMULATED)).toList(),
             s.refunds().stream().map(f->new Refund(f.id(),f.amount(),f.status())).toList(),
-            "Chỉ hiển thị các khoản đã được ghi nhận, chưa xác minh đủ toàn bộ dữ liệu tài chính.",coverageInventory))
-            .orElseGet(()->new View(id,"UNKNOWN","VND",null,null,null,null,"Chưa có dữ liệu sổ tài chính đã xác minh.",coverageInventory));
+            "Chỉ hiển thị các khoản đã được ghi nhận, chưa xác minh đủ toàn bộ dữ liệu tài chính.",coverageInventory,sandboxReconciliationEnabled))
+            .orElseGet(()->new View(id,"UNKNOWN","VND",null,null,null,null,"Chưa có dữ liệu sổ tài chính đã xác minh.",coverageInventory,sandboxReconciliationEnabled));
     }
 }

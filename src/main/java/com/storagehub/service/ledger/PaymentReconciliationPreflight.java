@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 public class PaymentReconciliationPreflight {
     public record Plan(String status,String sourceReference,UUID obligationId,String retryFingerprint) {}
     private final ObjectProvider<LedgerStore> ledgers;
+    private final SandboxPaymentRecognitionPolicy sandboxPolicy;
     public Plan read(Payment p,Rental r,ReservationPricingSnapshot snapshot,PaymentProvenance.Classification classification) {
         String ref=p==null||p.getId()==null?null:"payment:"+p.getId();
         if(p==null||p.getId()==null||p.getReservation()==null||p.getReservation().getId()==null
@@ -32,7 +33,9 @@ public class PaymentReconciliationPreflight {
             ||!Objects.equals(r.getReservation().getFacility().getId(),r.getFacility().getId()))
             return plan("CROSS_RENTAL_REJECTED",ref,null,null);
         String fingerprint=ref+":"+r.getId()+":"+r.getCustomer().getId()+":"+p.getPurpose()+":"+(p.getAmount()==null?"missing":p.getAmount().stripTrailingZeros().toPlainString());
-        if(classification!=PaymentProvenance.Classification.VERIFIED)return plan("NON_VERIFIED_MONEY",ref,null,fingerprint);
+        var recognition=sandboxPolicy.evaluate(p,classification);
+        if(!recognition.eligibleForReconciliation())return plan(
+            classification==PaymentProvenance.Classification.SANDBOX?recognition.reason():"NON_VERIFIED_MONEY",ref,null,fingerprint);
         if(p.getPurpose()!=PaymentType.RESERVATION_DEPOSIT || snapshot==null)return plan("ALLOCATION_PURPOSE_UNRESOLVED",ref,null,fingerprint);
         if(snapshot.getId()==null||snapshot.getReservation()==null
             ||!Objects.equals(snapshot.getReservation().getId(),r.getReservation().getId()))
@@ -51,7 +54,7 @@ public class PaymentReconciliationPreflight {
         var target=targets.getFirst();
         if(p.getAmount().compareTo(target.outstanding())>0)return plan("ALLOCATION_EXCEEDS_OUTSTANDING",ref,target.id(),fingerprint);
         // Mapping is unambiguous; the remaining blocker is the existing FileAsset evidence interface.
-        return plan("FIN_03A_EVIDENCE_MODEL_REQUIRED",ref,target.id(),fingerprint);
+        return plan("SANDBOX_RECEIPT_READY",ref,target.id(),fingerprint);
     }
     private static Plan plan(String status,String ref,UUID obligation,String fingerprint){return new Plan(status,ref,obligation,fingerprint);}
 }

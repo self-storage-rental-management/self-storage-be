@@ -20,6 +20,8 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
     private final LedgerStore store;
     private final ObjectProvider<LedgerCoverageSource> coverage;
     private final ObjectProvider<Clock> clocks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<LedgerCoverageInventory> inventories;
     private record Verified(LedgerStore.Snapshot snapshot,LedgerCoverageSource.Coverage proof) {}
     private Optional<Verified> verified(Rental rental,Instant now) {
         var source=coverage.getIfAvailable();if(source==null)return Optional.empty();
@@ -44,7 +46,18 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
     }
     public boolean consistentThroughApproval(){var source=coverage.getIfAvailable();return source!=null&&source.consistentThroughApproval();}
     public Optional<OverdueSources.Finance> read(Rental rental,Instant now) {
-        return verified(rental,now).map(v->new OverdueSources.Finance(now,v.snapshot().obligations().stream().map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList()));
+        var complete=verified(rental,now).map(v->new OverdueSources.Finance(now,v.snapshot().obligations().stream().map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList()));
+        if(complete.isPresent())return complete;
+        var inventory=inventories==null?null:inventories.getIfAvailable();if(inventory==null)return Optional.empty();
+        var stored=store.read(rental.getId());if(stored.isEmpty())return Optional.empty();var snapshot=stored.get();
+        if(rental.getCustomer()==null||rental.getFacility()==null||!rental.getId().equals(snapshot.rentalId())
+            ||!rental.getCustomer().getId().equals(snapshot.customerId())||!rental.getFacility().getId().equals(snapshot.facilityId())
+            ||!snapshot.receipts().isEmpty()||!snapshot.refunds().isEmpty())return Optional.empty();
+        var evidence=inventory.inspect(rental,stored);
+        if(evidence.gaps().contains("RENEWAL_TERMINAL_ACCOUNTING_UNRECONCILED"))return Optional.empty();
+        var matched=evidence.renewalDeposits().stream().filter(d->"MATCHED".equals(d.status())).map(LedgerCoverageInventory.RenewalDepositEvidence::obligationId).collect(java.util.stream.Collectors.toSet());
+        return Optional.of(new OverdueSources.Finance(now,snapshot.obligations().stream().filter(o->matched.contains(o.id())&&o.allocated().signum()==0&&o.refunded().signum()==0)
+            .map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList(),"PARTIAL"));
     }
     private Instant now(){var clock=clocks.getIfAvailable();return (clock==null?Clock.systemUTC():clock).instant();}
 }
