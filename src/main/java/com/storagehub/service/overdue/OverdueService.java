@@ -92,6 +92,8 @@ public class OverdueService {
             var source=finances.getIfAvailable();var f=source==null?null:source.read(r,at).orElse(null);
             if(f==null)missing.add("AUTHORITATIVE_OBLIGATIONS_ALLOCATIONS");else {
                 if(f.checkedAt()==null||f.checkedAt().isAfter(at)||f.obligations()==null)throw ApiExceptions.conflict("Authoritative financial state incomplete");var ids=new HashSet<UUID>();
+                if(!Set.of("COMPLETE","PARTIAL").contains(f.completeness()))throw ApiExceptions.conflict("Financial coverage invalid");
+                if(f.completeness().equals("PARTIAL"))missing.add("FINANCIAL_COVERAGE_PARTIAL");
                 for(var o:f.obligations()){
                     if(o==null||o.id()==null||!r.getId().equals(o.rentalId())||!ids.add(o.id())||o.dueAt()==null||o.outstanding()==null||o.outstanding().signum()<0||!"VND".equals(o.currency()))throw ApiExceptions.conflict("Authoritative obligation inconsistent");
                     if(at.isAfter(o.dueAt())&&o.outstanding().signum()>0){String ref="PAYMENT_DUE:"+r.getId()+":"+o.id();long days=Math.max(0,ChronoUnit.DAYS.between(o.dueAt().atZone(ZONE).toLocalDate(),at.atZone(ZONE).toLocalDate()));result.add(row(r,ref,"PAYMENT_DUE",days,"PAYMENT_DUE",o.id(),o.dueAt(),o.outstanding(),o.currency(),null,null,null,false));}
