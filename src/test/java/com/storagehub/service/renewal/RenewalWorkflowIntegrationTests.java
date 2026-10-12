@@ -87,7 +87,7 @@ class RenewalWorkflowIntegrationTests {
     @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";}
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
         var r=fixture();var a=customer(r);var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
-        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads,commands))
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads))
             .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
         String path="/api/customer/rentals/"+r.getId();
         mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\",\"amount\":1}")).andExpect(status().isBadRequest());
@@ -411,12 +411,13 @@ class RenewalWorkflowIntegrationTests {
                 var inventory=new com.storagehub.service.ledger.LedgerCoverageInventory(pricingSnapshots,paymentHistory,mock(com.storagehub.service.PaymentProvenance.class),em,new ObjectMapper().findAndRegisterModules(),new com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy("VNPAY_SANDBOX",true),ledger,activityLogs);
                 var pending=tx.execute(st->inventory.inspect(em.find(Rental.class,rental.getId()),ledger.read(rental.getId())));assertThat(pending.renewalDeposits().getFirst().status()).isEqualTo("NOT_EFFECTIVE");
                 var context=mock(ActorContext.class);when(context.required()).thenReturn(manager(rental));
-                var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new ManagerRenewalController(context,reads,commands)).setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
+                var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new ManagerRenewalController(context,reads)).setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
                 String path="/api/manager/renewals/"+n.id();String body=new ObjectMapper().writeValueAsString(new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()));
-                http.perform(post(path+"/decision").header("Idempotency-Key","deposit-approve").contentType("application/json").content(body)).andExpect(status().isConflict());
+                http.perform(post(path+"/decision").header("Idempotency-Key","deposit-approve").contentType("application/json").content(body)).andExpect(status().isNotFound());
                 tx.executeWithoutResult(st->{em.clear();assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.pending);
                     assertThat(em.createQuery("select count(a) from ActivityLog a where a.entityId=:id and a.action='test_hold'",Long.class).setParameter("id",n.id()).getSingleResult()).isZero();ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId());});
-                for(int i=0;i<2;i++)http.perform(post(path+"/decision").header("Idempotency-Key","deposit-approve").contentType("application/json").content(body)).andExpect(status().isOk()).andExpect(jsonPath("data.status").value("approved"));
+                var approved=tx.execute(st->commands.decision(manager(rental),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"legacy-writer-compatibility-test"));
+                assertThat(approved.status()).isEqualTo(RenewalStatus.approved);
                 http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)).andExpect(status().isOk()).andExpect(jsonPath("data.approvedPaymentDeadline").value(NOW.plusSeconds(86400).toString()));
                 var stored=ledger.read(rental.getId()).orElseThrow();assertThat(stored.revision()).isEqualTo(1);assertThat(stored.obligations()).hasSize(1);var deposit=stored.obligations().getFirst();
                 assertThat(deposit.kind()).isEqualTo(com.storagehub.service.ledger.LedgerStore.Kind.RENEWAL_DEPOSIT);assertThat(deposit.amount()).isEqualByComparingTo("20");assertThat(deposit.dueAt()).isEqualTo(NOW.plusSeconds(86400));assertThat(deposit.renewalId()).isEqualTo(n.id());assertThat(deposit.sourceRef()).startsWith("renewal-accepted:");

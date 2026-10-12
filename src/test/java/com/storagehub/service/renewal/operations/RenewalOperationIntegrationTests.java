@@ -190,7 +190,8 @@ class RenewalOperationIntegrationTests {
             var storage=new com.storagehub.service.FileStorageService(properties,
                 applicationContext.getBean(com.storagehub.domain.repo.FileAssetRepository.class),applicationContext.getBean(com.storagehub.domain.repo.CheckInRepository.class),
                 applicationContext.getBean(com.storagehub.domain.repo.ReservationGoodsItemRepository.class),applicationContext.getBean(com.storagehub.domain.repo.UserRepository.class),
-                applicationContext.getBean(com.storagehub.domain.repo.PaymentComplaintRepository.class),mock(com.storagehub.service.AdminAuthorizationService.class),mock(com.storagehub.service.FacilityScopeService.class),mock(AuditLogService.class));
+                applicationContext.getBean(com.storagehub.domain.repo.PaymentComplaintRepository.class),applicationContext.getBean(com.storagehub.domain.repo.MaintenanceTaskRepository.class),
+                mock(com.storagehub.service.AdminAuthorizationService.class),mock(com.storagehub.service.FacilityScopeService.class),mock(AuditLogService.class));
             org.springframework.test.util.ReflectionTestUtils.setField(storage,"duongEvidence",beans.getBeanProvider(com.storagehub.service.integration.DuongFileEvidence.class));
             var storageProxy=new org.springframework.aop.framework.ProxyFactory(storage);storageProxy.setProxyTargetClass(true);
             var attributes=new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource();storageProxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(transactions,attributes));

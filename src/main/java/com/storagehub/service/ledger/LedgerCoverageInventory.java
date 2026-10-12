@@ -94,7 +94,15 @@ public class LedgerCoverageInventory {
             if(workflow!=null&&workflow.getAcceptedRevision()!=null&&!revision.getId().equals(workflow.getAcceptedRevision().getId()))continue;
             var terms=mapper.readValue(revision.getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
             var spec=FinancialContractSpecifications.accepted(revision,terms).getFirst();
-            if(workflow!=null&&Set.of(RenewalStatus.pending,RenewalStatus.rejected).contains(workflow.getRenewal().getStatus())
+            if (terms.renewalDepositAmount() != null && terms.renewalDepositAmount().signum() == 0) {
+                // A new full-rent request has no deposit evidence to report. Until
+                // the payment-ready event and full-rent Ledger writer are integrated,
+                // do not classify it as debt or as a missing approval-backed deposit.
+                if (workflow != null && (workflow.getPaymentDeadline() != null || workflow.getExtensionHoldRef() != null))
+                    gaps.add("RENEWAL_FULL_RENT_OBLIGATION_UNPOSTED_OR_INVALID");
+                continue;
+            }
+            if(workflow!=null&&Set.of(RenewalStatus.pending,RenewalStatus.accepted,RenewalStatus.rejected).contains(workflow.getRenewal().getStatus())
                 &&workflow.getPaymentDeadline()==null&&workflow.getExtensionHoldRef()==null){
                 deposits.add(new RenewalDepositEvidence(spec.renewalId(),revision.getId(),"NOT_EFFECTIVE",null));continue;
             }

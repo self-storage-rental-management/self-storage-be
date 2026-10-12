@@ -36,7 +36,7 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     public void requireUpload(ActorPrincipal actor,String type,UUID resource) {
         if(type.startsWith("DUONG_RENEWAL_")) {
             var n=renewal(resource);renewalAccess(actor,n,type.substring("DUONG_RENEWAL_".length()),true);
-            if(Set.of(RenewalStatus.pending,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting new evidence");
+            if(Set.of(RenewalStatus.pending,RenewalStatus.accepted,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting operational evidence before payment/signing");
         }else {
             if(UPLOAD.equals(type)){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);if(resource!=null&&!actor.userId().equals(resource))throw unavailable();return;}
             if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)&&PUBLIC.equals(type)&&resource==null){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);return;}
