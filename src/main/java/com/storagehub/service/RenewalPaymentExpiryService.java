@@ -70,8 +70,10 @@ public class RenewalPaymentExpiryService {
         safety.release(renewal,workflow.getExtensionHoldRef());
         renewal.setStatus(RenewalStatus.payment_expired);
         var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
-        if(state==null){state=new RenewalOperationState(renewal);em.persist(state);}
+        boolean newState=state==null;
+        if(newState)state=new RenewalOperationState(renewal);
         state.expire(false);
+        if(newState)em.persist(state);
         renewals.releaseSlot(workflow);
         em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         var payload=Map.of("paymentId",payment.getId(),"responseCode",Objects.toString(payment.getGatewayResponseCode(),"UNKNOWN"),

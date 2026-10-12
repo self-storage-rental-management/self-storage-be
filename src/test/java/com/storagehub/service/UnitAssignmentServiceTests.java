@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -48,6 +49,7 @@ class UnitAssignmentServiceTests {
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private FacilityScopeService facilityScopeService;
     @Mock private AuditLogService auditLogService;
+    @Mock private NotificationService notificationService;
 
     private UnitAssignmentService service;
     private ActorPrincipal actor;
@@ -59,12 +61,12 @@ class UnitAssignmentServiceTests {
     void setUp() {
         service = new UnitAssignmentService(
             reservationRepository, storageUnitRepository, assignmentRepository, userRepository,
-            authorizationService, facilityScopeService, auditLogService
+            authorizationService, facilityScopeService, auditLogService, notificationService
         );
         operator = entityWithId(new User());
         UUID facilityId = UUID.randomUUID();
         actor = new ActorPrincipal(
-            operator.getId(), UUID.randomUUID(), Set.of(RoleCode.MANAGER),
+            operator.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
             Set.of("assign_units", "view_reservations", "view_units"),
             Map.of(facilityId, FacilityScopeLevel.OPERATE)
         );
@@ -110,6 +112,11 @@ class UnitAssignmentServiceTests {
         assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.reserved);
         verify(auditLogService).recordMutation(
             any(User.class), any(), any(), any(), any(), any(), any()
+        );
+        verify(notificationService).createNotification(
+            eq(reservation.getCustomer().getId()),
+            eq(com.storagehub.domain.model.NotificationType.RESERVATION),
+            any(), any(), eq(reservation.getId())
         );
     }
 

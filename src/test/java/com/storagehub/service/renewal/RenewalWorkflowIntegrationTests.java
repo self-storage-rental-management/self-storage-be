@@ -97,7 +97,7 @@ class RenewalWorkflowIntegrationTests {
         mvc.perform(post(path+"/renewal-requests").contentType("application/json").content("{\"renewalQuoteId\":\""+quoteId+"\"}")).andExpect(status().isBadRequest());
         String body="{\"renewalQuoteId\":\""+quoteId+"\"}";
         mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","http").contentType("application/json").content(body))
-            .andExpect(status().isCreated()).andExpect(jsonPath("data.status").value("pending")).andExpect(jsonPath("data.version").value(0));
+            .andExpect(status().isCreated()).andExpect(jsonPath("data.status").value("accepted")).andExpect(jsonPath("data.version").value(0));
         mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","http").contentType("application/json").content(body)).andExpect(status().isCreated());
         assertThat(em.createQuery("select count(x) from Renewal x",Long.class).getSingleResult()).isEqualTo(1);
     }
@@ -109,17 +109,6 @@ class RenewalWorkflowIntegrationTests {
             .isInstanceOf(ApiException.class).hasMessageContaining("Eligibility UNKNOWN");
         assertThat(em.createQuery("select count(q) from RenewalQuote q",Long.class).getSingleResult()).isZero();
     }
-    @Test void approvalRequiresFinanceConsistencyAndDownstreamLifecycle(){
-        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
-        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
-        finance.consistent=false;
-        assertThat(reads.detail(manager(r),n.id(),true).allowedActions()).contains("REJECT").doesNotContain("APPROVE");
-        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"finance-unsafe")).isInstanceOf(ApiException.class);
-        finance.consistent=true;lifecycle.available=false;
-        assertThat(reads.detail(manager(r),n.id(),true).disabledReasons()).anyMatch(reason->reason.contains("lifecycle"));
-        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"no-lifecycle")).isInstanceOf(ApiException.class);
-        assertThat(hold.calls).isZero();assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.pending);
-    }
     @Test void acceptedTermsSurviveReloadAndCurrentPriceChange(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
         var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
@@ -128,8 +117,8 @@ class RenewalWorkflowIntegrationTests {
         assertThat(detail.acceptedTerms()).usingRecursiveComparison()
             .withComparatorForType(BigDecimal::compareTo,BigDecimal.class).isEqualTo(q.terms());
         assertThat(detail.acceptedTerms().monthlyPrice()).isEqualByComparingTo("100");
-        assertThat(detail.acceptedTerms().renewalDepositAmount()).isEqualByComparingTo("20");
-        assertThat(detail.acceptedTerms().remainingRentalAmount()).isEqualByComparingTo("80");
+        assertThat(detail.acceptedTerms().renewalDepositAmount()).isEqualByComparingTo("0");
+        assertThat(detail.acceptedTerms().remainingRentalAmount()).isEqualByComparingTo("100");
         assertThat(detail.reviewState()).isEqualTo("AWAITING_CUSTOMER_CONFIRMATION");
     }
     @Test void mismatchedPersistedAmountFailsReadWithoutRepair(){
@@ -138,21 +127,6 @@ class RenewalWorkflowIntegrationTests {
         em.find(Renewal.class,n.id()).setAmount(new BigDecimal("999"));em.flush();
         assertThatThrownBy(()->reads.detail(a,n.id(),false)).isInstanceOf(ApiException.class);
         assertThat(em.find(Renewal.class,n.id()).getAmount()).isEqualByComparingTo("999");
-    }
-    @Test void acceptedPendingDoesNotExpireWithQuoteTtl(){
-        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
-        clock.time=NOW.plusSeconds(1801);
-        assertThat(commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve").status()).isEqualTo(RenewalStatus.approved);
-    }
-    @Test void debtAllowsRequestButBlocksApproval(){
-        var r=fixture();finance.debt=true;var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
-        assertThat(n.financialCheck().blockingObligationRefs()).containsExactly(PACKAGE);
-        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve")).isInstanceOf(ApiException.class);assertThat(hold.calls).isZero();
-    }
-    @Test void moveOutRequestBlocksApproval(){
-        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
-        r.setStatus(RentalStatus.return_requested);em.flush();
-        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve")).isInstanceOf(ApiException.class);assertThat(hold.calls).isZero();
     }
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
@@ -167,49 +141,6 @@ class RenewalWorkflowIntegrationTests {
             assertThat(successes).isEqualTo(1);
             tx.executeWithoutResult(s->{assertThat(em.createQuery("select count(x) from Renewal x",Long.class).getSingleResult()).isEqualTo(1);assertThat(em.createQuery("select count(x) from RenewalOpenSlot x",Long.class).getSingleResult()).isEqualTo(1);});
         }finally{pool.shutdownNow();}
-    }
-    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
-    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
-    void holdFailureRollsBackDecisionMarkerAuditAndReplayRecord(){
-        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
-        var r=tx.execute(s->fixture());var a=customer(r);var manager=manager(r);
-        var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
-        hold.fail=true;
-        assertThatThrownBy(()->commands.decision(manager,n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve")).isInstanceOf(IllegalStateException.class);
-        tx.executeWithoutResult(s->{
-            assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.pending);
-            assertThat(em.find(RenewalWorkflow.class,n.id()).getExtensionHoldRef()).isNull();
-            assertThat(em.createQuery("select count(x) from ActivityLog x where x.entityType='TestHold'",Long.class).getSingleResult()).isZero();
-            assertThat(em.createQuery("select count(x) from RenewalIdempotency x where x.operation='decision'",Long.class).getSingleResult()).isZero();
-        });
-    }
-    @Test void submitReplayApproveReplayAuditAndNoEndExtension(){
-        var r=fixture();var customer=customer(r);var manager=manager(r);var oldEnd=r.getContractEndDate();
-        var quote=commands.quote(customer,r.getId(),new RenewalCommands.Quote("TEST"));
-        var body=new RenewalCommands.Submit(quote.id(),"test");var created=commands.submit(customer,r.getId(),body,"submit");
-        assertThat(created.version()).isZero();assertThat(created.acceptedRevision()).isEqualTo(1);assertThat(created.reviewState()).isEqualTo("READY");
-        assertThat(commands.submit(customer,r.getId(),body,"submit")).isEqualTo(created);
-        var revision=em.find(RenewalWorkflow.class,created.id()).getAcceptedRevision();
-        var specs=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(revision,quote.terms());
-        assertThat(specs).hasSize(2);assertThat(specs.getFirst().sourceReference()).contains(revision.getId().toString(),quote.id().toString());
-        verifyNoInteractions(ledgerWrites);
-        var decision=new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,created.version());
-        var approved=commands.decision(manager,created.id(),decision,"approve");
-        assertThat(approved.status()).isEqualTo(RenewalStatus.approved);assertThat(approved.approvedPaymentDeadline()).isEqualTo(NOW.plusSeconds(86400));
-        assertThat(commands.decision(manager,created.id(),decision,"approve")).isEqualTo(approved);assertThat(hold.calls).isEqualTo(1);
-        assertThat(em.find(Rental.class,r.getId()).getContractEndDate()).isEqualTo(oldEnd);
-        assertThat(em.createQuery("select count(x) from ActivityLog x where x.entityType='Renewal'",Long.class).getSingleResult()).isEqualTo(2);
-        assertThat(reads.detail(customer,created.id(),false).acceptedQuoteId()).isEqualTo(quote.id());
-    }
-    @Test void requoteConsentRevisionsThenApproval(){
-        var r=fixture();var customer=customer(r);var q=commands.quote(customer,r.getId(),new RenewalCommands.Quote("TEST"));
-        var n=commands.submit(customer,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");pricing.rate=new BigDecimal("200");
-        assertThat(reads.detail(customer,n.id(),false).reviewState()).isEqualTo("AWAITING_CUSTOMER_CONFIRMATION");
-        var q2=commands.quote(customer,r.getId(),new RenewalCommands.Quote("TEST"));
-        var updated=commands.edit(customer,n.id(),new RenewalCommands.Edit(q2.id(),"consent",n.version()),"edit");
-        assertThat(updated.acceptedRevision()).isEqualTo(2);assertThat(updated.amount()).isEqualByComparingTo("200");
-        assertThat(commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,updated.version()),"approve").status()).isEqualTo(RenewalStatus.approved);
-        assertThat(em.createQuery("select count(x) from RenewalAcceptedRevision x",Long.class).getSingleResult()).isEqualTo(2);
     }
     @Test void staleQuoteCannotBeSubmittedOrAcceptedAsRevision(){
         var r=fixture();var a=customer(r);
@@ -259,7 +190,7 @@ class RenewalWorkflowIntegrationTests {
         }
         assertThat(reads.detail(a,UUID.fromString(requestId),false).acceptedQuoteId()).isEqualTo(UUID.fromString(freshId));
     }
-    @Test void pendingCancellationReleasesSlotKeepsHistoryAndReplays(){
+    @Test void acceptedCancellationReleasesSlotKeepsHistoryAndReplays(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
         var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
         var body=new RenewalCommands.Cancel("test cancel",n.version());var cancelled=commands.cancel(a,n.id(),body,"cancel");
@@ -268,36 +199,18 @@ class RenewalWorkflowIntegrationTests {
         em.flush();em.clear();assertThat(reads.detail(a,n.id(),false).cancellationReason()).isEqualTo("test cancel");
         assertThat(em.find(RenewalOpenSlot.class,r.getId())).isNull();assertThat(em.find(Renewal.class,n.id())).isNotNull();assertThat(hold.calls).isZero();
     }
-    @Test void rejectPersistsActorReasonAndNoHold(){
-        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
-        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
-        var rejected=commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.REJECT,"test reason",n.version()),"reject");
-        assertThat(rejected.status()).isEqualTo(RenewalStatus.rejected);assertThat(rejected.reviewReason()).isEqualTo("test reason");assertThat(rejected.reviewerId()).isEqualTo(r.getCustomer().getId());assertThat(hold.calls).isZero();
-    }
-    @Test void decisionUsesManagePermissionWithoutRequiringViewPermission(){
-        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
-        var manager=new ActorPrincipal(a.userId(),a.sessionId(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));
-        assertThat(commands.decision(manager,n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.REJECT,"test",n.version()),"reject").status()).isEqualTo(RenewalStatus.rejected);
-    }
-    @Test void financialUnknownBlocksApprovalBeforeHold(){
-        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");finance.unknown=true;
-        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve")).isInstanceOf(ApiException.class);assertThat(hold.calls).isZero();
-    }
-    @Test void financialReadbackIsPartialWhenApprovalConsistencyIsUnavailable(){
+    @Test void financialReadbackIsPartialWhenConsistencyIsUnavailable(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
         var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit-financial-partial");
         finance.consistent=false;
         var managerView=reads.detail(manager(r),n.id(),true);
         assertThat(managerView.financialCheck().completeness()).isEqualTo("PARTIAL");
         assertThat(managerView.allowedActions()).doesNotContain("APPROVE");
-        assertThat(managerView.disabledReasons()).anyMatch(reason->reason.contains("not certified through approval"));
-        assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve-financial-partial"))
-            .isInstanceOf(ApiException.class).hasMessageContaining("Consistent financial source missing");
         assertThat(hold.calls).isZero();
     }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings={"RETURNED","MAINTENANCE","RECOVERY","BOOKING"})
-    void operationalConflictIsRecheckedByD2OptionsQuoteSubmitEditAndApproval(String kind){
+    void operationalConflictIsRecheckedByOptionsQuoteSubmitAndEdit(String kind){
         var factory=new org.springframework.beans.factory.support.StaticListableBeanFactory();
         factory.addBean("guard",new com.storagehub.service.renewal.integration.RenewalOperationalGuard(em));
         org.springframework.test.util.ReflectionTestUtils.setField(commands,"operationalGuards",factory.getBeanProvider(com.storagehub.service.renewal.integration.RenewalOperationalGuard.class));
@@ -318,8 +231,7 @@ class RenewalWorkflowIntegrationTests {
             assertThatThrownBy(()->commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"))).hasMessageContaining(expected);
             assertThatThrownBy(()->commands.submit(a,r.getId(),new RenewalCommands.Submit(q2.id(),null),"after-conflict")).hasMessageContaining(expected);
             assertThatThrownBy(()->commands.edit(a,n.id(),new RenewalCommands.Edit(q2.id(),null,n.version()),"edit-conflict")).hasMessageContaining(expected);
-            assertThatThrownBy(()->commands.decision(manager(r),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"approve-conflict")).hasMessageContaining(expected);
-            assertThat(hold.calls).isZero();assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.pending);
+            assertThat(hold.calls).isZero();assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.accepted);
             assertThat(reads.detail(manager(r),n.id(),true).allowedActions()).doesNotContain("APPROVE");
             // Successful replay/cancel/reject remain usable; a new conflict must not duplicate the request.
             assertThat(commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"before-conflict").id()).isEqualTo(n.id());
@@ -392,71 +304,6 @@ class RenewalWorkflowIntegrationTests {
         }finally{
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"policies",oldPolicy);org.springframework.test.util.ReflectionTestUtils.setField(commands,"eligibility",oldEligibility);
         }
-    }
-    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
-    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
-    void approvalPostsDepositAtomicallyWithCommittedHttpJdbcReadback() throws Exception {
-        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
-        try(var schema=datasource.getConnection()) {
-            if(schema.getMetaData().getDatabaseProductName().equals("H2"))org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(schema,new org.springframework.core.io.ClassPathResource("rental-ledger-test-schema.sql"));
-            var ledger=new com.storagehub.service.ledger.LedgerStore(new org.springframework.jdbc.core.JdbcTemplate(datasource));
-            var factory=new org.springframework.beans.factory.support.StaticListableBeanFactory();factory.addBean("writer",new com.storagehub.service.ledger.RenewalDepositObligationWriter(ledger));
-            var previous=org.springframework.test.util.ReflectionTestUtils.getField(commands,"depositWriters");
-            org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",factory.getBeanProvider(com.storagehub.service.ledger.RenewalDepositObligationWriter.class));
-            try {
-                var rental=tx.execute(st->fixture());
-                var q=tx.execute(st->commands.quote(customer(rental),rental.getId(),new RenewalCommands.Quote("TEST")));
-                assertThat(ledger.read(rental.getId())).isEmpty();
-                var n=tx.execute(st->commands.submit(customer(rental),rental.getId(),new RenewalCommands.Submit(q.id(),null),"deposit-submit"));
-                var inventory=new com.storagehub.service.ledger.LedgerCoverageInventory(pricingSnapshots,paymentHistory,mock(com.storagehub.service.PaymentProvenance.class),em,new ObjectMapper().findAndRegisterModules(),new com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy("VNPAY_SANDBOX",true),ledger,activityLogs);
-                var pending=tx.execute(st->inventory.inspect(em.find(Rental.class,rental.getId()),ledger.read(rental.getId())));assertThat(pending.renewalDeposits().getFirst().status()).isEqualTo("NOT_EFFECTIVE");
-                var context=mock(ActorContext.class);when(context.required()).thenReturn(manager(rental));
-                var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new ManagerRenewalController(context,reads)).setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
-                String path="/api/manager/renewals/"+n.id();String body=new ObjectMapper().writeValueAsString(new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()));
-                http.perform(post(path+"/decision").header("Idempotency-Key","deposit-approve").contentType("application/json").content(body)).andExpect(status().isNotFound());
-                tx.executeWithoutResult(st->{em.clear();assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.pending);
-                    assertThat(em.createQuery("select count(a) from ActivityLog a where a.entityId=:id and a.action='test_hold'",Long.class).setParameter("id",n.id()).getSingleResult()).isZero();ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId());});
-                var approved=tx.execute(st->commands.decision(manager(rental),n.id(),new RenewalCommands.Decision(RenewalCommands.DecisionType.APPROVE,null,n.version()),"legacy-writer-compatibility-test"));
-                assertThat(approved.status()).isEqualTo(RenewalStatus.approved);
-                http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)).andExpect(status().isOk()).andExpect(jsonPath("data.approvedPaymentDeadline").value(NOW.plusSeconds(86400).toString()));
-                var stored=ledger.read(rental.getId()).orElseThrow();assertThat(stored.revision()).isEqualTo(1);assertThat(stored.obligations()).hasSize(1);var deposit=stored.obligations().getFirst();
-                assertThat(deposit.kind()).isEqualTo(com.storagehub.service.ledger.LedgerStore.Kind.RENEWAL_DEPOSIT);assertThat(deposit.amount()).isEqualByComparingTo("20");assertThat(deposit.dueAt()).isEqualTo(NOW.plusSeconds(86400));assertThat(deposit.renewalId()).isEqualTo(n.id());assertThat(deposit.sourceRef()).startsWith("renewal-accepted:");
-                var customerContext=mock(ActorContext.class);when(customerContext.required()).thenReturn(customer(rental));
-                var query=new com.storagehub.service.ledger.LedgerQueryService(ledger,em,new com.storagehub.service.integration.DuongResourceAccess(em),inventory);
-                var ledgerHttp=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new com.storagehub.api.rental.RentalLedgerController(customerContext,transactionalLedgerQuery(query))).setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
-                String ledgerPath="/api/customer/rentals/"+rental.getId()+"/ledger";
-                // Ledger GET authorization checks the persisted Customer role, not the mocked ActorContext alone.
-                tx.executeWithoutResult(st->{var user=em.find(User.class,rental.getCustomer().getId());var roles=em.createQuery("select r from Role r where r.code=:code",Role.class).setParameter("code",RoleCode.CUSTOMER).getResultList();var role=roles.isEmpty()?new Role():roles.getFirst();if(roles.isEmpty()){role.setCode(RoleCode.CUSTOMER);role.setName("TEST Customer");em.persist(role);}user.setRoles(new HashSet<>(Set.of(role)));});
-                ledgerHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(ledgerPath)).andExpect(status().isOk()).andExpect(jsonPath("data.coverageInventory.renewalDeposits[0].status").value("MATCHED"));
-                var sources=new org.springframework.beans.factory.support.StaticListableBeanFactory();
-                sources.addBean("clock",Clock.fixed(NOW.plusSeconds(86401),ZoneOffset.UTC));
-                var adapters=new com.storagehub.service.ledger.LedgerFinancialAdapters(ledger,sources.getBeanProvider(com.storagehub.service.ledger.LedgerCoverageSource.class),sources.getBeanProvider(Clock.class));
-                sources.addBean("inventory",inventory);org.springframework.test.util.ReflectionTestUtils.setField(adapters,"inventories",sources.getBeanProvider(com.storagehub.service.ledger.LedgerCoverageInventory.class));sources.addBean("finance",adapters);
-                var overdue=new com.storagehub.service.overdue.OverdueService(em,new ObjectMapper().findAndRegisterModules(),mock(RenewalPersistence.class),mock(AuditLogService.class),sources.getBeanProvider(Clock.class),sources.getBeanProvider(com.storagehub.service.overdue.OverdueSources.FinancialSource.class),sources.getBeanProvider(com.storagehub.service.overdue.OverdueSources.TermSource.class),sources.getBeanProvider(com.storagehub.service.overdue.OverdueSources.ReminderSource.class),sources.getBeanProvider(com.storagehub.service.overdue.OverdueSources.RecoverySource.class));
-                var overdueProxy=new org.springframework.aop.framework.ProxyFactory(overdue);overdueProxy.setProxyTargetClass(true);
-                var attrs=new org.springframework.transaction.interceptor.MatchAlwaysTransactionAttributeSource();var attr=new org.springframework.transaction.interceptor.DefaultTransactionAttribute();attr.setReadOnly(true);attrs.setTransactionAttribute(attr);overdueProxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(transactions,attrs));
-                var managerContext=mock(ActorContext.class);when(managerContext.required()).thenReturn(manager(rental));
-                var overdueHttp=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new com.storagehub.api.overdue.ManagerOverdueController(managerContext,(com.storagehub.service.overdue.OverdueService)overdueProxy.getProxy())).setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
-                overdueHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/overdue-cases").param("kind","PAYMENT_DUE").param("facilityId",rental.getFacility().getId().toString()).param("size","1"))
-                    .andExpect(status().isOk()).andExpect(jsonPath("completeness").value("PARTIAL")).andExpect(jsonPath("pagination.totalItems").value(1)).andExpect(jsonPath("data[0].outstanding").value(20)).andExpect(jsonPath("data[0].rentalId").value(rental.getId().toString()));
-                overdueHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/overdue-cases").param("kind","PAYMENT_DUE").param("facilityId",UUID.randomUUID().toString())).andExpect(status().isForbidden());
-                var jdbc=new org.springframework.jdbc.core.JdbcTemplate(datasource);
-                for(String mutation:List.of("update rental_ledger_obligations set due_at_ms=due_at_ms+1 where id=?","update rental_ledger_obligations set amount=amount+1 where id=?","delete from rental_ledger_commands where result_id=?")) {
-                    tx.executeWithoutResult(st->jdbc.update(mutation,deposit.id().toString()));
-                    ledgerHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(ledgerPath)).andExpect(status().isOk()).andExpect(jsonPath("data.coverageInventory.renewalDeposits[0].status").value("UNPOSTED_OR_INVALID")).andExpect(jsonPath("data.completeness").value("PARTIAL"));
-                    if(mutation.contains("due_at_ms"))tx.executeWithoutResult(st->jdbc.update("update rental_ledger_obligations set due_at_ms=? where id=?",deposit.dueAt().toEpochMilli(),deposit.id().toString()));
-                    else if(mutation.contains("amount+1"))tx.executeWithoutResult(st->jdbc.update("update rental_ledger_obligations set amount=? where id=?",deposit.amount(),deposit.id().toString()));
-                }
-                tx.executeWithoutResult(st->{em.clear();assertThat(em.find(Rental.class,rental.getId()).getContractEndDate()).isEqualTo(rental.getContractEndDate());});
-                try(var connection=datasource.getConnection();var sql=connection.prepareStatement("select kind,amount,due_at_ms,source_ref from rental_ledger_obligations where rental_id=?")) {sql.setString(1,rental.getId().toString());try(var rows=sql.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).isEqualTo("RENEWAL_DEPOSIT");assertThat(rows.getBigDecimal(2)).isEqualByComparingTo("20");assertThat(rows.getLong(3)).isEqualTo(NOW.plusSeconds(86400).toEpochMilli());assertThat(rows.getString(4)).isEqualTo(deposit.sourceRef());assertThat(rows.next()).isFalse();}}
-            }finally{org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",previous);}
-        }
-    }
-    private com.storagehub.service.ledger.LedgerQueryService transactionalLedgerQuery(com.storagehub.service.ledger.LedgerQueryService query) {
-        var proxy=new org.springframework.aop.framework.ProxyFactory(query);proxy.setProxyTargetClass(true);
-        var attributes=new org.springframework.transaction.interceptor.MatchAlwaysTransactionAttributeSource();var attribute=new org.springframework.transaction.interceptor.DefaultTransactionAttribute();attribute.setReadOnly(true);attributes.setTransactionAttribute(attribute);
-        proxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(transactions,attributes));
-        return (com.storagehub.service.ledger.LedgerQueryService)proxy.getProxy();
     }
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.

@@ -76,6 +76,9 @@ public class VnpayService {
     private final RenewalWorkflowService renewalWorkflowService;
     private final ObjectProvider<RenewalVnpaySettlementService> renewalSettlement;
 
+    @Autowired(required=false)
+    private org.springframework.context.ApplicationEventPublisher paymentEvents;
+
     /** Backward-compatible constructor for reservation-only unit fixtures. */
     public VnpayService(VnpayProperties properties,PaymentRepository paymentRepository,
         PaymentComplaintRepository complaintRepository,ReservationRepository reservationRepository,
@@ -159,6 +162,7 @@ public class VnpayService {
             var prepared=renewalWorkflowService.prepareVnpayPayment(actor,renewalId);
             if(existing.getRenewalRevision()==null||!existing.getRenewalRevision().getId().equals(prepared.revision().getId()))
                 throw ApiExceptions.conflict("Renewal payment intent is bound to an earlier accepted revision");
+            requireRenewalIntentBinding(existing,prepared);
             return renewalPaymentUrl(existing,clientIp);
         }
 
@@ -168,6 +172,12 @@ public class VnpayService {
         if(!attempts.isEmpty()) {
             if(attempts.stream().anyMatch(value->value.getStatus()==PaymentStatus.PAID))
                 throw ApiExceptions.conflict("Renewal full-rent payment has already been received");
+            if(attempts.size()==1&&attempts.getFirst().getRenewalRevision()!=null
+                &&attempts.getFirst().getRenewalRevision().getId().equals(prepared.revision().getId())
+                &&attempts.getFirst().getInitiatedBy().getId().equals(actor.userId())) {
+                requireRenewalIntentBinding(attempts.getFirst(),prepared);
+                return renewalPaymentUrl(attempts.getFirst(),clientIp);
+            }
             throw ApiExceptions.conflict("An unresolved VNPay Renewal intent already exists; retry it with its original idempotency key");
         }
         User initiator=userRepository.findById(actor.userId())
@@ -218,6 +228,8 @@ public class VnpayService {
         UUID reservationId=payment.getReservation()==null?null:payment.getReservation().getId();
         UUID renewalId=payment.getRenewal()==null?null:payment.getRenewal().getId();
         boolean renewalPayment=renewalId!=null;
+        if (renewalPayment && !properties.getTmnCode().equals(query.get("vnp_TmnCode")))
+            return new CallbackResult("97", "Invalid merchant", payment.getId(), null, renewalId, false, false);
         long receivedAmount;
         try {
             receivedAmount = Long.parseLong(query.getOrDefault("vnp_Amount", "-1"));
@@ -242,19 +254,7 @@ public class VnpayService {
             if(renewalPayment&&matches&&"RENEWAL_PAYMENT_RECONCILIATION_REQUIRED".equals(payment.getFailureCode())) {
                 Instant gatewayPaidAt=parseGatewayPayDate(query.get("vnp_PayDate"));
                 if(gatewayPaidAt!=null&&authenticatedRenewalCallback(payment,query,gatewayPaidAt)) {
-                    var evidence=recordRenewalGatewayEvidence(payment,query,gatewayPaidAt,false,null);
-                    var settlement=renewalSettlement.getIfAvailable();
-                    if(settlement!=null) {
-                        var result=settlement.settle(payment,evidence.getId());
-                        if(result.allocated()) {
-                            payment.setFailureCode(null);payment.setFailureReason(null);
-                            auditLogService.recordMutation((User)null,PaymentProvenance.CALLBACK_ACTION,"Payment",payment.getId(),
-                                payment.getRenewal().getRental().getFacility().getId(),null,renewalCallbackProof(payment,query,gatewayPaidAt));
-                        } else payment.setFailureReason(result.reason());
-                        paymentRepository.saveAndFlush(payment);
-                        return new CallbackResult("02",result.allocated()?"Renewal payment confirmed":"Payment received; Renewal reconciliation required",
-                            payment.getId(),null,renewalId,result.allocated(),!result.allocated());
-                    }
+                    recordVerifiedRenewalPayment(payment,query,gatewayPaidAt);
                 }
             }
             paymentRepository.saveAndFlush(payment);
@@ -275,7 +275,7 @@ public class VnpayService {
         Reservation reservation = payment.getReservation();
         if (success) {
             Instant gatewayPaidAt = parseGatewayPayDate(payment.getGatewayPayDate());
-            if (gatewayPaidAt == null) {
+            if (gatewayPaidAt == null || (renewalPayment && gatewayPaidAt.isAfter(Instant.now()))) {
                 paymentRepository.saveAndFlush(payment);
                 return new CallbackResult("04", "Invalid payment date", payment.getId(), reservationId, renewalId, false, false);
             }
@@ -291,28 +291,15 @@ public class VnpayService {
                 payment.setFailureCode("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED");
                 payment.setFailureReason("Authenticated funds require Renewal source and obligation reconciliation");
                 paymentRepository.saveAndFlush(payment);
-                boolean allocated=false;
                 if(authenticatedRenewalCallback(payment,query,gatewayPaidAt)) {
-                    var evidence=recordRenewalGatewayEvidence(payment,query,gatewayPaidAt,false,null);
-                    var settlement=renewalSettlement.getIfAvailable();
-                    if(settlement!=null) {
-                        var result=settlement.settle(payment,evidence.getId());
-                        allocated=result.allocated();
-                        if(!allocated)payment.setFailureReason(result.reason());
-                    } else payment.setFailureReason("Renewal full-rent ledger settlement source is unavailable");
-                    if(allocated) {
-                        payment.setFailureCode(null);payment.setFailureReason(null);
-                        auditLogService.recordMutation((User)null,PaymentProvenance.CALLBACK_ACTION,"Payment",payment.getId(),
-                            reservation==null?payment.getRenewal().getRental().getFacility().getId():null,null,
-                            renewalCallbackProof(payment,query,gatewayPaidAt));
-                    }
+                    recordVerifiedRenewalPayment(payment,query,gatewayPaidAt);
                 } else {
                     recordRenewalGatewayEvidence(payment,query,gatewayPaidAt,false,"CALLBACK_BINDING_UNVERIFIED");
                     payment.setFailureReason("VNPAY callback does not match the configured merchant and transaction proof");
                 }
                 paymentRepository.saveAndFlush(payment);
-                return new CallbackResult("00",allocated?"Renewal payment confirmed":"Payment received; Renewal reconciliation required",
-                    payment.getId(),null,renewalId,allocated,!allocated);
+                return new CallbackResult("00","Payment received; allocation and signing preparation pending",
+                    payment.getId(),null,renewalId,false,true);
             }
             if (gatewayPaidAt.isAfter(paymentDeadline(reservation))) {
                 markLatePaymentForReconciliation(payment, gatewayPaidAt);
@@ -364,10 +351,13 @@ public class VnpayService {
         authorizationService.require(actor, SystemPermission.VIEW_PAYMENTS);
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
+        if(payment.getRenewal()!=null&&payment.getStatus()==PaymentStatus.PAID)
+            return response(payment,"Verified Renewal payment is immutable; allocation retries use its stored evidence");
         Map<String, String> request = queryRequest(payment, clientIp);
         Map<String, String> response = post(request);
         if (!verifyQueryResponse(response)
-            || !payment.getGatewayIntentId().equals(response.get("vnp_TxnRef"))) {
+            || !payment.getGatewayIntentId().equals(response.get("vnp_TxnRef"))
+            || (payment.getRenewal()!=null&&!properties.getTmnCode().equals(response.get("vnp_TmnCode")))) {
             throw ApiExceptions.conflict("VNPAY returned an invalid query response");
         }
         payment.setLastReconciledAt(Instant.now());
@@ -389,7 +379,8 @@ public class VnpayService {
                 } else {
                     payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
                     payment.setFailureCode("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED");
-                    payment.setFailureReason("VNPAY query confirmed funds; authenticated callback evidence is still required for Renewal allocation");
+                    payment.setFailureReason("Verified funds await Ledger allocation and signing preparation");
+                    if(authenticatedRenewalCallback(payment,response,gatewayPaidAt))recordVerifiedRenewalPayment(payment,response,gatewayPaidAt);
                 }
             } else if (gatewayPaidAt.isAfter(paymentDeadline(payment.getReservation()))) {
                 markLatePaymentForReconciliation(payment, gatewayPaidAt);
@@ -421,7 +412,8 @@ public class VnpayService {
         }
         payment.setLastReconciledAt(Instant.now());
         if (!verifyQueryResponse(gateway)
-            || !payment.getGatewayIntentId().equals(gateway.get("vnp_TxnRef"))) {
+            || !payment.getGatewayIntentId().equals(gateway.get("vnp_TxnRef"))
+            || (payment.getRenewal()!=null&&!properties.getTmnCode().equals(gateway.get("vnp_TmnCode")))) {
             return ReconciliationOutcome.UNKNOWN;
         }
         payment.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
@@ -431,6 +423,7 @@ public class VnpayService {
 
         String responseCode = gateway.get("vnp_ResponseCode");
         if ("91".equals(responseCode)) {
+            if(payment.getRenewal()!=null)return ReconciliationOutcome.UNKNOWN;
             markQueryFailure(payment, "91", "VNPAY could not find the transaction at the payment deadline");
             return ReconciliationOutcome.FINAL_FAILURE;
         }
@@ -451,7 +444,8 @@ public class VnpayService {
                 else {
                     payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
                     payment.setFailureCode("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED");
-                    payment.setFailureReason("VNPAY reconciliation found funds; authenticated callback evidence is still required for Renewal allocation");
+                    payment.setFailureReason("Verified funds await Ledger allocation and signing preparation");
+                    if(authenticatedRenewalCallback(payment,gateway,gatewayPaidAt))recordVerifiedRenewalPayment(payment,gateway,gatewayPaidAt);
                 }
                 return ReconciliationOutcome.UNKNOWN;
             }
@@ -519,11 +513,32 @@ public class VnpayService {
     }
 
     private VnpayPaymentUrlResponse paymentUrl(Payment payment, String clientIp) {
-        Instant now = Instant.now();
         Instant deadline = paymentDeadline(payment.getReservation());
-        if (!deadline.isAfter(now)) {
+        if (!deadline.isAfter(Instant.now())) {
             throw ApiExceptions.conflict("Reservation payment deadline has expired");
         }
+        String url = gatewayPaymentUrl(payment, deadline,
+            "Thanh toan coc don " + payment.getReservation().getReservationCode(), clientIp);
+        return new VnpayPaymentUrlResponse(
+            payment.getId(), payment.getReservation().getId(), payment.getGatewayIntentId(),
+            payment.getAmount(), payment.getCurrency(), url
+        );
+    }
+
+    private RenewalVnpayPaymentResponse renewalPaymentUrl(Payment payment, String clientIp) {
+        Instant deadline = payment.getPaymentDeadline();
+        if (payment.getRenewal() == null || payment.getRenewalRevision() == null
+            || deadline == null || !deadline.isAfter(Instant.now())) {
+            throw ApiExceptions.conflict("Renewal payment intent has expired or is missing its resource binding");
+        }
+        String url = gatewayPaymentUrl(payment, deadline,
+            "Thanh toan gia han " + payment.getRenewal().getId(), clientIp);
+        return renewalPaymentResponse(payment, "VNPay Sandbox payment intent is ready", url);
+    }
+
+    /** Reservation and Renewal use the same merchant, signing and gateway return endpoint. */
+    private String gatewayPaymentUrl(Payment payment, Instant deadline, String orderInfo, String clientIp) {
+        Instant now = Instant.now();
         Instant gatewayExpiry = now.plus(Duration.ofMinutes(15));
         if (gatewayExpiry.isAfter(deadline)) {
             gatewayExpiry = deadline;
@@ -535,7 +550,7 @@ public class VnpayService {
         values.put("vnp_Amount", String.valueOf(amountMinor(payment.getAmount())));
         values.put("vnp_CurrCode", "VND");
         values.put("vnp_TxnRef", payment.getGatewayIntentId());
-        values.put("vnp_OrderInfo", "Thanh toan coc don " + payment.getReservation().getReservationCode());
+        values.put("vnp_OrderInfo", orderInfo);
         values.put("vnp_OrderType", "other");
         values.put("vnp_Locale", "vn");
         values.put("vnp_ReturnUrl", properties.getReturnUrl());
@@ -543,35 +558,31 @@ public class VnpayService {
         values.put("vnp_CreateDate", DATE_TIME.format(now));
         values.put("vnp_ExpireDate", DATE_TIME.format(gatewayExpiry));
         String query = encode(values);
-        String url = properties.getPayUrl() + "?" + query + "&vnp_SecureHash=" + hmac(query);
-        return new VnpayPaymentUrlResponse(
-            payment.getId(), payment.getReservation().getId(), payment.getGatewayIntentId(),
-            payment.getAmount(), payment.getCurrency(), url
-        );
+        return properties.getPayUrl() + "?" + query + "&vnp_SecureHash=" + hmac(query);
     }
 
-    private RenewalVnpayPaymentResponse renewalPaymentUrl(Payment payment,String clientIp) {
-        Instant now=Instant.now();Instant deadline=payment.getPaymentDeadline();
-        if(payment.getRenewal()==null||payment.getRenewalRevision()==null||deadline==null||!deadline.isAfter(now))
-            throw ApiExceptions.conflict("Renewal payment intent has expired or is missing its resource binding");
-        Instant gatewayExpiry=now.plus(Duration.ofMinutes(15));if(gatewayExpiry.isAfter(deadline))gatewayExpiry=deadline;
-        Map<String,String> values=new TreeMap<>();
-        values.put("vnp_Version",VERSION);values.put("vnp_Command","pay");values.put("vnp_TmnCode",properties.getTmnCode());
-        values.put("vnp_Amount",String.valueOf(amountMinor(payment.getAmount())));values.put("vnp_CurrCode","VND");
-        values.put("vnp_TxnRef",payment.getGatewayIntentId());
-        values.put("vnp_OrderInfo","Thanh toan gia han " + payment.getRenewal().getId());
-        values.put("vnp_OrderType","other");values.put("vnp_Locale","vn");values.put("vnp_ReturnUrl",properties.getReturnUrl());
-        values.put("vnp_IpAddr",ip(clientIp));values.put("vnp_CreateDate",DATE_TIME.format(now));
-        values.put("vnp_ExpireDate",DATE_TIME.format(gatewayExpiry));
-        String query=encode(values);String url=properties.getPayUrl()+"?"+query+"&vnp_SecureHash="+hmac(query);
-        return renewalPaymentResponse(payment,"VNPay Sandbox payment intent is ready",url);
+    private void requireRenewalIntentBinding(Payment payment,RenewalWorkflowService.PreparedPayment prepared) {
+        if(payment.getPurpose()!=PaymentType.RENEWAL||!"VNPAY".equals(payment.getGatewayProvider())
+            ||payment.getAmount()==null||payment.getAmount().compareTo(prepared.terms().totalAfterDiscount())!=0
+            ||!java.util.Objects.equals(payment.getCurrency(),prepared.terms().currency())
+            ||!java.util.Objects.equals(payment.getPaymentDeadline(),prepared.paymentDeadline()))
+            throw ApiExceptions.conflict("Renewal payment amount, purpose, currency or deadline binding changed");
     }
 
     private RenewalVnpayPaymentResponse renewalPaymentResponse(Payment payment,String message,String url) {
         return new RenewalVnpayPaymentResponse(payment.getId(),payment.getRenewal().getId(),
             payment.getRenewalRevision()==null?null:payment.getRenewalRevision().getId(),payment.getGatewayIntentId(),
             payment.getAmount(),payment.getCurrency(),payment.getStatus(),payment.getPaymentDeadline(),payment.getPaidAt(),
-            payment.getStatus()==PaymentStatus.PAID&&payment.getFailureCode()!=null,message,url);
+            payment.getStatus()==PaymentStatus.PAID&&(payment.getFailureCode()!=null
+                ||"RECONCILIATION_REQUIRED".equals(renewalSettlementStage(payment))),message,url,renewalSettlementStage(payment));
+    }
+
+    private String renewalSettlementStage(Payment payment) {
+        if(payment.getRenewal().getStatus()==com.storagehub.domain.model.RenewalStatus.completed)return "COMPLETED";
+        if(payment.getStatus()!=PaymentStatus.PAID)return "AWAITING_PAYMENT";
+        if(payment.getRenewalSigningPreparedAt()!=null)return "AWAITING_SIGNING";
+        if(payment.getRenewalAllocatedAt()!=null)return "ALLOCATED_AWAITING_SIGNING";
+        return payment.getRenewalEvidenceRef()!=null?"VERIFIED_AWAITING_ALLOCATION":"RECONCILIATION_REQUIRED";
     }
 
     private String renewalPaymentMessage(Payment payment) {
@@ -747,8 +758,19 @@ public class VnpayService {
             &&"00".equals(query.get("vnp_ResponseCode"))&&"00".equals(query.get("vnp_TransactionStatus"))
             &&query.get("vnp_TransactionNo")!=null&&!query.get("vnp_TransactionNo").isBlank()
             &&query.get("vnp_PayDate")!=null&&gatewayPaidAt.equals(parseGatewayPayDate(query.get("vnp_PayDate")))
+            &&!gatewayPaidAt.isAfter(Instant.now())
             &&gatewayPaidAt.equals(payment.getPaidAt())&&payment.getPaymentDeadline()!=null
             &&!gatewayPaidAt.isAfter(payment.getPaymentDeadline());
+    }
+    /** Transaction A only: no calendar, Ledger or activation work can roll back received funds. */
+    private void recordVerifiedRenewalPayment(Payment payment,Map<String,String> query,Instant paidAt) {
+        if(payment.getRenewalEvidenceRef()==null) {
+            var evidence=auditLogService.recordMutation((User)null,PaymentProvenance.CALLBACK_ACTION,"Payment",payment.getId(),
+                payment.getRenewal().getRental().getFacility().getId(),null,renewalCallbackProof(payment,query,paidAt));
+            payment.setRenewalEvidenceRef(evidence.getId());
+        }
+        payment.setRenewalNextRetryAt(Instant.now());
+        if(paymentEvents!=null)paymentEvents.publishEvent(new com.storagehub.service.ledger.RenewalPaymentReconciler.Verified(payment.getId()));
     }
     private com.storagehub.domain.model.ActivityLog recordRenewalGatewayEvidence(
         Payment payment,Map<String,String> query,Instant gatewayPaidAt,boolean accepted,String reason
@@ -895,7 +917,10 @@ public class VnpayService {
         return new VnpayTransactionResponse(payment.getId(), payment.getReservation()==null?null:payment.getReservation().getId(), payment.getGatewayIntentId(),
             payment.getGatewayTransactionNo(), payment.getAmount(), payment.getCurrency(), payment.getRefundedAmount(), payment.getStatus(),
             payment.getReservation()==null?null:payment.getReservation().getStatus(), payment.getGatewayResponseCode(), payment.getGatewayTransactionStatus(),
-            payment.getGatewayPayDate(), message, payment.getProcessedAt(), payment.getLastReconciledAt());
+            payment.getGatewayPayDate(), message, payment.getProcessedAt(), payment.getLastReconciledAt(),
+            payment.getPurpose(), payment.getGatewayBankCode() == null || payment.getGatewayBankCode().isBlank()
+                ? "VNPAY" : payment.getGatewayBankCode(),
+            payment.getPaidAt(), payment.getInitiatedBy()==null?null:payment.getInitiatedBy().getFullName());
     }
     private String message(Payment payment) {
         return payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully"

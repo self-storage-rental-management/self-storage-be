@@ -13,6 +13,16 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
+    @Query("""
+        select p.id from Payment p where p.renewal is not null
+        and p.status = com.storagehub.domain.model.PaymentStatus.PAID
+        and p.renewalEvidenceRef is not null and p.renewalSigningPreparedAt is null
+        and p.failureCode = 'RENEWAL_PAYMENT_RECONCILIATION_REQUIRED'
+        and (p.renewalNextRetryAt is null or p.renewalNextRetryAt <= :now)
+        order by p.createdAt
+        """)
+    List<UUID> findRenewalReconciliationCandidates(@Param("now") java.time.Instant now,
+        org.springframework.data.domain.Pageable page);
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
     Optional<Payment> findByGatewayIntentId(String gatewayIntentId);
 
