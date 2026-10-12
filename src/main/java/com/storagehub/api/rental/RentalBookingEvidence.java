@@ -11,9 +11,10 @@ public record RentalBookingEvidence(UUID rentalId,UUID reservationId,String curr
     public record Amounts(BigDecimal netRentalAmount,BigDecimal reservationDepositAmount,BigDecimal securityDepositAmount,
         BigDecimal remainingRentalAmount,BigDecimal dueAtCheckIn,BigDecimal totalInitialObligation) {}
     public record PaymentRecord(UUID id,String purpose,String status,BigDecimal amount,Instant processedAt,String verification,
-        com.storagehub.service.ledger.PaymentReconciliationPreflight.Plan reconciliation) {
+        com.storagehub.service.ledger.PaymentReconciliationPreflight.Plan reconciliation,
+        com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy.Decision projectRecognition) {
         public PaymentRecord(UUID id,String purpose,String status,BigDecimal amount,Instant processedAt,String verification) {
-            this(id,purpose,status,amount,processedAt,verification,null);
+            this(id,purpose,status,amount,processedAt,verification,null,null);
         }
     }
 }
