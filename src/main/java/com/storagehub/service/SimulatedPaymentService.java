@@ -107,6 +107,7 @@ public class SimulatedPaymentService {
         if (outcome == PaymentSimulationOutcome.SUCCESS) {
             payment.setStatus(PaymentStatus.PAID);
             payment.setPaidAt(now);
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), now);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(now);
             reservation.setConfirmedAt(now);

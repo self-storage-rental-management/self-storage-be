@@ -510,6 +510,9 @@ public class VnpayService {
             || reservation.getStatus() == ReservationStatus.PAYMENT_GRACE
             || reservation.getStatus() == ReservationStatus.PAYMENT_REVIEW) {
             resolveActiveComplaint(reservation, paidAt);
+            ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
+                .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), paidAt);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(paidAt);
             reservation.setConfirmedAt(paidAt);

@@ -109,11 +109,22 @@ public class ReservationCreationService {
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setGoodsReviewStatus(reviewRequired ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
         reservation.setCompatibilityResult(compatibility.getResult());
-        reservation.setStartDate(quote.getStartDate());
-        reservation.setEndDate(quote.getEndDate());
         if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
             throw ApiExceptions.validation("appointmentAt must be in the present or future", null);
         }
+        ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
+            now, reviewRequired
+        );
+        if (request.getAppointmentAt() != null
+            && !checkInWindow.contains(request.getAppointmentAt())) {
+            throw ApiExceptions.validation(
+                "appointmentAt must be within the permitted seven-day check-in window", null
+            );
+        }
+        java.time.LocalDate rentalStartDate = checkInWindow.availableAt()
+            .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
+        reservation.setStartDate(rentalStartDate);
+        reservation.setEndDate(rentalStartDate.plusMonths(quote.getRentalMonths()));
         reservation.setAppointmentAt(request.getAppointmentAt());
         reservation.setAmount(quote.getTotalAfterDiscount());
         reservation.setGoodsCondition(clean(request.getGoodsCondition()));

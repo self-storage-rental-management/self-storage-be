@@ -15,6 +15,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.PaymentComplaintRepository;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
@@ -40,6 +41,7 @@ class FileStorageServiceTests {
     @Mock ReservationGoodsItemRepository goodsItemRepository;
     @Mock UserRepository userRepository;
     @Mock PaymentComplaintRepository paymentComplaintRepository;
+    @Mock MaintenanceTaskRepository maintenanceTaskRepository;
     @Mock AdminAuthorizationService authorizationService;
     @Mock FacilityScopeService facilityScopeService;
     @Mock AuditLogService auditLogService;
@@ -57,7 +59,7 @@ class FileStorageServiceTests {
         properties.setStoragePath(temporaryDirectory.toString());
         service = new FileStorageService(
             properties, fileAssetRepository, checkInRepository, goodsItemRepository, userRepository,
-            paymentComplaintRepository, authorizationService, facilityScopeService, auditLogService
+            paymentComplaintRepository, maintenanceTaskRepository, authorizationService, facilityScopeService, auditLogService
         );
         customer = entity(new User());
         actor = new ActorPrincipal(customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
@@ -72,7 +74,7 @@ class FileStorageServiceTests {
     void storesPngForOwnedReservationGoodsItem() {
         byte[] png = new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
         var file = new MockMultipartFile("file", "hang-hoa.png", "image/png", png);
-        when(goodsItemRepository.findById(goodsItem.getId())).thenReturn(Optional.of(goodsItem));
+        when(goodsItemRepository.findByIdForUpdate(goodsItem.getId())).thenReturn(Optional.of(goodsItem));
         when(fileAssetRepository.saveAndFlush(any())).thenAnswer(invocation -> entity(invocation.getArgument(0)));
 
         var stored = service.store(actor, file, "RESERVATION_GOODS_ITEM", goodsItem.getId());
@@ -86,7 +88,7 @@ class FileStorageServiceTests {
     void rejectsGoodsImageOwnedByAnotherCustomer() {
         User otherCustomer = entity(new User());
         goodsItem.getReservation().setCustomer(otherCustomer);
-        when(goodsItemRepository.findById(goodsItem.getId())).thenReturn(Optional.of(goodsItem));
+        when(goodsItemRepository.findByIdForUpdate(goodsItem.getId())).thenReturn(Optional.of(goodsItem));
         var file = new MockMultipartFile("file", "hang-hoa.png", "image/png",
             new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a});
 
@@ -97,11 +99,25 @@ class FileStorageServiceTests {
 
     @Test
     void rejectsFileWhoseBytesDoNotMatchDeclaredPngMime() {
-        when(goodsItemRepository.findById(goodsItem.getId())).thenReturn(Optional.of(goodsItem));
+        when(goodsItemRepository.findByIdForUpdate(goodsItem.getId())).thenReturn(Optional.of(goodsItem));
         var file = new MockMultipartFile("file", "fake.png", "image/png", "not-a-png".getBytes());
 
         assertThatThrownBy(() -> service.store(actor, file, "RESERVATION_GOODS_ITEM", goodsItem.getId()))
             .hasMessageContaining("does not match");
+        verify(fileAssetRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void rejectsEleventhImageForTheSameGoodsItem() {
+        when(goodsItemRepository.findByIdForUpdate(goodsItem.getId())).thenReturn(Optional.of(goodsItem));
+        when(fileAssetRepository.countByEntityTypeAndEntityIdAndStatus(
+            "RESERVATION_GOODS_ITEM", goodsItem.getId(), com.storagehub.domain.model.FileAssetStatus.ACTIVE
+        )).thenReturn(10L);
+        var file = new MockMultipartFile("file", "anh-11.png", "image/png",
+            new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a});
+
+        assertThatThrownBy(() -> service.store(actor, file, "RESERVATION_GOODS_ITEM", goodsItem.getId()))
+            .hasMessageContaining("at most 10 images");
         verify(fileAssetRepository, never()).saveAndFlush(any());
     }
 
