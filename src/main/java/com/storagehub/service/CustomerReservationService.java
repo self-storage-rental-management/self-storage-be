@@ -213,6 +213,20 @@ public class CustomerReservationService {
     }
 
     @Transactional(readOnly = true)
+    public PageResponse<CustomerPaymentReceiptResponse> paymentHistory(
+        ActorPrincipal actor, int page, int size, String correlationId
+    ) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customers can read their payment history");
+        }
+        PageRequest pageable = createPageRequest(page, size).withSort(
+            Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id"))
+        );
+        return PageResponse.from(paymentRepository.findAllByReservation_Customer_Id(actor.userId(), pageable)
+            .map(payment -> toPaymentResponse(payment, payment.getReservation().getStatus())), correlationId);
+    }
+
+    @Transactional(readOnly = true)
     public List<CustomerPaymentReceiptResponse> listPayments(ActorPrincipal actor, UUID reservationId) {
         Reservation reservation = findOwnedReservation(actor, reservationId);
         return paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
@@ -569,7 +583,7 @@ public class CustomerReservationService {
             payment.getGatewayPayDate(), payment.getGatewayBankCode(),
             payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
             payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
-            payment.getInitiatedBy().getFullName(), payment.getCreatedAt()
+            payment.getInitiatedBy().getFullName(), payment.getCreatedAt(), payment.getReservation().getReservationCode()
         );
     }
 

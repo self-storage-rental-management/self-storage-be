@@ -108,6 +108,16 @@ public class CustomerReservationController {
         );
     }
 
+    @GetMapping("/payment-history")
+    public PageResponse<com.storagehub.api.payment.CustomerPaymentReceiptResponse> paymentHistory(
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "50") int size
+    ) {
+        return customerReservationService.paymentHistory(
+            actorContext.required(), page, size, CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/receipt-confirmation")
     public ApiResponse<ReservationDetailResponse> confirmReceipt(
         @PathVariable UUID reservationId
