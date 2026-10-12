@@ -17,7 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Component @RequiredArgsConstructor @Transactional(readOnly=true)
 @ConditionalOnProperty(name="storagehub.integration.ledger.enabled",havingValue="true")
 public class LedgerCoverageInventory {
-    public record PaymentEvidence(UUID paymentId,String provenance,boolean linkedReceipt,boolean refundUnreconciled) {}
+    public record PaymentEvidence(UUID paymentId,String provenance,boolean linkedReceipt,boolean refundUnreconciled,boolean eligibleForReconciliation) {}
     public record Inventory(UUID rentalId,Long ledgerRevision,String completeness,List<String> gaps,
         List<PaymentEvidence> payments,boolean consistentThroughApproval) {}
     private final ReservationPricingSnapshotRepository pricing;
@@ -26,10 +26,13 @@ public class LedgerCoverageInventory {
     private final EntityManager em;
     private final ObjectMapper mapper;
     private final SandboxPaymentRecognitionPolicy sandboxPolicy;
+    private final LedgerStore ledger;
+    private final ActivityLogRepository logs;
 
     public Inventory inspect(Rental rental,Optional<LedgerStore.Snapshot> stored) {
         var gaps=new LinkedHashSet<String>();var evidence=new ArrayList<PaymentEvidence>();
         var snapshot=stored.orElse(null);
+        var validatedReceipts=new HashSet<UUID>();
         if(snapshot==null)gaps.add("LEDGER_ACCOUNT_MISSING");
         else if(!Objects.equals(snapshot.rentalId(),rental.getId())||snapshot.revision()<0
             ||rental.getCustomer()==null||rental.getFacility()==null
@@ -53,14 +56,31 @@ public class LedgerCoverageInventory {
                 var classification=bound?provenance.classify(payment):PaymentProvenance.Classification.UNVERIFIED;
                 if(!bound)gaps.add("PAYMENT_BINDING_INVALID");
                 if(classification==PaymentProvenance.Classification.DISPUTED)gaps.add("PAYMENT_DISPUTED");
-                boolean linked=snapshot!=null&&snapshot.receipts().stream().anyMatch(p->p.method()==LedgerStore.Method.VNPAY_SANDBOX&&("payment:"+payment.getId()).equals(p.evidenceRef())&&p.amount().compareTo(payment.getAmount())==0);
+                boolean eligible=bound&&sandboxPolicy.evaluate(payment,classification).eligibleForReconciliation();
+                boolean linked=false;
+                if(snapshot!=null&&eligible){
+                    var rentSpecs=specifications.stream().filter(s->s.kind()==LedgerStore.Kind.RENT).toList();
+                    var candidates=snapshot.receipts().stream().filter(p->p.method()==LedgerStore.Method.VNPAY_SANDBOX
+                        &&("payment:"+payment.getId()).equals(p.evidenceRef())).toList();
+                    if(rentSpecs.size()==1&&candidates.size()==1&&snapshot.obligations().stream().filter(o->
+                        o.kind()==LedgerStore.Kind.RENT&&o.renewalId()==null&&rentSpecs.getFirst().sourceReference().equals(o.sourceRef())
+                        &&o.amount().compareTo(rentSpecs.getFirst().amount())==0).count()==1){
+                        var receipt=candidates.getFirst();
+                        var proofs=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",payment.getId(),PaymentProvenance.CALLBACK_ACTION);
+                        linked=proofs.size()==1&&payment.getAmount()!=null&&payment.getPaidAt()!=null
+                            &&receipt.amount().compareTo(payment.getAmount())==0&&receipt.evidenceFileId()==null
+                            &&receipt.receivedAt().toEpochMilli()==payment.getPaidAt().toEpochMilli()
+                            &&ledger.sandboxReceiptMatches(rental.getId(),receipt,new LedgerStore.GatewayProof(payment.getId(),proofs.getFirst().getId(),payment.getGatewayTransactionNo()),rentSpecs.getFirst().sourceReference());
+                        if(linked)validatedReceipts.add(receipt.id());
+                    }
+                }
                 if(payment.getStatus()==PaymentStatus.PAID){
-                    if(!sandboxPolicy.evaluate(payment,classification).eligibleForReconciliation())gaps.add("PAYMENT_NOT_PROJECT_SANDBOX");
+                    if(!eligible)gaps.add("PAYMENT_NOT_PROJECT_SANDBOX");
                     else if(!linked)gaps.add("SANDBOX_PAYMENT_NOT_RECONCILED");
                 }
                 boolean refund=payment.getRefundedAmount()!=null&&payment.getRefundedAmount().signum()>0;
                 if(refund)gaps.add("PAYMENT_REFUND_EXECUTION_UNRECONCILED");
-                evidence.add(new PaymentEvidence(payment.getId(),classification.name(),linked,refund));
+                evidence.add(new PaymentEvidence(payment.getId(),classification.name(),linked,refund,eligible));
             }
         }
         var revisions=em.createQuery("select a from RenewalAcceptedRevision a where a.renewal.rental.id=:id",RenewalAcceptedRevision.class)
@@ -80,7 +100,8 @@ public class LedgerCoverageInventory {
             if(snapshot.obligations().stream().anyMatch(o->allowed.stream().noneMatch(s->s.kind()==o.kind()
                 &&Objects.equals(s.renewalId(),o.renewalId())&&s.sourceReference().equals(o.sourceRef())
                 &&s.amount().compareTo(o.amount())==0)))gaps.add("OBLIGATION_SOURCE_UNVERIFIED");
-            if(snapshot.receipts().stream().anyMatch(p->p.method()!=LedgerStore.Method.SIMULATED))gaps.add("RECEIPT_WRITER_PROVENANCE_UNCERTIFIED");
+            if(snapshot.receipts().stream().anyMatch(p->p.method()!=LedgerStore.Method.SIMULATED&&p.method()!=LedgerStore.Method.VNPAY_SANDBOX))gaps.add("RECEIPT_WRITER_PROVENANCE_UNCERTIFIED");
+            if(snapshot.receipts().stream().anyMatch(p->p.method()==LedgerStore.Method.VNPAY_SANDBOX&&!validatedReceipts.contains(p.id())))gaps.add("SANDBOX_RECEIPT_BINDING_INVALID");
             if(snapshot.refunds().stream().anyMatch(f->!"EXECUTED".equals(f.status())||f.payoutRef()==null||f.payoutRef().isBlank()))gaps.add("LEDGER_REFUND_INCOMPLETE");
         }
         gaps.add("SECURITY_DEPOSIT_HELD_SOURCE_UNCERTIFIED");gaps.add("HISTORICAL_WRITER_COVERAGE_UNCERTIFIED");

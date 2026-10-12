@@ -55,6 +55,20 @@ public class LedgerStore {
         if(rows.size()>1)throw ApiExceptions.conflict("Payment evidence has duplicate ledger receipts");
         return rows.isEmpty()?Optional.empty():Optional.of(UUID.fromString(rows.getFirst()));
     }
+    /** Read-only proof and allocation binding; a receipt reference alone is not evidence. */
+    boolean sandboxReceiptMatches(UUID rental,Receipt receipt,GatewayProof proof,String rentSource) {
+        var rows=jdbc.queryForList("select payment_id,proof_log_id,environment,transaction_no from rental_ledger_gateway_evidence where receipt_id=?",s(receipt.id()));
+        if(rows.size()!=1)return false;
+        var row=rows.getFirst();
+        if(!s(proof.paymentId()).equals(value(row,"payment_id"))||!s(proof.proofLogId()).equals(value(row,"proof_log_id"))
+            ||!"SANDBOX".equals(value(row,"environment"))||!Objects.equals(proof.transactionNo(),value(row,"transaction_no")))return false;
+        var allocations=jdbc.queryForList("select a.amount,a.rental_id,o.rental_id as obligation_rental,o.kind,o.renewal_id,o.source_ref from rental_ledger_allocations a join rental_ledger_obligations o on o.id=a.obligation_id where a.receipt_id=?",s(receipt.id()));
+        if(allocations.size()!=1)return false;
+        var allocation=allocations.getFirst();
+        return s(rental).equals(value(allocation,"rental_id"))&&s(rental).equals(value(allocation,"obligation_rental"))
+            &&"RENT".equals(value(allocation,"kind"))&&value(allocation,"renewal_id")==null
+            &&rentSource.equals(value(allocation,"source_ref"))&&receipt.amount().compareTo(new BigDecimal(value(allocation,"amount")))==0;
+    }
     public UUID charge(UUID rental,UUID renewal,Kind kind,BigDecimal amount,Instant due,String source,
         UUID actor,String key,long expectedRevision) {
         long revision=lock(rental);money(amount,true);required(kind);required(due);text(source,200);
