@@ -1,6 +1,7 @@
 package com.storagehub.api.payment;
 
 import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.ReservationStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -21,5 +22,9 @@ public record VnpayTransactionResponse(
     String gatewayPayDate,
     String message,
     Instant processedAt,
-    Instant lastReconciledAt
+    Instant lastReconciledAt,
+    PaymentType purpose,
+    String paymentMethod,
+    Instant paidAt,
+    String initiatedByName
 ) {}

@@ -35,6 +35,7 @@ public class RenewalVnpaySettlementService {
     private final ObjectProvider<RenewalOperationSources.SafetySource> safetySources;
     private final ObjectProvider<com.storagehub.service.renewal.RenewalSources.FinancialSource> financialSources;
     private final ObjectProvider<Clock> clocks;
+    private final com.storagehub.service.PaymentProvenance provenance;
 
     @Transactional(propagation=Propagation.MANDATORY)
     public Result settle(Payment payment,UUID evidenceLogId) {
@@ -42,6 +43,8 @@ public class RenewalVnpaySettlementService {
     }
 
     private Result settleChecked(Payment payment,UUID evidenceLogId) {
+        if(payment!=null&&payment.getRenewalLedgerReceiptRef()!=null)
+            return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
         if(payment==null||payment.getRenewal()==null||payment.getRenewalRevision()==null||evidenceLogId==null)
             return new Result(false,null,"Payment resource binding is incomplete");
         var renewal=em.find(Renewal.class,payment.getRenewal().getId(),LockModeType.PESSIMISTIC_WRITE);
@@ -72,21 +75,13 @@ public class RenewalVnpaySettlementService {
             ||payment.getAmount().compareTo(specifications.getFirst().amount())!=0)
             return new Result(false,null,"Payment amount, purpose or deadline does not match full-rent Renewal terms");
 
+        if(!Objects.equals(evidenceLogId,payment.getRenewalEvidenceRef())
+            ||provenance.classify(payment)!=com.storagehub.service.PaymentProvenance.Classification.SANDBOX
+            ||payment.getRefundedAmount()==null||payment.getRefundedAmount().signum()!=0)
+            return new Result(false,null,"Verified resource-bound Payment evidence is unavailable");
+
         var now=now();
         if(payment.getPaidAt().isAfter(now))return new Result(false,null,"Gateway payment time is in the future");
-        var safety=safetySources.getIfAvailable();var policySource=policies.getIfAvailable();var calendar=calendars.getIfAvailable();
-        if(safety==null||!safety.atomic()||policySource==null||calendar==null||!calendar.atomic())
-            return new Result(false,null,"Atomic signing and Recovery sources are unavailable");
-        var policy=policySource.read(renewal).orElse(null);
-        if(policy==null||policy.signingWindow()==null||policy.signingWindow().isNegative()||policy.signingWindow().isZero())
-            return new Result(false,null,"Signing policy is unavailable");
-        UUID hold=workflow.getExtensionHoldRef();
-        Instant cutoff=safety.check(renewal,terms,hold,now);
-        if(cutoff==null||now.isAfter(workflow.getPaymentDeadline())||payment.getPaymentDeadline().isAfter(cutoff))
-            return new Result(false,null,"Payment deadline or extension hold is no longer active");
-        Instant signingDeadline=min(payment.getPaidAt().plus(policy.signingWindow()),cutoff);
-        if(!signingDeadline.isAfter(now)||!calendar.feasible(renewal,now,signingDeadline))
-            return new Result(false,null,"No signing slot is available before the Recovery cutoff");
 
         var account=ledger.read(renewal.getRental().getId()).orElse(null);
         if(account==null||!account.customerId().equals(renewal.getRental().getCustomer().getId())
@@ -98,37 +93,80 @@ public class RenewalVnpaySettlementService {
             &&o.amount().compareTo(spec.amount())==0).toList();
         if(obligations.size()!=1||obligations.getFirst().outstanding().compareTo(payment.getAmount())!=0)
             return new Result(false,null,"Unique unpaid full-rent obligation is unavailable");
-        var financial=financialSources.getIfAvailable();
-        if(financial==null||!financial.consistentThroughApproval())
-            return new Result(false,null,"Consistent Renewal financial source is unavailable");
-        var financialState=financial.read(renewal.getRental()).orElse(null);
-        if(financialState==null||financialState.checkedAt()==null||financialState.checkedAt().isAfter(now)
-            ||financialState.dueObligations()==null||financialState.unresolvedDispute()
-            ||financialState.dueObligations().stream().anyMatch(ref->!Objects.equals(ref,obligations.getFirst().id())))
-            return new Result(false,null,"Other due obligations or a financial dispute block Renewal payment allocation");
-        var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
-        if(state!=null&&state.hasVerifiedPayment())
-            return new Result(false,null,"Renewal already has a verified payment state");
-
-        safety.retain(renewal,hold,signingDeadline);
+        if(!ledger.renewalFullRentCommandMatches(obligations.getFirst(),spec,renewal.getRental().getCustomer().getId()))
+            return new Result(false,null,"Full-rent obligation lacks the payment-ready writer evidence");
         UUID receipt=ledger.receiveSandbox(renewal.getRental().getId(),payment.getAmount(),
             Map.of(obligations.getFirst().id(),payment.getAmount()),
             new LedgerStore.GatewayProof(payment.getId(),evidenceLogId,payment.getGatewayTransactionNo()),
             renewal.getRental().getCustomer().getId(),"renewal-vnpay:"+payment.getId(),account.revision(),payment.getPaidAt());
 
-        if(state==null) { state=new RenewalOperationState(renewal);em.persist(state); }
+        payment.setRenewalLedgerReceiptRef(receipt);
+        payment.setRenewalAllocatedAt(now);
+        em.flush();
+        return new Result(true,receipt,null);
+    }
+
+    /** Transaction C: preserves the existing signing contract; does not extend Rental here. */
+    @Transactional(propagation=Propagation.MANDATORY)
+    public Result prepareSigning(Payment payment) {
+        if(payment.getRenewalSigningPreparedAt()!=null)
+            return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
+        if(payment.getStatus()!=PaymentStatus.PAID||payment.getRenewalAllocatedAt()==null
+            ||payment.getRenewalLedgerReceiptRef()==null||payment.getRenewalRevision()==null
+            ||payment.getRefundedAmount()==null||payment.getRefundedAmount().signum()!=0
+            ||provenance.classify(payment)!=com.storagehub.service.PaymentProvenance.Classification.SANDBOX)
+            return new Result(false,null,"Verified full-rent allocation is required before signing");
+        var renewal=em.find(Renewal.class,payment.getRenewal().getId(),LockModeType.PESSIMISTIC_WRITE);
+        var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
+        if(workflow==null||workflow.getAcceptedRevision()==null||renewal.getStatus()!=RenewalStatus.accepted
+            ||!Objects.equals(workflow.getAcceptedRevision().getId(),payment.getRenewalRevision().getId()))
+            return new Result(false,null,"Current accepted revision no longer permits signing preparation");
+        final RenewalQuoteResponse.Terms terms;
+        try { terms=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class); }
+        catch(Exception invalid) { return new Result(false,null,"Accepted terms are invalid"); }
+        var now=now();
+        var safety=safetySources.getIfAvailable();var policySource=policies.getIfAvailable();var calendar=calendars.getIfAvailable();
+        if(safety==null||!safety.atomic()||policySource==null||calendar==null||!calendar.atomic())
+            return new Result(false,null,"Atomic signing and Recovery sources are unavailable");
+        var policy=policySource.read(renewal).orElse(null);
+        if(policy==null||policy.signingWindow()==null||policy.signingWindow().isNegative()||policy.signingWindow().isZero())
+            return new Result(false,null,"Signing policy is unavailable");
+        UUID hold=workflow.getExtensionHoldRef();
+        Instant cutoff=safety.check(renewal,terms,hold,now);
+        // Callback arrival time does not decide whether the customer paid before the deadline.
+        if(cutoff==null||payment.getPaidAt().isAfter(payment.getPaymentDeadline())||payment.getPaymentDeadline().isAfter(cutoff))
+            return new Result(false,null,"Extension rights require reconciliation");
+        Instant signingDeadline=min(payment.getPaidAt().plus(policy.signingWindow()),cutoff);
+        if(!signingDeadline.isAfter(now)||!calendar.feasible(renewal,now,signingDeadline))
+            return new Result(false,null,"No signing slot is available before the Recovery cutoff");
+        var financial=financialSources.getIfAvailable();
+        var financialState=financial==null?null:financial.read(renewal.getRental()).orElse(null);
+        if(financial==null||!financial.consistentThroughApproval()||financialState==null||financialState.checkedAt()==null
+            ||financialState.checkedAt().isAfter(now)||financialState.dueObligations()==null
+            ||financialState.unresolvedDispute()||!financialState.dueObligations().isEmpty())
+            return new Result(false,null,"Financial state is unknown or still blocks signing");
+        var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
+        if(state!=null&&state.hasVerifiedPayment())
+            return new Result(false,null,"Renewal already has a different verified payment state");
+        safety.retain(renewal,hold,signingDeadline);
+
+        boolean newState=state==null;
+        if(newState)state=new RenewalOperationState(renewal);
         state.fullRent(payment.getId(),payment.getPaidAt(),signingDeadline,cutoff,policy.reference(),policy.version());
+        if(newState)em.persist(state);
         renewal.setStatus(RenewalStatus.full_rent_paid);
         em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         var eventData=Map.of("paymentRef",payment.getId(),"amount",payment.getAmount(),"currency",payment.getCurrency(),
-            "paidAt",payment.getPaidAt(),"paymentDeadline",payment.getPaymentDeadline(),"receiptId",receipt);
+            "paidAt",payment.getPaidAt(),"paymentDeadline",payment.getPaymentDeadline(),"receiptId",payment.getRenewalLedgerReceiptRef());
         try {
             em.persist(new RenewalOperationEvent(renewal,"FULL_RENT_PAYMENT",payment.getPaidAt(),null,mapper.writeValueAsString(eventData)));
         } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
             throw new IllegalStateException("Could not store Renewal payment event",invalid);
         }
         em.flush();
-        return new Result(true,receipt,null);
+        payment.setRenewalSigningPreparedAt(now);
+        payment.setFailureCode(null);payment.setFailureReason(null);payment.setRenewalNextRetryAt(null);
+        return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
     }
 
     private Instant now(){var clock=clocks.getIfAvailable();return (clock==null?Clock.systemUTC():clock).instant();}

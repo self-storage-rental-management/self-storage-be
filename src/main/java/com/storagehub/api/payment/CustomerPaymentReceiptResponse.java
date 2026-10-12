@@ -26,6 +26,7 @@ public record CustomerPaymentReceiptResponse(
     Instant processedAt,
     Instant paidAt,
     Instant lastReconciledAt,
-    String initiatedByName
+    String initiatedByName,
+    Instant createdAt
 ) {
 }
