@@ -42,6 +42,7 @@ class RentalBookingEvidenceJpaTests {
     @Autowired com.storagehub.service.ledger.LedgerStore ledger;
     @Autowired com.storagehub.service.ledger.SandboxPaymentReconciliationService reconciliation;
     @Autowired com.storagehub.service.ledger.LedgerQueryService ledgerReads;
+    @Autowired com.storagehub.domain.repo.ActivityLogRepository logs;
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void authenticatedSandboxReceiptAllocatesRentAndReplaysWithCommittedHttpJdbcReadback() throws Exception {
         gatewayConfig.setEnabled(true);gatewayConfig.setTmnCode("TEST_ONLY");gatewayConfig.setHashSecret("test-only-no-external-gateway");
@@ -88,6 +89,30 @@ class RentalBookingEvidenceJpaTests {
         assertThat(view.path("obligations").get(0).path("outstanding").decimalValue()).isEqualByComparingTo("80");
         assertThat(view.path("sandboxReconciliationEnabled").asBoolean()).isTrue();
         assertThat(view.path("coverageInventory").path("payments").get(0).path("linkedReceipt").asBoolean()).isTrue();
+        assertThat(view.path("coverageInventory").path("gaps").toString()).doesNotContain("RECEIPT_WRITER_PROVENANCE_UNCERTIFIED","SANDBOX_RECEIPT_BINDING_INVALID");
+        assertThat(view.path("coverageInventory").path("payments").get(0).path("eligibleForReconciliation").asBoolean()).isTrue();
+        var jdbc=new org.springframework.jdbc.core.JdbcTemplate(datasource);
+        String receiptId=receipt;
+        // Commit a damaged source in the isolated test schema; GET must diagnose it, never certify it.
+        for(String mutation:List.of("update rental_ledger_gateway_evidence set transaction_no='TEST-ONLY-DRIFT' where receipt_id=?",
+            "update rental_ledger_allocations set amount=19 where receipt_id=?",
+            "delete from rental_ledger_gateway_evidence where receipt_id=?")) {
+            tx.executeWithoutResult(status->jdbc.update(mutation,receiptId));
+            var damaged=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/manager/rentals/"+data.get(0)+"/ledger"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn().getResponse();
+            var coverage=mapper.readTree(damaged.getContentAsString()).path("data").path("coverageInventory");
+            assertThat(coverage.path("payments").get(0).path("linkedReceipt").asBoolean()).isFalse();
+            assertThat(coverage.path("gaps").toString()).contains("SANDBOX_RECEIPT_BINDING_INVALID");
+            assertThat(coverage.path("consistentThroughApproval").asBoolean()).isFalse();
+            // Restore using immutable gateway proof, not a fabricated production evidence record.
+            tx.executeWithoutResult(status->{
+                if(mutation.startsWith("delete")) {
+                    var log=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",data.get(1),com.storagehub.service.PaymentProvenance.CALLBACK_ACTION).getFirst();
+                    jdbc.update("insert into rental_ledger_gateway_evidence(receipt_id,payment_id,proof_log_id,environment,transaction_no) values(?,?,?,'SANDBOX',?)",receiptId,data.get(1).toString(),log.getId().toString(),params.get("vnp_TransactionNo"));
+                }else if(mutation.contains("transaction_no"))jdbc.update("update rental_ledger_gateway_evidence set transaction_no=? where receipt_id=?",params.get("vnp_TransactionNo"),receiptId);
+                else jdbc.update("update rental_ledger_allocations set amount=20 where receipt_id=?",receiptId);
+            });
+        }
         var simulated=tx.execute(status->payment(em.find(Rental.class,data.get(0)),"SIMULATED-",9).getId());
         http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/manager/rentals/"+data.get(0)+"/sandbox-payments/"+simulated+"/reconciliation")
             .header("Idempotency-Key","reject-simulation").contentType("application/json").content("{\"expectedRevision\":2}"))
