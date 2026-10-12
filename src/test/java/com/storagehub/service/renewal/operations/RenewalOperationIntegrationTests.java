@@ -139,6 +139,73 @@ class RenewalOperationIntegrationTests {
         assertThat(service.appointment(customer,n.getId(),retry,"slow-calendar",edit)).isEqualTo(accepted);
     }
     private ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
+    @org.junit.jupiter.api.io.TempDir java.nio.file.Path evidenceRoot;
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void completionConsumesRealBoundSignedContractWithCommittedReadback() throws Exception {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        var n=tx.execute(s->scheduled());
+        var assigned=tx.execute(s->{
+            var role=em.createQuery("select r from Role r where r.code=:code",com.storagehub.domain.model.Role.class).setParameter("code",RoleCode.STAFF).getResultStream().findFirst().orElse(null);
+            if(role==null){role=new com.storagehub.domain.model.Role();role.setCode(RoleCode.STAFF);role.setName("TEST Staff");em.persist(role);}
+            for(var code:List.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code())){
+                var permission=em.createQuery("select p from Permission p where p.code=:code",Permission.class).setParameter("code",code).getResultStream().findFirst().orElse(null);
+                if(permission==null){permission=new Permission();permission.setCode(code);permission.setName(code);em.persist(permission);}role.getPermissions().add(permission);
+            }
+            var staff=new User();staff.setEmail(UUID.randomUUID()+"@test.invalid");staff.setFullName("TEST signing Staff");staff.setPasswordHash("TEST-ONLY");staff.setRoles(new HashSet<>(Set.of(role)));em.persist(staff);
+            var current=em.find(Renewal.class,n.getId());
+            var customerRole=em.createQuery("select r from Role r where r.code=:code",com.storagehub.domain.model.Role.class).setParameter("code",RoleCode.CUSTOMER).getResultStream().findFirst().orElse(null);
+            if(customerRole==null){customerRole=new com.storagehub.domain.model.Role();customerRole.setCode(RoleCode.CUSTOMER);customerRole.setName("TEST Customer");em.persist(customerRole);}current.getRequestedBy().getRoles().add(customerRole);
+            var scope=new UserFacilityScope();scope.setUser(staff);scope.setFacility(current.getRental().getFacility());scope.setScopeLevel(FacilityScopeLevel.OPERATE);em.persist(scope);
+            var w=em.find(RenewalWorkflow.class,n.getId());
+            var proof=new com.storagehub.service.renewal.integration.RenewalAssignmentSource.Assignment(n.getId(),current.getRental().getFacility().getId(),staff.getId(),w.getAcceptedRevision().getQuote().getId(),w.getVersion());
+            em.persist(new RenewalOperationEvent(current,"STAFF_ASSIGNMENT",NOW,staff.getId(),store.canonical(proof)));em.flush();return staff.getId();
+        });
+        var staff=new ActorPrincipal(assigned,UUID.randomUUID(),Set.of(RoleCode.STAFF),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(n.getRental().getFacility().getId(),FacilityScopeLevel.OPERATE));
+        var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
+        var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),state.expectedVersion()),"real-file-arrival");
+        var access=new com.storagehub.service.integration.DuongResourceAccess(em);
+        var assignments=new com.storagehub.service.renewal.integration.RenewalAssignmentSource(em,mapper(),access);
+        var properties=new com.storagehub.config.FileProperties();properties.setStoragePath(evidenceRoot.toString());
+        var realEvidence=new com.storagehub.service.integration.DuongFileEvidence(em,access,assignments,properties,mapper());
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("evidence",realEvidence);
+        var original=org.springframework.test.util.ReflectionTestUtils.getField(service,"evidences");
+        var originalAuthorization=org.springframework.test.util.ReflectionTestUtils.getField(service,"authorizations");
+        beans.addBean("assignment",assignments);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"authorizations",beans.getBeanProvider(RenewalOperationSources.AuthorizationSource.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"evidences",beans.getBeanProvider(RenewalOperationSources.EvidenceSource.class));
+        try {
+            var actors=mock(ActorContext.class);when(actors.required()).thenReturn(staff);
+            var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new StaffRenewalOperationController(actors,service)).setControllerAdvice(new GlobalExceptionHandler()).build();
+            var path="/api/staff/renewals/"+n.getId();var oldEnd=n.getRental().getContractEndDate();
+            for(var kind:List.of("INCIDENT","OTHER_RENEWAL","OTHER_UPLOADER","CHANGED_BYTES")){
+                var id=persistSignedFile(tx,n.getId(),kind.equals("OTHER_UPLOADER")?n.getRequestedBy().getId():assigned,kind.equals("OTHER_RENEWAL")?UUID.randomUUID():n.getId(),kind.equals("INCIDENT")?"INCIDENT":"SIGNED_CONTRACT");
+                if(kind.equals("CHANGED_BYTES")){var key=tx.execute(s->em.find(FileAsset.class,id).getStorageKey());java.nio.file.Files.writeString(java.nio.file.Path.of(key),"WRONG DOC");}
+                var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),id,"TEST invalid evidence");
+                http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path+"/completion").header("Idempotency-Key","invalid-"+kind).contentType("application/json").content(mapper().writeValueAsString(body)))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().is(kind.equals("CHANGED_BYTES")?409:404));
+                assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).expectedVersion()).isEqualTo(arrival.state().expectedVersion());
+                tx.executeWithoutResult(s->assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(oldEnd));
+            }
+            var document=persistSignedFile(tx,n.getId(),assigned,n.getId(),"SIGNED_CONTRACT");
+            var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),document,"TEST signed contract");
+            var request=org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path+"/completion").header("Idempotency-Key","bound-completion").contentType("application/json").content(mapper().writeValueAsString(body));
+            http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+            http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data.phase").value("COMPLETED"));
+            tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(LocalDate.of(2026,11,6));realEvidence.requireDownload(actor(n,RoleCode.CUSTOMER),em.find(FileAsset.class,document));});
+            tx.executeWithoutResult(s->em.createQuery("delete from UserFacilityScope s where s.user.id=:id").setParameter("id",assigned).executeUpdate());
+            http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+            try(var connection=datasource.getConnection();var query=connection.prepareStatement("select payload_json from renewal_operation_events where renewal_id=? and kind='COMPLETION'")){
+                query.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(n.getId().getMostSignificantBits()).putLong(n.getId().getLeastSignificantBits()).array());
+                try(var rows=query.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).contains(document.toString());assertThat(rows.next()).isFalse();}
+            }
+        } finally {org.springframework.test.util.ReflectionTestUtils.setField(service,"evidences",original);org.springframework.test.util.ReflectionTestUtils.setField(service,"authorizations",originalAuthorization);}
+    }
+    private UUID persistSignedFile(org.springframework.transaction.support.TransactionTemplate tx,UUID renewal,UUID uploader,UUID resource,String purpose) throws Exception {
+        var path=java.nio.file.Files.createTempFile(evidenceRoot,"signed-", ".txt");var bytes="TEST FILE".getBytes(java.nio.charset.StandardCharsets.UTF_8);java.nio.file.Files.write(path,bytes);
+        var hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        return tx.execute(s->{var file=new FileAsset();file.setUploadedBy(em.find(User.class,uploader));file.setStorageKey(path.toString());file.setOriginalName("test-signed.txt");file.setContentType("text/plain");file.setSizeBytes(bytes.length);file.setChecksumSha256(hash);file.setEntityType(com.storagehub.service.integration.DuongFileEvidence.renewalType(purpose));file.setEntityId(resource);em.persist(file);em.flush();return file.getId();});
+    }
     @Test void missingAppointmentPeriodCannotRecordArrival() {
         var n=scheduled();var state=em.find(RenewalOperationState.class,n.getId());
         state.appointment(state.getAppointmentRef(),state.getAppointmentStart(),null);em.flush();
@@ -243,7 +310,7 @@ class RenewalOperationIntegrationTests {
         var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);var n=tx.execute(s->scheduled());var staff=actor(n,RoleCode.STAFF);var oldEnd=n.getRental().getContractEndDate();
         var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),state.expectedVersion()),"arrival");ops.failConsume=true;
         assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST rollback"),"rollback")).isInstanceOf(IllegalStateException.class);
-        tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(oldEnd);assertThat(em.find(Renewal.class,n.getId()).getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(em.createQuery("select count(e) from ActivityLog e where e.entityType='TestD3Hold'",Long.class).getSingleResult()).isZero();assertThat(em.createQuery("select count(e) from RenewalIdempotency e where e.operation='d3_complete'",Long.class).getSingleResult()).isZero();});
+        tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(oldEnd);assertThat(em.find(Renewal.class,n.getId()).getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(em.createQuery("select count(e) from ActivityLog e where e.entityType='TestD3Hold'",Long.class).getSingleResult()).isZero();assertThat(em.createQuery("select count(e) from RenewalIdempotency e where e.operation='d3_complete' and e.resourceId=:id",Long.class).setParameter("id",n.getId()).getSingleResult()).isZero();});
     }
     @Test void fullDepositAppointmentArrivalCashCompletionAndReplay(){
         var n=fixture();var oldEnd=n.getRental().getContractEndDate();var customer=actor(n,RoleCode.CUSTOMER);var staff=actor(n,RoleCode.STAFF);
