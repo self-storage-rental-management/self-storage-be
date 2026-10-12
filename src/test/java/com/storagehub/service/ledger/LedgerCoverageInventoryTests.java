@@ -33,7 +33,7 @@ class LedgerCoverageInventoryTests {
         var inventory=inventory(rental,List.of(payment));var source=(PaymentProvenance)ReflectionTestUtils.getField(inventory,"provenance");
         when(source.classify(payment)).thenReturn(PaymentProvenance.Classification.SIMULATED);
         var result=inventory.inspect(rental,Optional.of(snapshot(rental)));
-        assertThat(result.gaps()).contains("PAYMENT_NOT_PRODUCTION_VERIFIED","PAYMENT_REFUND_EXECUTION_UNRECONCILED");
+        assertThat(result.gaps()).contains("PAYMENT_NOT_PROJECT_SANDBOX","PAYMENT_REFUND_EXECUTION_UNRECONCILED");
         assertThat(result.payments().getFirst().provenance()).isEqualTo("SIMULATED");
         when(source.classify(payment)).thenReturn(PaymentProvenance.Classification.DISPUTED);
         assertThat(inventory.inspect(rental,Optional.of(snapshot(rental))).gaps()).contains("PAYMENT_DISPUTED");
@@ -45,7 +45,7 @@ class LedgerCoverageInventoryTests {
         var em=mock(EntityManager.class);var query=mock(TypedQuery.class);
         when(em.createQuery(anyString(),eq(RenewalAcceptedRevision.class))).thenReturn(query);
         when(query.setParameter(eq("id"),any())).thenReturn(query);when(query.getResultList()).thenReturn(List.of());
-        return new LedgerCoverageInventory(pricing,payments,mock(PaymentProvenance.class),em,new ObjectMapper());
+        return new LedgerCoverageInventory(pricing,payments,mock(PaymentProvenance.class),em,new ObjectMapper(),new SandboxPaymentRecognitionPolicy("VNPAY_SANDBOX",true));
     }
     private Rental rental() {
         var r=new Rental();var customer=new User();var facility=new Facility();var reservation=new Reservation();

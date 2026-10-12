@@ -54,7 +54,7 @@ public class PaymentReconciliationPreflight {
         var target=targets.getFirst();
         if(p.getAmount().compareTo(target.outstanding())>0)return plan("ALLOCATION_EXCEEDS_OUTSTANDING",ref,target.id(),fingerprint);
         // Mapping is unambiguous; the remaining blocker is the existing FileAsset evidence interface.
-        return plan("FIN_03A_EVIDENCE_MODEL_REQUIRED",ref,target.id(),fingerprint);
+        return plan("SANDBOX_RECEIPT_READY",ref,target.id(),fingerprint);
     }
     private static Plan plan(String status,String ref,UUID obligation,String fingerprint){return new Plan(status,ref,obligation,fingerprint);}
 }

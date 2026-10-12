@@ -25,6 +25,7 @@ public class LedgerCoverageInventory {
     private final PaymentProvenance provenance;
     private final EntityManager em;
     private final ObjectMapper mapper;
+    private final SandboxPaymentRecognitionPolicy sandboxPolicy;
 
     public Inventory inspect(Rental rental,Optional<LedgerStore.Snapshot> stored) {
         var gaps=new LinkedHashSet<String>();var evidence=new ArrayList<PaymentEvidence>();
@@ -52,10 +53,10 @@ public class LedgerCoverageInventory {
                 var classification=bound?provenance.classify(payment):PaymentProvenance.Classification.UNVERIFIED;
                 if(!bound)gaps.add("PAYMENT_BINDING_INVALID");
                 if(classification==PaymentProvenance.Classification.DISPUTED)gaps.add("PAYMENT_DISPUTED");
-                boolean linked=snapshot!=null&&snapshot.receipts().stream().anyMatch(p->("payment:"+payment.getId()).equals(p.evidenceRef()));
+                boolean linked=snapshot!=null&&snapshot.receipts().stream().anyMatch(p->p.method()==LedgerStore.Method.VNPAY_SANDBOX&&("payment:"+payment.getId()).equals(p.evidenceRef())&&p.amount().compareTo(payment.getAmount())==0);
                 if(payment.getStatus()==PaymentStatus.PAID){
-                    if(classification!=PaymentProvenance.Classification.VERIFIED)gaps.add("PAYMENT_NOT_PRODUCTION_VERIFIED");
-                    else if(!linked)gaps.add("VERIFIED_PAYMENT_NOT_RECONCILED");
+                    if(!sandboxPolicy.evaluate(payment,classification).eligibleForReconciliation())gaps.add("PAYMENT_NOT_PROJECT_SANDBOX");
+                    else if(!linked)gaps.add("SANDBOX_PAYMENT_NOT_RECONCILED");
                 }
                 boolean refund=payment.getRefundedAmount()!=null&&payment.getRefundedAmount().signum()>0;
                 if(refund)gaps.add("PAYMENT_REFUND_EXECUTION_UNRECONCILED");
