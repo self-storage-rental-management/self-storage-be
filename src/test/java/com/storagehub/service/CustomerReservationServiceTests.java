@@ -117,6 +117,47 @@ class CustomerReservationServiceTests {
     }
 
     @Test
+    void paymentHistoryIncludesArchivedReservationsAndScopesToCustomer() {
+        reservation.setArchivedAt(Instant.now());
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        Payment payment = entityWithId(new Payment());
+        payment.setReservation(reservation);
+        payment.setInitiatedBy(reservation.getCustomer());
+        payment.setPurpose(PaymentType.RESERVATION_DEPOSIT);
+        payment.setStatus(PaymentStatus.PAID);
+        payment.setAmount(new BigDecimal("100000"));
+        payment.setCurrency("VND");
+        ReflectionTestUtils.setField(payment, "createdAt", Instant.parse("2026-10-12T08:00:00Z"));
+        var pageable = org.springframework.data.domain.PageRequest.of(0, 50,
+            org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "createdAt")
+                .and(org.springframework.data.domain.Sort.by("id")));
+        when(paymentRepository.findAllByReservation_Customer_Id(actor.userId(), pageable))
+            .thenReturn(new PageImpl<>(List.of(payment), pageable, 1));
+
+        var history = service.paymentHistory(actor, 0, 50, "history-test");
+
+        assertThat(history.data()).hasSize(1);
+        assertThat(history.data().getFirst().reservationCode()).isEqualTo(reservation.getReservationCode());
+        assertThat(history.data().getFirst().createdAt()).isEqualTo(payment.getCreatedAt());
+        verify(paymentRepository).findAllByReservation_Customer_Id(actor.userId(), pageable);
+        org.mockito.Mockito.verifyNoInteractions(snapshotRepository, reservationRepository);
+    }
+
+    @Test
+    void paymentHistoryRejectsNonCustomerActors() {
+        var staff = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of(), Map.of());
+        assertThatThrownBy(() -> service.paymentHistory(staff, 0, 50, "test")).isInstanceOf(ApiException.class);
+        org.mockito.Mockito.verifyNoInteractions(paymentRepository);
+    }
+
+    @Test
+    void paymentHistoryRejectsInvalidPagination() {
+        assertThatThrownBy(() -> service.paymentHistory(actor, -1, 50, "test")).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> service.paymentHistory(actor, 0, 101, "test")).isInstanceOf(ApiException.class);
+        org.mockito.Mockito.verifyNoInteractions(paymentRepository);
+    }
+
+    @Test
     void listsOnlyReservationsOwnedByCustomer() {
         when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
