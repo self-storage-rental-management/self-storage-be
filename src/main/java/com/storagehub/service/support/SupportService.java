@@ -332,7 +332,7 @@ public class SupportService {
             switch(link.type()) {
                 case RENTAL -> {var r=em.find(Rental.class,link.id());if(r!=null&&r.getCustomer().getId().equals(actor.userId()))facility=r.getFacility();}
                 case RESERVATION -> {var r=em.find(Reservation.class,link.id());if(r!=null&&r.getCustomer().getId().equals(actor.userId()))facility=r.getFacility();}
-                case PAYMENT -> {var p=em.find(Payment.class,link.id());if(p!=null&&p.getReservation().getCustomer().getId().equals(actor.userId()))facility=p.getReservation().getFacility();}
+                case PAYMENT -> {var p=em.find(Payment.class,link.id());if(p!=null&&p.getReservation()!=null&&p.getReservation().getCustomer().getId().equals(actor.userId()))facility=p.getReservation().getFacility();else if(p!=null&&p.getRenewal()!=null&&p.getRenewal().getRental().getCustomer().getId().equals(actor.userId()))facility=p.getRenewal().getRental().getFacility();}
                 case STORAGE_UNIT -> {var rows=em.createQuery("select r.facility from Rental r where r.customer.id=:customer and r.storageUnit.id=:unit",Facility.class).setParameter("customer",actor.userId()).setParameter("unit",link.id()).setMaxResults(1).getResultList();if(!rows.isEmpty())facility=rows.getFirst();}
             }
             if(facility==null)throw ApiExceptions.notFound("Owned linked record not found");if(requested!=null&&!facility.getId().equals(requested))throw ApiExceptions.validation("Facility conflicts with linked record",null);
