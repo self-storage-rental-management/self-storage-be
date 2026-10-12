@@ -54,8 +54,11 @@ class SupportSwaggerTests {
         assertHandler(RequestMethod.GET,workflowPath("customer")+"/{id}",CustomerSupportController.class);
         assertHandler(RequestMethod.POST,workflowPath("customer")+"/{id}/messages",CustomerSupportController.class);
         assertHandler(RequestMethod.GET,workflowPath("staff"),StaffSupportController.class);
+        assertHandler(RequestMethod.GET,workflowPath("staff")+"/queue",StaffSupportController.class);
+        assertHandler(RequestMethod.POST,workflowPath("staff")+"/{id}/claim",StaffSupportController.class);
         assertHandler(RequestMethod.POST,workflowPath("staff")+"/{id}/accept",StaffSupportController.class);
         assertHandler(RequestMethod.GET,workflowPath("manager"),ManagerSupportController.class);
+        assertHandler(RequestMethod.GET,workflowPath("manager")+"/summary",ManagerSupportController.class);
     }
 
     private void assertHandler(RequestMethod method,String path,Class<?> controller) {

@@ -1,6 +1,109 @@
-# Đặc tả API gia hạn (D2)
+# Renewal API contract
 
-## Eligibility/operational guard — 11/10/2026
+Đây là contract duy nhất cho flow gia hạn: yêu cầu/báo giá, thanh toán, ký, hoàn tất và tích hợp nguồn. API Payment chung đọc tại [Payment contract](PAYMENT_API_CONTRACT.md).
+
+## Quy tắc hiện hành và thứ tự áp dụng
+
+- Renewal mới: hệ thống kiểm tra điều kiện, Customer chấp nhận báo giá bất biến, trả toàn kỳ qua Payment/VNPay chung; không yêu cầu Manager duyệt và không phát sinh cọc gia hạn mới.
+- Xác minh Payment, phân bổ Ledger và chuẩn bị ký có transaction riêng. Chỉ hoàn tất ký/bàn giao với đủ bằng chứng mới cập nhật thời hạn Rental.
+- Nguồn cấu hình/tài chính/lịch ký/quyền giữ kho còn thiếu vẫn chặn bằng `UNKNOWN`/`DEFERRED_SOURCE`; không suy dữ liệu thiếu là 0 hoặc đã thanh toán.
+- Các mô tả `pending → approved → deposit_paid`, Manager `decision` và cọc mô phỏng trong phần đối chiếu phía dưới chỉ dùng cho tương thích hồ sơ/điều khoản cũ. Chúng không phải flow mặc định của Renewal mới.
+- Khi mô tả lịch sử mâu thuẫn, quy tắc ở mục này và phần **Current payment and lifecycle** được ưu tiên. Các ghi chú rollout/test có ngày tháng chỉ phản ánh thời điểm được ghi, không xác nhận trạng thái deploy hiện tại.
+
+## Nội dung
+
+- [Thanh toán và vòng đời hiện tại](#current-payment-and-lifecycle)
+- [Yêu cầu và đọc hồ sơ](#request-and-read-api)
+- [Ký và vận hành](#signing-and-operations-api)
+- [Tích hợp nguồn dùng chung](#shared-source-integration)
+
+## Current payment and lifecycle
+
+### Renewal Payment integration — 12/10/2026
+
+#### Policy and lifecycle
+
+Reservation and Renewal use the same `VnpayService`, `VnpayProperties` and signed URL builder (`gatewayPaymentUrl`). Both use `app.vnpay` merchant credentials, gateway URL and `/api/public/payments/vnpay/return` / IPN callback verification. There are no separate Renewal merchant credentials. Renewal's customer endpoint creates a shared `Payment` with purpose `RENEWAL`, accepted-revision binding and the full-period amount; it does not call the Reservation deposit endpoint.
+
+New quotes have **zero additional Renewal deposit** and one full-period rental obligation. Customer accepts the immutable server quote; the system validates eligibility. Ordinary Renewal has no Manager approval step. Original security deposits and historical accepted split-payment terms are not repriced or rewritten.
+
+```mermaid
+flowchart LR
+  A[Accepted quote] --> B[Payment intent and full-rent obligation]
+  B --> C[Authenticated VNPay evidence committed]
+  C --> D[Exact Ledger allocation committed]
+  D --> E[Signing prerequisites checked in separate transaction]
+  E --> F[Appointment, arrival and signed contract]
+  F --> G[Verified completion extends Rental once]
+  C --> R[Persistent reconciliation queue]
+  D --> R
+  R --> D
+  R --> E
+```
+
+Signing remains required by the approved business decisions and the existing `RenewalOperationService.complete` contract. Payment itself neither sets `completed` nor changes `Rental.contractEndDate`.
+
+#### API
+
+| Method/path | Contract |
+|---|---|
+| `POST /api/customer/renewals/{renewalId}/payment-intents` | JWT Customer, `Idempotency-Key`, no client amount/currency/purpose. Server resolves current accepted revision, amount, deadline, capacity and obligation. |
+| `GET /api/customer/renewals/{renewalId}/payment` | JWT owner; latest authoritative shared Payment projection. No client redirect status is trusted. |
+| `GET /api/public/payments/vnpay/ipn` | Existing shared HMAC verification and IPN response contract. |
+| `GET /api/public/payments/vnpay/return` | Processes authenticated evidence and returns to `page=rental-records&renewalId=…&vnpayReturn=true`. UI must fetch Payment and Renewal. |
+
+Envelope remains `ApiResponse.data`. Response has `paymentId`, `renewalId`, `acceptedRevisionId`, `transactionReference`, `amount`, `currency`, `paymentStatus`, `paymentDeadline`, `paidAt`, `reconciliationRequired`, `message`, `paymentUrl` and additive `settlementStage`.
+
+| `settlementStage` | Meaning |
+|---|---|
+| `AWAITING_PAYMENT` | Read `paymentStatus` for pending/processing/not-received/failed/cancelled. |
+| `VERIFIED_AWAITING_ALLOCATION` | Shared Payment has authenticated received-funds proof; no committed allocation yet. |
+| `ALLOCATED_AWAITING_SIGNING` | Exact Ledger receipt committed; signing preparation still pending or blocked. |
+| `AWAITING_SIGNING` | Full-rent payment and signing preparation committed. Contract completion still required. |
+| `COMPLETED` | Renewal completion has actually succeeded. |
+| `RECONCILIATION_REQUIRED` | Received funds cannot safely enter this workflow, including late/historical incomplete evidence. |
+
+`PAID` means received funds, not successful activation. `reconciliationRequired=true` may coexist with an allocated receipt. A retry can return PAID with `paymentUrl=null`; it must not create another payment. New browser keys recover the sole owned unresolved intent for the same accepted revision. Conflicting keys/resources are rejected. The original key and gateway intent remain immutable.
+
+#### Transaction and authority boundaries
+
+1. **A — gateway evidence:** `VnpayService.processCallback` locks Payment and verifies HMAC, merchant, amount, transaction identity and gateway payment time. It commits PAID, stable evidence-log reference and a reconciliation marker. It never calls Ledger or calendar in this transaction. Signed query reconciliation can record the same verified proof only after query signature, merchant, amount, identity and payment-time checks.
+2. **B — allocation:** `RenewalPaymentReconciler` runs `REQUIRES_NEW`, locks the persisted Payment and invokes `RenewalVnpaySettlementService.settle`. It checks accepted revision, original quote hash/terms, purpose, currency, exact full-rent amount, deadline, Payment provenance, refund state, account/customer/facility, one exact obligation and payment-ready writer evidence. Receipt, allocation and Payment receipt-reference commit together.
+3. **C — signing preparation:** another `REQUIRES_NEW` rechecks accepted terms, refund/provenance, atomic hold/Recovery/calendar and consistent financial state. It prepares the existing signing phase. Failure preserves A and B. A delayed callback is not rejected just because processing occurs after payment deadline; gateway-paid time determines timeliness. Expired hold/signing rights still block C and require reconciliation.
+4. **Actual activation:** existing staff completion still checks permission/assignment, appointment, arrival, signed document, financial coverage and shared resource guards. The default Ledger accounting adapter checks the exact shared Payment receipt again; it never executes payment or invents CASH receipts. An owner-provided `AccountingSource` takes precedence. Historical deposit/CASH execution remains delegated to its owner adapter and fails closed when absent.
+
+`LedgerStore` keeps its financial schemas and read contracts. Existing unique payment/gateway evidence and receipt-command keys prevent duplicate allocation and cross-obligation reuse. A missing account/obligation/coverage source is UNKNOWN, never zero debt.
+
+#### Reconciliation and exceptional flows
+
+Payment rows persist evidence/receipt references, allocation/signing timestamps, retry count and next retry time. An AFTER_COMMIT event attempts B/C immediately; the already opt-in Renewal lifecycle scheduler retries persisted rows in batches of 100, with bounded retry delay. Restart does not lose queued work. A failed expiry pass does not prevent the paid-work retry pass.
+
+- Identical callback: reuses the original evidence and allocation. Conflicting callback: cannot overwrite PAID transaction metadata.
+- Before-deadline payment with delayed callback: allocate exact received funds; independently decide if signing/extension rights remain valid.
+- After-deadline payment: preserve PAID and `PAYMENT_AFTER_DEADLINE`; manual financial/Refund owner reconciliation, no automatic allocation/activation.
+- Ledger unavailable: A remains committed; retry B from persisted Payment.
+- Signing/activation blocked: A/B remain committed; retry C or route exception handling to Manager/support.
+- Pending/processing/not-received at expiry: query shared VNPay, retain resources for unknown outcome. Renewal query response `91` is conservatively UNKNOWN, since it does not prove a delayed payment cannot arrive. Authoritative final failure may release resources only after locked Payment/other attempts/workflow rechecks.
+- Expiry/callback race: locked Payment is authoritative; PAID or another unresolved attempt prevents release.
+- Accepted revision changed: allocation/activation reject binding mismatch; verified funds remain recorded.
+- Historical PAID without the new evidence references: read as reconciliation required; no automatic evidence fabrication or backfill.
+
+#### Schema and rollout
+
+New additive Flyway migration: `V2026101204__renewal_payment_reconciliation.sql`. Adds six reconciliation columns, an evidence FK, unique evidence/receipt references, composite accepted-revision/resource FK and a queue index. Existing `V2026101203` and applied migrations are unchanged. Version 2026101204 did not exist on fetched `origin/develop` at audit time.
+
+The migration stops if existing resource/revision bindings violate the new FK. Operators must investigate historical mismatches; this task does not repair/delete historical data. Test validates the actual SQL with Flyway migrate/validate/replay in isolated H2 and preserves existing monetary/status data. **MySQL validation remains unexecuted without `STORAGEHUB_SCHEMA_TEST_URL`/credentials for an isolated schema.** Do not run against a shared schema as a substitute.
+
+Existing integration properties remain opt-in; no production gateway, schedule, migration profile or optional adapter was enabled by this task. Deploy schema before application code with Hibernate validation. Payment owner coordination: shared Payment fields/provenance, signed query proof, receipt metadata, retry ownership, late funds/refund procedure and migration rollout. Confirm real policy/calendar/coverage/assignment/evidence sources before claiming complete browser-to-VNPay-to-Rental E2E.
+
+
+---
+
+## Request and read API
+
+### Đặc tả API gia hạn (D2)
+
+#### Eligibility/operational guard — 11/10/2026
 
 `SharedRenewalEligibilitySource` triển khai `EligibilitySource`, opt-in cùng `RenewalOperationalGuard` qua `storagehub.integration.renewal-operational-checks.enabled=true`. Gate D2 gọi guard trước policy/eligibility: options, quote, submit, edit, APPROVE và review/allowedActions. Guard chặn Rental đã trả/completed, unit không occupied, ReturnCase, bảo trì đang mở, Rental/booking khác cam kết cùng unit và Recovery handoff. Replay thành công, CANCEL/REJECT không bị đưa qua gate mới.
 
@@ -12,7 +115,7 @@ Ngày áp dụng policy đã được xác nhận: D2/D3 dùng ngày bắt đầ
 
 Không đổi default flag hoặc tự bật module trong môi trường đang chạy.
 
-## Bổ sung hoàn thiện theo hướng mở rộng — 06/10/2026
+#### Bổ sung hoàn thiện theo hướng mở rộng — 06/10/2026
 
 - Phản hồi Renewal bổ sung `acceptedTerms` có thể null (đối tượng lồng `RenewalQuoteResponse.Terms`, không dàn phẳng) và `cancellationReason`. Điều khoản chỉ lấy từ phiên bản điều chỉnh/báo giá đã lưu và được Customer chấp nhận; không tính lại theo giá hiện tại. Bản ghi cũ không có workflow trả null. Lược đồ danh sách/chi tiết/lệnh nhất quán; không bổ sung API tra cứu báo giá công khai riêng.
 - Dữ liệu tổng hợp kiểm tra liên kết Rental/Customer của báo giá đã chấp nhận và tính nhất quán giữa amount/newEndDate của yêu cầu đã lưu. Dữ liệu sai lệch trả 409, không sửa bản ghi hoặc làm lộ tài nguyên không liên quan.
@@ -26,9 +129,9 @@ Việc công bố policy chung, giá/điều kiện gói thuê/làm tròn, ngu�
 
 Đường dẫn gốc `/api`; JWT Bearer; dùng ApiResponse/PageResponse/correlationId chuẩn. Không có dữ liệu mẫu chạy thực tế/policy mặc định, nguồn tài chính giả hoặc endpoint HTTP không tồn tại.
 
-## Thao tác
+#### Thao tác
 
-### Ngày gia hạn tương thích D1-D4 - 09/10/2026
+##### Ngày gia hạn tương thích D1-D4 - 09/10/2026
 
 Terms báo giá và acceptedTerms thêm `endDateConvention` INCLUSIVE/EXCLUSIVE và `rentalStartDate` (JSON snapshot hiện có, không thêm DB column). `oldEndDate` vẫn là raw snapshot của Rental; `newEndDate` và Renewal.newEndDate vẫn là ngày cuối kỳ gia hạn inclusive. `extensionStartDate` là canonical endExclusive kỳ cũ; `extensionEndExclusive` là đầu ngày sau kỳ mới.
 
@@ -50,7 +153,7 @@ REJECT cần lý do, không cần policy/tài chính/hold. APPROVE kiểm tra l�
 
 Lệnh từ chối trường body không được hỗ trợ. note/reason tối đa 2000 ký tự; version>=0; key dài 1–100 ký tự. Kiểm tra lại quyền trước khi trả kết quả đã lưu; ràng buộc tài nguyên và mã băm payload chuẩn hóa; trả trạng thái/dữ liệu gốc mà không lặp audit/hold; không lưu correlationId vào kết quả dùng lại. RenewalRequestAdvice giới hạn trong module ánh xạ thiếu header thành 400, không thay bộ xử lý dùng chung hoặc hành vi role khác.
 
-## Truy vấn/dữ liệu tổng hợp
+#### Truy vấn/dữ liệu tổng hợp
 
 page0,size20 tối đa 100; status đúng enum,rentalId; Manager thêm facilityId/search. Tìm kiếm không phân biệt hoa thường, không diễn giải ký tự đại diện, theo mã gian/tên Customer hoặc UUID Rental/Renewal chính xác. Sắp xếp theo createdAt,newEndDate,amount,id; mặc định createdAt desc + id asc. Tham số không hỗ trợ/lặp trả 400; chi tiết không nhận truy vấn; áp dụng phạm vi/bộ lọc trước phân trang tại cơ sở dữ liệu.
 
@@ -58,11 +161,11 @@ Các trường JSON báo giá được dàn phẳng: id,rentalId,customerId,quot
 
 GET tính reviewState và allowedActions theo từng người dùng, không ghi dữ liệu. Tài chính UNKNOWN/null khi nguồn chưa đầy đủ; không bao giờ suy thành nợ bằng 0. Giá/policy thay đổi trước khi duyệt → 409; cần báo giá mới và Customer xác nhận bằng PATCH. Yêu cầu pending không hết hạn chỉ vì TTL của báo giá đã chấp nhận đã hết. Rental không hoạt động hoặc thiếu nguồn không được báo READY.
 
-## Nguồn có thẩm quyền bắt buộc
+#### Nguồn có thẩm quyền bắt buộc
 
 PolicySource: tham chiếu/phiên bản BO, TTL, cửa sổ thanh toán/gửi yêu cầu, tỷ lệ cọc, ID gói đủ điều kiện. PricingSource: gói/giá/giảm giá/phiên bản có hiệu lực và ánh xạ loại gian. Bộ tính dùng VND với scale2 HALF_UP: bộ kết nối phải công bố rõ moneyScale2; scale0/tiền tệ khác bị chặn, không chuyển đổi. Chủ nguồn phải xác nhận việc công bố quy tắc làm tròn.
 
-### Adapter giá đọc danh mục chung — 09/10/2026
+##### Adapter giá đọc danh mục chung — 09/10/2026
 
 `service/renewal/integration/SharedCatalogRenewalPricingSource` là Spring bean triển khai `RenewalSources.PricingSource`. Chỉ đọc `UnitTypeRepository.findById` và `RentalPackagePolicyRepository.findByFacility_IdOrderByRentalMonthsAsc`, không ghi entity/repository/policy chung và không tạo gói mặc định.
 
@@ -77,7 +180,7 @@ Không đổi endpoint/DTO/permission, không chạy migration. Test adapter dù
 
 EligibilitySource: nguồn gốc ngày đã xác minh/mốc giới hạn Recovery/tính khả thi. FinancialSource: tham chiếu nghĩa vụ đến hạn/tranh chấp với checkedAt; độ mới của dữ liệu đọc có thẩm quyền là trách nhiệm bộ kết nối. ExtensionHoldSource: giao thức dung lượng/khóa dùng chung cho phần kéo dài gian đang chiếm; mặc định participatesInTransaction=false nên chặn duyệt. Lớp triển khai giao dịch local đã được rà soát phải chủ động xác nhận hỗ trợ và bảo đảm rollback cùng bên gọi; không tạo tác động bên ngoài từ xa thiếu tính nguyên tử. Lớp triển khai kiểm thử chỉ có trong dữ liệu H2 của test.
 
-## Lưu trữ/giao dịch
+#### Lưu trữ/giao dịch
 
 Bổ sung renewal_quotes, renewal_accepted_revisions, renewal_workflows, renewal_open_slots, renewal_idempotency. Giữ nguyên cấu trúc Rental/Renewal/ReservationQuote dùng chung hiện có. Bản chụp/phiên bản điều chỉnh bất biến, ràng buộc duy nhất cho báo giá/phiên bản đã chấp nhận, workflow dùng @Version. Không xóa lịch sử.
 
@@ -87,8 +190,245 @@ Tính duy nhất của idempotency theo actor/operation/SHA-256(key UTF-8 nguyê
 
 Audit tái sử dụng AuditLogService hiện có với người dùng thực trong giao dịch. Hold/hạn/status/audit/idempotency cùng commit; lỗi thì rollback. Khóa local không chứng minh an toàn dung lượng giữa Booking/Return/Assignment; vẫn cần giao thức khóa chung được chủ nguồn thống nhất và kiểm thử hồi quy MySQL.
 
-## Triển khai/lỗi
+#### Triển khai/lỗi
 
 docs/sql/renewal-persistence-schema.sql là DDL chỉ để rà soát, chưa bật Flyway. Tác vụ này không chạy migration MySQL hoặc thay đổi dữ liệu thực tế. Cấu hình dev ddl-auto=update hiện có có thể tạo bảng khi khởi động: không chạy trên MySQL chung của team trước khi chủ nguồn duyệt. Staging/prod dùng validate cần migration được duyệt; không bổ sung ngược dữ liệu cũ.
 
 400 trường/truy vấn/header sai hoặc không hỗ trợ; 401 phiên đăng nhập không hợp lệ; 403 thiếu quyền; 404 tài nguyên/báo giá ngoài quyền xem; 409 điều khoản/phiên bản cũ, trùng yêu cầu đang mở, hết hạn, xung đột giai đoạn/trả kho/nợ/dung lượng/nguồn. Thiếu nguồn dùng CONFLICT hiện có + thông điệp DEFERRED_SOURCE; không thay enum toàn cục. Triển khai D2 đầy đủ xuyên role cần nguồn thật, duyệt schema/khóa, phối hợp D3 và xác minh MySQL/E2E.
+### Current full-period payment contract — 12/10/2026
+
+For new accepted Renewals, the current payment/transaction contract is [Renewal Payment integration](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle). It supersedes mandatory Manager approval and deposit-first descriptions below for new quotes. Historical accepted terms remain readable. Payment verification, allocation and signing preparation commit independently; only verified contract completion extends Rental.
+
+
+---
+
+## Signing and operations API
+
+### Đặc tả API vận hành gia hạn — D3
+
+#### Bổ sung kiểm tra vận hành — 11/10/2026
+
+Khi `storagehub.integration.renewal-operational-checks.enabled=true`, các lần kiểm tra SafetySource của D3 đều qua `RenewalOperationalGuard`: trước/sau kết quả cọc, signing (lịch hẹn/arrival/CASH/completion), xác nhận ngoại lệ đổi lịch và ngay trước consume hold/kéo dài Rental. Chặn dữ liệu Return/bảo trì/Recovery handoff/booking cam kết đã biết; không viết hoặc hủy bản ghi của flow nguồn. Guard không tự cung cấp atomic SafetySource, calendar/office hours, giữ chỗ, accounting hoặc quyền. Các gate thiếu nguồn tiếp tục DEFERRED_SOURCE; retry/replay giữ nguyên vị trí trước kiểm tra cho lệnh đã thành công. Flag mặc định không đổi.
+
+Ngày triển khai: 08/10/2026. Đường dẫn gốc `/api`, JWT Bearer, ApiResponse/PageResponse chuẩn. Đây là phần triển khai BE theo hướng bổ sung, không phải tuyên bố rằng đã sẵn sàng triển khai xuyên role. Đọc cùng RENEWAL_API_CONTRACT.md (D2).
+
+#### Điều kiện tích hợp dùng chung
+
+SafetySource có adapter persistence opt-in `TransactionalRenewalExtensionHoldSource`, dùng cùng holdRef của D2; chưa ready khi thiếu shared-writer protocol. Các nguồn lịch ký/Recovery/accounting/lifecycle vẫn giữ trạng thái thiếu nguồn, không cài đặt giá trị mặc định hoặc fake provider. Overload pre-approval `CalendarSource.feasible(Rental,now,cutoff)` mặc định UNKNOWN và không tạo Renewal giả để gọi lịch ký.
+
+| Giao diện tích hợp  | Bảo đảm do chủ nguồn cung cấp                                                                                                                                                                                   | Hành vi khi thiếu                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| AuthorizationSource | Quyền ký/CASH/ngoại lệ/hoàn tiền thực tế, phân công Staff hiện tại, phạm vi OPERATE/MANAGE, ID được phân công cho hàng đợi trước phân trang                                                                     | Thao tác Staff/Manager chuyên biệt liên quan trả 409 DEFERRED_SOURCE; không tái sử dụng PERFORM_CHECKIN |
+| PolicySource        | Cửa sổ ký theo BO, giới hạn kéo dài ngoại lệ, tham chiếu/phiên bản policy, phân loại lỗi cơ sở có thẩm quyền                                                                                                    | Không quyết định cọc/ngoại lệ bằng policy viết cứng                                                     |
+| CalendarSource      | Giờ làm việc thực, ngày nghỉ, toàn bộ thời lượng khung hẹn, tính khả thi; giữ/thay khung hẹn trong giao dịch cho mục đích RENEWAL                                                                               | Không cam kết lịch hẹn; không sửa Check-in                                                              |
+| SafetySource        | Giao thức khóa chung Rental/hold/Booking/Assignment/Return/Recovery/bảo trì; giữ lại/tái giữ chỗ/tiêu thụ/giải phóng hold trong giao dịch                                                                       | Không cam kết dung lượng hoặc hoàn tất                                                                  |
+| AccountingSource    | Liên kết cọc Renewal và các lần thử có thẩm quyền, idempotency ràng buộc tài nguyên, bảng kê phải trả/biên nhận CASH/phân bổ thực, tập khoản thanh toán bắt buộc, đối soát khi hết hạn có thanh toán đang xử lý | Không suy đã thanh toán/nợ bằng 0; không dùng cọc Booking40% thay thế                                   |
+| EvidenceSource      | Tham chiếu FileAsset thực, kiểm tra người tải lên/liên kết/tài nguyên/mục đích/phạm vi hiển thị                                                                                                                 | Không nhận URL tùy ý hoặc bằng chứng thuộc tài nguyên khác                                              |
+| RefundSource        | Quyền được hoàn theo BO, số tiền thực đã trả/đã hoàn/đang được dành để hoàn, SLA theo lịch nghiệp vụ, dành quyền hoàn trong giao dịch                                                                           | Không báo duyệt/chi trả thành công; duyệt chỉ chờ bên thực thi dùng chung xử lý                         |
+
+`atomic()` mặc định false. Xác nhận hỗ trợ đòi hỏi giao dịch local/rollback thật và tính nhất quán giữa các bên cùng ghi; chỉ một cờ là chưa đủ. Mọi lỗi nguồn phải rollback thay đổi local và dùng chung. Thực thi thông báo/biên nhận/hoàn tiền thuộc chủ nguồn dùng chung; không tạo URL HTTP không tồn tại hoặc sổ tiền thứ hai.
+
+#### Đường dẫn API
+
+| Người thao tác         | Phương thức/hậu tố đường dẫn             | Body                                                                                                | Kết quả                                                                                                             |
+| ---------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Customer               | GET `/customer/renewals/{id}/operations` | —                                                                                                   | Trạng thái vận hành, expectedVersion workflow đã xác minh, missingSources                                           |
+| Customer               | POST `.../simulated-payment`             | expectedVersion                                                                                     | 200 Result; chỉ DEPOSIT, điều khoản/kết quả do server xác định                                                      |
+| Customer               | POST/PATCH `.../appointment`             | appointmentAt là thời điểm ISO, reason (bắt buộc với PATCH), expectedVersion                        | 200 Result; toàn bộ khung hẹn thực nằm trong hạn có hiệu lực                                                        |
+| Customer               | GET `.../appointment`                    | —                                                                                                   | Trạng thái cùng appointmentRef/thời điểm bắt đầu/kết thúc/các hạn hiện tại                                          |
+| Customer               | POST `.../exception-confirmations`       | decisionRef, expectedVersion                                                                        | 200 Result; chỉ đề xuất mới nhất, kiểm tra lại policy/lỗi/lịch/hold/mốc giới hạn                                    |
+| Customer/Manager/Staff | GET `/{role}/renewals/{id}/payments`     | page,size                                                                                           | Dòng thời gian sự kiện cọc/CASH D3 đã lưu, không phải lịch sử thanh toán cũ được nhập vào                           |
+| Customer/Manager       | GET `/{role}/renewals/{id}/refunds`      | page,size                                                                                           | Lịch sử quyết định/dành quyền hoàn, không phải bằng chứng đã chi trả; loại bằng chứng nội bộ khỏi phản hồi Customer |
+| Staff                  | GET `/staff/renewals/{id}`               | —                                                                                                   | Chỉ trạng thái ký được phân công                                                                                    |
+| Staff                  | GET `/staff/renewal-appointments`        | page,size,facilityId,date theo ISO YYYY-MM-DD,status SIGNING/SIGNING_EXPIRED/COMPLETED              | Lọc phân công và phạm vi OPERATE TRƯỚC phân trang; sắp xếp appointmentStart/id                                      |
+| Staff                  | POST `/staff/renewals/{id}/arrival`      | appointmentRef,evidenceFileIds,expectedVersion                                                      | 201 sự kiện theo đồng hồ server; không nhận arrivalAt từ client/ghi lùi thời gian                                   |
+| Staff                  | POST `.../facility-incidents`            | appointmentRef,reason,evidenceFileIds,expectedVersion                                               | 201 sự kiện; có thể ghi nhận sự cố sau hết hạn để xem xét                                                           |
+| Staff                  | GET `.../payable-statement`              | —                                                                                                   | statementRef/phiên bản/hạn/số tiền/nghĩa vụ bắt buộc thực tế                                                        |
+| Staff                  | POST `.../cash-receipts`                 | payableStatementRef,receiptReference,received=true,expectedVersion                                  | 201 sự kiện biên nhận thực từ nguồn dùng chung; không phải hoàn tất                                                 |
+| Staff                  | POST `.../completion`                    | expectedVersion,identityVerified=true,arrivalRef,signedDocumentFileId,completionNote                | 200 Result; kéo dài Rental đúng một lần                                                                             |
+| Manager                | GET `/manager/renewals/{id}/operations`  | —                                                                                                   | Trạng thái trong phạm vi READ + VIEW_RENTALS                                                                        |
+| Manager                | GET `.../facility-incidents`             | page,size                                                                                           | Dòng thời gian sự cố/ngoại lệ nội bộ                                                                                |
+| Manager                | POST `.../exception-decisions`           | incidentId,action,appointmentAt/revisedDeadline khi đổi lịch,reason,evidenceFileIds,expectedVersion | 201 đề xuất; cần quyền chuyên biệt                                                                                  |
+| Manager                | POST `.../refund-decisions`              | incidentId,decision APPROVE/REJECT,reason,evidenceFileIds,expectedVersion                           | 201 dành quyền hoàn thực tế hoặc từ chối; không bao giờ là chi trả                                                  |
+
+Bắt buộc header `Idempotency-Key`, dài 1–100 ký tự. DTO từ chối trường không được hỗ trợ. reason/note tối đa 2000 ký tự, danh sách bằng chứng tối đa 10 ID FileAsset khác nhau và không null. Không nhận amount, outcome, actor, currency, paidAt, overrideDeadline tùy ý hoặc exception=true. Page0,size20 tối đa 100; bộ lọc không hỗ trợ/lặp trả 400; GET không thay đổi dữ liệu.
+
+Result = `{state: RenewalOperationResponse, event: {id,kind,occurredAt,actorId,data}}`; được bao trong ApiResponse. `state.expectedVersion` là CÙNG phiên bản workflow D2 đã xác minh, không phải phiên bản JPA của trạng thái bổ sung. Mỗi thao tác thành công bắt buộc tăng phiên bản workflow. Thử lại phản hồi 201 vẫn trả 201 và kết quả gốc đã lưu. Kiểm tra quyền role/tài nguyên/phạm vi/phân công hiện tại TRƯỚC khi trả kết quả đã lưu; chỉ kiểm tra trạng thái/phiên bản/hạn mới đối với key mới.
+
+#### Vòng đời và an toàn
+
+- Điều khoản đã duyệt giữ bất biến. Số tiền cọc lấy từ báo giá Customer đã chấp nhận, không phải danh mục đang chạy hoặc giá trị Manager nhập. Bộ xử lý dùng chung ghi SUCCESS/FAILED/NOT_RECEIVED; lần thử thất bại không ghi đè trạng thái nghiệp vụ đã duyệt/đang ký.
+- Trước khi nộp cọc: kiểm tra duyệt/hạn thanh toán/mốc giới hạn, hold và tính khả thi lịch hẹn. Kiểm tra paidAt theo đồng hồ server SAU khi gọi bộ xử lý, số tiền/tiền tệ/liên kết và các hạn. Hạn ký được tính từ thời lượng ký dùng chung và mốc giới hạn Recovery; nộp cọc không kéo dài Rental.
+- `renewal_operation_states` riêng theo dõi SIGNING, SIGNING_EXPIRED, PAYMENT_EXPIRED, COMPLETED. Không đổi tên/thêm RenewalStatus dùng chung. Hết hạn ký sau khi đã nộp tiền KHÔNG trở thành payment_expired hoặc tự quy lỗi/mất cọc cho Customer.
+- Trạng thái đọc có thể hiển thị SIGNING_EXPIRY_PENDING khi thời gian đã qua nhưng chưa chạy đối soát; GET không thực thi hết hạn. Yêu cầu đã duyệt được xác minh nhưng chưa có dòng D3 hiển thị AWAITING_DEPOSIT; dữ liệu cũ chưa xác định vẫn là UNKNOWN/null.
+- Lịch hẹn chỉ thay tham chiếu lịch hiện tại và đặt lại ghi nhận đến hiện tại trước khi khách đến; sau khi khách đến cần xem xét sự cố cơ sở. Calendar giữ khung hẹn thực trong giao dịch, mục đích RENEWAL, không phải Check-in.
+- Ghi nhận đến là sự kiện server thực gắn với lịch hiện tại; không thay endDate/hạn. Bằng chứng đã ký và tập nghĩa vụ tài chính đã thanh toán đầy đủ vẫn bắt buộc khi hoàn tất.
+- Hoàn tất thông thường khóa actor User → Rental → workflow D2, kiểm tra lại đang hoạt động/chưa trả kho/phân bổ/bản chụp ngày kết thúc, bằng chứng, toàn bộ tập thanh toán bắt buộc và an toàn dùng chung; sau đó tiêu thụ hold, đặt ngày kết thúc Rental đúng newEndDate đã chấp nhận, đánh dấu hoàn tất và chỉ giải phóng renewal open slot khớp. Không giải phóng gian vật lý/quyền truy cập.
+- Cho phép hoàn tất đúng thời điểm bằng hạn/mốc giới hạn có hiệu lực; sau đó bị chặn. Cần bảo đảm khóa từ nguồn chung để xử lý cạnh tranh Return/Recovery; chỉ khóa Rental local không chứng minh điều này.
+- Ngoại lệ APPROVE_RESCHEDULE_BEFORE_CUTOFF chỉ là đề xuất. Cần lỗi cơ sở đã xác minh, khung hẹn thực và giới hạn kéo dài BO so với hạn GỐC. Theo dõi rõ đề xuất mới nhất; Customer xác nhận thì kiểm tra lại và tái giữ chỗ/tiếp tục giữ hold. Giữ nguyên hạn gốc; yêu cầu kết thúc không được hồi sinh, sau mốc giới hạn không được hoàn tất/tạm dừng Recovery.
+- REJECT và REQUEST_POST_CUTOFF_REVIEW chỉ ghi nhận xem xét, không ghi đè hạn hoặc trạng thái Rental. Cần thêm quyền chuyên biệt.
+- Duyệt hoàn tiền dành quyền được hoàn thực tế qua chủ nguồn và trả APPROVED_AWAITING_EXECUTION; khoản đang chờ phải ngăn duyệt trùng dưới khóa chung. Không dùng ReturnCase/tiền bảo đảm kho thay thế, khoản thanh toán âm, ví hoặc giao dịch chuyển tiền thực giả lập. Bên thực thi dùng chung phải là Staff được phân công và được cấp quyền, không phải người duyệt, có bằng chứng/lịch sử/idempotency thực; module này KHÔNG tạo API thực thi hoàn tiền.
+- `RenewalOperationService.expire(id)` là điểm vào đối soát giao dịch NỘI BỘ. Nó kiểm tra đồng hồ server phải nằm sau hạn, đối soát thanh toán đang xử lý, chỉ giải phóng extension hold và ghi REVIEW_REQUIRED. Giữ lịch sử đã nộp tiền, ngày gốc, open slot và gian vật lý. Không bật bộ lập lịch tự động cho đến khi chủ nguồn/vòng đời/schema duyệt triển khai.
+
+#### Lưu trữ/triển khai
+
+Bổ sung bảng renewal*operation_states, renewal_operation_events; sự kiện bất biến mang người thao tác/thời điểm occurredAt từ server thực và liên kết Renewal cha. Tái sử dụng renewal_idempotency của D2 với không gian tên thao tác riêng (`d3*\*`); không có bộ nhớ đệm thứ hai. Lệnh D3 không giả phiên bản cho bản ghi cũ.
+
+DDL chỉ để rà soát nằm trong docs/sql/renewal-operations-overdue-schema.sql. Không phải migration Flyway, chưa được thực thi. Cấu hình ddl-auto=update hiện có có thể tạo bảng khi khởi động; KHÔNG chạy trên TiDB/MySQL chung của team trước khi phối hợp duyệt schema. Không bổ sung ngược dữ liệu lịch sử hoặc sửa chữa bản ghi.
+
+400 trường sai định dạng/chèn trường không hợp lệ/thiếu header; 401 phiên đăng nhập không hợp lệ; 403 thiếu role/năng lực được cấp; 404 tài nguyên/tham chiếu lồng ngoài quyền xem; 409 phiên bản/giai đoạn/hạn cũ, xung đột hoặc DEFERRED_SOURCE. Mã lỗi/cấu trúc bao toàn cục hiện có giữ nguyên.
+
+Nghiệm thu production đầy đủ vẫn cần bộ kết nối thật, schema/quyền được chủ nguồn rà soát, đối soát hết hạn/open-slot, khả năng xem kết quả thực thi/đối soát hoàn tiền chung, tích hợp thông báo và E2E MySQL/giữa các bên cùng ghi. Bộ kết nối local trong test chỉ là dữ liệu kiểm thử.
+### Full-rent payment compatibility — 12/10/2026
+
+See [Renewal Payment integration](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle) for the current full-period VNPay flow. Operations projection supports `AWAITING_PAYMENT_INTENT`, `fullRentPaymentRef`/`fullRentPaidAt`, and payment-history event `FULL_RENT_PAYMENT` alongside historical deposit fields. Signing/appointment/arrival/document requirements remain in force. The Payment-to-Ledger completion adapter verifies exact allocated shared Payment evidence; payment confirmation alone is not completion. Legacy deposit and CASH execution require the original owner adapter.
+
+
+---
+
+## Shared source integration
+
+### Contract tích hợp nguồn gia hạn, quá hạn và file hỗ trợ
+
+Cập nhật 09/10/2026. Đây là API/adapter bổ sung của dự án; không thay Booking, Check-in, Payment, Return, policy config cũ, shared security hoặc schema.
+Không tự tạo policy, cấp quyền, phân công, xác nhận tiền hoặc backfill bằng chứng lịch sử.
+
+#### 1. Công bố chính sách gia hạn
+
+GET/PUT /api/business/facilities/{facilityId}/renewal-policy.
+Bearer token bắt buộc. GET dành cho BO có policies:read hoặc Manager có policies:read và scope READ thực tại cơ sở.
+PUT chỉ BO đang ACTIVE, có policies:read và policies:update thực trong DB và token.
+Không sửa role/grant mặc định của dự án để vượt điều kiện này.
+
+Body PUT:
+
+| Trường | Ràng buộc / nghĩa |
+|---|---|
+| expectedRevision | Bắt buộc >=0; lần đầu 0, lần sau revision từ GET. Sai revision trả 409 |
+| effectiveFrom / effectiveTo | effectiveFrom bắt buộc; effectiveTo có thể null, không nhỏ hơn effectiveFrom; khoảng ngày bao gồm hai đầu |
+| quoteTtlMinutes / paymentWindowHours | Số nguyên bắt buộc >0, không lấy TTL Booking làm mặc định |
+| requestWindowDays | Số nguyên bắt buộc >=0 |
+| depositRate | Tỷ lệ 0..1 do BO nhập; không tự điền tỷ lệ đã đề xuất trong tài liệu |
+| eligiblePackageIds | Tập ID bắt buộc, <=20, không null; package phải tồn tại và thuộc cùng facility. Tập rỗng không tạo package mặc định |
+| signing | Có thể null; nếu có, signingWindowMinutes và exceptionExtensionLimitMinutes bắt buộc >0 |
+| term | Có thể null; nếu có, phải đủ các trường dưới đây |
+
+term.calendar hiện chỉ hỗ trợ CALENDAR_DAYS; term.timezone chỉ hỗ trợ Asia/Ho_Chi_Minh.
+warningThroughDay >0, seriousThroughDay > warningThroughDay, urgentThroughDay > seriousThroughDay,
+recoveryFromDay = urgentThroughDay +1. recoveryCutoffTime và recoveryStartTime bắt buộc là giờ địa phương.
+Không cung cấp lịch ngày làm việc/ngày nghỉ bằng dữ liệu giả.
+Trường lạ ở body/signing/term bị từ chối.
+
+Response ApiResponse.data chứa schema, facilityId, revision, version, publishedBy, publishedAt và toàn bộ snapshot đã công bố.
+version do server sinh mới mỗi lần công bố. GET khi chưa công bố trả 404; policy malformed/incomplete trả lỗi, không giả thành policy rỗng.
+Adapter trả Optional.empty khi thiếu snapshot, ngoài effective range hoặc thiếu nhánh signing/term cần dùng.
+
+Persistence dùng SystemSetting sẵn có, key rentalRenewalPolicy:{facilityId}, JSON <=2000 ký tự; không migration/seed.
+PUT khóa Facility trước rồi setting, CAS revision và ghi audit cùng transaction. Không thay global config/package DTO hoặc writer cũ.
+Chưa chứng minh triển khai trên MySQL/TiDB chung; kiểm chứng DB test ghi/đọc trong bộ integration tests H2.
+
+#### 2. Mapping adapter policy và ngày
+
+PublishedRenewalPolicyAdapters:
+
+- RenewalSources.PolicySource: snapshot theo facility và canonical extensionStart, ref = system-setting:{id}, version/rate/windows/eligible packages từ snapshot thực.
+- RenewalOperationSources.PolicySource: cần ngày có bằng chứng và signing đã công bố; deadline vẫn do consumer hiện có kiểm tra.
+- OverdueSources.TermSource: ngày cuối được sử dụng L từ RentalPeriodResolver, không dùng raw end exclusive như ngày cuối; cutoff = L + urgentThroughDay tại recoveryCutoffTime; recoveryStart = L + recoveryFromDay tại recoveryStartTime.
+
+ProjectHandoffRentalPeriodAdapter chỉ đăng ký khi storagehub.integration.rental-period.enabled=true. Mặc định OFF giữ nguyên.
+Không tự sửa ngày Booking/Rental lịch sử hoặc bật profile production. Hồ sơ không có proof giữ UNKNOWN.
+Nguồn term không thu phí, khóa kho, tạo Recovery hoặc thay số dư.
+
+#### 3. Phân công nhân viên gia hạn
+
+POST /api/manager/renewals/{id}/staff-assignment.
+Header Idempotency-Key bắt buộc; body assignedStaffId, reason, expectedVersion.
+201 ApiResponse.data là Result(state,event); event.kind = STAFF_ASSIGNMENT.
+
+Manager phải có rentals:read, rentals:update và scope MANAGE thực.
+Nhân viên được chọn phải ACTIVE, role STAFF, rentals:read, rentals:update và OPERATE tại cơ sở thực.
+Không đồng nhất Booking.assignedBy với nhân viên ký. Không dùng checkins:process thay quyền gia hạn.
+Renewal phải được duyệt, chưa terminal và chưa ghi nhận Arrival; không phân công lại cùng người chỉ để reset.
+Receipt idempotency/resource lock/workflow version hiện có giữ nguyên; retry cùng key/payload đọc lại kết quả, khác payload hoặc stale version trả 409.
+Sự kiện lưu renewalId, facilityId, staffId, acceptedQuoteId và workflowRevision.
+
+RenewalAssignmentSource kiểm tra role/grants/scope DB cùng claims, assignment hiện hành theo accepted quote.
+READ chỉ requires rentals:read; ARRIVAL/INCIDENT/COMPLETE thêm rentals:update.
+CASH cần rentals:read, payments:read, payments:collect; REFUND của Manager thêm payments:read/payments:collect.
+Danh sách Staff lấy đúng assignment trước phân trang; sai actor/resource không lộ hồ sơ.
+Thiếu assignment / stale quote / hai assignment cùng timestamp không được đoán từ UUID.
+
+Lưu ý triển khai: RoleDataInitializer hiện không cấp rentals:update cho các role mặc định, Staff cũng không mặc định có payments:collect.
+Adapter không sửa shared RBAC. Tài khoản thiếu grant thực vẫn bị chặn; tests dùng grants riêng trong DB H2.
+
+#### 4. Xác minh lỗi cơ sở
+
+POST /api/manager/renewals/{id}/facility-fault-reviews.
+Header Idempotency-Key bắt buộc; body incidentId, facilityFault (boolean bắt buộc), reason, evidenceFileIds (<=10), expectedVersion.
+201 Result với event.kind = FAULT_REVIEW; không tự duyệt ngoại lệ, đổi hạn hoặc tạo hoàn tiền.
+Incident phải thuộc đúng Renewal. Manager có rentals:read/rentals:update và MANAGE thực.
+File phải thuộc purpose FAULT_REVIEW của đúng Renewal, người thực hiện và file thật.
+Adapter chỉ chấp nhận kết luận true hiện hành, đúng reviewer và scope/quyền reviewer vẫn hợp lệ.
+Kết luận false, thiếu review, reviewer bị revoke hoặc review cùng timestamp mơ hồ đều chặn, không suy từ note incident.
+
+#### 5. Upload và đọc bằng chứng
+
+Tái sử dụng endpoint FileController hiện có: POST /api/files (multipart file/entityType/entityId), GET /api/files/{fileId}.
+Giữ nguyên giới hạn size, MIME/magic bytes và metadata response của endpoint.
+Thêm namespace riêng:
+
+- DUONG_RENEWAL_ARRIVAL, INCIDENT, SIGNED_CONTRACT, EXCEPTION, FAULT_REVIEW, REFUND (tiền tố DUONG_RENEWAL_ áp dụng cho từng purpose).
+- DUONG_SUPPORT_PUBLIC, DUONG_SUPPORT_INTERNAL.
+- DUONG_SUPPORT_UPLOAD: vùng chờ riêng của Customer, entityId = uploader.userId; không phải ticket ID.
+
+Upload DUONG_SUPPORT_PUBLIC với entityId null được server lưu thành DUONG_SUPPORT_UPLOAD có owner binding.
+Customer chỉ đọc được staging của mình. Khi tạo/gửi Support, adapter khóa file và chuyển staging sang PUBLIC gắn ticket trong cùng transaction.
+File đã gắn ticket không được chuyển ticket khác; INTERNAL không được chuyển PUBLIC.
+Non-null staging owner binding ngăn writer khiếu nại hiện có lấy nhầm ảnh chưa liên kết; không sửa PaymentComplaintService.
+
+File renewal phải gắn renewalId ngay khi upload; quyền/purpose/current assignment được kiểm tra lại khi attach và download.
+Customer chỉ đọc signed contract sau COMPLETED có COMPLETION event thực liên kết đúng file.
+Support PUBLIC cần đúng Customer/ticket hoặc Staff hiện được phân công hoặc Manager trong scope.
+INTERNAL không cho Customer, kể cả nếu uploader trùng Customer.
+Kiểm file ACTIVE, path thực nằm trong storage root, kích thước thật và SHA-256 thật; UUID đơn thuần không phải bằng chứng.
+
+File các namespace cũ giữ nguyên handler/guard. SupportSources.EvidenceSource bổ sung default supportsFiles(List<UUID>) = true để tương thích provider cũ.
+Adapter mới chỉ chứng nhận file PUBLIC/INTERNAL riêng; lịch sử chứa file ngoài namespace được trả evidenceCompleteness=UNKNOWN và evidenceFileIds=null,
+không làm lỗi toàn bộ timeline và không giả download/COMPLETE. Denied hoặc corruption trên file thuộc adapter không bị nuốt thành success.
+
+#### 6. Bổ sung 10/10/2026: đọc đối chiếu, không đổi writer
+
+##### Chính sách đã lưu
+
+- GET `/api/business/facilities/{id}/renewal-policy/stored` trả snapshot đã lưu, kể cả chưa có hiệu lực hoặc hết hiệu lực.
+- Query `revision` không bắt buộc, số nguyên >=1. Khi có, trả đúng lần công bố hiện tại hoặc snapshot `RENEWAL_POLICY_PUBLISHED` trong ActivityLog của cùng SystemSetting/cơ sở; không dùng revision mới hơn thay kết quả của lần cũ.
+- Chỉ BO ACTIVE, `policies:read` trong token và DB. Response giữ nguyên DTO PublishedRenewalPolicy, không thêm dữ liệu giả hoặc revision 0.
+- Không có lịch sử chứng minh revision yêu cầu: 404. Snapshot lỗi/mơ hồ: 409. FE giữ kết quả chưa xác định, không báo lưu thành công.
+- Các reader áp dụng chính sách theo ngày, GET/PUT cũ và điều kiện công bố không đổi.
+
+##### Phân công gia hạn hiện tại
+
+GET `/api/manager/renewals/{id}/staff-assignment`, Bearer bắt buộc; Manager ACTIVE với `rentals:read` và scope READ thực trong token/DB.
+Không thay POST cùng path, Booking assignment, Check-in hay kiểm quyền xử lý của Staff.
+
+Response `{renewalId, expectedVersion, status, staffId, staffName}`:
+
+| status | Ý nghĩa |
+|---|---|
+| ASSIGNED | Bằng chứng STAFF_ASSIGNMENT hợp lệ với accepted quote hiện tại; Staff còn ACTIVE/quyền/scope OPERATE thực |
+| UNASSIGNED | Có workflow/accepted revision nhưng chưa ghi nhận phân công D3; staffId/staffName null |
+| UNAVAILABLE | Thiếu workflow/accepted revision hoặc bằng chứng mơ hồ/không hợp lệ; không giả chưa phân công |
+| INELIGIBLE | Có bằng chứng phân công nhưng Staff không còn đủ điều kiện; không chứng nhận quyền ký |
+
+expectedVersion là phiên bản workflow thực hoặc null khi thiếu; FE không dùng projection khác phiên bản để chứng nhận phân công hiện tại.
+Đọc không ghi event, không tăng version, không tự sửa phân công hoặc cấp quyền.
+
+#### 7. Giới hạn còn giữ nguyên
+
+API mới không mở khóa các guard accounting, hold, service calendar, refund hay delivery.
+Simulated-payment vẫn là thử nghiệm, không phải chứng từ thu tiền thật.
+Notification persisted/read không được coi là bằng chứng delivery của current resolution cycle.
+Từ 10/10/2026 có kernel ledger và outbox/review receipt riêng, mặc định OFF; xem [contract ledger và communication](LEDGER_COMMUNICATION_INTEGRATION_API_CONTRACT.md).
+Ledger chưa có writer-backed coverage hoặc engine Accounting/Refund hoàn chỉnh. Outbox chỉ cung cấp proof khi Customer xác nhận nhận đúng notification/current resolution/policy; persistence/readFlag đơn thuần vẫn không phải proof.
+Cross-writer hold, trạng thái access/PIN và objective-specific Support result vẫn thiếu implementation.
+Không thể suy đủ các trường đó từ Payment.status hoặc ghi chú người dùng. End-to-end D1-D5 chưa được chứng nhận hoàn tất.

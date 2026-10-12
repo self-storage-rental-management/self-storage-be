@@ -18,7 +18,9 @@ public class PaymentProvenance {
     private final ActivityLogRepository logs;
     private final ObjectMapper mapper;
     public Classification classify(Payment p) {
-        if(p==null || p.getReservation()==null || p.getId()==null)return Classification.UNVERIFIED;
+        if(p==null||p.getId()==null)return Classification.UNVERIFIED;
+        if(p.getRenewal()!=null)return classifyRenewal(p);
+        if(p.getReservation()==null)return Classification.UNVERIFIED;
         var complaint=complaints.findByReservation_Id(p.getReservation().getId());
         if(complaint.isPresent() && complaint.get().getPayment()!=null && Objects.equals(complaint.get().getPayment().getId(),p.getId())) {
             var s=complaint.get().getStatus();
@@ -53,6 +55,37 @@ public class PaymentProvenance {
                 || !"VND".equals(d.path("currency").asText()) || !d.path("signatureVerified").asBoolean()
                 || p.getAmount().compareTo(new java.math.BigDecimal(d.path("amount").asText()))!=0)return Classification.UNVERIFIED;
             return switch(d.path("environment").asText()) {case "PRODUCTION"->Classification.VERIFIED;case "SANDBOX"->Classification.SANDBOX;default->Classification.UNVERIFIED;};
+        } catch(Exception invalid){return Classification.UNVERIFIED;}
+    }
+    private Classification classifyRenewal(Payment p) {
+        if(p.getRenewal()==null||p.getRenewal().getRental()==null||p.getRenewal().getRental().getCustomer()==null
+            ||p.getRenewalRevision()==null||p.getPaymentDeadline()==null||p.getStatus()!=PaymentStatus.PAID
+            ||(p.getFailureCode()!=null&&!"RENEWAL_PAYMENT_RECONCILIATION_REQUIRED".equals(p.getFailureCode()))
+            ||!"VNPAY".equals(p.getGatewayProvider())||p.getPurpose()!=PaymentType.RENEWAL
+            ||!"VND".equals(p.getCurrency())||p.getPaidAt()==null||p.getGatewayTransactionNo()==null
+            ||p.getGatewayTransactionNo().isBlank()||!"00".equals(p.getGatewayResponseCode())
+            ||!"00".equals(p.getGatewayTransactionStatus())||p.getPaidAt().isAfter(p.getPaymentDeadline()))
+            return Classification.UNVERIFIED;
+        var proof=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",p.getId(),CALLBACK_ACTION);
+        if(proof.size()!=1)return Classification.UNVERIFIED;
+        try {
+            var log=proof.getFirst();var d=mapper.readTree(log.getAfterStateJson());var renewal=p.getRenewal();
+            if(!d.path("renewalPaymentAccepted").asBoolean()||!d.path("signatureVerified").asBoolean()
+                ||!d.path("merchantMatched").asBoolean()||log.getFacility()==null
+                ||!Objects.equals(log.getFacility().getId(),renewal.getRental().getFacility().getId())
+                ||!p.getId().toString().equals(d.path("paymentId").asText())
+                ||!renewal.getId().toString().equals(d.path("renewalId").asText())
+                ||!p.getRenewalRevision().getId().toString().equals(d.path("acceptedRevisionId").asText())
+                ||!renewal.getRental().getCustomer().getId().toString().equals(d.path("customerId").asText())
+                ||!Objects.equals(p.getGatewayIntentId(),d.path("intentId").asText())
+                ||!p.getGatewayTransactionNo().equals(d.path("transactionNo").asText())
+                ||!p.getPurpose().name().equals(d.path("purpose").asText())
+                ||!"VND".equals(d.path("currency").asText())
+                ||p.getAmount().compareTo(new java.math.BigDecimal(d.path("amount").asText()))!=0
+                ||!p.getPaidAt().equals(java.time.Instant.parse(d.path("gatewayPaidAt").asText()))
+                ||!p.getPaymentDeadline().equals(java.time.Instant.parse(d.path("paymentDeadline").asText())))
+                return Classification.UNVERIFIED;
+            return "SANDBOX".equals(d.path("environment").asText())?Classification.SANDBOX:Classification.UNVERIFIED;
         } catch(Exception invalid){return Classification.UNVERIFIED;}
     }
     public static String environment(String payUrl,String apiUrl) {

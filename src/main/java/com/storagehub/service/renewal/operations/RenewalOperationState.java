@@ -17,6 +17,8 @@ public class RenewalOperationState {
     @Enumerated(EnumType.STRING) @Column(nullable=false,length=24) private Phase phase;
     private UUID depositPaymentRef;
     private Instant depositPaidAt;
+    private UUID fullRentPaymentRef;
+    private Instant fullRentPaidAt;
     private Instant originalSigningDeadline;
     private Instant effectiveSigningDeadline;
     private Instant recoveryCutoff;
@@ -36,6 +38,11 @@ public class RenewalOperationState {
         phase=Phase.SIGNING;depositPaymentRef=ref;depositPaidAt=paid;originalSigningDeadline=deadline;
         effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;policyRef=policy;policyVersion=version;
     }
+    public void fullRent(UUID ref,Instant paid,Instant deadline,Instant cutoff,String policy,String version) {
+        phase=Phase.SIGNING;fullRentPaymentRef=ref;fullRentPaidAt=paid;originalSigningDeadline=deadline;
+        effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;policyRef=policy;policyVersion=version;
+    }
+    public boolean hasVerifiedPayment() { return depositPaidAt!=null || fullRentPaidAt!=null; }
     public void appointment(UUID ref,Instant start,Instant end) {appointmentRef=ref;appointmentStart=start;appointmentEnd=end;arrivalRef=null;}
     public void arrival(UUID ref) {arrivalRef=ref;}
     public void proposedException(UUID ref) {pendingExceptionRef=ref;}

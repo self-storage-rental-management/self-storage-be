@@ -23,6 +23,13 @@ public class RenewalWorkflow {
     public RenewalWorkflow(Renewal renewal,RenewalAcceptedRevision revision) {this.renewal=renewal;this.acceptedRevision=revision;}
     public void accept(RenewalAcceptedRevision revision) {this.acceptedRevision=revision;}
     public void cancelled(String reason) {this.cancellationReason=reason;}
+    public void paymentReady(Instant deadline, UUID hold) {
+        if (deadline == null || hold == null) throw new IllegalArgumentException("Payment readiness requires deadline and hold");
+        if (paymentDeadline != null && (!paymentDeadline.equals(deadline) || !hold.equals(extensionHoldRef)))
+            throw new IllegalStateException("Payment readiness is immutable after a VNPay intent is available");
+        this.paymentDeadline = deadline;
+        this.extensionHoldRef = hold;
+    }
     public void reviewed(User reviewer,Instant now,String reason,Instant deadline,UUID hold) {
         this.reviewer=reviewer;this.reviewedAt=now;this.reviewReason=reason;this.paymentDeadline=deadline;this.extensionHoldRef=hold;
     }
