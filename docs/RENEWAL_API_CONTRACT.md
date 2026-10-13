@@ -576,3 +576,11 @@ Worker mặc định kiểm tra mỗi 60 giây sau hạn ký. Chỉ xử lý c�
 - API này ghi nhận khoản hoàn đã thực hiện ngoài hệ thống; không gửi lệnh chuyển tiền ngân hàng. Sandbox dùng bằng chứng thử nghiệm có nhãn rõ ràng.
 - Response dùng Result operations hiện có, event `REFUND_EXECUTION`. Timeline `/refunds` bổ sung `DEPOSIT_DISPOSITION` và `REFUND_EXECUTION`. Customer không nhận mã giao dịch hoặc file hoàn nội bộ.
 - Cập nhật Shared Refund, Payment.refundedAmount và ledger trong cùng transaction. Khoản đã hoàn không được thực hiện lại; retry cùng key/body trả kết quả cũ sau khi kiểm tra quyền hiện tại.
+
+#### Biên lai thanh toán gia hạn
+
+GET `/api/{customer|manager}/renewals/{id}/payments/{paymentId}/receipt` trả envelope biên lai cho khoản PAID đã phân bổ vào ledger. Quyền đọc reuse operations, kiểm tra payment thuộc đúng renewal; thiếu bằng chứng đối soát trả 409, sai liên kết trả 404.
+
+Các trường: `paymentId`, `renewalId`, `transactionReference`, `gatewayTransactionNo`, `amount`, `currency`, `paymentStatus`, `paymentMethod`, `gatewayPayDate`, `paidAt`, `processedAt`, `initiatedByName`, `kind`, `environment`. `kind`: DEPOSIT/FULL_RENT/REMAINING_RENT theo điều khoản và purpose gốc; `environment`: SANDBOX/PRODUCTION theo provenance đã xác minh. Không trả khóa merchant hoặc đường dẫn file nội bộ.
+
+FE dùng chung bố cục biên lai đặt chỗ: tiêu đề, mã yêu cầu gia hạn, trạng thái Đã xác nhận, thông tin giao dịch hai cột và ghi chú đối chiếu. Biên lai chỉ xác nhận khoản thu, không thay thế trạng thái hoàn tất gia hạn.

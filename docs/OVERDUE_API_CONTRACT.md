@@ -4,7 +4,7 @@
 
 ### Nhiệm vụ Recovery đã được tiếp nhận
 
-Danh sách/chi tiết nhiệm vụ bổ sung `customerName` và `storageUnitCode` từ Rental liên kết, phục vụ bảng hàng đợi của Manager và Staff. Giao diện Manager: Theo dõi quá hạn > Thu hồi kho. Giao diện Staff: Ký gia hạn > Thu hồi kho. Trạng thái nhiệm vụ: `OPEN` (chờ xử lý), `IN_PROGRESS` (đang xử lý), `CLOSED` (đã đóng); hàng đợi đọc không tự thực hiện kiểm kê, thanh lý tài sản hoặc giải phóng gian.
+Danh sách/chi tiết nhiệm vụ bổ sung `customerName` và `storageUnitCode` từ Rental liên kết. Nhiệm vụ thu hồi hiển thị chung tại Nhân viên & Nhiệm vụ của Manager và Nhiệm vụ vận hành của Staff, có loại Thu hồi kho và mở chi tiết ngay trong trang nhiệm vụ. Không còn tab thu hồi riêng ở Theo dõi quá hạn hoặc Ký gia hạn. Trạng thái nhiệm vụ: `OPEN` (chờ xử lý), `IN_PROGRESS` (đang xử lý), `CLOSED` (đã đóng); màn hình đọc không tự thực hiện kiểm kê, thanh lý tài sản hoặc giải phóng gian. Staff xem nhiệm vụ chưa đóng trong phạm vi được cấp quyền; không suy ra người được phân công hoặc hạn xử lý từ thời điểm tiếp nhận.
 
 API renewal-risk bổ sung `repossessionStatus`, `repossessionStartedAt`, `recoveryTaskId`. Có task `OPEN`/`IN_PROGRESS` trả `REPOSSESSION_STARTED`, thời điểm thực từ `received_at`; task `CLOSED` trả `REPOSSESSION_CLOSED`. Không có receiver/task trả `NOT_CONFIRMED` và hai trường tham chiếu/thời điểm null. Ngày quá hạn thứ 8 hoặc `repossessionStartsAt` chỉ là điều kiện thời gian, không phải chứng cứ task đã được tạo. Marker này do nhiệm vụ Recovery sở hữu; không đổi enum vòng đời Rental hoặc trạng thái vật lý StorageUnit. Có task thì `withinOrdinaryRenewalWindow=false`, kể cả khi nguồn term hiện tại thiếu.
 

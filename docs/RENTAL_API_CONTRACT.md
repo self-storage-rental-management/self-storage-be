@@ -1,6 +1,14 @@
 # Đặc tả API đọc hồ sơ thuê
 
-Phạm vi đã triển khai: chỉ gồm bốn endpoint GET. Không bao gồm kích hoạt hồ sơ thuê, thanh toán, phân gian, quyết định gia hạn hoặc tạo hợp đồng pháp lý.
+Phạm vi đã triển khai: các endpoint GET hồ sơ thuê và đọc tài liệu bàn giao. Không bao gồm kích hoạt hồ sơ thuê, thanh toán, phân gian, quyết định gia hạn hoặc tạo hợp đồng pháp lý.
+
+## Tài liệu bàn giao đã ghi nhận
+
+GET `/api/{customer|manager}/rentals/{id}/handover-files`, JWT Bearer, trả envelope `{data: [...], correlationId}`. Kiểm tra quyền sở hữu Customer hoặc quyền đọc/scoped Rental của Manager trước khi đọc file.
+
+Mỗi file gồm `id`, `name`, `contentType`, `sizeBytes`, `uploadedAt`, `kind` (`SIGNED_CONTRACT` hoặc `HANDOVER_EVIDENCE`). Chỉ lấy FileAsset ACTIVE loại CHECK_IN, gắn đúng CheckIn đã hoàn tất của Rental và có trong `evidenceReferences` của bàn giao đã lưu. Không liệt kê file upload nháp, đường dẫn lưu trữ hay hợp đồng chưa liên kết. File Staff upload với tiền tố `hop-dong-da-ky-` được nhận diện là hợp đồng đã ký; file bàn giao khác giữ loại minh chứng.
+
+FE hiển thị dưới thông tin hồ sơ, dùng GET `/api/files/{fileId}` hiện có để tải. Download kiểm tra lại quyền file; không thay đổi quyền truy cập hoặc dữ liệu bàn giao. Danh sách rỗng khi chưa có tài liệu; dữ liệu bàn giao không đọc được trả lỗi, không giả thành đã có hợp đồng.
 
 ## Swagger
 
