@@ -160,6 +160,7 @@ public class FacilityLifecycleService {
 
     private void applyTechnical(UnitType type, ManagerUnitTypeRequest request) {
         type.setName(request.name().trim());
+        type.setDescription(clean(request.description()));
         type.setLengthM(request.lengthM());
         type.setWidthM(request.widthM());
         type.setHeightM(request.heightM());
@@ -168,6 +169,10 @@ public class FacilityLifecycleService {
         type.setRackLengthM(request.rackLengthM());
         type.setRackWidthM(request.rackWidthM());
         type.setRackHeightM(request.rackHeightM());
+        type.setAisleWidthM(request.aisleWidthM());
+        type.setTrolleyType(request.trolleyType().trim());
+        type.setSmallBoxCapacity(request.smallBoxCapacity());
+        type.setLargeBoxCapacity(request.largeBoxCapacity());
         type.setImageUrl(request.imageUrl() == null || request.imageUrl().isBlank() ? null : request.imageUrl().trim());
     }
 
@@ -223,8 +228,10 @@ public class FacilityLifecycleService {
 
     private UnitTypeResponse unitTypeResponse(UnitType t) {
         long available = units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.available);
-        return new UnitTypeResponse(t.getId(), t.getFacility().getId(), t.getCode(), t.getName(), t.getLengthM(), t.getWidthM(), t.getHeightM(),
+        return new UnitTypeResponse(t.getId(), t.getFacility().getId(), t.getCode(), t.getName(), t.getDescription(), t.getLengthM(), t.getWidthM(), t.getHeightM(),
             t.getAreaM2(), t.getVolumeM3(), t.getMonthlyPrice(), t.getSecurityDepositAmount(), t.getImageUrl(), t.getMaxLoadKg(),
-            t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getStatus(), available, t.getCreatedAt(), t.getUpdatedAt());
+            t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getAisleWidthM(), t.getTrolleyType(),
+            t.getSmallBoxCapacity(), t.getLargeBoxCapacity(), t.getStatus(),
+            units.countByFacility_IdAndUnitType_Id(t.getFacility().getId(), t.getId()), available, t.getCreatedAt(), t.getUpdatedAt());
     }
 }
