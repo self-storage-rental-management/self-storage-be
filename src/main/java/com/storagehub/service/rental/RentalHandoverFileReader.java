@@ -6,6 +6,7 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.RentalQueryService;
+import com.storagehub.service.renewal.operations.RenewalOperationEvent;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.util.*;
@@ -20,9 +21,9 @@ public class RentalHandoverFileReader {
     private final ObjectMapper mapper;
     public record Document(UUID id,String name,String contentType,long sizeBytes,Instant uploadedAt,String kind) {}
     public List<Document> read(ActorPrincipal actor,UUID rentalId,boolean manager) {
-        rentals.detail(actor,rentalId,manager); // Reuse ownership and facility scope checks.
-        var checkIns=em.createQuery("select c from CheckIn c where c.rental.id=:rental and c.status=:status order by c.checkedInAt desc,c.id desc",CheckIn.class)
-            .setParameter("rental",rentalId).setParameter("status",CheckInStatus.completed).getResultList();
+        var rental=rentals.detail(actor,rentalId,manager); // Reuse ownership and facility scope checks.
+        var checkIns=em.createQuery("select c from CheckIn c where (c.rental.id=:rental or (c.rental is null and c.reservation.id=:reservation)) and c.status=:status order by c.checkedInAt desc,c.id desc",CheckIn.class)
+            .setParameter("rental",rentalId).setParameter("reservation",rental.reservationId()).setParameter("status",CheckInStatus.completed).getResultList();
         var result=new LinkedHashMap<UUID,Document>();
         for(var checkIn:checkIns) {
             final CompleteCheckInRequest handover;
@@ -38,6 +39,17 @@ public class RentalHandoverFileReader {
                 String kind=file.getOriginalName().startsWith("hop-dong-da-ky-")?"SIGNED_CONTRACT":"HANDOVER_EVIDENCE";
                 result.putIfAbsent(id,new Document(id,file.getOriginalName(),file.getContentType(),file.getSizeBytes(),file.getCreatedAt(),kind));
             }
+        }
+        var completions=em.createQuery("select e from RenewalOperationEvent e where e.renewal.rental.id=:rental and e.renewal.status=:status and e.kind='COMPLETION' order by e.occurredAt desc,e.id desc",RenewalOperationEvent.class)
+            .setParameter("rental",rentalId).setParameter("status",RenewalStatus.completed).getResultList();
+        for(var completion:completions) {
+            final UUID fileId;
+            try {fileId=UUID.fromString(mapper.readTree(completion.getPayloadJson()).path("signedDocumentFileId").asText());}
+            catch(Exception invalid){throw ApiExceptions.conflict("Signed renewal document references require reconciliation");}
+            var file=em.find(FileAsset.class,fileId);
+            if(file==null||file.getStatus()!=FileAssetStatus.ACTIVE||!"DUONG_RENEWAL_SIGNED_CONTRACT".equals(file.getEntityType())
+                ||!completion.getRenewal().getId().equals(file.getEntityId()))continue;
+            result.putIfAbsent(fileId,new Document(fileId,file.getOriginalName(),file.getContentType(),file.getSizeBytes(),file.getCreatedAt(),"SIGNED_CONTRACT"));
         }
         return List.copyOf(result.values());
     }
