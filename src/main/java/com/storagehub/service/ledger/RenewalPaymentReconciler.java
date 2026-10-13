@@ -29,6 +29,7 @@ public class RenewalPaymentReconciler {
         this.payments=payments;this.settlement=settlement;
         transaction=new TransactionTemplate(manager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
     @TransactionalEventListener

@@ -51,4 +51,14 @@ class RenewalPaymentExpiryTests {
         verify(em).persist(argThat(value->value instanceof RenewalOperationState state&&state.getPhase()==RenewalOperationState.Phase.PAYMENT_EXPIRED));
         assertThat(renewal.getStatus()).isEqualTo(RenewalStatus.payment_expired);
     }
+    @Test void simpleIntentWithoutAHoldExpiresOnlyAfterVerifiedFinalFailure() {
+        ReflectionTestUtils.setField(service,"simplePayment",true);
+        payment.setStatus(PaymentStatus.PENDING);
+        when(gateway.reconcileAtPaymentDeadline(payment)).thenAnswer(c->{payment.setStatus(PaymentStatus.FAILED);return VnpayService.ReconciliationOutcome.FINAL_FAILURE;});
+        when(em.find(eq(Renewal.class),eq(renewal.getId()),any(jakarta.persistence.LockModeType.class))).thenReturn(renewal);
+        var workflow=mock(RenewalWorkflow.class);when(workflow.getPaymentDeadline()).thenReturn(payment.getPaymentDeadline());
+        when(em.find(eq(RenewalWorkflow.class),eq(renewal.getId()),any(jakarta.persistence.LockModeType.class))).thenReturn(workflow);
+        assertThat(service.reconcileExpiredIntents()).isEqualTo(1);
+        verifyNoInteractions(safety);verify(persistence).releaseSlot(workflow);
+    }
 }

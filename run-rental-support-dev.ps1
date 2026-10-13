@@ -1,6 +1,7 @@
 # Explicit local test rollout; never changes the shared application defaults.
 param(
     [switch]$EnableRenewalPayments,
+    [switch]$EnableStaffSigningCalendar,
     [string]$VnpayConfigPath
 )
 $ErrorActionPreference = 'Stop'
@@ -30,6 +31,10 @@ $rentalLocalConfiguration = @{
     'logging.level.root' = 'INFO'
     'logging.level.org.hibernate.SQL' = 'WARN'
 }
+if ($EnableStaffSigningCalendar) {
+    $rentalLocalConfiguration['spring.flyway.locations'] += 'classpath:db/renewal-calendar-migration'
+    $rentalLocalConfiguration['storagehub.integration.renewal-signing-calendar.enabled'] = $true
+}
 if ($VnpayConfigPath) {
     $rentalGatewayPath = (Resolve-Path -LiteralPath $VnpayConfigPath -ErrorAction Stop).Path
     if ((Get-Item -LiteralPath $rentalGatewayPath).PSIsContainer) {
@@ -47,6 +52,7 @@ if ($VnpayConfigPath) {
     }
 }
 if ($EnableRenewalPayments) {
+    $rentalLocalConfiguration['storagehub.integration.renewal-simple-payment.enabled'] = $true
     # Explicit local opt-in uses the shared Payment merchant, never a Renewal-specific gateway.
     foreach ($rentalGatewayRequirement in @(
         @('app.vnpay.tmn-code', 'STORAGEHUB_VNPAY_TMN_CODE'),

@@ -27,11 +27,18 @@ class SupportSwaggerTests {
             assertThat(list.isMissingNode()).isFalse();assertThat(list.path("security").toString()).contains("bearerAuth");
             assertThat(list.path("parameters").toString()).contains("page","size","status","search");
         }
-        for(String suffix:new String[]{"accept","resolution","request-information","escalations"}){
+        for(String suffix:new String[]{"claim","accept","resolution","request-information"}){
             var op=paths.path("/api/staff/support-workflows/{id}/"+suffix).path("post");
             assertThat(op.isMissingNode()).as(suffix).isFalse();assertThat(op.path("parameters").toString()).contains("Idempotency-Key");
             assertThat(op.path("responses").has("409")).isTrue();
         }
+        assertThat(paths.has("/api/manager/support-tickets/{id}/assignment")).isFalse();
+        assertThat(paths.has("/api/manager/support-tickets/{id}/escalations/{escalationId}/decision")).isFalse();
+        assertThat(paths.path("/api/staff/support-workflows/{id}/escalations").has("post")).isFalse();
+        paths.fields().forEachRemaining(entry->{
+            if(entry.getKey().startsWith("/api/manager/support-tickets"))
+                assertThat(entry.getValue().fieldNames()).toIterable().noneMatch(method->java.util.Set.of("post","put","patch","delete").contains(method));
+        });
         assertThat(paths.has("/api/manager/support-tickets/{id}/resolution")).isFalse();
         assertThat(paths.has("/api/customer/support-workflows/{id}/events")).isFalse();
         assertThat(paths.has("/api/customer/support-tickets/{id}/close")).isFalse();

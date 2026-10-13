@@ -43,25 +43,68 @@ public class RenewalLedgerAccountingConfiguration {
                 &&p.getLastReconciledAt()!=null);
         }
         @Override public RenewalOperationSources.Statement statement(Renewal renewal,Terms terms,Instant now) {
-            throw deferred("CASH payable statement remains the cash receipt owner's responsibility");
+            var workflow=em.find(RenewalWorkflow.class,renewal.getId());
+            var state=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,renewal.getId());
+            if(workflow==null||workflow.getAcceptedRevision()==null||state==null||!state.hasVerifiedPayment()
+                ||state.getEffectiveSigningDeadline()==null||!state.getEffectiveSigningDeadline().isAfter(now))
+                throw deferred("Current paid Renewal signing state required");
+            var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
+            var snapshot=account(renewal);
+            if(specs.size()>1) {
+                var initial=obligation(snapshot,workflow,specs.getFirst());
+                if(initial.outstanding().signum()!=0||initial.refunded().signum()!=0)throw deferred("Verified unrefunded initial payment required before CASH");
+            }
+            var spec=specs.getLast();var obligation=obligation(snapshot,workflow,spec);
+            if(obligation.refunded().signum()!=0)throw deferred("Refunded Renewal obligation requires reconciliation");
+            String version=workflow.getAcceptedRevision().getId()+":"+snapshot.revision();
+            UUID ref=UUID.nameUUIDFromBytes((renewal.getId()+":"+version).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return new RenewalOperationSources.Statement(ref,renewal.getId(),version,state.getEffectiveSigningDeadline(),
+                obligation.outstanding(),"VND",List.of(obligation.id()));
         }
         @Override public RenewalOperationSources.Receipt cash(Renewal renewal,UUID statement,String receipt,UUID actor,String key,Instant now) {
-            throw deferred("Actual CASH recording requires the cash receipt owner's verified evidence");
+            throw deferred("CASH receipt evidence file required");
+        }
+        @Override public RenewalOperationSources.Receipt cash(Renewal renewal,UUID statement,String receipt,UUID file,UUID actor,String key,Instant now) {
+            var workflow=em.find(RenewalWorkflow.class,renewal.getId(),jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+            if(workflow==null||workflow.getAcceptedRevision()==null||file==null)throw deferred("Accepted revision and CASH evidence required");
+            final Terms terms;
+            try {terms=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),Terms.class);}
+            catch(Exception invalid){throw deferred("Accepted terms are invalid");}
+            var payable=statement(renewal,terms,now);
+            if(!payable.reference().equals(statement)||payable.amount().signum()<=0)throw deferred("Payable statement is stale or already paid");
+            var snapshot=account(renewal);
+            // Version is derived from the immutable revision and the exact Ledger revision.
+            if(!payable.version().equals(workflow.getAcceptedRevision().getId()+":"+snapshot.revision()))throw deferred("Ledger changed; reload payable statement");
+            UUID id=ledger.receive(renewal.getRental().getId(),LedgerStore.Method.CASH,payable.amount(),
+                Map.of(payable.requiredObligations().getFirst(),payable.amount()),"renewal-cash:"+renewal.getId()+":"+receipt,
+                file,actor,"renewal-cash:"+renewal.getId()+":"+key,snapshot.revision(),now);
+            return new RenewalOperationSources.Receipt(id,renewal.getId(),statement,payable.amount(),"VND",now);
+        }
+        private LedgerStore.Snapshot account(Renewal renewal) {
+            var snapshot=ledger.read(renewal.getRental().getId()).orElseThrow(()->deferred("Renewal Ledger account is unknown"));
+            if(!snapshot.customerId().equals(renewal.getRental().getCustomer().getId())||!snapshot.facilityId().equals(renewal.getRental().getFacility().getId()))
+                throw deferred("Ledger resource binding changed");
+            return snapshot;
+        }
+        private LedgerStore.Obligation obligation(LedgerStore.Snapshot snapshot,RenewalWorkflow workflow,FinancialContractSpecifications.Specification spec) {
+            var matches=snapshot.obligations().stream().filter(o->Objects.equals(o.renewalId(),spec.renewalId())&&o.kind()==spec.kind()
+                &&o.sourceRef().equals(spec.sourceReference())&&o.amount().compareTo(spec.amount())==0
+                &&o.dueAt().toEpochMilli()==workflow.getPaymentDeadline().toEpochMilli()).toList();
+            if(matches.size()!=1||!ledger.renewalPaymentCommandMatches(matches.getFirst(),spec,snapshot.customerId()))
+                throw deferred("Accepted Renewal obligation or writer evidence is missing");
+            return matches.getFirst();
         }
         @Override public void requireFullyPaid(Renewal renewal,Terms terms,Instant now) {
             var workflow=em.find(RenewalWorkflow.class,renewal.getId(),jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
             if(workflow==null||workflow.getAcceptedRevision()==null||workflow.getPaymentDeadline()==null)
                 throw deferred("Accepted Renewal revision and payment deadline are unavailable");
             var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
-            if(specs.size()!=1||terms.renewalDepositAmount().signum()!=0)throw deferred("Historical split-payment terms require their original accounting adapter");
-            var snapshot=ledger.read(renewal.getRental().getId()).orElseThrow(()->deferred("Renewal Ledger account is unknown"));
-            if(!snapshot.customerId().equals(renewal.getRental().getCustomer().getId())||!snapshot.facilityId().equals(renewal.getRental().getFacility().getId()))
-                throw deferred("Ledger resource binding changed");
-            var spec=specs.getFirst();var obligations=snapshot.obligations().stream().filter(o->
-                Objects.equals(o.renewalId(),renewal.getId())&&o.kind()==spec.kind()&&o.sourceRef().equals(spec.sourceReference())
-                &&o.amount().compareTo(spec.amount())==0&&o.dueAt().toEpochMilli()==workflow.getPaymentDeadline().toEpochMilli()).toList();
-            if(obligations.size()!=1||obligations.getFirst().outstanding().signum()!=0||obligations.getFirst().refunded().signum()!=0)
-                throw deferred("Full-period obligation is missing, unpaid or refunded");
+            var snapshot=account(renewal);
+            for(var required:specs) {
+                var o=obligation(snapshot,workflow,required);
+                if(o.outstanding().signum()!=0||o.refunded().signum()!=0)throw deferred("Renewal obligation is unpaid or refunded");
+            }
+            var spec=specs.getFirst();var initial=obligation(snapshot,workflow,spec);
             var candidates=payments.findAllByRenewal_IdAndStatusIn(renewal.getId(),List.of(PaymentStatus.PAID));
             boolean verified=false;
             for(var candidate:candidates) {
@@ -76,10 +119,30 @@ public class RenewalLedgerAccountingConfiguration {
                     &&("payment:"+payment.getId()).equals(r.evidenceRef())&&r.method()==LedgerStore.Method.VNPAY_SANDBOX
                     &&r.amount().compareTo(spec.amount())==0&&r.receivedAt().toEpochMilli()==payment.getPaidAt().toEpochMilli()).toList();
                 verified=receipts.size()==1&&ledger.renewalReceiptMatches(renewal.getRental().getId(),receipts.getFirst(),
-                    new LedgerStore.GatewayProof(payment.getId(),payment.getRenewalEvidenceRef(),payment.getGatewayTransactionNo()),obligations.getFirst());
+                    new LedgerStore.GatewayProof(payment.getId(),payment.getRenewalEvidenceRef(),payment.getGatewayTransactionNo()),initial);
                 if(verified)break;
             }
             if(!verified)throw deferred("Verified Payment allocation is missing or changed");
+            if(specs.size()>1&&specs.getLast().amount().signum()>0) {
+                var remainder=obligation(snapshot,workflow,specs.getLast());
+                var cashReceipts=snapshot.receipts().stream().filter(r->r.amount().compareTo(remainder.amount())==0
+                    &&ledger.renewalCashReceiptMatches(renewal.getRental().getId(),r,remainder)).toList();
+                if(cashReceipts.size()!=1)throw deferred("Verified remaining-rent CASH allocation required");
+                var receipt=cashReceipts.getFirst();
+                var file=em.find(FileAsset.class,receipt.evidenceFileId(),jakarta.persistence.LockModeType.PESSIMISTIC_READ);
+                if(file==null||file.getStatus()!=FileAssetStatus.ACTIVE||!"DUONG_RENEWAL_CASH_RECEIPT".equals(file.getEntityType())
+                    ||!renewal.getId().equals(file.getEntityId()))throw deferred("CASH receipt evidence is unavailable");
+                var events=em.createQuery("select e from RenewalOperationEvent e where e.renewal.id=:id and e.kind='CASH'",com.storagehub.service.renewal.operations.RenewalOperationEvent.class)
+                    .setParameter("id",renewal.getId()).getResultList();
+                boolean bound=false;
+                for(var event:events)try {
+                    var json=new com.fasterxml.jackson.databind.ObjectMapper().readTree(event.getPayloadJson());
+                    bound|=receipt.id().toString().equals(json.path("reference").asText())
+                        &&file.getUploadedBy()!=null&&Objects.equals(event.getActorId(),file.getUploadedBy().getId())
+                        &&!event.getOccurredAt().isBefore(receipt.receivedAt())&&!event.getOccurredAt().isAfter(now);
+                }catch(Exception invalid){throw deferred("CASH receipt event is invalid");}
+                if(!bound)throw deferred("Authorized CASH receipt event required");
+            }
             var source=finance.getIfAvailable();var state=source==null?null:source.read(renewal.getRental()).orElse(null);
             if(source==null||!source.consistentThroughApproval()||state==null||state.checkedAt()==null||state.checkedAt().isAfter(now)
                 ||state.dueObligations()==null||!state.dueObligations().isEmpty()||state.unresolvedDispute())

@@ -1,15 +1,65 @@
 # Renewal API contract
 
+## Bỏ phụ thuộc chính sách ký trong flow thường — 13/10/2026
+
+- Chọn/đổi lịch trước cọc, mở intent và chuẩn bị ký theo lịch đã chọn không yêu cầu `RenewalOperationSources.PolicySource` hoặc `BO_SIGNING_POLICY`. Thiếu policy xử lý ngoại lệ không khóa các nút chọn lịch thông thường.
+- Lịch phải hợp lệ theo giờ phục vụ, thời lượng và sức chứa Calendar, nằm trọn trước cutoff đã công bố. Không dùng `signingWindow` của policy ngoại lệ làm giới hạn chọn lịch.
+- Hạn ký của flow mới là thời điểm kết thúc lượt ký đã chọn, giới hạn bởi cutoff hiện hành. State ghi nguồn `RENEWAL_SELECTED_APPOINTMENT`, version `1`; đây là quy tắc từ lịch khách lưu, không phải bằng chứng BO đã công bố policy. Hạn trả cọc vẫn theo cửa sổ thanh toán và trước giờ ký.
+- Hồ sơ đã trả tiền theo flow cũ nhưng chưa có lịch giữ protocol ký cũ để đối soát. Các lệnh duyệt ngoại lệ/kéo dài hạn của Manager vẫn cần policy riêng tại thời điểm thực hiện; thay đổi này không cấp quyền kéo dài hạn tùy ý.
+
+Mục này thay thế các mô tả yêu cầu policy ký/ngoại lệ trong flow thường bên dưới.
+
+## Chọn lịch ký trước cọc — 13/10/2026
+
+Flow hiện tại: chấp nhận báo giá → chọn lịch ký → thanh toán cọc → xác nhận tiền và chuẩn bị ký → khách đến, thu phần còn lại và ký → hoàn tất.
+
+- Customer được đọc `signing-slots` và tạo/đổi appointment trong trạng thái `accepted` trước khi có Payment. Lưu lịch dự kiến bằng event APPOINTMENT và operation phase `AWAITING_PAYMENT_INTENT`; Renewal vẫn `accepted`, không giả đã trả tiền hoặc đổi ngày thuê. Lịch trong giờ phục vụ, 30 phút, phải nằm trọn trong cửa sổ ký BO và trước cutoff đã công bố.
+- Chọn lịch chưa giữ sức chứa. POST `payment-intents` bắt buộc có lịch tương lai, kiểm tra lại và reserve đúng lịch trong cùng transaction với tạo intent. Hết chỗ thì trả 409 và rollback; khách chọn lại trước khi trả tiền. Hạn trả cọc không vượt cửa sổ thanh toán, cutoff và thời điểm lịch ký trừ một giây.
+- Khi intent đã bắt đầu, không đổi lịch dự kiến hoặc chấp nhận revision mới để thay ràng buộc giao dịch. Sau khi tiền được xác minh và phân bổ, bước chuẩn bị ký giữ lịch đã chọn và chuyển phase `SIGNING`, Renewal `appointment_scheduled`. Callback xử lý muộn khi lịch đã qua hoặc nằm ngoài hạn ký giữ PAID và chờ đối soát, không âm thầm đặt lịch khác.
+- Đổi lịch sau thanh toán tiếp tục dùng các guard ký hiện có. Ghi nhận khách đến, thu phần còn lại và hoàn tất chỉ được thực hiện trong bước ký đã xác minh Payment. Chỉ chọn lịch không mở các thao tác này.
+- Hết hạn Payment với thất bại cuối cùng được xác minh thì giải phóng reservation lịch trong cùng transaction. Tiền đã nhận hoặc gateway chưa rõ kết quả không tự giải phóng. Chấp nhận báo giá mới trước khi có Payment xóa lựa chọn lịch cũ để khách chọn lại.
+- FE cho phép chọn lịch trước trả cọc và khóa nút trả cọc khi chưa có lịch tương lai. API vẫn kiểm tra độc lập; không tin điều kiện trên trình duyệt. Không đổi bố cục UI và không cần thêm cột DB.
+
+Mục này thay thế các mô tả bắt buộc thanh toán xong mới chọn lịch ở bên dưới. Nguồn calendar/policy/cutoff còn thiếu vẫn trả `DEFERRED_SOURCE`.
+
+## Bỏ bước phân công Staff — 13/10/2026
+
+- Renewal không cần Manager phân công Staff. POST `/api/manager/renewals/{id}/staff-assignment` đã gỡ; lời gọi nội bộ cũ bị từ chối trước khi ghi dữ liệu hoặc replay lệnh cũ.
+- Staff ACTIVE với role, permission và scope OPERATE hiện hành ở đúng cơ sở được xem và xử lý Renewal. Danh sách Staff lọc theo các cơ sở được phép trước phân trang; đọc/arrival/incident/thu tiền/hoàn tất vẫn kiểm tra quyền chuyên biệt trong token và DB.
+- Lịch ký giữ quy tắc 30 phút/lượt và tối đa một khách trên mỗi đơn vị sức chứa Staff. Calendar tự giữ một đơn vị sức chứa còn trống trong transaction, không đọc STAFF_ASSIGNMENT và không buộc khách chờ Manager chọn nhân viên. Staff có quyền tại cơ sở được xử lý; bản ghi sức chứa không xác lập quyền sở hữu hồ sơ.
+- UI bỏ lựa chọn phân công, mã nhân viên và phần hiển thị phân công hiện tại; phần xác minh sự cố của Manager giữ chức năng hiện có. GET phân công chỉ còn đọc metadata lịch sử để đối soát, không phải bước của flow mới.
+- Mã nguồn thiếu nguồn `STAFF_PERMISSION_ASSIGNMENT` được giữ tương thích API nhưng chỉ biểu thị thiếu AuthorizationSource; không biểu thị thiếu phân công. Event phân công lịch sử không bị xóa và không quyết định quyền hiện tại. Không cần migration DB cho thay đổi này.
+
+Mục này thay thế các mô tả bắt buộc phân công hoặc “assigned Staff” bên dưới.
+
+## Cập nhật cọc gia hạn — 13/10/2026
+
+Quy tắc này thay thế mô tả trả toàn kỳ của báo giá mới ở các mục đối chiếu bên dưới:
+
+- Báo giá mới dùng tỷ lệ chung với Booking (`RentalDepositPolicy.RATE`): cọc trả trước 40% tiền thuê sau giảm giá, phần còn lại 60% thu khi ký. Làm tròn scale 2 HALF_UP; phần còn lại = tổng sau giảm − cọc. Không thu thêm cọc bảo đảm đã giữ của Rental. `depositRate` trong bản policy cũ không ghi đè tỷ lệ chung này.
+- Customer chấp nhận snapshot → `payment-intents` dùng Payment/VNPay chung, số tiền = `renewalDepositAmount`. Callback xác thực và Ledger phân bổ đúng nghĩa vụ `RENEWAL_DEPOSIT`; chuẩn bị ký chuyển sang `deposit_paid`. Chưa cập nhật ngày thuê.
+- Khi mở intent, ghi cả hai nghĩa vụ của accepted revision: `RENEWAL_DEPOSIT` và `RENEWAL_REMAINDER`. Nghĩa vụ tiền còn lại của chính revision được phép tồn tại khi chuẩn bị ký; công nợ khác và tranh chấp vẫn chặn. Khóa, idempotency, hash báo giá và bằng chứng gateway được giữ.
+- Staff đọc `GET /api/staff/renewals/{id}/payable-statement` và gửi `POST /api/staff/renewals/{id}/cash-receipts` với `payableStatementRef`, `receiptReference`, `receiptFileId`, `received=true`, `expectedVersion` và header `Idempotency-Key`. Bảng kê xác định số tiền từ Ledger; client không nhập số tiền. Reference/version ràng buộc accepted revision và revision Ledger; thay đổi số dư thì đọc lại bảng kê.
+- `receiptFileId` là FileAsset ACTIVE do Staff có quyền tại cơ sở tải lên, gắn đúng Renewal, entityType `DUONG_RENEWAL_CASH_RECEIPT`. Thu tiền và sự kiện CASH ghi trong cùng transaction. Thiếu chứng từ, bảng kê cũ hoặc khoản đã trả bị chặn.
+- Hoàn tất yêu cầu đủ allocation cọc VNPay, phần còn lại CASH có chứng từ và sự kiện Staff, không refund, cùng các điều kiện lịch ký/arrival/hợp đồng/quyền/an toàn hiện có. Nguồn vận hành thiếu vẫn trả `DEFERRED_SOURCE`; không tự chứng nhận coverage tài chính hoàn chỉnh.
+- Snapshot đã chấp nhận không bị sửa: hồ sơ cũ có cọc 0 tiếp tục trả toàn kỳ; snapshot chia cọc cũ giữ nguyên tỷ lệ. Muốn dùng 40% cho yêu cầu cũ chưa thanh toán, Customer lấy báo giá mới và chấp nhận lại. API mô phỏng cọc không được mở lại. Không cần thêm cột DB cho thay đổi này.
+
 Đây là contract duy nhất cho flow gia hạn: yêu cầu/báo giá, thanh toán, ký, hoàn tất và tích hợp nguồn. API Payment chung đọc tại [Payment contract](PAYMENT_API_CONTRACT.md).
 
 ## Quy tắc hiện hành và thứ tự áp dụng
 
+Cập nhật 13/10/2026 — mở thanh toán rút gọn: `storagehub.integration.renewal-simple-payment.enabled=true` áp dụng nguồn DB cục bộ cho options/quote/submit/payment. Runner Payment local bật chế độ này. Giữ quyền sở hữu, Rental active/chưa trả, gian occupied, policy/gói/giá hợp lệ, khoảng thời gian gửi yêu cầu và cutoff do BO công bố, accepted revision/hash và deadline bất biến. Kiểm tra ReturnCase, RECOVERY_HANDOFF đã ghi nhận, công nợ Ledger khác Renewal hiện tại đã đến hạn và PaymentComplaint PENDING/REVIEW_OVERDUE. Không yêu cầu chứng nhận toàn bộ tài chính lịch sử, receiver Recovery hay lịch ký/Staff/extension hold trước khi mở cổng.
+
+Giới hạn có chủ ý: Ledger trống không chứng minh hết nợ; thiếu hồ sơ Recovery không chứng minh chưa bị thu hồi ở hệ thống khác. Chế độ này chỉ kiểm tra dữ liệu đã ghi nhận và projection ghi `LOCAL_DB_AND_PUBLISHED_CUTOFF_ONLY`, không công bố coverage COMPLETE. Khi chưa có tài khoản Ledger, mở tài khoản đúng Rental/Customer/cơ sở để ghi nghĩa vụ gia hạn mới; không tạo tiền/công nợ lịch sử giả. Vẫn chặn dữ liệu lỗi, sai binding, policy/giá thiếu và nghĩa vụ trùng; callback VNPay, số tiền/currency/purpose/revision, provenance và receipt chống trùng vẫn được giữ.
+
+Extension hold chuyển sang chuẩn bị ký sau thanh toán; nguồn lịch ký, an toàn giữ kho và tài chính hoàn tất tiếp tục kiểm tra ở bước này. Không có nguồn thật thì tiền PAID/phân bổ vẫn giữ, trạng thái chờ ký/đối soát; không tự completed hoặc đổi ngày thuê. Intent chưa có hold chỉ giải phóng open slot sau xác nhận thất bại cuối cùng; PAID hoặc kết quả VNPay chưa rõ vẫn được giữ. Cấu hình shared mặc định chưa bật chế độ rút gọn; các mô tả chặn đầy đủ phía dưới áp dụng khi chế độ này tắt.
+
 Options gia hạn đọc gói đang hiệu lực từ catalog của cơ sở và lọc theo policy đã công bố. Mỗi option gồm `pricingPackageCode`, `rentalMonths` và `pricingPackageName` (tên `RentalPackagePolicy.name`, có thể null với adapter cũ). FE dùng tên gói để hiển thị; code vẫn là định danh gửi lên quote. Mã seed local như `DEMO_3M` không được dùng làm tên giao diện. Điều khoản đã chấp nhận hiển thị số tháng từ snapshot; không đổi mã, giá, hash hoặc revision lịch sử để thay nhãn.
 
-- Renewal mới: hệ thống kiểm tra điều kiện, Customer chấp nhận báo giá bất biến, trả toàn kỳ qua Payment/VNPay chung; không yêu cầu Manager duyệt và không phát sinh cọc gia hạn mới.
+- Renewal mới: hệ thống kiểm tra điều kiện, Customer chấp nhận báo giá bất biến, trả trước 40% qua Payment/VNPay chung, phần còn lại thu khi ký; không yêu cầu Manager duyệt.
 - Xác minh Payment, phân bổ Ledger và chuẩn bị ký có transaction riêng. Chỉ hoàn tất ký/bàn giao với đủ bằng chứng mới cập nhật thời hạn Rental.
 - Nguồn cấu hình/tài chính/lịch ký/quyền giữ kho còn thiếu vẫn chặn bằng `UNKNOWN`/`DEFERRED_SOURCE`; không suy dữ liệu thiếu là 0 hoặc đã thanh toán.
-- Các mô tả `pending → approved → deposit_paid` và Manager `decision` trong phần đối chiếu phía dưới chỉ dùng cho tương thích hồ sơ/điều khoản cũ. Chúng không phải flow mặc định của Renewal mới.
+- Các mô tả Manager `approved`/`decision` trong phần đối chiếu phía dưới chỉ dùng cho tương thích hồ sơ cũ. Flow mới là `accepted → deposit_paid → appointment_scheduled → completed`.
 - API Customer mô phỏng cọc Renewal đã bị gỡ. Thanh toán mới dùng `POST /api/customer/renewals/{renewalId}/payment-intents`; dữ liệu cọc lịch sử vẫn được đọc để đối soát.
 - Khi mô tả lịch sử mâu thuẫn, quy tắc ở mục này và phần **Current payment and lifecycle** được ưu tiên. Các ghi chú rollout/test có ngày tháng chỉ phản ánh thời điểm được ghi, không xác nhận trạng thái deploy hiện tại.
 
@@ -22,22 +72,24 @@ Options gia hạn đọc gói đang hiệu lực từ catalog của cơ sở và
 
 ## Current payment and lifecycle
 
-### Renewal Payment integration — 12/10/2026
+### Renewal Payment integration — cập nhật 13/10/2026
 
 #### Policy and lifecycle
 
-Reservation and Renewal use the same `VnpayService`, `VnpayProperties` and signed URL builder (`gatewayPaymentUrl`). Both use `app.vnpay` merchant credentials, gateway URL and `/api/public/payments/vnpay/return` / IPN callback verification. There are no separate Renewal merchant credentials. Renewal's customer endpoint creates a shared `Payment` with purpose `RENEWAL`, accepted-revision binding and the full-period amount; it does not call the Reservation deposit endpoint.
+Reservation and Renewal use the same `VnpayService`, `VnpayProperties` and signed URL builder (`gatewayPaymentUrl`). Both use `app.vnpay` merchant credentials, gateway URL and `/api/public/payments/vnpay/return` / IPN callback verification. There are no separate Renewal merchant credentials. Renewal's customer endpoint creates a shared `Payment` with purpose `RENEWAL`, accepted-revision binding and the accepted deposit amount (full-period amount for earlier zero-deposit quotes); it does not call the Reservation deposit endpoint.
 
-New quotes have **zero additional Renewal deposit** and one full-period rental obligation. Customer accepts the immutable server quote; the system validates eligibility. Ordinary Renewal has no Manager approval step. Original security deposits and historical accepted split-payment terms are not repriced or rewritten.
+New quotes use **40% rental prepayment and 60% remaining rent**. Customer accepts the immutable server quote; the system validates eligibility. Ordinary Renewal has no Manager approval step. Original security deposits and previously accepted payment terms are not repriced or rewritten.
 
 ```mermaid
 flowchart LR
-  A[Accepted quote] --> B[Payment intent and full-rent obligation]
+  A[Accepted quote] --> S[Customer selects signing appointment]
+  S --> B[Reserve chosen slot and create deposit intent]
   B --> C[Authenticated VNPay evidence committed]
   C --> D[Exact Ledger allocation committed]
   D --> E[Signing prerequisites checked in separate transaction]
-  E --> F[Appointment, arrival and signed contract]
-  F --> G[Verified completion extends Rental once]
+  E --> F[Arrival and signed contract at selected appointment]
+  F --> H[Staff records remaining rent with CASH evidence]
+  H --> G[Verified completion extends Rental once]
   C --> R[Persistent reconciliation queue]
   D --> R
   R --> D
@@ -62,7 +114,7 @@ Envelope remains `ApiResponse.data`. Response has `paymentId`, `renewalId`, `acc
 | `AWAITING_PAYMENT` | Read `paymentStatus` for pending/processing/not-received/failed/cancelled. |
 | `VERIFIED_AWAITING_ALLOCATION` | Shared Payment has authenticated received-funds proof; no committed allocation yet. |
 | `ALLOCATED_AWAITING_SIGNING` | Exact Ledger receipt committed; signing preparation still pending or blocked. |
-| `AWAITING_SIGNING` | Full-rent payment and signing preparation committed. Contract completion still required. |
+| `AWAITING_SIGNING` | Initial payment and signing preparation committed. Remaining rent and contract completion still required for split quotes. |
 | `COMPLETED` | Renewal completion has actually succeeded. |
 | `RECONCILIATION_REQUIRED` | Received funds cannot safely enter this workflow, including late/historical incomplete evidence. |
 
@@ -71,9 +123,9 @@ Envelope remains `ApiResponse.data`. Response has `paymentId`, `renewalId`, `acc
 #### Transaction and authority boundaries
 
 1. **A — gateway evidence:** `VnpayService.processCallback` locks Payment and verifies HMAC, merchant, amount, transaction identity and gateway payment time. It commits PAID, stable evidence-log reference and a reconciliation marker. It never calls Ledger or calendar in this transaction. Signed query reconciliation can record the same verified proof only after query signature, merchant, amount, identity and payment-time checks.
-2. **B — allocation:** `RenewalPaymentReconciler` runs `REQUIRES_NEW`, locks the persisted Payment and invokes `RenewalVnpaySettlementService.settle`. It checks accepted revision, original quote hash/terms, purpose, currency, exact full-rent amount, deadline, Payment provenance, refund state, account/customer/facility, one exact obligation and payment-ready writer evidence. Receipt, allocation and Payment receipt-reference commit together.
+2. **B — allocation:** `RenewalPaymentReconciler` runs `REQUIRES_NEW`, locks the persisted Payment and invokes `RenewalVnpaySettlementService.settle`. It checks accepted revision, original quote hash/terms, purpose, currency, exact initial-payment amount, deadline, Payment provenance, refund state, account/customer/facility, one exact obligation and payment-ready writer evidence. Receipt, allocation and Payment receipt-reference commit together.
 3. **C — signing preparation:** another `REQUIRES_NEW` rechecks accepted terms, refund/provenance, atomic hold/Recovery/calendar and consistent financial state. It prepares the existing signing phase. Failure preserves A and B. A delayed callback is not rejected just because processing occurs after payment deadline; gateway-paid time determines timeliness. Expired hold/signing rights still block C and require reconciliation.
-4. **Actual activation:** existing staff completion still checks permission/assignment, appointment, arrival, signed document, financial coverage and shared resource guards. The default Ledger accounting adapter checks the exact shared Payment receipt again; it never executes payment or invents CASH receipts. An owner-provided `AccountingSource` takes precedence. Historical deposit/CASH execution remains delegated to its owner adapter and fails closed when absent.
+4. **Actual activation:** Staff completion checks permission/assignment, appointment, arrival, signed document, financial coverage and shared resource guards. The default Ledger accounting adapter verifies the exact shared Payment receipt and, for split quotes, the remaining-rent CASH allocation with a resource-bound file and Staff event. An owner-provided `AccountingSource` takes precedence; historical approval-backed deposit execution remains delegated to its owner adapter.
 
 `LedgerStore` keeps its financial schemas and read contracts. Existing unique payment/gateway evidence and receipt-command keys prevent duplicate allocation and cross-obligation reuse. A missing account/obligation/coverage source is UNKNOWN, never zero debt.
 
@@ -107,6 +159,8 @@ Existing integration properties remain opt-in; no production gateway, schedule, 
 ### Đặc tả API gia hạn (D2)
 
 #### Eligibility/operational guard — 11/10/2026
+
+Cập nhật 13/10: đã có adapter lịch ký Staff opt-in, dùng quy tắc chung và phân công thực; xem phần “Staff signing calendar and receiver-state API”. Các giới hạn thiếu nguồn Recovery/shared writer và coverage tài chính bên dưới vẫn áp dụng. Adapter local demo không được coi là nguồn vận hành thật.
 
 `SharedRenewalEligibilitySource` triển khai `EligibilitySource`, opt-in cùng `RenewalOperationalGuard` qua `storagehub.integration.renewal-operational-checks.enabled=true`. Gate D2 gọi guard trước policy/eligibility: options, quote, submit, edit, APPROVE và review/allowedActions. Guard chặn Rental đã trả/completed, unit không occupied, ReturnCase, bảo trì đang mở, Rental/booking khác cam kết cùng unit và Recovery handoff. Replay thành công, CANCEL/REJECT không bị đưa qua gate mới.
 
@@ -198,9 +252,9 @@ Audit tái sử dụng AuditLogService hiện có với người dùng thực tr
 docs/sql/renewal-persistence-schema.sql là DDL chỉ để rà soát, chưa bật Flyway. Tác vụ này không chạy migration MySQL hoặc thay đổi dữ liệu thực tế. Cấu hình dev ddl-auto=update hiện có có thể tạo bảng khi khởi động: không chạy trên MySQL chung của team trước khi chủ nguồn duyệt. Staging/prod dùng validate cần migration được duyệt; không bổ sung ngược dữ liệu cũ.
 
 400 trường/truy vấn/header sai hoặc không hỗ trợ; 401 phiên đăng nhập không hợp lệ; 403 thiếu quyền; 404 tài nguyên/báo giá ngoài quyền xem; 409 điều khoản/phiên bản cũ, trùng yêu cầu đang mở, hết hạn, xung đột giai đoạn/trả kho/nợ/dung lượng/nguồn. Thiếu nguồn dùng CONFLICT hiện có + thông điệp DEFERRED_SOURCE; không thay enum toàn cục. Triển khai D2 đầy đủ xuyên role cần nguồn thật, duyệt schema/khóa, phối hợp D3 và xác minh MySQL/E2E.
-### Current full-period payment contract — 12/10/2026
+### Current shared payment contract — cập nhật 13/10/2026
 
-For new accepted Renewals, the current payment/transaction contract is [Renewal Payment integration](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle). It supersedes mandatory Manager approval and deposit-first descriptions below for new quotes. Historical accepted terms remain readable. Payment verification, allocation and signing preparation commit independently; only verified contract completion extends Rental.
+For new accepted Renewals, the current payment/transaction contract is [Renewal Payment integration](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle). New quotes use the shared Booking 40% prepayment rate without Manager approval. Historical accepted terms remain readable. Payment verification, allocation and signing preparation commit independently; only verified contract completion extends Rental.
 
 
 ---
@@ -221,7 +275,7 @@ SafetySource có adapter persistence opt-in `TransactionalRenewalExtensionHoldSo
 
 | Giao diện tích hợp  | Bảo đảm do chủ nguồn cung cấp                                                                                                                                                                                   | Hành vi khi thiếu                                                                                       |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| AuthorizationSource | Quyền ký/CASH/ngoại lệ/hoàn tiền thực tế, phân công Staff hiện tại, phạm vi OPERATE/MANAGE, ID được phân công cho hàng đợi trước phân trang                                                                     | Thao tác Staff/Manager chuyên biệt liên quan trả 409 DEFERRED_SOURCE; không tái sử dụng PERFORM_CHECKIN |
+| AuthorizationSource | Quyền ký/CASH/ngoại lệ/hoàn tiền thực tế, phạm vi OPERATE/MANAGE hiện hành, tập ID được phép theo cơ sở cho hàng đợi trước phân trang                                                                     | Thao tác Staff/Manager chuyên biệt liên quan trả 409 DEFERRED_SOURCE; không tái sử dụng PERFORM_CHECKIN |
 | PolicySource        | Cửa sổ ký theo BO, giới hạn kéo dài ngoại lệ, tham chiếu/phiên bản policy, phân loại lỗi cơ sở có thẩm quyền                                                                                                    | Không quyết định cọc/ngoại lệ bằng policy viết cứng                                                     |
 | CalendarSource      | Giờ làm việc thực, ngày nghỉ, toàn bộ thời lượng khung hẹn, tính khả thi; giữ/thay khung hẹn trong giao dịch cho mục đích RENEWAL                                                                               | Không cam kết lịch hẹn; không sửa Check-in                                                              |
 | SafetySource        | Giao thức khóa chung Rental/hold/Booking/Assignment/Return/Recovery/bảo trì; giữ lại/tái giữ chỗ/tiêu thụ/giải phóng hold trong giao dịch                                                                       | Không cam kết dung lượng hoặc hoàn tất                                                                  |
@@ -241,12 +295,12 @@ SafetySource có adapter persistence opt-in `TransactionalRenewalExtensionHoldSo
 | Customer               | POST `.../exception-confirmations`       | decisionRef, expectedVersion                                                                        | 200 Result; chỉ đề xuất mới nhất, kiểm tra lại policy/lỗi/lịch/hold/mốc giới hạn                                    |
 | Customer/Manager/Staff | GET `/{role}/renewals/{id}/payments`     | page,size                                                                                           | Dòng thời gian sự kiện cọc/CASH D3 đã lưu, không phải lịch sử thanh toán cũ được nhập vào                           |
 | Customer/Manager       | GET `/{role}/renewals/{id}/refunds`      | page,size                                                                                           | Lịch sử quyết định/dành quyền hoàn, không phải bằng chứng đã chi trả; loại bằng chứng nội bộ khỏi phản hồi Customer |
-| Staff                  | GET `/staff/renewals/{id}`               | —                                                                                                   | Chỉ trạng thái ký được phân công                                                                                    |
-| Staff                  | GET `/staff/renewal-appointments`        | page,size,facilityId,date theo ISO YYYY-MM-DD,status SIGNING/SIGNING_EXPIRED/COMPLETED              | Lọc phân công và phạm vi OPERATE TRƯỚC phân trang; sắp xếp appointmentStart/id                                      |
+| Staff                  | GET `/staff/renewals/{id}`               | —                                                                                                   | Hồ sơ thuộc cơ sở Staff có quyền OPERATE                                                                                    |
+| Staff                  | GET `/staff/renewal-appointments`        | page,size,facilityId,date theo ISO YYYY-MM-DD,status SIGNING/SIGNING_EXPIRED/COMPLETED              | Lọc quyền và phạm vi OPERATE TRƯỚC phân trang; sắp xếp appointmentStart/id                                      |
 | Staff                  | POST `/staff/renewals/{id}/arrival`      | appointmentRef,evidenceFileIds,expectedVersion                                                      | 201 sự kiện theo đồng hồ server; không nhận arrivalAt từ client/ghi lùi thời gian                                   |
 | Staff                  | POST `.../facility-incidents`            | appointmentRef,reason,evidenceFileIds,expectedVersion                                               | 201 sự kiện; có thể ghi nhận sự cố sau hết hạn để xem xét                                                           |
 | Staff                  | GET `.../payable-statement`              | —                                                                                                   | statementRef/phiên bản/hạn/số tiền/nghĩa vụ bắt buộc thực tế                                                        |
-| Staff                  | POST `.../cash-receipts`                 | payableStatementRef,receiptReference,received=true,expectedVersion                                  | 201 sự kiện biên nhận thực từ nguồn dùng chung; không phải hoàn tất                                                 |
+| Staff                  | POST `.../cash-receipts`                 | payableStatementRef,receiptReference,receiptFileId,received=true,expectedVersion                                  | 201 sự kiện biên nhận thực từ Ledger và chứng từ Staff; không phải hoàn tất                                                 |
 | Staff                  | POST `.../completion`                    | expectedVersion,identityVerified=true,arrivalRef,signedDocumentFileId,completionNote                | 200 Result; kéo dài Rental đúng một lần                                                                             |
 | Manager                | GET `/manager/renewals/{id}/operations`  | —                                                                                                   | Trạng thái trong phạm vi READ + VIEW_RENTALS                                                                        |
 | Manager                | GET `.../facility-incidents`             | page,size                                                                                           | Dòng thời gian sự cố/ngoại lệ nội bộ                                                                                |
@@ -283,14 +337,47 @@ DDL chỉ để rà soát nằm trong docs/sql/renewal-operations-overdue-schema
 Nghiệm thu production đầy đủ vẫn cần bộ kết nối thật, schema/quyền được chủ nguồn rà soát, đối soát hết hạn/open-slot, khả năng xem kết quả thực thi/đối soát hoàn tiền chung, tích hợp thông báo và E2E MySQL/giữa các bên cùng ghi. Bộ kết nối local trong test chỉ là dữ liệu kiểm thử.
 ### Full-rent payment compatibility — 12/10/2026
 
-See [Renewal Payment integration](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle) for the current full-period VNPay flow. Operations projection supports `AWAITING_PAYMENT_INTENT`, `fullRentPaymentRef`/`fullRentPaidAt`, and payment-history event `FULL_RENT_PAYMENT` alongside historical deposit fields. Signing/appointment/arrival/document requirements remain in force. The Payment-to-Ledger completion adapter verifies exact allocated shared Payment evidence; payment confirmation alone is not completion. Legacy deposit and CASH execution require the original owner adapter.
+See [Renewal Payment integration](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle) for the current shared VNPay flow. Operations projection uses `depositPaymentRef`/`depositPaidAt` and `DEPOSIT` for accepted split quotes; `fullRentPaymentRef`/`fullRentPaidAt` and `FULL_RENT_PAYMENT` remain for earlier zero-deposit quotes. Signing/appointment/arrival/document requirements remain in force. Completion verifies exact allocated shared Payment evidence and the remaining-rent CASH receipt where applicable; payment confirmation alone is not completion. Historical approval-backed deposit execution requires the original owner adapter.
 
 
 ---
 
 ## Shared source integration
 
+### Team service calendar policy — 13/10/2026
+
+`GET /api/staff/facilities/{facilityId}/service-calendar-policy` returns `ApiResponse<ServiceCalendarPolicyResponse>`.
+Requires JWT STAFF, current DB/claim `rentals:read`, and current READ scope for the facility. Unauthorized scope/missing facility returns 404; missing role/grant returns 403.
+
+The team policy supplied on 13/10 uses `Asia/Ho_Chi_Minh`, works all seven days, working hours 08:00–17:00, appointment starts 08:00–16:30, rounded upward to a 30-minute boundary. An exact boundary is retained; seconds/nanoseconds after it require the next boundary. After the last start, the next allowed start is 08:00 the following day.
+
+`ServiceCalendarPolicy` is the shared calculation source for Booking and the local Renewal signing calendar. Booking retains its own sequence: optional 9 working hours for OTHER goods review, 6 elapsed hours for deposit payment, 9 working hours for assignment, then a 7-day check-in window. The newer detailed team examples and current Booking code use 9 working hours rather than the earlier screenshot's 24 elapsed hours. Those Booking processing/deposit windows are not added to Renewal.
+
+Response fields are `facilityId`, `facilityStatus`, `timezone`, `workingDays` (MONDAY through SUNDAY), `workingFrom`, `workingTo`, `firstAppointmentStart`, `lastAppointmentStart`, `slotStepMinutes`, `availabilityStatus`. Availability is explicitly `NOT_EVALUATED`: hours do not prove staff capacity, a reservable appointment, Recovery status, or Renewal eligibility. This endpoint does not write appointments or change deadlines.
+
+`LocalDemoSigningCalendarSource` remains opt-in and local-only; its 30-minute service duration and one appointment per facility are demo constraints. Actual capacity/reservations and the Recovery receiver must still supply the existing transactional source contracts. The supplied hours policy does not certify those sources or implement `RenewalSharedWriterProtocol`.
+
 ### Contract tích hợp nguồn gia hạn, quá hạn và file hỗ trợ
+
+#### Staff signing calendar and receiver-state API — 13/10/2026
+
+Team-confirmed signing capacity: one customer per Staff at a time, 30 minutes per signing appointment. The policy read response additionally includes `signingDurationMinutes=30` and `maximumConcurrentPerStaff=1`.
+
+Opt-in `storagehub.integration.renewal-signing-calendar.enabled=true` selects `StaffRenewalSigningCalendarSource` instead of the demo calendar. Add `classpath:db/renewal-calendar-migration` to the existing Flyway locations before enabling. Migration `V2026101301__create_staff_renewal_signing_calendar.sql` adds the Staff mutex and resource-bound reservation tables; it does not rewrite prior migrations, adopt old/demo appointments, or update existing data. The local runner supports `-EnableStaffSigningCalendar`; starting it with that switch runs this additive migration on its fixed local datasource. This change has not been applied to local/shared MySQL during implementation.
+
+The provider uses current DB Staff roles/grants/OPERATE scope and the accepted revision. Feasibility searches eligible Staff; reservation automatically consumes available capacity without Manager assignment. A Facility row lock precedes a Staff mutex shared across facilities/instances; overlap reads use current locking reads in explicit READ_COMMITTED transactions. Writes from REPEATABLE_READ/default-isolation callers are deferred rather than using an older capacity snapshot; Payment reconciliation now opens its separate transactions at READ_COMMITTED. Half-open intervals allow adjacent slots. Old appointments remain reserved during reschedule and roll back with the caller on failure. Changing slots rechecks eligible capacity and preserves the existing reservation until the new reservation commits. Verified normal completion releases the calendar reservation in the same transaction; expiry keeps its review/disposition and does not silently release paid rights. The expiry classifier recognizes full-rent payments as paid signing rather than unpaid payment expiry.
+
+Historical SIGNING appointments with a future end that are not bound to the new reservation registry anywhere make coverage UNKNOWN/deferred. Rollout must quiesce old calendar writers and explicitly reconcile those records; an empty new calendar is not historical coverage. This calendar tracks Renewal signing work; it does not claim to certify unrelated Check-in/Maintenance Staff workload or the shared Booking/Return/Recovery writer protocol.
+
+| API | Access | Result |
+|---|---|---|
+| GET `/api/customer/renewals/{id}/signing-slots?date=YYYY-MM-DD` | Existing Customer ownership guard | Current, nonbinding signing slot candidates |
+| GET `/api/staff/renewals/{id}/signing-slots?date=YYYY-MM-DD` | Current facility Staff permission guard | Same facility capacity calendar |
+| GET `/api/staff/rentals/{rentalId}/recovery-state` | Current `rentals:read` and READ facility scope | Receiver-owned state, checked at server time |
+
+Slot reads require phase SIGNING, no recorded arrival, an atomic calendar and current signing deadline/Recovery cutoff. Response includes `renewalId`, `expectedVersion`, `checkedAt`, `date`, `sourceCoverage`, `slots` (`reference`, `start`, `end`); the whole slot must fit the deadline. GET neither reserves capacity nor asserts financial/Recovery readiness. Existing POST/PATCH appointment remains the mutation API and rechecks capacity/version/deadlines under locks. Date/time violations or DEFERRED_SOURCE return 400/409; ownership/assignment guards retain existing 403/404 behavior.
+
+Recovery read returns `rentalId`, `facilityId`, `checkedAt`, `sourceCoverage`, `recoveryBlocked`. Missing source/evidence is `UNKNOWN` with null blocked; demo adapters are marked `LOCAL_DEMO`, including proxied beans. Wrong Rental/facility or stale evidence returns 409. This endpoint wires the existing receiver port to Staff reads; it does not fabricate a Recovery receiver, alter Rental/unit/access state, or certify absence of externally initiated Recovery. A non-demo Recovery provider, complete Ledger coverage and the coordinated shared-writer protocol remain required for live end-to-end activation.
 
 Cập nhật 09/10/2026. Đây là API/adapter bổ sung của dự án; không thay Booking, Check-in, Payment, Return, policy config cũ, shared security hoặc schema.
 Không tự tạo policy, cấp quyền, phân công, xác nhận tiền hoặc backfill bằng chứng lịch sử.
@@ -341,27 +428,9 @@ ProjectHandoffRentalPeriodAdapter chỉ đăng ký khi storagehub.integration.re
 Không tự sửa ngày Booking/Rental lịch sử hoặc bật profile production. Hồ sơ không có proof giữ UNKNOWN.
 Nguồn term không thu phí, khóa kho, tạo Recovery hoặc thay số dư.
 
-#### 3. Phân công nhân viên gia hạn
+#### 3. Staff processing permissions
 
-POST /api/manager/renewals/{id}/staff-assignment.
-Header Idempotency-Key bắt buộc; body assignedStaffId, reason, expectedVersion.
-201 ApiResponse.data là Result(state,event); event.kind = STAFF_ASSIGNMENT.
-
-Manager phải có rentals:read, rentals:update và scope MANAGE thực.
-Nhân viên được chọn phải ACTIVE, role STAFF, rentals:read, rentals:update và OPERATE tại cơ sở thực.
-Không đồng nhất Booking.assignedBy với nhân viên ký. Không dùng checkins:process thay quyền gia hạn.
-Renewal phải được duyệt, chưa terminal và chưa ghi nhận Arrival; không phân công lại cùng người chỉ để reset.
-Receipt idempotency/resource lock/workflow version hiện có giữ nguyên; retry cùng key/payload đọc lại kết quả, khác payload hoặc stale version trả 409.
-Sự kiện lưu renewalId, facilityId, staffId, acceptedQuoteId và workflowRevision.
-
-RenewalAssignmentSource kiểm tra role/grants/scope DB cùng claims, assignment hiện hành theo accepted quote.
-READ chỉ requires rentals:read; ARRIVAL/INCIDENT/COMPLETE thêm rentals:update.
-CASH cần rentals:read, payments:read, payments:collect; REFUND của Manager thêm payments:read/payments:collect.
-Danh sách Staff lấy đúng assignment trước phân trang; sai actor/resource không lộ hồ sơ.
-Thiếu assignment / stale quote / hai assignment cùng timestamp không được đoán từ UUID.
-
-Lưu ý triển khai: RoleDataInitializer hiện không cấp rentals:update cho các role mặc định, Staff cũng không mặc định có payments:collect.
-Adapter không sửa shared RBAC. Tài khoản thiếu grant thực vẫn bị chặn; tests dùng grants riêng trong DB H2.
+Manager Staff-assignment POST is removed. Eligible Staff at the Renewal facility can process the request without assignment. The current database and token must grant rentals:read for viewing, rentals:update for arrival/incident/completion, and payments:read/payments:collect for CASH. Historical STAFF_ASSIGNMENT records are metadata only. Staff lists are filtered by current facility OPERATE scope before pagination.
 
 #### 4. Xác minh lỗi cơ sở
 
@@ -408,10 +477,10 @@ không làm lỗi toàn bộ timeline và không giả download/COMPLETE. Denied
 - Không có lịch sử chứng minh revision yêu cầu: 404. Snapshot lỗi/mơ hồ: 409. FE giữ kết quả chưa xác định, không báo lưu thành công.
 - Các reader áp dụng chính sách theo ngày, GET/PUT cũ và điều kiện công bố không đổi.
 
-##### Phân công gia hạn hiện tại
+##### Metadata phân công lịch sử
 
 GET `/api/manager/renewals/{id}/staff-assignment`, Bearer bắt buộc; Manager ACTIVE với `rentals:read` và scope READ thực trong token/DB.
-Không thay POST cùng path, Booking assignment, Check-in hay kiểm quyền xử lý của Staff.
+POST cùng path đã gỡ. GET chỉ dùng đọc lịch sử; không quyết định quyền xử lý Renewal, Booking assignment hay Check-in.
 
 Response `{renewalId, expectedVersion, status, staffId, staffName}`:
 
@@ -433,4 +502,4 @@ Notification persisted/read không được coi là bằng chứng delivery củ
 Từ 10/10/2026 có kernel ledger và outbox/review receipt riêng, mặc định OFF; xem [contract ledger và communication](LEDGER_COMMUNICATION_INTEGRATION_API_CONTRACT.md).
 Ledger chưa có writer-backed coverage hoặc engine Accounting/Refund hoàn chỉnh. Outbox chỉ cung cấp proof khi Customer xác nhận nhận đúng notification/current resolution/policy; persistence/readFlag đơn thuần vẫn không phải proof.
 Cross-writer hold, trạng thái access/PIN và objective-specific Support result vẫn thiếu implementation.
-Không thể suy đủ các trường đó từ Payment.status hoặc ghi chú người dùng. End-to-end D1-D5 chưa được chứng nhận hoàn tất.
+Không thể suy đủ các trường đó từ Payment.status hoặc ghi chú người dùng. End-to-end D1-D5 chưa được chứng nhận hoàn tất..
