@@ -31,6 +31,7 @@ public record UnitTypeResponse(
     UnitTypeStatus status,
     long totalCount,
     long availableCount,
+    long occupiedCount,
     Instant createdAt,
     Instant updatedAt
 ) {

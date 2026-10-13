@@ -119,7 +119,11 @@ public class FacilityQueryService {
             actor.hasRole(RoleCode.CUSTOMER) ? List.of() : managerNames(facility.getId()),
             facility.getStatus(),
             facility.getCreatedAt(),
-            facility.getUpdatedAt()
+            facility.getUpdatedAt(),
+            storageUnitRepository.countByFacility_Id(facility.getId()),
+            storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.available),
+            storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.occupied),
+            unitTypeRepository.findMinimumMonthlyPrice(facility.getId(), UnitTypeStatus.active)
         );
     }
 

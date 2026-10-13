@@ -128,6 +128,7 @@ public class UnitTypeQueryService {
             unitType.getStatus(),
             storageUnitRepository.countByFacility_IdAndUnitType_Id(unitType.getFacility().getId(), unitType.getId()),
             availableUnitCount,
+            storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(unitType.getFacility().getId(), unitType.getId(), StorageUnitStatus.occupied),
             unitType.getCreatedAt(),
             unitType.getUpdatedAt()
         );
