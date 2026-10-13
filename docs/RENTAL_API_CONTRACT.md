@@ -8,9 +8,19 @@ GET `/api/{customer|manager}/rentals/{id}/handover-files`, JWT Bearer, trả env
 
 Mỗi file gồm `id`, `name`, `contentType`, `sizeBytes`, `uploadedAt`, `kind` (`SIGNED_CONTRACT` hoặc `HANDOVER_EVIDENCE`). Chỉ lấy FileAsset ACTIVE loại CHECK_IN, gắn đúng CheckIn đã hoàn tất của Rental và có trong `evidenceReferences` của bàn giao đã lưu. Không liệt kê file upload nháp, đường dẫn lưu trữ hay hợp đồng chưa liên kết. File Staff upload với tiền tố `hop-dong-da-ky-` được nhận diện là hợp đồng đã ký; file bàn giao khác giữ loại minh chứng.
 
+Reader cũng lấy hợp đồng gia hạn từ COMPLETION event của Renewal completed thuộc đúng Rental: `signedDocumentFileId` phải trỏ FileAsset ACTIVE loại DUONG_RENEWAL_SIGNED_CONTRACT gắn đúng Renewal. File upload trước khi hoàn tất chưa được công bố cho Customer. CheckIn cũ chưa gắn Rental chỉ được đọc qua đúng Reservation của Rental, không lấy file từ hồ sơ khác của cùng Customer.
+
 FE hiển thị dưới thông tin hồ sơ, dùng GET `/api/files/{fileId}` hiện có để tải. Download kiểm tra lại quyền file; không thay đổi quyền truy cập hoặc dữ liệu bàn giao. Danh sách rỗng khi chưa có tài liệu; dữ liệu bàn giao không đọc được trả lỗi, không giả thành đã có hợp đồng.
 
 ## Swagger
+
+### Thanh toán và biên lai trong chi tiết gian kho
+
+GET `/api/manager/rentals/{id}/payments` trả envelope danh sách khoản thanh toán liên quan đúng Reservation hoặc Renewal của Rental. Yêu cầu MANAGER, VIEW_RENTALS, VIEW_PAYMENTS và READ scope hiện tại trong token/DB. Không suy ra thanh toán từ giá niêm yết hoặc ghi chú hồ sơ.
+
+Mỗi khoản có `paymentId`, `rentalId`, `renewalId`, `purpose`, `status`, `amount`, `currency`, `refundedAmount`, `transactionReference`, `gatewayTransactionNo`, `paymentMethod`, `gatewayPayDate`, `paidAt`, `processedAt`, `createdAt`, `initiatedByName`, `verification`. Provenance giữ VERIFIED/SANDBOX/SIMULATED/UNVERIFIED/DISPUTED/ATTEMPT; PAID đơn thuần không chứng nhận tiền thật hoặc công nợ toàn hồ sơ. Chỉ đọc khoản đặt chỗ, phần tiền thuê còn lại, tiền thuê tháng và gia hạn; không thay đổi luồng trả kho.
+
+Chi tiết gian kho hiển thị Hồ sơ thuê, hợp đồng đã ký từ Staff upload với nút xem trước/tải xuống, và trạng thái từng khoản thu. Biên lai dùng bố cục chung với lịch sử thanh toán, giữ nhãn Sandbox/mô phỏng/đối soát khi thích hợp. Không tạo PDF hợp đồng từ thông tin hồ sơ hoặc dùng ảnh minh chứng bàn giao làm hợp đồng. Thiếu hợp đồng hoặc trạng thái bảo trì hiển thị Không có dữ liệu.
 
 ### Bổ sung ngày đã xác minh - 09/10/2026
 
