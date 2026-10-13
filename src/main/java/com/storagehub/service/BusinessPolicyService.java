@@ -22,6 +22,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 @Service
 @RequiredArgsConstructor
@@ -144,7 +145,7 @@ public class BusinessPolicyService {
         return toResponse(policy);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public RentalPackagePolicyResponse createPackagePolicy(ActorPrincipal actor, RentalPackagePolicyRequest request) {
         requirePolicyOwner(actor);
 
@@ -156,6 +157,7 @@ public class BusinessPolicyService {
         if (policyRepository.findByFacility_IdAndCode(facility.getId(), request.code().trim()).isPresent()) {
             throw ApiExceptions.conflict("A package policy with code '" + request.code() + "' already exists for this facility");
         }
+        validatePackagePeriod(request, facility.getId(), null);
 
         RentalPackagePolicy policy = new RentalPackagePolicy();
         policy.setFacility(facility);
@@ -182,7 +184,7 @@ public class BusinessPolicyService {
         return toResponse(saved);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public RentalPackagePolicyResponse updatePackagePolicy(
         ActorPrincipal actor,
         UUID policyId,
@@ -194,6 +196,7 @@ public class BusinessPolicyService {
             .orElseThrow(() -> ApiExceptions.notFound("Rental package policy not found"));
 
         facilityScopeService.assertCanManage(actor, policy.getFacility().getId());
+        validatePackagePeriod(request, policy.getFacility().getId(), policy.getId());
 
         RentalPackagePolicyResponse before = toResponse(policy);
 
@@ -258,6 +261,34 @@ public class BusinessPolicyService {
         }
         setting.setValue(rawValue);
         systemSettingRepository.save(setting);
+    }
+
+    private void validatePackagePeriod(RentalPackagePolicyRequest request, UUID facilityId, UUID excludedPolicyId) {
+        if (request.effectiveTo() != null && request.effectiveTo().isBefore(request.effectiveFrom())) {
+            throw ApiExceptions.validation("effectiveTo must be on or after effectiveFrom", null);
+        }
+        if (Boolean.FALSE.equals(request.active())) return;
+
+        boolean overlaps = policyRepository.findByFacility_IdAndRentalMonths(facilityId, request.rentalMonths())
+            .stream()
+            .filter(existing -> existing.isActive())
+            .filter(existing -> excludedPolicyId == null || !excludedPolicyId.equals(existing.getId()))
+            .anyMatch(existing -> periodsOverlap(
+                request.effectiveFrom(), request.effectiveTo(),
+                existing.getEffectiveFrom(), existing.getEffectiveTo()
+            ));
+        if (overlaps) {
+            throw ApiExceptions.conflict(
+                "Facility already has an active " + request.rentalMonths()
+                    + "-month package in the selected effective period"
+            );
+        }
+    }
+
+    private boolean periodsOverlap(LocalDate firstStart, LocalDate firstEnd, LocalDate secondStart, LocalDate secondEnd) {
+        boolean firstStartsBeforeSecondEnds = secondEnd == null || !firstStart.isAfter(secondEnd);
+        boolean secondStartsBeforeFirstEnds = firstEnd == null || !secondStart.isAfter(firstEnd);
+        return firstStartsBeforeSecondEnds && secondStartsBeforeFirstEnds;
     }
 
     private int getIntSetting(String key, int defaultValue) {

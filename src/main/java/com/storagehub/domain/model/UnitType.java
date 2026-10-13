@@ -50,6 +50,9 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal monthlyPrice;
 
+    @Column(name = "security_deposit_amount", nullable = false, precision = 14, scale = 2)
+    private BigDecimal securityDepositAmount = BigDecimal.ZERO;
+
     @Column(length = 1000)
     private String imageUrl;
 
