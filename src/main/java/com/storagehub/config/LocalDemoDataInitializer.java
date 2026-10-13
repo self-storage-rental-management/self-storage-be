@@ -121,6 +121,7 @@ public class LocalDemoDataInitializer {
                     unitType.setWidthM(decimal(definition.widthM()));
                     unitType.setHeightM(decimal(definition.heightM()));
                     unitType.setMonthlyPrice(decimal(definition.monthlyPrice()));
+                    unitType.setSecurityDepositAmount(decimal(definition.monthlyPrice()));
                     unitType.setMaxLoadKg(decimal(definition.maxLoadKg()));
                     unitType.setRackCount(definition.rackCount());
                     unitType.setRackLengthM(decimal(4.0));

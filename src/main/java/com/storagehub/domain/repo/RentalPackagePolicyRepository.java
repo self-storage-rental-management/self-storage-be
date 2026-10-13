@@ -17,5 +17,7 @@ public interface RentalPackagePolicyRepository extends JpaRepository<RentalPacka
 
     List<RentalPackagePolicy> findByFacility_IdOrderByRentalMonthsAsc(UUID facilityId);
 
+    List<RentalPackagePolicy> findByFacility_IdAndRentalMonths(UUID facilityId, int rentalMonths);
+
     List<RentalPackagePolicy> findAllByOrderByRentalMonthsAsc();
 }

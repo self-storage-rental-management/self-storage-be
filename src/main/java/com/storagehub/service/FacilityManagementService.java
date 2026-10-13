@@ -15,6 +15,7 @@ import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
+import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -33,6 +34,7 @@ public class FacilityManagementService {
     private final UnitTypeRepository unitTypeRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final RentalPackagePolicyRepository rentalPackagePolicyRepository;
+    private final UserFacilityScopeRepository userFacilityScopeRepository;
 
     @Transactional
     public FacilityResponse createFacility(ActorPrincipal actor, CreateFacilityRequest request) {
@@ -41,45 +43,26 @@ public class FacilityManagementService {
         }
 
         String code = request.code().trim().toUpperCase();
-        Facility existing = facilityRepository.findAll().stream()
-            .filter(f -> code.equalsIgnoreCase(f.getCode()))
-            .findFirst()
-            .orElse(null);
-
-        Facility facility;
-        if (existing == null) {
-            facility = new Facility();
-            facility.setCode(code);
-        } else {
-            UUID existingId = existing.getId();
-            // Nếu cơ sở đã tồn tại, xóa các unit và unit_type cũ để đồng bộ cấu hình mới từ BO
-            List<StorageUnit> oldUnits = storageUnitRepository.findAll().stream()
-                .filter(u -> u.getFacility().getId().equals(existingId))
-                .toList();
-            storageUnitRepository.deleteAll(oldUnits);
-            storageUnitRepository.flush();
-
-            List<UnitType> oldTypes = unitTypeRepository.findAll().stream()
-                .filter(ut -> ut.getFacility().getId().equals(existingId))
-                .toList();
-            unitTypeRepository.deleteAll(oldTypes);
-            unitTypeRepository.flush();
-
-            facility = existing;
+        if (facilityRepository.findByCodeIgnoreCase(code).isPresent()) {
+            throw ApiExceptions.conflict("Facility code already exists");
         }
+
+        Facility facility = new Facility();
+        facility.setCode(code);
 
         facility.setName(request.name().trim());
         facility.setAddress(request.address().trim());
         facility.setCity(request.city().trim());
-        facility.setStatus(request.status() != null ? request.status() : FacilityStatus.active);
+        facility.setPhone(clean(request.phone()));
+        facility.setAccessHours(clean(request.accessHours()));
+        facility.setImageUrl(clean(request.imageUrl()));
+        facility.setClimateControlled(Boolean.TRUE.equals(request.climateControlled()));
+        facility.setSecurityDescription(clean(request.securityDescription()));
+        // A newly created facility is never customer-visible. A Manager must first
+        // define the real unit types, then BO prices and publishes them.
+        facility.setStatus(FacilityStatus.setup);
 
         Facility saved = facilityRepository.saveAndFlush(facility);
-
-        // Tạo các loại gian kho và số lượng gian kho theo đúng cấu hình của BO
-        provisionUnitTypesAndUnits(saved, request.unitSpecs());
-
-        // Đảm bảo các gói thuê (package policies) tiêu chuẩn có sẵn cho cơ sở
-        provisionRentalPackages(saved);
 
         return new FacilityResponse(
             saved.getId(),
@@ -87,10 +70,27 @@ public class FacilityManagementService {
             saved.getName(),
             saved.getAddress(),
             saved.getCity(),
+            saved.getPhone(),
+            saved.getAccessHours(),
+            saved.getImageUrl(),
+            saved.isClimateControlled(),
+            saved.getSecurityDescription(),
+            managerNames(saved.getId()),
             saved.getStatus(),
             saved.getCreatedAt(),
             saved.getUpdatedAt()
         );
+    }
+
+    private String clean(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private List<String> managerNames(UUID facilityId) {
+        return userFacilityScopeRepository.findByFacility_Id(facilityId).stream()
+            .filter(scope -> scope.getUser().getStatus() == com.storagehub.domain.model.UserStatus.ACTIVE)
+            .filter(scope -> scope.getUser().getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.MANAGER))
+            .map(scope -> scope.getUser().getFullName()).sorted().toList();
     }
 
     private void provisionUnitTypesAndUnits(Facility facility, List<CreateFacilityRequest.UnitSpecRequest> unitSpecs) {
@@ -124,6 +124,7 @@ public class FacilityManagementService {
                 unitType.setWidthM(BigDecimal.valueOf(widthM));
                 unitType.setHeightM(BigDecimal.valueOf(heightM));
                 unitType.setMonthlyPrice(BigDecimal.valueOf(monthlyPrice));
+                unitType.setSecurityDepositAmount(BigDecimal.valueOf(monthlyPrice));
                 unitType.setMaxLoadKg(BigDecimal.valueOf(maxLoadKg));
                 unitType.setRackCount(def.rackCount());
                 unitType.setRackLengthM(BigDecimal.valueOf(4.0));
@@ -159,6 +160,7 @@ public class FacilityManagementService {
                 unitType.setWidthM(BigDecimal.valueOf(def.widthM()));
                 unitType.setHeightM(BigDecimal.valueOf(def.heightM()));
                 unitType.setMonthlyPrice(BigDecimal.valueOf(def.monthlyPrice()));
+                unitType.setSecurityDepositAmount(BigDecimal.valueOf(def.monthlyPrice()));
                 unitType.setMaxLoadKg(BigDecimal.valueOf(def.maxLoadKg()));
                 unitType.setRackCount(def.rackCount());
                 unitType.setRackLengthM(BigDecimal.valueOf(4.0));
