@@ -53,6 +53,13 @@ public class FacilityLifecycleService {
         facility.setImageUrl(clean(request.imageUrl()));
         if (request.climateControlled() != null) facility.setClimateControlled(request.climateControlled());
         facility.setSecurityDescription(clean(request.securityDescription()));
+        if (request.status() != null && request.status() != facility.getStatus()) {
+            if (request.status() == FacilityStatus.active) {
+                validateAndActivate(facility);
+            } else {
+                facility.setStatus(request.status());
+            }
+        }
         Facility saved = facilities.save(facility);
         FacilityResponse after = facilityResponse(saved);
         audit.recordMutation("FACILITY_UPDATED", "Facility", saved.getId(), saved.getId(), before, after);
@@ -120,6 +127,15 @@ public class FacilityLifecycleService {
     public FacilityResponse publish(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
         Facility facility = facility(facilityId);
+        validateAndActivate(facility);
+        Facility saved = facilities.save(facility);
+        FacilityResponse after = facilityResponse(saved);
+        audit.recordMutation("FACILITY_PUBLISHED", "Facility", facilityId, facilityId, null, after);
+        return after;
+    }
+
+    private void validateAndActivate(Facility facility) {
+        UUID facilityId = facility.getId();
         List<UnitType> candidates = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).stream()
             .filter(type -> type.getStatus() == UnitTypeStatus.awaiting_pricing || type.getStatus() == UnitTypeStatus.active)
             .toList();
@@ -137,14 +153,9 @@ public class FacilityLifecycleService {
             .stream().anyMatch(p -> p.getEffectiveTo() == null || !p.getEffectiveTo().isBefore(LocalDate.now()));
         if (!hasEffectivePackage) throw ApiExceptions.conflict("BO must configure an effective rental package before publication");
 
-        FacilityResponse before = facilityResponse(facility);
         candidates.forEach(type -> type.setStatus(UnitTypeStatus.active));
         unitTypes.saveAll(candidates);
         facility.setStatus(FacilityStatus.active);
-        Facility saved = facilities.save(facility);
-        FacilityResponse after = facilityResponse(saved);
-        audit.recordMutation("FACILITY_PUBLISHED", "Facility", facilityId, facilityId, before, after);
-        return after;
     }
 
     private void applyTechnical(UnitType type, ManagerUnitTypeRequest request) {
