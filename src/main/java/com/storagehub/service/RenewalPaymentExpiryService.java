@@ -33,8 +33,12 @@ public class RenewalPaymentExpiryService {
     private final ObjectMapper mapper;
     private final AuditLogService audit;
     private final ObjectProvider<RenewalOperationSources.SafetySource> safetySources;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.integration.renewal-simple-payment.enabled:false}")
+    private boolean simplePayment;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<RenewalOperationSources.CalendarSource> signingCalendars;
 
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public int reconcileExpiredIntents() {
         Instant now=Instant.now();
         var candidates=new ArrayList<Payment>();
@@ -63,21 +67,27 @@ public class RenewalPaymentExpiryService {
         if(payments.existsByRenewal_IdAndStatusIn(renewal.getId(),UNRESOLVED))return false;
         if(payments.findAllByRenewal_IdAndStatusIn(renewal.getId(),List.of(PaymentStatus.PAID)).size()>0)return false;
         var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
-        if(workflow==null||workflow.getPaymentDeadline()==null||workflow.getPaymentDeadline().isAfter(Instant.now())
-            ||workflow.getExtensionHoldRef()==null)return false;
-        var safety=safetySources.getIfAvailable();
-        if(safety==null||!safety.atomic())return false;
-        safety.release(renewal,workflow.getExtensionHoldRef());
+        if(workflow==null||workflow.getPaymentDeadline()==null||workflow.getPaymentDeadline().isAfter(Instant.now()))return false;
+        boolean holdReleased=false;
+        if(workflow.getExtensionHoldRef()!=null) {
+            var safety=safetySources.getIfAvailable();if(safety==null||!safety.atomic())return false;
+            safety.release(renewal,workflow.getExtensionHoldRef());holdReleased=true;
+        }else if(!simplePayment)return false;
         renewal.setStatus(RenewalStatus.payment_expired);
         var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         boolean newState=state==null;
         if(newState)state=new RenewalOperationState(renewal);
+        if(state.getAppointmentRef()!=null) {
+            var calendar=signingCalendars==null?null:signingCalendars.getIfAvailable();
+            if(calendar==null||!calendar.atomic())throw com.storagehub.common.api.ApiExceptions.conflict("Signing calendar release unavailable");
+            calendar.release(renewal,Instant.now());
+        }
         state.expire(false);
         if(newState)em.persist(state);
         renewals.releaseSlot(workflow);
         em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         var payload=Map.of("paymentId",payment.getId(),"responseCode",Objects.toString(payment.getGatewayResponseCode(),"UNKNOWN"),
-            "expiredAt",Instant.now().toString(),"holdReleased",true);
+            "expiredAt",Instant.now().toString(),"holdReleased",holdReleased);
         try { em.persist(new RenewalOperationEvent(renewal,"EXPIRY",Instant.now(),null,mapper.writeValueAsString(payload))); }
         catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw new IllegalStateException("Could not persist Renewal payment expiry event",invalid);}
         audit.recordMutation((User)null,"RENEWAL_PAYMENT_EXPIRED","Renewal",renewal.getId(),renewal.getRental().getFacility().getId(),

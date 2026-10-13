@@ -139,6 +139,12 @@ class DuongPortAdaptersJpaTests {
         for(boolean verdict:List.of(true,false))em.persist(new RenewalOperationEvent(renewal,"FAULT_REVIEW",NOW.plusSeconds(1),manager.getId(),mapper.writeValueAsString(Map.of("incidentId",incident.getId(),"facilityFault",verdict))));em.flush();
         assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),manager.getId())).hasMessageContaining("ambiguous");
     }
+    @Test void managerCannotUploadOrAttachSupportEvidenceButCanReadHistory() throws Exception {
+        var t=ticket();var f=file(manager,DuongFileEvidence.INTERNAL,t.getId());
+        assertThatThrownBy(()->files.requireUpload(actor(manager,RoleCode.MANAGER),DuongFileEvidence.INTERNAL,t.getId())).hasMessageContaining("read-only");
+        assertThatThrownBy(()->files.requireAttach(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()))).hasMessageContaining("read-only");
+        files.requireRead(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()));
+    }
     @Test void publicAttachmentBindsAndCanBeReadFromDb() throws Exception {var ticket=ticket();var f=file(customer,DuongFileEvidence.UPLOAD,customer.getId());files.requireAttach(actor(customer,RoleCode.CUSTOMER),ticket,Visibility.PUBLIC,List.of(f.getId()));em.flush();UUID id=f.getId();em.clear();f=em.find(FileAsset.class,id);ticket=em.find(SupportTicket.class,ticket.getId());assertThat(f.getEntityType()).isEqualTo(DuongFileEvidence.PUBLIC);assertThat(f.getEntityId()).isEqualTo(ticket.getId());files.requireRead(actor(customer,RoleCode.CUSTOMER),ticket,Visibility.PUBLIC,List.of(id));files.requireDownload(actor(customer,RoleCode.CUSTOMER),f);}
     @Test void attachmentCannotRebindOtherTicket() throws Exception {var a=ticket();var b=ticket();var f=file(customer,DuongFileEvidence.PUBLIC,a.getId());assertThatThrownBy(()->files.requireAttach(actor(customer,RoleCode.CUSTOMER),b,Visibility.PUBLIC,List.of(f.getId()))).hasMessageContaining("not found");assertThat(f.getEntityId()).isEqualTo(a.getId());}
     @Test void internalAttachmentCannotBeReadByCustomerEvenUploader() throws Exception {var t=ticket();var f=file(customer,DuongFileEvidence.INTERNAL,t.getId());assertThatThrownBy(()->files.requireDownload(actor(customer,RoleCode.CUSTOMER),f)).hasMessageContaining("not found");files.requireRead(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()));}

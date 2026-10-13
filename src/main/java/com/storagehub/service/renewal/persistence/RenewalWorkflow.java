@@ -23,6 +23,15 @@ public class RenewalWorkflow {
     public RenewalWorkflow(Renewal renewal,RenewalAcceptedRevision revision) {this.renewal=renewal;this.acceptedRevision=revision;}
     public void accept(RenewalAcceptedRevision revision) {this.acceptedRevision=revision;}
     public void cancelled(String reason) {this.cancellationReason=reason;}
+    public void paymentReady(Instant deadline) {
+        if(deadline==null)throw new IllegalArgumentException("Payment deadline required");
+        if(paymentDeadline!=null&&!paymentDeadline.equals(deadline))throw new IllegalStateException("Payment deadline is immutable");
+        paymentDeadline=deadline;
+    }
+    public void signingHold(UUID hold) {
+        if(hold==null||extensionHoldRef!=null&&!extensionHoldRef.equals(hold))throw new IllegalStateException("Signing hold binding is immutable");
+        extensionHoldRef=hold;
+    }
     public void paymentReady(Instant deadline, UUID hold) {
         if (deadline == null || hold == null) throw new IllegalArgumentException("Payment readiness requires deadline and hold");
         if (paymentDeadline != null && (!paymentDeadline.equals(deadline) || !hold.equals(extensionHoldRef)))

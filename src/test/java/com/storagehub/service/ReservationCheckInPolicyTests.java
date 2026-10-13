@@ -3,9 +3,30 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import com.storagehub.service.calendar.ServiceCalendarPolicy;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ReservationCheckInPolicyTests {
+
+    @ParameterizedTest
+    @CsvSource({
+        "2026-10-12T02:00,2026-10-14T08:00",
+        "2026-10-12T08:00,2026-10-14T08:00",
+        "2026-10-12T09:00,2026-10-14T15:00",
+        "2026-10-12T10:00,2026-10-14T16:00",
+        "2026-10-12T12:00,2026-10-15T08:00",
+        "2026-10-12T16:30,2026-10-15T08:00",
+        "2026-10-12T17:38,2026-10-15T08:00"
+    })
+    void otherGoodsFollowTheSevenTeamPolicyExamples(String submitted, String expected) {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            LocalDateTime.parse(submitted).atZone(ServiceCalendarPolicy.ZONE).toInstant(), true);
+        assertThat(window.availableAt()).isEqualTo(
+            LocalDateTime.parse(expected).atZone(ServiceCalendarPolicy.ZONE).toInstant());
+    }
 
     @Test
     void normalGoodsIncludeSixHoursForPaymentAndOneWorkingDayForAssignment() {

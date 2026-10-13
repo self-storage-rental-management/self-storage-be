@@ -407,6 +407,19 @@ class RenewalOperationIntegrationTests {
             org.springframework.test.util.ReflectionTestUtils.setField(service,"operationalGuards",new org.springframework.beans.factory.support.StaticListableBeanFactory().getBeanProvider(com.storagehub.service.renewal.integration.RenewalOperationalGuard.class));
         }
     }
+    @Test void fullRentSigningExpiryUsesSigningDeadlineAndPreservesPaidRights() {
+        var n=fixture();var s=new RenewalOperationState(n);
+        s.fullRent(UUID.randomUUID(),NOW,NOW.plus(Duration.ofHours(72)),NOW.plus(Duration.ofHours(72)),"TEST","v1");
+        em.persist(s);em.flush();
+        clock.time=NOW.plus(Duration.ofHours(25));
+        assertThat(service.expire(n.getId())).isFalse();
+        clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);
+        assertThat(service.expire(n.getId())).isTrue();
+        assertThat(s.getPhase()).isEqualTo(RenewalOperationState.Phase.SIGNING_EXPIRED);
+        assertThat(n.getStatus()).isNotEqualTo(RenewalStatus.payment_expired);
+        assertThat(s.getFullRentPaidAt()).isEqualTo(NOW);
+        assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNotNull();
+    }
     private Renewal fixture(){return fixture(false);}
     private Renewal fixture(boolean exclusive){
         String suffix=UUID.randomUUID().toString().substring(0,8);Facility f=new Facility();f.setCode(suffix);f.setName("TEST");f.setAddress("TEST");f.setCity("TEST");em.persist(f);

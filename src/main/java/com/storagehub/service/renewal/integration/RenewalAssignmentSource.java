@@ -13,7 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Explicit D3 assignment events, never Booking assignedBy or Staff role alone. */
+/** Facility-scoped Staff authorization. Historical assignment events are read-only metadata. */
 @Component @RequiredArgsConstructor @Transactional(readOnly=true)
 public class RenewalAssignmentSource implements RenewalOperationSources.AuthorizationSource {
     private final EntityManager em;
@@ -42,17 +42,15 @@ public class RenewalAssignmentSource implements RenewalOperationSources.Authoriz
         if(capability==RenewalOperationSources.Capability.CASH)access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS);
         else if(capability==RenewalOperationSources.Capability.READ)access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS);
         else access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS);
-        var assignment=current(n).orElseThrow(()->ApiExceptions.conflict("DEFERRED_SOURCE: Renewal has not been assigned"));
-        if(!actor.userId().equals(assignment.staffId()))throw ApiExceptions.notFound("Renewal not found");
+
     }
     public Set<UUID> assignedRenewalIds(ActorPrincipal actor) {
         access.require(actor,RoleCode.STAFF,null,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS);
         var scopes=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.OPERATE)&&access.scope(actor.userId(),e.getKey(),FacilityScopeLevel.OPERATE)).map(Map.Entry::getKey).toList();
         if(scopes.isEmpty())throw ApiExceptions.forbidden("Current Staff OPERATE scope required");
-        var rentals=em.createQuery("select distinct e.renewal from RenewalOperationEvent e where e.kind='STAFF_ASSIGNMENT' and e.renewal.rental.facility.id in :scopes",Renewal.class).setParameter("scopes",scopes).getResultList();
-        var ids=new HashSet<UUID>();
-        for(var n:rentals)if(current(n).filter(a->actor.userId().equals(a.staffId())).isPresent())ids.add(n.getId());
-        return Set.copyOf(ids);
+        // Method name retained for the AuthorizationSource compatibility contract.
+        return Set.copyOf(em.createQuery("select n.id from Renewal n where n.rental.facility.id in :scopes",UUID.class)
+            .setParameter("scopes",scopes).getResultList());
     }
     public void requireAssignable(User target,UUID facility) {
         if(!access.eligible(target,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS)||!access.scope(target.getId(),facility,FacilityScopeLevel.OPERATE))throw ApiExceptions.validation("Staff must be active with Renewal permissions and OPERATE scope",null);
