@@ -12,9 +12,9 @@ public final class RenewalOperationSources {
     private RenewalOperationSources() {}
     public enum Capability { READ, ARRIVAL, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND }
     public interface AuthorizationSource {
-        /** Checks actual permission, current Staff assignment and evidence visibility, not just role. */
+        /** Checks current permission, facility scope and evidence visibility, not just role. */
         void require(ActorPrincipal actor, Renewal renewal, Capability capability);
-        /** Authoritative assignment+permission set, used BEFORE pagination. Missing contract is not an empty queue. */
+        /** Facility-scoped authorized set used BEFORE pagination. Historical method name retained for compatibility. */
         Set<UUID> assignedRenewalIds(ActorPrincipal actor);
     }
     public record Policy(String reference, String version, Duration signingWindow, Duration exceptionExtensionLimit) {}
@@ -33,6 +33,10 @@ public final class RenewalOperationSources {
         boolean feasible(Renewal renewal, Instant start, Instant deadline);
         /** Atomically reserves the signing slot and replaces the previous reservation without altering Check-in. */
         void reserve(Renewal renewal, Slot slot, Instant now);
+        /** Stateful calendars prevent reassignment from silently orphaning a reserved slot. */
+        default void beforeStaffAssignment(Renewal renewal,UUID nextStaff) {}
+        /** Called only after verified normal completion in the caller transaction. */
+        default void release(Renewal renewal,Instant now) {}
     }
     public interface SafetySource {
         default boolean atomic() { return false; }
@@ -55,6 +59,9 @@ public final class RenewalOperationSources {
         boolean safeToExpire(Renewal renewal);
         Statement statement(Renewal renewal, Terms terms, Instant now);
         Receipt cash(Renewal renewal, UUID statementRef, String receiptReference, UUID actorId, String key, Instant now);
+        default Receipt cash(Renewal renewal,UUID statementRef,String receiptReference,UUID receiptFileId,UUID actorId,String key,Instant now) {
+            return cash(renewal,statementRef,receiptReference,actorId,key,now);
+        }
         /** Locks/rechecks the policy-required obligation set, deposits, CASH allocations and disputes. */
         void requireFullyPaid(Renewal renewal, Terms terms, Instant now);
     }

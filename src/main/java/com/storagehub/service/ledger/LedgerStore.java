@@ -75,6 +75,19 @@ public class LedgerStore {
     boolean renewalFullRentCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID customer) {
         return renewalChargeCommandMatches(obligation,spec,customer,"renewal-full-rent:");
     }
+    boolean renewalPaymentCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID customer) {
+        String prefix=spec.kind()==Kind.RENEWAL_DEPOSIT?"renewal-prepayment:":
+            spec.sourceReference().endsWith(":FULL_RENT")?"renewal-full-rent:":"renewal-remainder:";
+        return renewalChargeCommandMatches(obligation,spec,customer,prefix);
+    }
+    boolean renewalCashReceiptMatches(UUID rental,Receipt receipt,Obligation obligation) {
+        if(receipt.method()!=Method.CASH||receipt.evidenceFileId()==null||receipt.evidenceRef()==null
+            ||!receipt.evidenceRef().startsWith("renewal-cash:"))return false;
+        var allocations=jdbc.queryForList("select obligation_id,rental_id,amount from rental_ledger_allocations where receipt_id=?",s(receipt.id()));
+        return allocations.size()==1&&s(obligation.id()).equals(value(allocations.getFirst(),"obligation_id"))
+            &&s(rental).equals(value(allocations.getFirst(),"rental_id"))
+            &&receipt.amount().compareTo(new java.math.BigDecimal(value(allocations.getFirst(),"amount")))==0;
+    }
     private boolean renewalChargeCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID reviewer,String prefix) {
         String fingerprint=hash(List.of(s(spec.rentalId()),s(spec.renewalId()),spec.kind().name(),spec.amount().toPlainString(),obligation.dueAt().toEpochMilli(),spec.sourceReference()).toString());
         String acceptedId=spec.sourceReference().split(":")[1];

@@ -306,6 +306,32 @@ class RenewalWorkflowIntegrationTests {
         }
     }
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
+    @Test void simplePaymentOpensWithoutCalendarRecoveryCoverageOrExtensionHold() {
+        var simple=mock(com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks.class);
+        var writer=mock(com.storagehub.service.ledger.RenewalDepositObligationWriter.class);
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("simple",simple);beans.addBean("writer",writer);
+        Object old=org.springframework.test.util.ReflectionTestUtils.getField(commands,"localPaymentChecks");
+        Object oldWriter=org.springframework.test.util.ReflectionTestUtils.getField(commands,"depositWriters");
+        try {
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"localPaymentChecks",beans.getBeanProvider(com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",beans.getBeanProvider(com.storagehub.service.ledger.RenewalDepositObligationWriter.class));
+            var r=fixture();r.getStorageUnit().setStatus(StorageUnitStatus.occupied);em.flush();
+            when(simple.cutoff(any(),any())).thenReturn(NOW.plusSeconds(86400));
+            eligibility.unknown=true;finance.unknown=true;
+            var actor=customer(r);var q=commands.quote(actor,r.getId(),new RenewalCommands.Quote("TEST"));
+            var submitted=commands.submit(actor,r.getId(),new RenewalCommands.Submit(q.id(),null),"simple-submit");
+            var result=commands.prepareVnpayPayment(actor,submitted.id());
+            assertThat(result.workflow().getExtensionHoldRef()).isNull();assertThat(result.paymentDeadline()).isAfter(NOW);
+            assertThat(result.terms().renewalDepositAmount()).isZero();
+            verify(simple).requireKnownFinance(any(),eq(submitted.id()),eq(NOW));
+            verify(writer).paymentIntentAvailable(any(),any(),eq(actor.userId()));
+            Instant original=result.paymentDeadline();
+            assertThat(commands.prepareVnpayPayment(actor,submitted.id()).paymentDeadline()).isEqualTo(original);
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"localPaymentChecks",old);
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",oldWriter);
+        }
+    }
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.
     private Rental fixture(){
         String fixtureKey=UUID.randomUUID().toString().substring(0,8);

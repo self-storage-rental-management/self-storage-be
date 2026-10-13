@@ -34,6 +34,14 @@ MVP KHÔNG cung cấp endpoint tính phí/miễn phí/phạt mới hoặc endpoi
 
 ## Nguồn, lưu trữ và triển khai
 
+### API đọc trạng thái Recovery cho Staff — 13/10/2026
+
+`GET /api/staff/rentals/{rentalId}/recovery-state` cần JWT STAFF, quyền `rentals:read` hiện hành trong DB/claims và phạm vi READ của cơ sở. Response `ApiResponse.data` gồm `rentalId`, `facilityId`, `checkedAt` từ server, `sourceCoverage`, `recoveryBlocked`.
+
+API gọi đúng `RecoverySource.state(Rental, now)` đang đăng ký. Không có receiver hoặc không có bằng chứng trả `sourceCoverage=UNKNOWN`, `recoveryBlocked=null`; không suy false từ bảng trống. Provider demo trả `LOCAL_DEMO`, kể cả qua Spring proxy. Nguồn có bằng chứng hợp lệ trả `VERIFIED`; sai Rental/cơ sở/thời điểm trả 409 DEFERRED_SOURCE. Cơ sở ngoài phạm vi/hồ sơ không tồn tại trả 404; thiếu role/grant trả 403.
+
+GET không nhận bàn giao, đổi trạng thái hay tạo ACK. POST recovery-handoffs hiện có vẫn là lệnh điều phối bàn giao và yêu cầu receiver có thẩm quyền. Repo vẫn cần provider Recovery thật để bao phủ dữ liệu do bên thu hồi quản lý; API đọc này không chứng nhận coverage từ dữ liệu local demo.
+
 `service/overdue/OverdueSources.java`: FinancialSource, TermSource (chỉ đọc policy BO/nguồn gốc ngày), ReminderSource (policy + đưa vào hàng đợi trong giao dịch), RecoverySource (bên nhận thực tham gia giao dịch). Không cài dữ liệu giả/lớp triển khai mặc định chạy thực tế. Thiếu nguồn => đọc PARTIAL hoặc lệnh trả 409 DEFERRED_SOURCE; không trả 0/[] như thể thành công.
 
 Bổ sung overdue_follow_up_states và overdue_follow_ups; lịch sử bất biến, tác vụ này không xóa hoặc xóa mềm. Tái sử dụng cơ chế idempotency D2 với không gian tên thao tác overdue_follow_up/overdue_recovery và payload ràng buộc Rental+hồ sơ. Kiểm tra quyền hiện tại trước khi trả kết quả đã lưu; trả kết quả đã lưu trước khi kiểm tra phiên bản luồng cũ/tình trạng quá hạn hiện tại. Sự kiện/audit/phiên bản/kết quả dùng lại và thao tác đưa vào hàng đợi/tiếp nhận của chủ nguồn cùng commit hoặc rollback.
