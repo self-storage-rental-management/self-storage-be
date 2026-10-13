@@ -2,6 +2,7 @@ package com.storagehub.api.facility;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import com.storagehub.domain.model.FacilityStatus;
 
 public record UpdateFacilityRequest(
     @NotBlank @Size(max = 160) String name,
@@ -11,5 +12,6 @@ public record UpdateFacilityRequest(
     @Size(max = 120) String accessHours,
     String imageUrl,
     Boolean climateControlled,
-    @Size(max = 255) String securityDescription
+    @Size(max = 255) String securityDescription,
+    FacilityStatus status
 ) {}
