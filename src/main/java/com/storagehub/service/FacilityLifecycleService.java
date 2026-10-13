@@ -232,6 +232,7 @@ public class FacilityLifecycleService {
             t.getAreaM2(), t.getVolumeM3(), t.getMonthlyPrice(), t.getSecurityDepositAmount(), t.getImageUrl(), t.getMaxLoadKg(),
             t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getAisleWidthM(), t.getTrolleyType(),
             t.getSmallBoxCapacity(), t.getLargeBoxCapacity(), t.getStatus(),
-            units.countByFacility_IdAndUnitType_Id(t.getFacility().getId(), t.getId()), available, t.getCreatedAt(), t.getUpdatedAt());
+            units.countByFacility_IdAndUnitType_Id(t.getFacility().getId(), t.getId()), available,
+            units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt());
     }
 }
