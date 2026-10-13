@@ -4,10 +4,13 @@
 
 ## Quy tắc hiện hành và thứ tự áp dụng
 
+Options gia hạn đọc gói đang hiệu lực từ catalog của cơ sở và lọc theo policy đã công bố. Mỗi option gồm `pricingPackageCode`, `rentalMonths` và `pricingPackageName` (tên `RentalPackagePolicy.name`, có thể null với adapter cũ). FE dùng tên gói để hiển thị; code vẫn là định danh gửi lên quote. Mã seed local như `DEMO_3M` không được dùng làm tên giao diện. Điều khoản đã chấp nhận hiển thị số tháng từ snapshot; không đổi mã, giá, hash hoặc revision lịch sử để thay nhãn.
+
 - Renewal mới: hệ thống kiểm tra điều kiện, Customer chấp nhận báo giá bất biến, trả toàn kỳ qua Payment/VNPay chung; không yêu cầu Manager duyệt và không phát sinh cọc gia hạn mới.
 - Xác minh Payment, phân bổ Ledger và chuẩn bị ký có transaction riêng. Chỉ hoàn tất ký/bàn giao với đủ bằng chứng mới cập nhật thời hạn Rental.
 - Nguồn cấu hình/tài chính/lịch ký/quyền giữ kho còn thiếu vẫn chặn bằng `UNKNOWN`/`DEFERRED_SOURCE`; không suy dữ liệu thiếu là 0 hoặc đã thanh toán.
-- Các mô tả `pending → approved → deposit_paid`, Manager `decision` và cọc mô phỏng trong phần đối chiếu phía dưới chỉ dùng cho tương thích hồ sơ/điều khoản cũ. Chúng không phải flow mặc định của Renewal mới.
+- Các mô tả `pending → approved → deposit_paid` và Manager `decision` trong phần đối chiếu phía dưới chỉ dùng cho tương thích hồ sơ/điều khoản cũ. Chúng không phải flow mặc định của Renewal mới.
+- API Customer mô phỏng cọc Renewal đã bị gỡ. Thanh toán mới dùng `POST /api/customer/renewals/{renewalId}/payment-intents`; dữ liệu cọc lịch sử vẫn được đọc để đối soát.
 - Khi mô tả lịch sử mâu thuẫn, quy tắc ở mục này và phần **Current payment and lifecycle** được ưu tiên. Các ghi chú rollout/test có ngày tháng chỉ phản ánh thời điểm được ghi, không xác nhận trạng thái deploy hiện tại.
 
 ## Nội dung
@@ -233,7 +236,6 @@ SafetySource có adapter persistence opt-in `TransactionalRenewalExtensionHoldSo
 | Người thao tác         | Phương thức/hậu tố đường dẫn             | Body                                                                                                | Kết quả                                                                                                             |
 | ---------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Customer               | GET `/customer/renewals/{id}/operations` | —                                                                                                   | Trạng thái vận hành, expectedVersion workflow đã xác minh, missingSources                                           |
-| Customer               | POST `.../simulated-payment`             | expectedVersion                                                                                     | 200 Result; chỉ DEPOSIT, điều khoản/kết quả do server xác định                                                      |
 | Customer               | POST/PATCH `.../appointment`             | appointmentAt là thời điểm ISO, reason (bắt buộc với PATCH), expectedVersion                        | 200 Result; toàn bộ khung hẹn thực nằm trong hạn có hiệu lực                                                        |
 | Customer               | GET `.../appointment`                    | —                                                                                                   | Trạng thái cùng appointmentRef/thời điểm bắt đầu/kết thúc/các hạn hiện tại                                          |
 | Customer               | POST `.../exception-confirmations`       | decisionRef, expectedVersion                                                                        | 200 Result; chỉ đề xuất mới nhất, kiểm tra lại policy/lỗi/lịch/hold/mốc giới hạn                                    |
