@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 public interface UserFacilityScopeRepository extends JpaRepository<UserFacilityScope, UUID> {
     List<UserFacilityScope> findByUserId(UUID userId);
     Optional<UserFacilityScope> findByUser_IdAndFacility_Id(UUID userId, UUID facilityId);
+    List<UserFacilityScope> findByFacility_Id(UUID facilityId);
 
     @Modifying
     @Query("delete from UserFacilityScope scope where scope.user.id = :userId")
