@@ -63,6 +63,7 @@ class ReportingServiceTests {
     @Mock ActivityLogRepository activityLogRepository;
     @Mock AdminAuthorizationService authorizationService;
     @Mock FacilityScopeService facilityScopeService;
+    @Mock ReportingPaymentEvidence reportingPaymentEvidence;
 
     private ReportingService service;
 
@@ -83,7 +84,8 @@ class ReportingServiceTests {
             maintenanceTaskRepository,
             activityLogRepository,
             authorizationService,
-            facilityScopeService
+            facilityScopeService,
+            reportingPaymentEvidence
         );
 
         facilityId = UUID.randomUUID();
@@ -136,6 +138,8 @@ class ReportingServiceTests {
         when(storageUnitRepository.findByFacility_Id(facilityId)).thenReturn(List.of(u1, u2));
         when(rentalRepository.findByFacility_Id(facilityId)).thenReturn(List.of(rental));
         when(paymentRepository.findPaidPaymentsByFacility(facilityId)).thenReturn(List.of(payment));
+        when(reportingPaymentEvidence.reportableCollectedRevenue(List.of(payment)))
+            .thenReturn(Optional.of(new BigDecimal("1500000")));
         when(checkInRepository.countByReservation_Facility_IdAndStatusAndCheckedInAtBetween(eq(facilityId), eq(CheckInStatus.completed), any(), any()))
             .thenReturn(5L);
         when(returnCaseRepository.countByFacility_IdAndStatusNotIn(eq(facilityId), any()))
@@ -157,7 +161,7 @@ class ReportingServiceTests {
         assertThat(summary.openReturnsCount()).isEqualTo(1);
         assertThat(summary.openMaintenanceTasksCount()).isEqualTo(2);
 
-        verify(authorizationService).require(managerActor, SystemPermission.VIEW_UNITS);
+        verify(authorizationService).require(managerActor, SystemPermission.VIEW_REPORTS);
         verify(facilityScopeService).assertCanRead(managerActor, facilityId);
     }
 

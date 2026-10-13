@@ -21,7 +21,11 @@ public class RenewalSigningSlotsReadService {
     private final ObjectProvider<RenewalOperationSources.CalendarSource> calendars;
     private final ObjectProvider<Clock> clocks;
     public record View(UUID renewalId,Long expectedVersion,Instant checkedAt,LocalDate date,
-        String sourceCoverage,List<RenewalOperationSources.Slot> slots) {}
+        String sourceCoverage,List<RenewalOperationSources.Slot> slots,Instant availableAt,Instant deadlineAt) {
+        public View(UUID id,Long version,Instant checked,LocalDate date,String coverage,List<RenewalOperationSources.Slot> slots) {
+            this(id,version,checked,date,coverage,slots,null,null);
+        }
+    }
 
     public View read(ActorPrincipal actor,UUID id,LocalDate date,RenewalOperationService.Audience audience) {
         var detail=operations.detail(actor,id,audience); // Existing ownership/current Staff assignment authorization.
@@ -38,10 +42,12 @@ public class RenewalSigningSlotsReadService {
         Instant deadline=window[0].isBefore(window[1])?window[0]:window[1];
         if(!deadline.isAfter(now)||date.isAfter(deadline.atZone(ServiceCalendarPolicy.ZONE).toLocalDate()))
             throw ApiExceptions.conflict("Signing date is outside the current deadline");
+        Instant availableAt=ServiceCalendarPolicy.nextAppointmentAt(now.plusSeconds(1));
+        Instant latestStart=latestStart(deadline);
         var renewal=em.find(Renewal.class,id);
         boolean demo=LocalDemoSigningCalendarSource.class.isAssignableFrom(org.springframework.aop.support.AopUtils.getTargetClass(source));
         String coverage=demo?"LOCAL_DEMO":"VERIFIED";
-        if(!source.feasible(renewal,now,deadline))return new View(id,detail.expectedVersion(),now,date,coverage,List.of());
+        if(!source.feasible(renewal,now,deadline))return new View(id,detail.expectedVersion(),now,date,coverage,List.of(),availableAt,latestStart);
         var result=new ArrayList<RenewalOperationSources.Slot>();
         for(LocalTime time=ServiceCalendarPolicy.OPEN;!time.isAfter(ServiceCalendarPolicy.LAST_APPOINTMENT_START);time=time.plusMinutes(ServiceCalendarPolicy.SLOT_STEP_MINUTES)) {
             Instant at=date.atTime(time).atZone(ServiceCalendarPolicy.ZONE).toInstant();
@@ -54,6 +60,16 @@ public class RenewalSigningSlotsReadService {
                 if(!slot.end().isAfter(deadline))result.add(slot);
             }
         }
-        return new View(id,detail.expectedVersion(),now,date,coverage,List.copyOf(result));
+        return new View(id,detail.expectedVersion(),now,date,coverage,List.copyOf(result),availableAt,latestStart);
     }
+    /** Latest complete 30-minute service start within the current cutoff and opening hours. */
+    private static Instant latestStart(Instant deadline) {
+        var candidate=deadline.minus(Duration.ofMinutes(30)).atZone(ServiceCalendarPolicy.ZONE);
+        var date=candidate.toLocalDate();var time=candidate.toLocalTime();
+        if(time.isBefore(ServiceCalendarPolicy.OPEN))return date.minusDays(1).atTime(ServiceCalendarPolicy.LAST_APPOINTMENT_START).atZone(ServiceCalendarPolicy.ZONE).toInstant();
+        if(time.isAfter(ServiceCalendarPolicy.LAST_APPOINTMENT_START))time=ServiceCalendarPolicy.LAST_APPOINTMENT_START;
+        else time=time.withMinute(time.getMinute()/30*30).withSecond(0).withNano(0);
+        return date.atTime(time).atZone(ServiceCalendarPolicy.ZONE).toInstant();
+    }
+
 }

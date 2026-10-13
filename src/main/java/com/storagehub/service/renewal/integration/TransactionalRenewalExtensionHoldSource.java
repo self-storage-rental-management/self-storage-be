@@ -125,6 +125,20 @@ public class TransactionalRenewalExtensionHoldSource implements RenewalSources.E
         // Caller reconciles payment first. Do not mutate physical unit status or Recovery.
         transition(ref,"RELEASED",now());
     }
+    @Override public boolean restoreSigningWindow(Renewal renewal,Terms terms,UUID ref,Instant deadline) {
+        var r=lock(renewal.getRental());var h=load(ref);bind(h,renewal);var at=now();
+        if(!Set.of("ACTIVE","RELEASED").contains(h.state()))throw ApiExceptions.conflict("Consumed hold cannot be restored");
+        if(terms==null||!h.start().equals(terms.extensionStartDate())||!h.end().equals(terms.extensionEndExclusive()))
+            throw ApiExceptions.conflict("Signing correction terms do not match hold");
+        var cutoff=verify(r,h.start(),h.end(),at);
+        if(deadline==null||!deadline.isAfter(at)||deadline.isAfter(cutoff))throw ApiExceptions.conflict("Corrected signing deadline outside cutoff");
+        var overlaps=jdbc.query("select id from renewal_extension_holds where unit_id=? and id<>? and state='ACTIVE' and start_date<? and end_exclusive>? order by id for update",
+            (rs,i)->uuid(rs.getBytes("id")),bytes(h.unit()),bytes(ref),java.sql.Date.valueOf(h.end()),java.sql.Date.valueOf(h.start()));
+        if(!overlaps.isEmpty())throw ApiExceptions.conflict("Another extension hold prevents signing correction");
+        jdbc.update("update renewal_extension_holds set state='ACTIVE',expires_at=?,version=version+1,updated_at=? where id=?",
+            Timestamp.from(deadline),Timestamp.from(at),bytes(ref));
+        return true;
+    }
     private void transition(UUID ref,String state,Instant at) {
         jdbc.update("update renewal_extension_holds set state=?,version=version+1,updated_at=? where id=?",state,Timestamp.from(at),bytes(ref));
     }

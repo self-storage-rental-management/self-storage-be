@@ -63,6 +63,9 @@ public class OverdueService {
     public OverdueResponse.FollowUp recovery(ActorPrincipal actor,String id,OverdueCommands.Recovery body,String key) {
         var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
         Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_recovery",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
+        if(!em.createQuery("select f.id from OverdueFollowUp f where f.caseRef=:id and f.type='RECOVERY_HANDOFF'",UUID.class)
+            .setParameter("id",id).setMaxResults(1).getResultList().isEmpty())
+            throw ApiExceptions.conflict("Recovery handoff already recorded");
         var current=current(r,ref);if(!current.kind().equals("RENTAL_TERM")||!current.recoveryEligible())throw ApiExceptions.conflict("Only policy-eligible rental-term expiry may enter Recovery");
         var state=stream(id,body.expectedVersion());var source=recoveries.getIfAvailable();if(source==null||!source.atomic())throw deferred("Authorized Recovery receiving service unavailable");
         var handoff=source.receive(r,id,body.reason(),key,now());if(handoff==null||handoff.reference()==null||handoff.status()==null||!Set.of("RECEIVED","ALREADY_RECEIVED").contains(handoff.status()))throw deferred("Recovery receiver has not acknowledged");

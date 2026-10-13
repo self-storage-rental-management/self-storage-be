@@ -55,5 +55,11 @@ public class RenewalOperationState {
         phase=Phase.SIGNING;appointment(appointment,start,end);
     }
     public void expire(boolean paid) {phase=paid?Phase.SIGNING_EXPIRED:Phase.PAYMENT_EXPIRED;}
+    public void correctSigningWindow(Instant deadline,Instant cutoff,String policy,String version) {
+        if(!hasVerifiedPayment()||completedAt!=null||confirmedExceptionRef!=null||pendingExceptionRef!=null)
+            throw new IllegalStateException("Signing window cannot be corrected in this state");
+        originalSigningDeadline=deadline;effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;
+        policyRef=policy;policyVersion=version;phase=Phase.SIGNING;
+    }
     public void completed(UUID staff,Instant at) {phase=Phase.COMPLETED;completedBy=staff;completedAt=at;}
 }

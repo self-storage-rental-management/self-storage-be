@@ -27,6 +27,9 @@ public class ManagerRenewalOperationController {
     public ApiResponse<RenewalOperationService.Result> exception(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.ExceptionDecision body,@RequestHeader("Idempotency-Key") String key){return response(service.exception(actors.required(),id,body,key));}
     @PostMapping("/refund-decisions") @ResponseStatus(org.springframework.http.HttpStatus.CREATED) @Operation(summary="Reserve policy refund entitlement or reject",description="Approval is APPROVED_AWAITING_EXECUTION, not payout. Accounting reserves actual/pending entitlement; execution belongs to shared owner.")
     public ApiResponse<RenewalOperationService.Result> refund(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.RefundDecision body,@RequestHeader("Idempotency-Key") String key){return response(service.refund(actors.required(),id,body,key));}
+    @PostMapping("/refund-executions") @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+    @Operation(summary="Record a completed deposit refund with payout evidence",description="Requires current manager financial permissions, an approved reservation, linked evidence and explicit payout attestation. Sandbox records remain labeled Sandbox; this endpoint does not initiate a bank transfer.")
+    public ApiResponse<RenewalOperationService.Result> executeRefund(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.RefundExecution body,@RequestHeader("Idempotency-Key") String key){return response(service.executeRefund(actors.required(),id,body,key));}
     @GetMapping("/facility-incidents") @Operation(summary="Read incident and exception timeline")
     public PageResponse<RenewalOperationResponse.Event> incidents(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"facility-incidents");}
     @GetMapping("/payments") @Operation(summary="Read facility Renewal payment events")
