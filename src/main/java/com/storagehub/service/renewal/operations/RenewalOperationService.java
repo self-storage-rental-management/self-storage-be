@@ -39,6 +39,8 @@ public class RenewalOperationService {
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.ledger.LedgerStore> ledgers;
     @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.ledger.RenewalOverdueFeeService> overdueFees;
+    @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.renewal.integration.RenewalOperationalGuard> operationalGuards;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
@@ -116,7 +118,7 @@ public class RenewalOperationService {
         if(term==null||term.recoveryCutoff()==null)throw deferred("Published signing cutoff unavailable");
         Instant cutoff=term.recoveryCutoff();
         if(!cutoff.isAfter(now()))throw ApiExceptions.conflict("Renewal cutoff has passed");
-        return new Instant[]{cutoff,cutoff};
+        return new Instant[]{com.storagehub.service.renewal.RenewalSigningDeadline.calculate(now(),cutoff),cutoff};
     }
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.overdue.OverdueSources.TermSource> appointmentTerms;
@@ -135,7 +137,7 @@ public class RenewalOperationService {
             var selected=slot(c.renewal(),body.appointmentAt(),window[0]);
             boolean fresh=existing==null;
             if(fresh)existing=new RenewalOperationState(c.renewal());
-            existing.awaitingPayment(selected.end(),window[1],"RENEWAL_SELECTED_APPOINTMENT","1");
+            existing.awaitingPayment(window[0],window[1],"RENEWAL_PENDING_PAYMENT_WINDOW","2");
             var event=event(c,"APPOINTMENT",selected);existing.appointment(event.getId(),selected.start(),selected.end());
             if(fresh)em.persist(existing);
             return finish(c,op,key,body,event,200);
@@ -181,7 +183,8 @@ public class RenewalOperationService {
         if(!body.payableStatementRef().equals(statement.reference()))throw ApiExceptions.conflict("Payable statement is stale");
         if(body.receiptFileId()==null)throw ApiExceptions.validation("CASH receipt evidence file required",null);
         evidence(actor,c.renewal(),"CASH_RECEIPT",List.of(body.receiptFileId()));
-        var receipt=finance.cash(c.renewal(),body.payableStatementRef(),body.receiptReference(),body.receiptFileId(),actor.userId(),key,now());
+        String method=body.paymentMethod()==null?"CASH":body.paymentMethod().trim().toUpperCase(java.util.Locale.ROOT);
+        var receipt=finance.balance(c.renewal(),body.payableStatementRef(),body.receiptReference(),body.receiptFileId(),method,actor.userId(),key,now());
         if(receipt==null||receipt.reference()==null||!id.equals(receipt.renewalId())||!statement.reference().equals(receipt.statementRef())||receipt.amount()==null||receipt.amount().compareTo(statement.amount())!=0||!statement.currency().equals(receipt.currency())||receipt.receivedAt()==null||receipt.receivedAt().isAfter(now()))throw deferred("Shared CASH receipt is incomplete or inconsistent");
         return finish(c,"d3_cash",key,body,event(c,"CASH",receipt),201);
     }
@@ -265,11 +268,25 @@ public class RenewalOperationService {
         } else data.put("status","REJECTED");
         return finish(c,"d3_refund",key,body,event(c,"REFUND",data),201);
     }
+    public Result executeRefund(ActorPrincipal actor,UUID id,RefundExecution body,String key) {
+        var c=context(actor,id,Audience.MANAGER,Capability.REFUND,key,"d3_refund_execute",body,body.expectedVersion());
+        var old=replay(c,"d3_refund_execute",key,body);if(old.isPresent())return old.get();
+        if(!Boolean.TRUE.equals(body.transferred()))throw ApiExceptions.validation("Refund payout attestation required",null);
+        evidence(actor,c.renewal(),"REFUND",List.of(body.receiptFileId()));
+        var source=refunds.getIfAvailable();if(source==null||!source.atomic())throw deferred("Refund execution source unavailable");
+        var execution=source.execute(c.renewal(),body.refundId(),body.receiptFileId(),body.transactionReference(),actor.userId(),now());
+        if(execution==null||!id.equals(execution.renewalId())||!body.refundId().equals(execution.reference())||execution.amount()==null||execution.amount().signum()<=0
+            ||!"VND".equals(execution.currency())||execution.executedAt()==null||execution.executedAt().isAfter(now()))throw deferred("Refund execution receipt invalid");
+        var data=new LinkedHashMap<String,Object>(mapper.convertValue(execution,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
+        data.put("receiptFileId",body.receiptFileId());data.put("transactionReference",body.transactionReference());
+        return finish(c,"d3_refund_execute",key,body,event(c,"REFUND_EXECUTION",data),201);
+    }
     public Result assignStaff(ActorPrincipal actor,UUID id,StaffAssignment body,String key) {
         throw ApiExceptions.forbidden("Renewal Staff assignment is no longer supported; eligible facility Staff can process Renewals");
     }
     public Result reviewFault(ActorPrincipal actor,UUID id,FaultReview body,String key) {
-        var c=context(actor,id,Audience.MANAGER,Capability.EXCEPTION,key,"d3_fault_review",body,body.expectedVersion());var old=replay(c,"d3_fault_review",key,body);if(old.isPresent())return old.get();nonterminal(c.renewal());
+        var c=context(actor,id,Audience.MANAGER,Capability.EXCEPTION,key,"d3_fault_review",body,body.expectedVersion());var old=replay(c,"d3_fault_review",key,body);if(old.isPresent())return old.get();
+        if(c.renewal().getStatus()==RenewalStatus.completed)throw ApiExceptions.conflict("Completed Renewal cannot acquire signing-failure entitlement");
         linked(c.renewal(),body.incidentId(),"INCIDENT");evidence(actor,c.renewal(),"FAULT_REVIEW",body.evidenceFileIds());
         return finish(c,"d3_fault_review",key,body,event(c,"FAULT_REVIEW",body),201);
     }
@@ -284,6 +301,7 @@ public class RenewalOperationService {
         var safety=safety();if(wf.getExtensionHoldRef()==null)throw deferred("Extension hold missing");safety.release(n,wf.getExtensionHoldRef());
         if(s==null){s=new RenewalOperationState(n);em.persist(s);}s.expire(paid);
         if(!paid)n.setStatus(RenewalStatus.payment_expired); // Paid signing expiry stays supplemental, not payment failure.
+        calendar().release(n,now());
         var event=new RenewalOperationEvent(n,"EXPIRY",now(),null,store.canonical(Map.of("disposition","REVIEW_REQUIRED","paid",paid)));em.persist(event);
         em.lock(wf,LockModeType.PESSIMISTIC_FORCE_INCREMENT);em.flush();audit.recordMutation((User)null,"renewal_expiry","Renewal",id,rental.getFacility().getId(),null,Map.of("eventId",event.getId()));
         // No forfeiture, physical-unit release, recovery pause or slot release without reconciliation contract.
@@ -304,7 +322,7 @@ public class RenewalOperationService {
     @Transactional(readOnly=true)
     public PageResponse<RenewalOperationResponse.Event> events(ActorPrincipal actor,UUID id,Audience audience,String category,int page,int size,String correlation) {
         var n=visible(actor,id,audience,false,Capability.READ);if(page<0||size<1||size>100)throw ApiExceptions.validation("Invalid page/size",null);
-        List<String> kinds=switch(category){case "payments"->List.of("DEPOSIT","FULL_RENT_PAYMENT","CASH");case "refunds"->List.of("REFUND");case "facility-incidents"->List.of("INCIDENT","EXCEPTION","FAULT_REVIEW");default->throw ApiExceptions.validation("Unknown event category",null);};
+        List<String> kinds=switch(category){case "payments"->List.of("DEPOSIT","FULL_RENT_PAYMENT","CASH");case "refunds"->List.of("REFUND","DEPOSIT_DISPOSITION","REFUND_EXECUTION");case "facility-incidents"->List.of("INCIDENT","EXCEPTION","FAULT_REVIEW");default->throw ApiExceptions.validation("Unknown event category",null);};
         if(category.equals("facility-incidents")&&audience!=Audience.MANAGER)throw ApiExceptions.forbidden("Internal incident timeline");
         var q=em.createQuery("select e from RenewalOperationEvent e where e.renewal.id=:id and e.kind in :kinds order by e.occurredAt desc,e.id",RenewalOperationEvent.class).setParameter("id",n.getId()).setParameter("kinds",kinds);
         long count=em.createQuery("select count(e) from RenewalOperationEvent e where e.renewal.id=:id and e.kind in :kinds",Long.class).setParameter("id",id).setParameter("kinds",kinds).getSingleResult();
@@ -380,13 +398,22 @@ public class RenewalOperationService {
         var accepted=terms(new Context(n,null,workflow(n)));
         var specs=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(workflow(n).getAcceptedRevision(),accepted);
         var total=java.math.BigDecimal.ZERO;
+        var feeSource=overdueFees==null?null:overdueFees.getIfAvailable();
+        var fee=feeSource==null?null:feeSource.quote(n,account,now());
+        if(s.remainingRentalAmount()==null||s.overdueFee()==null||s.unpostedOverdueFee()==null
+            ||s.remainingRentalAmount().signum()<0||s.overdueFee().signum()<0||s.unpostedOverdueFee().signum()<0
+            ||s.remainingRentalAmount().add(s.overdueFee()).compareTo(s.amount())!=0)
+            throw deferred("Payable statement breakdown invalid");
+        if(fee!=null&&(fee.outstanding().compareTo(s.overdueFee())!=0||fee.unposted().compareTo(s.unpostedOverdueFee())!=0))
+            throw deferred("Daily overdue fee changed; reload payable statement");
         for(var id:s.requiredObligations()){
             var obligation=account.obligations().stream().filter(o->o.id().equals(id)).findFirst().orElseThrow(()->deferred("Payable statement obligation missing"));
             if(specs.stream().noneMatch(spec->Objects.equals(spec.renewalId(),obligation.renewalId())&&spec.kind()==obligation.kind()
-                &&spec.sourceReference().equals(obligation.sourceRef())&&spec.amount().compareTo(obligation.amount())==0))throw deferred("Payable statement obligation source mismatch");
+                &&spec.sourceReference().equals(obligation.sourceRef())&&spec.amount().compareTo(obligation.amount())==0)
+                &&(fee==null||fee.posted().stream().noneMatch(o->o.id().equals(obligation.id()))))throw deferred("Payable statement obligation source mismatch");
             total=total.add(obligation.outstanding());
         }
-        if(total.compareTo(s.amount())!=0)throw deferred("Payable statement balance mismatch");
+        if(total.add(s.unpostedOverdueFee()).compareTo(s.amount())!=0)throw deferred("Payable statement balance mismatch");
         // Source version is opaque: certification of revision/version atomicity remains the accounting owner's protocol.
     }
     private RenewalOperationEvent event(Context c,String kind,Object data){var e=new RenewalOperationEvent(c.renewal(),kind,now(),c.user().getId(),store.canonical(data));em.persist(e);em.flush();return e;}
@@ -411,7 +438,9 @@ public class RenewalOperationService {
     }
     private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
         if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
-        if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND")){var raw=mapper.valueToTree(data);var safe=new LinkedHashMap<String,Object>();safe.put("status",raw.path("status").asText());if(raw.has("reservation"))safe.put("reservation",mapper.convertValue(raw.get("reservation"),Object.class));data=safe;}return new RenewalOperationResponse.Event(e.getId(),e.getKind(),e.getOccurredAt(),audience==Audience.CUSTOMER?null:e.getActorId(),data);}
+        if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND")){var raw=mapper.valueToTree(data);var safe=new LinkedHashMap<String,Object>();safe.put("status",raw.path("status").asText());if(raw.has("reservation"))safe.put("reservation",mapper.convertValue(raw.get("reservation"),Object.class));data=safe;}
+        if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND_EXECUTION")&&data instanceof Map<?,?> raw){var safe=new LinkedHashMap<>(raw);safe.remove("receiptFileId");safe.remove("transactionReference");data=safe;}
+        return new RenewalOperationResponse.Event(e.getId(),e.getKind(),e.getOccurredAt(),audience==Audience.CUSTOMER?null:e.getActorId(),data);}
     private <T>T decode(String json,Class<T> type){try{return mapper.readValue(json,type);}catch(Exception e){throw ApiExceptions.conflict("Stored operation snapshot invalid");}}
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}
     private static Instant min(Instant a,Instant b){return a.isBefore(b)?a:b;}

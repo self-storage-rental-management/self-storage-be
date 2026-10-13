@@ -18,7 +18,7 @@ public class StaffRecoveryStateController {
     private final ActorContext actors;
     private final RecoveryStateReadService states;
     @GetMapping @Operation(summary="Read receiver-owned Recovery state",
-        description="Current rentals:read and READ facility scope required. UNKNOWN/null is not clear Recovery. LOCAL_DEMO evidence must not be treated as production coverage. Read-only; no receiver receipt is fabricated.")
+        description="Current rentals:read and READ facility scope required. UNKNOWN/null is not clear Recovery. LOCAL_DEMO and INTERNAL_TASK do not certify external Recovery coverage. Read-only; no receiver receipt is fabricated.")
     public ApiResponse<RecoveryStateReadService.View> read(@PathVariable UUID rentalId) {
         return new ApiResponse<>(states.read(actors.required(),rentalId),CorrelationIdContext.current());
     }

@@ -12,7 +12,7 @@ Tài liệu đặc tả API phân hệ **Cấu hình chính sách & Báo cáo th
   - `VIEW_REPORTS`: Xem báo cáo doanh thu hệ thống (`/api/business/reports/revenue`) và hiệu suất mạng lưới cơ sở (`/api/business/reports/performance`).
 - **Facility Manager (`FACILITY_MANAGER`, `MANAGER`)**:
   - `policies:read`: Đọc chính sách chung để áp dụng tại cơ sở. Không được `policies:update`, kể cả khi tài khoản còn quyền cũ trong DB/session. Các lệnh sửa cấu hình và gói thuê kiểm tra role `BUSINESS` cùng quyền `policies:update` ở service.
-  - `VIEW_UNITS` / `VIEW_REPORTS`: Xem báo cáo tổng hợp cơ sở thuộc phạm vi quản lý (`/api/manager/reports/summary`) và nhật ký hoạt động cơ sở (`/api/manager/reports/activities`).
+  - `VIEW_REPORTS`: Xem báo cáo tổng hợp cơ sở thuộc phạm vi quản lý (`/api/manager/reports/summary`) và nhật ký hoạt động cơ sở (`/api/manager/reports/activities`).
 
 Quyết định quyền policy được chủ dự án duyệt ngày 09/10/2026: BO sở hữu policy, Manager chỉ đọc. Các tên enum `VIEW_POLICIES` / `MANAGE_POLICIES` tương ứng mã API `policies:read` / `policies:update`. Admin quản lý cấp quyền, không trực tiếp sửa policy. `RoleDataInitializer` nâng phiên bản quyền từ 3 lên 4, chỉ điều chỉnh quyền policy của Manager/BO và giữ các quyền tùy chỉnh khác; `AdminRoleService` bảo vệ ranh giới này khi sửa bảng quyền. Chưa chạy nâng phiên bản trên DB thật trong lượt sửa này vì schema test vẫn chưa qua `validate`.
 
@@ -98,7 +98,7 @@ Quyết định quyền policy được chủ dự án duyệt ngày 09/10/2026:
 #### 1. Báo cáo tổng hợp cơ sở (Manager Facility KPIs)
 - **Endpoint**: `GET /api/manager/reports/summary`
 - **Query Params**: `facilityId` (tùy chọn, mặc định lấy cơ sở trong scope của Manager)
-- **Quyền**: `VIEW_UNITS` / `VIEW_REPORTS`
+- **Quyền**: `VIEW_REPORTS`
 - **Response**:
 ```json
 {
@@ -127,6 +127,8 @@ Quyết định quyền policy được chủ dự án duyệt ngày 09/10/2026:
   ]
 }
 ```
+
+`monthlyRecurringRevenue` là tổng giá thuê theo tháng của các hợp đồng đang hiệu lực, dùng làm số tiền dự kiến theo hợp đồng và không đồng nghĩa với tiền đã thu. `collectedRevenue` chỉ có giá trị số khi phạm vi báo cáo doanh thu đã được bật và dữ liệu thanh toán có đủ bằng chứng xác minh, đối soát; nếu thiếu bằng chứng, đang có khoản chưa đối soát hoặc chưa cấu hình phạm vi doanh thu, trường này trả về `null` để giao diện hiển thị "Chưa xác minh" thay vì báo số 0 gây hiểu nhầm. Giao dịch mô phỏng và sandbox không được cộng vào doanh thu thực thu.
 
 #### 2. Nhật ký hoạt động cơ sở (Manager Facility Activities)
 - **Endpoint**: `GET /api/manager/reports/activities`

@@ -36,7 +36,9 @@ public class RecoveryStateReadService {
         var evidence=state.get();
         if(!Objects.equals(evidence.rentalId(),rentalId)||!Objects.equals(evidence.facilityId(),facility)||!Objects.equals(evidence.checkedAt(),now))
             throw ApiExceptions.conflict("DEFERRED_SOURCE: Recovery state is stale or belongs to another rental");
-        boolean demo=LocalDemoRecoverySource.class.isAssignableFrom(org.springframework.aop.support.AopUtils.getTargetClass(source));
-        return new View(rentalId,facility,now,demo?"LOCAL_DEMO":"VERIFIED",evidence.recoveryBlocked());
+        var sourceClass=org.springframework.aop.support.AopUtils.getTargetClass(source);
+        String coverage=LocalDemoRecoverySource.class.isAssignableFrom(sourceClass)?"LOCAL_DEMO":
+            RecoveryTaskSource.class.isAssignableFrom(sourceClass)?"INTERNAL_TASK":"VERIFIED";
+        return new View(rentalId,facility,now,coverage,evidence.recoveryBlocked());
     }
 }

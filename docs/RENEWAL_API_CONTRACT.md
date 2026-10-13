@@ -1,21 +1,48 @@
 # Renewal API contract
 
+## Mốc quá hạn và cảnh báo đọc từ server — 13/10/2026
+
+### Bàn giao Recovery ngày quá hạn thứ 8
+
+Khi bật `shared-payment-schema`, `storagehub.integration.recovery-tasks.enabled=true` và `storagehub.integration.renewal-auto-recovery.enabled=true`, worker đọc Rental còn active theo giờ server, xác minh kỳ thuê và policy, rồi bàn giao vào `RecoveryTaskSource` trong cùng transaction. Runner local bật hai cờ qua `-EnableRenewalPayments -EnableAutoRecovery` và nạp `db/recovery-migration`. Receiver tạo đúng một `recovery_tasks` trạng thái `OPEN` cho mỗi Rental; `RECOVERY_HANDOFF`, audit, thông báo Customer và hủy Renewal chưa hoàn tất cùng commit. Chạy lại không tạo thêm nhiệm vụ hoặc thông báo. Manager/Staff xem nhiệm vụ đã lưu qua `GET /api/{manager|staff}/recovery-tasks?facilityId=...&page=0&size=20` và `GET /api/{manager|staff}/recovery-tasks/{id}`, cần quyền xem Rental và scope cơ sở.
+
+Receiver kiểm tra lại thời điểm bắt đầu Recovery, trạng thái Rental/gian kho và ReturnCase trước khi nhận. Nếu Payment đang chờ đối soát, nguồn policy/hold/Recovery thiếu hoặc dữ liệu không nhất quán, worker hoãn và thử lại; không tạo ACK giả. Renewal đã hoàn tất ở các kỳ trước là lịch sử, không chặn thu hồi của kỳ hiện tại. Cọc gia hạn được ghi `depositDisposition=REVIEW_REQUIRED`; không tự quyết định mất/hoàn cọc. Handoff chỉ tạo việc thu hồi; Rental và gian vẫn giữ trạng thái vật lý hiện tại cho đến khi quy trình kiểm kê và xử lý tài sản hoàn tất. Bảng nội bộ không chứng minh không có Recovery ở hệ thống khác: khi chưa có task, API trạng thái trả `UNKNOWN`, không trả kết luận an toàn.
+## Thanh toán cùng bộ xử lý Reservation — 13/10/2026
+
+- Cọc giữ nguyên `VnpayService`, cấu hình merchant, URL, HMAC Return/IPN và `LedgerStore.receiveSandbox` dùng chung. Mỗi Renewal vẫn ràng buộc accepted revision và số tiền cọc của snapshot, không gọi endpoint tạo cọc của Reservation.
+- Phần còn lại khi ký dùng `ManualRentalPaymentService` giống Check-in Reservation. Staff chọn `CASH` hoặc `BANK_TRANSFER`, gửi mã biên nhận/giao dịch thực tế, chứng từ và bảng kê hiện hành; số tiền do BE lấy từ Ledger. Lưu một Payment `RENTAL_BALANCE`/`MANUAL` của Renewal, audit resource-bound, receipt/allocation và event thu tiền trong cùng transaction. Không liên kết Payment Renewal sang đơn Reservation và không thu lại cọc bảo đảm.
+- DTO `cash-receipts` nhận thêm `paymentMethod`, mặc định CASH để giữ tương thích. Receipt/event bổ sung `paymentId` và `paymentMethod`; lịch sử thanh toán dùng Payment ID và hiển thị đúng phương thức. Legacy receipt thiếu Payment ID vẫn đọc được, không tự tạo proof cho dữ liệu cũ.
+- Hoàn tất kiểm tra Payment cọc VNPay và Payment phần còn lại, số tiền/currency/revision, refund, phân bổ, chứng từ và Staff event. Trong chế độ rút gọn local đã bật, kiểm tra công nợ/tranh chấp đã ghi nhận thay yêu cầu coverage lịch sử COMPLETE; không chứng nhận dữ liệu chưa biết là không có nợ. Giờ ký, hợp đồng, quyền và an toàn kho/Recovery giữ kiểm tra hiện hành.
+- Migration gateway local được bổ sung bằng version mới `2026101302`, không sửa lịch sử version `1202`. Chi tiết rollout tại [Payment contract](PAYMENT_API_CONTRACT.md).
+
+## Bộ chọn lịch cùng cách dùng Reservation — 13/10/2026
+
+FE chọn lịch ký bằng hai ô `date` và `time` trong cùng hàng như form Reservation, bước thời gian 30 phút. Hiển thị khoảng lịch hợp lệ từ BE; giờ bắt đầu 08:00–16:30 theo giờ Việt Nam. Customer chọn ngày, FE đọc lại các slot còn trống của ngày đó. Nút lưu chỉ mở khi thời điểm chọn có trong kết quả của đúng Renewal và workflow version, BE vẫn recheck khi ghi/mở Payment.
+
+GET `signing-slots` bổ sung `availableAt` (thời điểm bắt đầu lượt sớm nhất trong tương lai) và `deadlineAt` (thời điểm bắt đầu lượt muộn nhất còn đủ 30 phút trước hạn ký/cutoff và trong giờ phục vụ). Hai trường là giới hạn chọn giờ bắt đầu, không phải bằng chứng đã reserve lịch. Khi không có slot phù hợp, danh sách rỗng và FE yêu cầu chọn ngày khác. Phản hồi khác version hoặc chưa xác minh nguồn không cho lưu lịch.
+
 ## Bỏ phụ thuộc chính sách ký trong flow thường — 13/10/2026
 
 - Chọn/đổi lịch trước cọc, mở intent và chuẩn bị ký theo lịch đã chọn không yêu cầu `RenewalOperationSources.PolicySource` hoặc `BO_SIGNING_POLICY`. Thiếu policy xử lý ngoại lệ không khóa các nút chọn lịch thông thường.
 - Lịch phải hợp lệ theo giờ phục vụ, thời lượng và sức chứa Calendar, nằm trọn trước cutoff đã công bố. Không dùng `signingWindow` của policy ngoại lệ làm giới hạn chọn lịch.
-- Hạn ký của flow mới là thời điểm kết thúc lượt ký đã chọn, giới hạn bởi cutoff hiện hành. State ghi nguồn `RENEWAL_SELECTED_APPOINTMENT`, version `1`; đây là quy tắc từ lịch khách lưu, không phải bằng chứng BO đã công bố policy. Hạn trả cọc vẫn theo cửa sổ thanh toán và trước giờ ký.
+- Quy tắc trên chỉ mô tả bản lịch sử `RENEWAL_SELECTED_APPOINTMENT/1`. Flow hiện hành dùng hạn ký từ paidAt đã xác thực + 72 giờ, giới hạn bởi cutoff; lượt ký 30 phút không là hạn hiệu lực. State mới ghi `RENEWAL_DEPOSIT_SIGNING_WINDOW/2`. Hạn trả cọc vẫn theo cửa sổ thanh toán và trước giờ ký.
 - Hồ sơ đã trả tiền theo flow cũ nhưng chưa có lịch giữ protocol ký cũ để đối soát. Các lệnh duyệt ngoại lệ/kéo dài hạn của Manager vẫn cần policy riêng tại thời điểm thực hiện; thay đổi này không cấp quyền kéo dài hạn tùy ý.
 
 Mục này thay thế các mô tả yêu cầu policy ký/ngoại lệ trong flow thường bên dưới.
 
 ## Chọn lịch ký trước cọc — 13/10/2026
 
+Quy tắc hạn ký cập nhật: không cần Manager duyệt; Customer chọn lịch trước thanh toán cọc. Sau khi xác thực tiền, `signingDeadline = MIN(depositPaidAt + 72 giờ, recoveryCutoff)`. `recoveryCutoff` là 17:00 ngày quá hạn thứ 7 theo timezone của chính sách đã công bố. Lượt hẹn 30 phút chỉ quản lý phục vụ, không phải hạn hiệu lực yêu cầu. Trước cọc, slot đọc/chọn và mở intent được giới hạn trong `MIN(serverNow + 72 giờ, recoveryCutoff)`; lịch phải bắt đầu sau lúc trả cọc và nằm trọn trong hạn ký thực tế.
+
+Nếu lịch đã qua nhưng còn hạn ký, hồ sơ vẫn `SIGNING` và Customer được đổi lịch mà không đặt cọc lại; Staff chỉ ghi nhận khách đến theo lịch hiện tại còn hiệu lực. Đổi lịch thông thường không reset hạn ký. Chỉ hết hạn ký thực tế mới đưa hồ sơ sang hết hiệu lực/chờ đối soát. Không tự thay đổi ngày hết hạn Rental.
+
+Runner local bật `renewal-signing-window-correction.enabled` cùng profile `shared-payment-schema`: sửa có audit các state được tạo bởi quy tắc `RENEWAL_SELECTED_APPOINTMENT/1` với deadline đúng bằng appointmentEnd. Chỉ sửa giao dịch PAID đã xác thực và phân bổ, đúng accepted revision, không refund/ngoại lệ/hoàn tất, còn trong hạn ký mới và chưa có xung đột. Hold RELEASED có thể khôi phục sau kiểm tra quyền giữ kho và overlap; hold CONSUMED không thể khôi phục. Không sửa giá, số tiền, paidAt, hợp đồng hoặc sự kiện thanh toán lịch sử.
+
 Flow hiện tại: chấp nhận báo giá → chọn lịch ký → thanh toán cọc → xác nhận tiền và chuẩn bị ký → khách đến, thu phần còn lại và ký → hoàn tất.
 
 - Customer được đọc `signing-slots` và tạo/đổi appointment trong trạng thái `accepted` trước khi có Payment. Lưu lịch dự kiến bằng event APPOINTMENT và operation phase `AWAITING_PAYMENT_INTENT`; Renewal vẫn `accepted`, không giả đã trả tiền hoặc đổi ngày thuê. Lịch trong giờ phục vụ, 30 phút, phải nằm trọn trong cửa sổ ký BO và trước cutoff đã công bố.
 - Chọn lịch chưa giữ sức chứa. POST `payment-intents` bắt buộc có lịch tương lai, kiểm tra lại và reserve đúng lịch trong cùng transaction với tạo intent. Hết chỗ thì trả 409 và rollback; khách chọn lại trước khi trả tiền. Hạn trả cọc không vượt cửa sổ thanh toán, cutoff và thời điểm lịch ký trừ một giây.
-- Khi intent đã bắt đầu, không đổi lịch dự kiến hoặc chấp nhận revision mới để thay ràng buộc giao dịch. Sau khi tiền được xác minh và phân bổ, bước chuẩn bị ký giữ lịch đã chọn và chuyển phase `SIGNING`, Renewal `appointment_scheduled`. Callback xử lý muộn khi lịch đã qua hoặc nằm ngoài hạn ký giữ PAID và chờ đối soát, không âm thầm đặt lịch khác.
+- Khi intent đã bắt đầu, không đổi lịch dự kiến hoặc chấp nhận revision mới để thay ràng buộc giao dịch. Sau khi tiền được xác minh và phân bổ, bước chuẩn bị ký giữ lịch đã chọn và chuyển phase `SIGNING`, Renewal `appointment_scheduled`. Lịch đã qua vẫn có thể mở SIGNING nếu còn hạn ký 72 giờ/cutoff để Customer đổi lịch; lịch nằm ngoài hạn ký thực tế hoặc tiền chưa đủ bằng chứng vẫn giữ PAID/chờ đối soát, không âm thầm đặt lịch khác.
 - Đổi lịch sau thanh toán tiếp tục dùng các guard ký hiện có. Ghi nhận khách đến, thu phần còn lại và hoàn tất chỉ được thực hiện trong bước ký đã xác minh Payment. Chỉ chọn lịch không mở các thao tác này.
 - Hết hạn Payment với thất bại cuối cùng được xác minh thì giải phóng reservation lịch trong cùng transaction. Tiền đã nhận hoặc gateway chưa rõ kết quả không tự giải phóng. Chấp nhận báo giá mới trước khi có Payment xóa lựa chọn lịch cũ để khách chọn lại.
 - FE cho phép chọn lịch trước trả cọc và khóa nút trả cọc khi chưa có lịch tương lai. API vẫn kiểm tra độc lập; không tin điều kiện trên trình duyệt. Không đổi bố cục UI và không cần thêm cột DB.
@@ -166,7 +193,11 @@ Cập nhật 13/10: đã có adapter lịch ký Staff opt-in, dùng quy tắc ch
 
 Adapter đọc ngày từ RentalPeriodResolver và cutoff từ TermSource của policy BO đã công bố; chỉ trả eligibility đầy đủ khi có `RenewalEligibilityEvidenceSource` xác nhận Recovery/khả thi ký đúng Rental/unit/facility và checkedAt bằng server now. `SharedRenewalEligibilityEvidenceSource` hiện là runtime adapter tổng hợp: đọc `RecoverySource.state(Rental,now)` và `CalendarSource.feasible(Rental,now,cutoff)`. Hai method bổ sung mặc định trả Optional.empty để không thay đổi implementation cũ. **Receiver Recovery/lịch ký vẫn chưa có runtime provider đầy đủ**; trước cutoff, thiếu coverage vẫn UNKNOWN; quá cutoff được chặn bằng policy thật. Không suy feasible=true từ vắng conflict, không dùng booking sellable count hoặc hardcode lịch ký/cutoff. Dữ liệu lệch/DB lỗi không chuyển thành eligibility thành công.
 
-`TransactionalRenewalExtensionHoldSource` triển khai cả D2 ExtensionHoldSource và D3 SafetySource, opt-in bằng hai flag `renewal-extension-holds.enabled` và `renewal-operational-checks.enabled` trong namespace `storagehub.integration`. JDBC giữ cùng transaction với caller, khóa Rental → Unit → hold, unique theo renewal, không tự reclaim hold hết hạn, recheck khi retain/consume/release. Chưa bật runtime: thiếu implementation `RenewalSharedWriterProtocol` thì atomic/participatesInTransaction=false. Không dùng local guard hoặc flag thay thế shared-writer protocol. Migration additive nằm riêng tại `db/renewal-hold-migration`, không thuộc Flyway mặc định, không tự cập nhật DB chung.
+`TransactionalRenewalExtensionHoldSource` triển khai cả D2 ExtensionHoldSource và D3 SafetySource, opt-in bằng hai flag `renewal-extension-holds.enabled` và `renewal-operational-checks.enabled` trong namespace `storagehub.integration`. JDBC giữ cùng transaction với caller, khóa Rental → Unit → hold, unique theo renewal, không tự reclaim hold hết hạn, recheck khi retain/consume/release. Migration additive nằm riêng tại `db/renewal-hold-migration`, không thuộc Flyway mặc định, không tự cập nhật DB chung.
+
+Trong runner Payment local (`shared-payment-schema` và `renewal-simple-payment.enabled`), `LocalDatabaseRenewalWriterProtocol` tái sử dụng `RenewalOperationalGuard`, `RentalPeriodResolver`, `RenewalLocalPaymentChecks` và RecoverySource nếu đã tích hợp. Adapter khóa Rental rồi Unit, đọc các xung đột hiện tại bằng locking reads, kiểm tra kỳ gia hạn và cutoff đã công bố. Return request khóa Rental; tạo Maintenance khóa Unit để phối hợp với ký gia hạn. Adapter chỉ xác nhận dữ liệu DB local, không chứng nhận Recovery bên ngoài hoặc toàn bộ công nợ lịch sử. Khi có RecoverySource mà nguồn trả UNKNOWN/BLOCKED hoặc sai binding, ký vẫn bị chặn. Ngoài profile này, vẫn cần implementation shared-writer đầy đủ của các module trước khi bật luồng vận hành chung.
+
+Các giao dịch VNPay PAID có bằng chứng xác thực được bộ `RenewalPaymentReconciler` thử lại theo lịch sẵn có để phân bổ và mở bước SIGNING; không tạo giao dịch thu tiền mới. Lịch đã hết hạn, khoản tiền thiếu bằng chứng hoặc xung đột thực vẫn giữ trạng thái cần đối soát.
 
 Ngày áp dụng policy đã được xác nhận: D2/D3 dùng ngày bắt đầu kỳ gia hạn; cutoff cho eligibility và D4 dùng ngày kiểm tra tại Asia/Ho_Chi_Minh. effectiveFrom/effectiveTo bao gồm cả hai ngày biên. Future-only policy không được dùng làm policy quá hạn hiện hành; thiếu policy hiện hành vẫn UNKNOWN. Publication hiện chỉ giữ một snapshot mỗi cơ sở, chưa lưu lịch sử phiên bản có hiệu lực khác nhau.
 
@@ -422,7 +453,7 @@ PublishedRenewalPolicyAdapters:
 
 - RenewalSources.PolicySource: snapshot theo facility và canonical extensionStart, ref = system-setting:{id}, version/rate/windows/eligible packages từ snapshot thực.
 - RenewalOperationSources.PolicySource: cần ngày có bằng chứng và signing đã công bố; deadline vẫn do consumer hiện có kiểm tra.
-- OverdueSources.TermSource: ngày cuối được sử dụng L từ RentalPeriodResolver, không dùng raw end exclusive như ngày cuối; cutoff = L + urgentThroughDay tại recoveryCutoffTime; recoveryStart = L + recoveryFromDay tại recoveryStartTime.
+- OverdueSources.TermSource: ngày cuối được sử dụng L từ RentalPeriodResolver, không dùng raw end exclusive như ngày cuối; cutoff = L + 7 ngày lúc 17:00; recoveryStart = L + 8 ngày lúc 08:00 theo timezone của policy đã công bố. Các ngưỡng/ngày/giờ cũ trong snapshot chỉ còn là dữ liệu legacy.
 
 ProjectHandoffRentalPeriodAdapter chỉ đăng ký khi storagehub.integration.rental-period.enabled=true. Mặc định OFF giữ nguyên.
 Không tự sửa ngày Booking/Rental lịch sử hoặc bật profile production. Hồ sơ không có proof giữ UNKNOWN.
@@ -503,3 +534,45 @@ Từ 10/10/2026 có kernel ledger và outbox/review receipt riêng, mặc địn
 Ledger chưa có writer-backed coverage hoặc engine Accounting/Refund hoàn chỉnh. Outbox chỉ cung cấp proof khi Customer xác nhận nhận đúng notification/current resolution/policy; persistence/readFlag đơn thuần vẫn không phải proof.
 Cross-writer hold, trạng thái access/PIN và objective-specific Support result vẫn thiếu implementation.
 Không thể suy đủ các trường đó từ Payment.status hoặc ghi chú người dùng. End-to-end D1-D5 chưa được chứng nhận hoàn tất..
+
+### Bổ sung 13/10/2026: phí theo ngày và xử lý cọc gia hạn
+
+Phạm vi adapter hiện tại: profile `shared-payment-schema`, bật `storagehub.integration.ledger.enabled` và `storagehub.integration.renewal-simple-payment.enabled`. Runner `run-rental-support-dev.ps1 -EnableRenewalPayments` sử dụng migration bổ sung `V2026101320__renewal_cancellation_accounting.sql`; không reset dữ liệu.
+
+#### Phí quá hạn
+
+- `lateFeeAmount` đã lưu là mức phí **mỗi ngày quá hạn**, VND nguyên không âm. Không lấy giá trị mặc định khi cấu hình thiếu.
+- Tính số ngày từ `lastPermittedDate` của kỳ thuê, theo thời gian server và timezone trong chính sách cơ sở. Ngày sau ngày cuối được phép thuê là ngày quá hạn thứ 1.
+- Payable statement bổ sung `remainingRentalAmount`, `overdueFee`, `unpostedOverdueFee`; `amount = remainingRentalAmount + overdueFee` là số tiền còn phải thu.
+- Bảng kê hết hiệu lực ở mốc đến sớm hơn giữa hạn ký và đầu ngày kế tiếp tại cơ sở. Staff phải lấy bảng kê mới trước khi thu.
+- Phí đã ghi nhận/thu của cùng Rental và kỳ hợp đồng được đối chiếu qua ledger, kể cả từ một renewal khác. Không thu lại; ngày mới chỉ ghi phần phát sinh thêm. Đổi mức phí sau khi đã ghi phí yêu cầu đối soát, không tự định giá lại khoản cũ.
+- Thu bổ sung phần phí qua API balance payment hiện có, kèm mã giao dịch và chứng từ thật. Điều kiện hoàn tất ký kiểm tra lại toàn bộ phần tiền thuê và phí còn thiếu.
+
+#### Đọc trạng thái cọc
+
+GET `/api/{customer|manager|staff}/renewals/{id}/deposit-settlement`, envelope `{data, correlationId}`. Quyền đọc reuse guard operations theo vai trò, chủ hồ sơ và scope cơ sở.
+
+`data`: `renewalId`, `expectedVersion`, `status`, `amount`, `refundedAmount`, `currency`, `environment`, `refundId`, `signingDeadline`, `checkedAt`.
+
+| status | Ý nghĩa |
+|---|---|
+| UNKNOWN / NOT_APPLICABLE | Thiếu bằng chứng cọc / luồng trả toàn bộ tiền thuê không có cọc |
+| HELD / APPLIED_TO_RENT | Đã ghi nhận cọc / đã hoàn tất gia hạn |
+| REVIEW_REQUIRED | Cần xác minh sự cố hoặc nguyên nhân; chưa kết luận mất cọc |
+| FORFEITED | Hết hạn ký do khách không hoàn tất, cọc không hoàn lại |
+| REFUND_ELIGIBLE | Có kết luận sự cố cơ sở, cần quyết định hoàn |
+| REFUND_APPROVED | Đã duyệt và giữ khoản hoàn, chưa ghi nhận chuyển tiền |
+| REFUNDED | Đã ghi nhận kết quả hoàn bằng chứng từ |
+
+`environment` là `SANDBOX` hoặc `PRODUCTION` theo bằng chứng gốc, không suy từ nhãn UI. UNKNOWN/NOT_APPLICABLE trả số tiền, environment và refundId null.
+
+Worker mặc định kiểm tra mỗi 60 giây sau hạn ký. Chỉ xử lý cọc đã có Payment/receipt/ledger đối soát đúng; nguồn thiếu hoặc mơ hồ thì trì hoãn. Sự cố chưa có kết luận không tự ghi khách vi phạm. Hủy nghĩa vụ tiền thuê chưa thu bằng cancellation credit riêng; giữ nguyên khoản thu, allocation và điều khoản gốc. Không cập nhật hạn hợp đồng hoặc chuyển kho thành AVAILABLE.
+
+#### Duyệt và ghi nhận hoàn cọc
+
+- Manager dùng `/refund-decisions` hiện có. Sự cố phải gắn với lịch hẹn hợp lệ đã đóng cọc và có kết luận lỗi cơ sở. Nếu hạn ký còn hiệu lực, calendar phải xác nhận không thể bố trí lịch thay thế trước khi duyệt hoàn.
+- POST `/api/manager/renewals/{id}/refund-executions`: bắt buộc `Idempotency-Key`, `expectedVersion`, `refundId`, `receiptFileId`, `transactionReference`, `transferred: true`. Không nhận số tiền do client truyền.
+- Chứng từ upload namespace `DUONG_RENEWAL_REFUND`, liên kết đúng renewal, còn ACTIVE và qua kiểm tra file/scope. Guard Manager REFUND kiểm tra lại quyền và phiên bản trước replay.
+- API này ghi nhận khoản hoàn đã thực hiện ngoài hệ thống; không gửi lệnh chuyển tiền ngân hàng. Sandbox dùng bằng chứng thử nghiệm có nhãn rõ ràng.
+- Response dùng Result operations hiện có, event `REFUND_EXECUTION`. Timeline `/refunds` bổ sung `DEPOSIT_DISPOSITION` và `REFUND_EXECUTION`. Customer không nhận mã giao dịch hoặc file hoàn nội bộ.
+- Cập nhật Shared Refund, Payment.refundedAmount và ledger trong cùng transaction. Khoản đã hoàn không được thực hiện lại; retry cùng key/body trả kết quả cũ sau khi kiểm tra quyền hiện tại.

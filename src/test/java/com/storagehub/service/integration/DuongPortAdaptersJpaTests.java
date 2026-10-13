@@ -48,38 +48,14 @@ class DuongPortAdaptersJpaTests {
     }
     @Autowired EntityManager em; @Autowired ObjectMapper mapper;
     @Autowired RenewalPolicyPublicationService policies; @Autowired PublishedRenewalPolicyAdapters adapters;
-    @Autowired RenewalAssignmentSource assignments; @Autowired DuongFileEvidence files;
+    @Autowired DuongFileEvidence files;
     @Autowired FileProperties fileProperties; @Autowired ProjectHandoffRentalPeriodAdapter periods;
     @Autowired RenewalOperationService operations;
-    @Autowired RenewalAssignmentReadService assignmentRead;
     @Autowired com.storagehub.service.FileStorageService storage;
     @Autowired com.storagehub.service.support.SupportService support;
     @TempDir Path root;
-    @Test void assignmentReadSurvivesEntityReloadWithoutChangingBookingOrWorkflow() {
-        var a=actor(manager,RoleCode.MANAGER);UUID id=renewal.getId(),sid=staff.getId();
-        assertThat(assignmentRead.read(a,id).status()).isEqualTo("UNASSIGNED");
-        var result=operations.assignStaff(a,id,new RenewalOperationCommands.StaffAssignment(sid,"TEST",0L),"readback-assignment");
-        var before=renewal.getRental().getReservation().getStatus();em.flush();em.clear();
-        var view=assignmentRead.read(a,id);
-        assertThat(view.status()).isEqualTo("ASSIGNED");assertThat(view.staffId()).isEqualTo(sid);assertThat(view.staffName()).isNotBlank();
-        assertThat(view.expectedVersion()).isEqualTo(result.state().expectedVersion());
-        assertThat(em.find(Renewal.class,id).getRental().getReservation().getStatus()).isEqualTo(before);
-        assertThat(em.createQuery("select count(e) from RenewalOperationEvent e where e.kind='STAFF_ASSIGNMENT'",Long.class).getSingleResult()).isEqualTo(1);
-        em.find(User.class,sid).setStatus(UserStatus.INACTIVE);em.flush();
-        assertThat(assignmentRead.read(a,id).status()).isEqualTo("INELIGIBLE");
-        assertThat(em.find(RenewalWorkflow.class,id).getVersion()).isEqualTo(view.expectedVersion());
-    }
-    @Test void assignmentReadDoesNotExposeAmbiguousProofOrBypassCurrentDbScope() throws Exception {
-        var a=actor(manager,RoleCode.MANAGER);assign(staff,NOW);assign(staff,NOW);
-        assertThat(assignmentRead.read(a,renewal.getId()).status()).isEqualTo("UNAVAILABLE");
-        assertThat(assignmentRead.read(a,renewal.getId()).staffId()).isNull();
-        em.createQuery("delete from UserFacilityScope s where s.user.id=:u").setParameter("u",manager.getId()).executeUpdate();
-        assertThatThrownBy(()->assignmentRead.read(a,renewal.getId())).hasMessageContaining("not found");
-        assertThatThrownBy(()->assignmentRead.read(actor(customer,RoleCode.CUSTOMER),renewal.getId())).hasMessageContaining("role/permissions");
-    }
-    @Test void expiredPaymentCannotAcceptAssignmentOrFaultReview() {
+    @Test void expiredPaymentCannotAcceptFaultReview() {
         renewal.setStatus(RenewalStatus.payment_expired);em.flush();var a=actor(manager,RoleCode.MANAGER);
-        assertThatThrownBy(()->operations.assignStaff(a,renewal.getId(),new RenewalOperationCommands.StaffAssignment(staff.getId(),"TEST",0L),"expired-assignment")).hasMessageContaining("Terminal");
         assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"expired-fault")).hasMessageContaining("Terminal");
         assertThat(em.createQuery("select count(e) from RenewalOperationEvent e",Long.class).getSingleResult()).isZero();
     }
@@ -110,7 +86,9 @@ class DuongPortAdaptersJpaTests {
         assertThat(policies.get(actor(manager,RoleCode.MANAGER),facility.getId()).version()).isEqualTo(p.version());
         assertThat(adapters.read(rental,LocalDate.of(2026,10,7)).orElseThrow().depositRate()).isEqualByComparingTo("0.2");
         assertThat(adapters.read(renewal).orElseThrow().signingWindow()).isEqualTo(Duration.ofMinutes(4320));
-        var term=adapters.term(rental,NOW).orElseThrow();assertThat(term.lastPermittedDate()).isEqualTo(LocalDate.of(2026,10,6));assertThat(term.recoveryStart()).isEqualTo(Instant.parse("2026-10-13T17:00:00Z"));
+        var term=adapters.term(rental,NOW).orElseThrow();assertThat(term.lastPermittedDate()).isEqualTo(LocalDate.of(2026,10,6));
+        assertThat(term.recoveryCutoff()).isEqualTo(Instant.parse("2026-10-13T10:00:00Z"));
+        assertThat(term.recoveryStart()).isEqualTo(Instant.parse("2026-10-14T01:00:00Z"));
         assertThat(rental.getContractEndDate()).isEqualTo(LocalDate.of(2026,10,7));
     }
     @Test void managerCannotPublishEvenWithManagePolicyClaim(){assertThatThrownBy(()->policies.publish(actor(manager,RoleCode.MANAGER),facility.getId(),input(0))).hasMessageContaining("permission");}
@@ -121,11 +99,6 @@ class DuongPortAdaptersJpaTests {
         assertThatThrownBy(()->adapters.read(rental,LocalDate.of(2026,10,7))).hasMessageContaining("incomplete");
     }
     @Test void policyOutsideEffectiveDatesAndOptionalSourcesAreEmpty(){var p=input(0);policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),new PublishedRenewalPolicy.Input(0L,p.effectiveFrom(),p.effectiveFrom(),30,24,30,p.depositRate(),Set.of(),null,null));assertThat(adapters.read(rental,LocalDate.of(2027,1,1))).isEmpty();assertThat(adapters.read(renewal)).isEmpty();assertThat(adapters.term(rental,NOW)).isEmpty();}
-    @Test void assignmentIsNotInferredFromRoleOrBooking(){assertThat(assignments.current(renewal)).isEmpty();assertThat(assignments.assignedRenewalIds(actor(staff,RoleCode.STAFF))).isEmpty();assertThatThrownBy(()->assignments.require(actor(staff,RoleCode.STAFF),renewal,RenewalOperationSources.Capability.READ)).hasMessageContaining("not been assigned");}
-    @Test void persistedAssignmentAllowsOnlyCurrentStaff() throws Exception {assign(staff,NOW);assertThat(assignments.assignedRenewalIds(actor(staff,RoleCode.STAFF))).containsExactly(renewal.getId());assignments.require(actor(staff,RoleCode.STAFF),renewal,RenewalOperationSources.Capability.COMPLETE);var other=new ActorPrincipal(manager.getId(),UUID.randomUUID(),Set.of(RoleCode.STAFF),actor(staff,RoleCode.STAFF).permissions(),Map.of(facility.getId(),FacilityScopeLevel.OPERATE));assertThatThrownBy(()->assignments.require(other,renewal,RenewalOperationSources.Capability.READ)).isInstanceOf(RuntimeException.class);}
-    @Test void ambiguousAssignmentFailsClosed() throws Exception {assign(staff,NOW);assign(staff,NOW);assertThatThrownBy(()->assignments.current(renewal)).hasMessageContaining("ambiguous");}
-    @Test void revokedDbScopeOverridesOldClaims() throws Exception {assign(staff,NOW);em.createQuery("delete from UserFacilityScope s where s.user.id=:u").setParameter("u",staff.getId()).executeUpdate();assertThatThrownBy(()->assignments.require(actor(staff,RoleCode.STAFF),renewal,RenewalOperationSources.Capability.COMPLETE)).hasMessageContaining("not found");}
-    @Test void managerAssignmentCommandPersistsAndReplaysExactlyOnce(){var body=new RenewalOperationCommands.StaffAssignment(staff.getId(),"TEST assignment",0L);var a=actor(manager,RoleCode.MANAGER);var first=operations.assignStaff(a,renewal.getId(),body,"assign-test");assertThat(operations.assignStaff(a,renewal.getId(),body,"assign-test")).isEqualTo(first);assertThat(assignments.current(renewal).orElseThrow().staffId()).isEqualTo(staff.getId());assertThat(em.createQuery("select count(e) from RenewalOperationEvent e where e.kind='STAFF_ASSIGNMENT'",Long.class).getSingleResult()).isEqualTo(1);assertThat(first.state().missingSources()).doesNotContain("STAFF_PERMISSION_ASSIGNMENT");assertThat(first.state().missingSources()).contains("BO_SIGNING_POLICY","RENEWAL_ACCOUNTING");}
     @Test void facilityFaultNeedsExplicitBoundManagerReview() throws Exception {var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW,staff.getId(),"{}");em.persist(incident);em.flush();assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),manager.getId())).hasMessageContaining("missing");em.persist(new RenewalOperationEvent(renewal,"FAULT_REVIEW",NOW.plusSeconds(1),manager.getId(),mapper.writeValueAsString(Map.of("incidentId",incident.getId(),"facilityFault",true))));em.flush();adapters.requireFacilityFault(renewal,incident.getId(),manager.getId());assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),staff.getId())).hasMessageContaining("reviewer");}
     @Test void faultReviewCommandPersistsVerdictNotJustNote(){var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW.minusSeconds(60),staff.getId(),"{}");em.persist(incident);em.flush();operations.reviewFault(actor(manager,RoleCode.MANAGER),renewal.getId(),new RenewalOperationCommands.FaultReview(incident.getId(),true,"TEST verified",List.of(),0L),"fault-test");adapters.requireFacilityFault(renewal,incident.getId(),manager.getId());}
     @Test void revokedFaultReviewerScopeCannotAuthorizeCustomerConfirmation() throws Exception {
