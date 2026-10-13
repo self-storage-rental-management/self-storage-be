@@ -38,6 +38,9 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false, length = 100)
     private String name;
 
+    @Column(length = 500)
+    private String description;
+
     @Column(name = "length_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal lengthM;
 
@@ -70,6 +73,18 @@ public class UnitType extends BaseEntity {
 
     @Column(name = "rack_height_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal rackHeightM;
+
+    @Column(name = "aisle_width_m", precision = 10, scale = 2)
+    private BigDecimal aisleWidthM;
+
+    @Column(name = "trolley_type", length = 160)
+    private String trolleyType;
+
+    @Column(name = "small_box_capacity")
+    private Integer smallBoxCapacity;
+
+    @Column(name = "large_box_capacity")
+    private Integer largeBoxCapacity;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)
