@@ -25,6 +25,7 @@ public class RoleDataInitializer {
     private static final int POLICY_OWNERSHIP_VERSION = 4;
     private static final int STAFF_RESERVATION_REVIEW_VERSION = 5;
     private static final int STAFF_TRAM_WORKFLOW_VERSION = 6;
+    private static final int BUSINESS_RETURNS_VERSION = 7;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -107,6 +108,16 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(STAFF_TRAM_WORKFLOW_VERSION);
                 }
+                // Allow Business Operations role to oversee warehouse returns across all facilities.
+                if (role.getPermissionsPolicyVersion() < BUSINESS_RETURNS_VERSION) {
+                    if (code == RoleCode.BUSINESS) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.VIEW_RETURNS));
+                        updated.add(permissions.get(SystemPermission.MANAGE_RENTALS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(BUSINESS_RETURNS_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -159,6 +170,8 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_RESERVATIONS,
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_RENTALS,
+                SystemPermission.VIEW_RETURNS,
+                SystemPermission.MANAGE_RENTALS,
                 SystemPermission.VIEW_PAYMENTS,
                 SystemPermission.VIEW_POLICIES,
                 SystemPermission.VIEW_SUPPORT,
