@@ -1,5 +1,13 @@
 # Payment API contract
 
+## Bộ ghi nhận dùng chung — 13/10/2026
+
+Reservation và Renewal dùng chung `ManualRentalPaymentService` khi Staff thu tiền còn lại: `CASH` hoặc `BANK_TRANSFER`, lưu Payment purpose `RENTAL_BALANCE`, provider `MANUAL`, trạng thái PAID và audit binding `MANUAL_RENTAL_BALANCE_RECORDED_V1`. Đây là Staff xác nhận khoản thu thực tế, không phải gọi ngân hàng hoặc tự tạo giao dịch chuyển tiền.
+
+Reservation giữ endpoint Check-in hiện tại và số phải thu từ pricing snapshot. Renewal dùng bảng kê accepted revision, endpoint `cash-receipts` nhận thêm `paymentMethod` (mặc định CASH), chứng từ và idempotency key. Payment của Renewal chỉ liên kết Renewal/revision; không gắn sang Reservation. Payment, audit, receipt/allocation Ledger và event thu tiền cùng transaction. Retry không ghi thêm tiền, reference/key khác terms bị chặn. Completion recheck cả Payment proof lẫn phân bổ, chứng từ và các điều kiện ký hiện có.
+
+Schema gateway dùng migration opt-in mới `2026101302` tại `classpath:db/sandboxpaymentmigration`, tránh version `1202` đang được một số DB local dùng cho migration Renewal cũ. Không sửa script/checksum/history `1202`; migration mới kiểm tra schema gateway đã có hoặc bổ sung đúng bảng/checks còn thiếu. Runner `-EnableRenewalPayments` xác minh target `storagehub_local` trước Flyway. Sao lưu trước rollout; DDL MySQL có thể auto-commit.
+
 ## Phạm vi
 
 Payment là nguồn xác nhận tiền thanh toán. Reservation và Renewal dùng chung `VnpayService`, merchant `app.vnpay`, chữ ký HMAC, endpoint Return/IPN và bảng Payment. Ledger ghi nghĩa vụ và phân bổ tiền; Renewal quyết định điều kiện ký/hoàn tất. Redirect từ trình duyệt không phải bằng chứng thanh toán thành công.
@@ -7,6 +15,8 @@ Payment là nguồn xác nhận tiền thanh toán. Reservation và Renewal dùn
 Từ 13/10/2026, báo giá Renewal mới chia tiền thuê sau giảm giá giống đặt kho: 40% trả trước qua VNPay, 60% thu tiền mặt khi ký, có chứng từ do Staff ghi nhận. Không thu lại cọc bảo đảm của Rental. Số tiền gateway lấy từ snapshot đã chấp nhận; hồ sơ cũ có cọc bằng 0 vẫn trả toàn kỳ. Chi tiết nghĩa vụ, chứng từ và hoàn tất xem [Renewal contract](RENEWAL_API_CONTRACT.md).
 
 ## API
+
+Manager payment history is available at `GET /api/manager/payment-history?facilityId={uuid}&page=0&size=20&search={text}`. It requires a Manager actor with `payments:read` and READ scope for the requested facility. The paginated response includes recorded Payment attempts and completed return settlements/refunds; search matches transaction references and customer or unit names. Refunds stored on a Payment remain visible through its `refundedAmount` field.
 
 Base path `/api`, envelope và lỗi theo [quy ước chung](BE-00_API_CONTRACT.md).
 

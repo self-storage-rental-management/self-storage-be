@@ -110,6 +110,8 @@ public class RenewalWorkflowService {
         if(selection==null||selection.getAppointmentRef()==null||selection.getAppointmentStart()==null||selection.getAppointmentEnd()==null
             ||!selection.getAppointmentStart().isAfter(now))throw ApiExceptions.conflict("Select a future signing appointment before payment");
         if(selection.getAppointmentEnd().isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
+        if(selection.getAppointmentEnd().isAfter(RenewalSigningDeadline.calculate(now,gate.eligibility().recoveryCutoff())))
+            throw ApiExceptions.conflict("Select a signing appointment within the three-day signing window");
         var selectedCalendar=calendars.getIfAvailable();
         if(selectedCalendar==null||!selectedCalendar.atomic())throw deferred("Signing calendar unavailable");
         var selectedSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart()).orElseThrow(()->ApiExceptions.conflict("Selected signing slot is no longer available"));
