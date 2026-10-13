@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 public record ManagerUnitTypeRequest(
     @NotBlank @Size(max = 20) String code,
     @NotBlank @Size(max = 100) String name,
+    @Size(max = 500) String description,
     @NotNull @DecimalMin("0.01") BigDecimal lengthM,
     @NotNull @DecimalMin("0.01") BigDecimal widthM,
     @NotNull @DecimalMin("0.01") BigDecimal heightM,
@@ -18,6 +19,10 @@ public record ManagerUnitTypeRequest(
     @NotNull @DecimalMin("0.01") BigDecimal rackLengthM,
     @NotNull @DecimalMin("0.01") BigDecimal rackWidthM,
     @NotNull @DecimalMin("0.01") BigDecimal rackHeightM,
+    @NotNull @DecimalMin("0.01") BigDecimal aisleWidthM,
+    @NotBlank @Size(max = 160) String trolleyType,
+    @Min(0) int smallBoxCapacity,
+    @Min(0) int largeBoxCapacity,
     @Size(max = 1000) String imageUrl,
     @Min(0) int physicalUnitCount,
     @Size(max = 32) String floor,
