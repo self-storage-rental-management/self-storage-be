@@ -19,6 +19,7 @@ public class PaymentProvenance {
     private final ObjectMapper mapper;
     public Classification classify(Payment p) {
         if(p==null||p.getId()==null)return Classification.UNVERIFIED;
+        if(p.getPurpose()==PaymentType.RENTAL_BALANCE&&"MANUAL".equals(p.getGatewayProvider()))return classifyManualBalance(p);
         if(p.getRenewal()!=null)return classifyRenewal(p);
         if(p.getReservation()==null)return Classification.UNVERIFIED;
         var complaint=complaints.findByReservation_Id(p.getReservation().getId());
@@ -57,6 +58,35 @@ public class PaymentProvenance {
             return switch(d.path("environment").asText()) {case "PRODUCTION"->Classification.VERIFIED;case "SANDBOX"->Classification.SANDBOX;default->Classification.UNVERIFIED;};
         } catch(Exception invalid){return Classification.UNVERIFIED;}
     }
+    public boolean manualReceiptMatches(Payment payment,UUID fileId) {
+        if(fileId==null||classify(payment)!=Classification.VERIFIED)return false;
+        var proof=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",payment.getId(),ManualRentalPaymentService.AUDIT_ACTION);
+        try{return proof.size()==1&&fileId.toString().equals(mapper.readTree(proof.getFirst().getAfterStateJson()).path("receiptFileId").asText());}
+        catch(Exception invalid){return false;}
+    }
+    private Classification classifyManualBalance(Payment p) {
+        if(p.getStatus()!=PaymentStatus.PAID||p.getAmount()==null||p.getAmount().signum()<=0||!"VND".equals(p.getCurrency())
+            ||p.getPaidAt()==null||p.getInitiatedBy()==null||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0
+            ||p.getGatewayBankCode()==null||!Set.of("CASH","BANK_TRANSFER").contains(p.getGatewayBankCode())||p.getGatewayTransactionNo()==null)
+            return Classification.UNVERIFIED;
+        var proof=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",p.getId(),ManualRentalPaymentService.AUDIT_ACTION);
+        if(proof.size()!=1)return Classification.UNVERIFIED;
+        try {
+            var log=proof.getFirst();var d=mapper.readTree(log.getAfterStateJson());
+            var facility=p.getRenewal()!=null?p.getRenewal().getRental().getFacility():p.getReservation().getFacility();
+            if(log.getActor()==null||!p.getInitiatedBy().getId().equals(log.getActor().getId())||log.getFacility()==null
+                ||!facility.getId().equals(log.getFacility().getId())||!p.getId().toString().equals(d.path("paymentId").asText())
+                ||!p.getInitiatedBy().getId().toString().equals(d.path("initiatedBy").asText())
+                ||!p.getCurrency().equals(d.path("currency").asText())||p.getAmount().compareTo(new java.math.BigDecimal(d.path("amount").asText()))!=0
+                ||!p.getGatewayBankCode().equals(d.path("paymentMethod").asText())||!p.getGatewayTransactionNo().equals(d.path("transactionReference").asText())
+                ||!p.getPaidAt().equals(java.time.Instant.parse(d.path("paidAt").asText())))return Classification.UNVERIFIED;
+            if(p.getRenewal()!=null) {
+                if(p.getReservation()!=null||p.getRenewalRevision()==null||!p.getRenewal().getId().toString().equals(d.path("renewalId").asText())
+                    ||!p.getRenewalRevision().getId().toString().equals(d.path("acceptedRevisionId").asText())||d.path("receiptFileId").asText().isBlank())return Classification.UNVERIFIED;
+            }else if(p.getReservation()==null||!p.getReservation().getId().toString().equals(d.path("reservationId").asText())||!d.path("renewalId").isNull())return Classification.UNVERIFIED;
+            return Classification.VERIFIED;
+        }catch(Exception invalid){return Classification.UNVERIFIED;}
+    }
     private Classification classifyRenewal(Payment p) {
         if(p.getRenewal()==null||p.getRenewal().getRental()==null||p.getRenewal().getRental().getCustomer()==null
             ||p.getRenewalRevision()==null||p.getPaymentDeadline()==null||p.getStatus()!=PaymentStatus.PAID
@@ -85,7 +115,11 @@ public class PaymentProvenance {
                 ||!p.getPaidAt().equals(java.time.Instant.parse(d.path("gatewayPaidAt").asText()))
                 ||!p.getPaymentDeadline().equals(java.time.Instant.parse(d.path("paymentDeadline").asText())))
                 return Classification.UNVERIFIED;
-            return "SANDBOX".equals(d.path("environment").asText())?Classification.SANDBOX:Classification.UNVERIFIED;
+            return switch (d.path("environment").asText()) {
+                case "PRODUCTION" -> Classification.VERIFIED;
+                case "SANDBOX" -> Classification.SANDBOX;
+                default -> Classification.UNVERIFIED;
+            };
         } catch(Exception invalid){return Classification.UNVERIFIED;}
     }
     public static String environment(String payUrl,String apiUrl) {

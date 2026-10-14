@@ -18,6 +18,11 @@ CREATE TABLE rental_ledger_obligations (
  FOREIGN KEY (rental_id) REFERENCES rental_ledger_accounts(rental_id)
 );
 CREATE INDEX idx_rental_ledger_due ON rental_ledger_obligations(rental_id,due_at_ms);
+CREATE TABLE renewal_ledger_cancellation_credits (
+ id VARCHAR(36) PRIMARY KEY,rental_id VARCHAR(36) NOT NULL,obligation_id VARCHAR(36) NOT NULL,
+ amount DECIMAL(19,0) NOT NULL CHECK(amount>0),source_ref VARCHAR(200) NOT NULL,reason VARCHAR(200) NOT NULL,
+ UNIQUE(rental_id,source_ref),FOREIGN KEY(obligation_id,rental_id) REFERENCES rental_ledger_obligations(id,rental_id)
+);
 CREATE TABLE rental_ledger_receipts (
  id VARCHAR(36) PRIMARY KEY,
  rental_id VARCHAR(36) NOT NULL,

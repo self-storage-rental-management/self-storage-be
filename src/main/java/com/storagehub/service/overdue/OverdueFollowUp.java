@@ -14,7 +14,8 @@ public class OverdueFollowUp extends BaseEntity {
     @ManyToOne(fetch=FetchType.LAZY,optional=false) @JoinColumn(nullable=false,updatable=false) private Rental rental;
     @Column(nullable=false,updatable=false,length=24) private String type;
     @Column(nullable=false,updatable=false,length=2000) private String content;
-    @Column(nullable=false,updatable=false) private UUID actorId;
+    /** Null identifies a scheduled system handoff; user actions retain their actor. */
+    @Column(updatable=false) private UUID actorId;
     @Column(name="recorded_at",nullable=false,updatable=false) private Instant recordedAt;
     @Column(updatable=false) private UUID externalRef;
     @Column(updatable=false,length=200) private String policyRef;
