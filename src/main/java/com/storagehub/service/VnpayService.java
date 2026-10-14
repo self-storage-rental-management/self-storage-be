@@ -473,6 +473,7 @@ public class VnpayService {
         payment.setPaidAt(paidAt);
         payment.setProcessedAt(Instant.now());
         Reservation reservation = payment.getReservation();
+        ReservationStatus previousReservationStatus = reservation.getStatus();
         if (reservation.getStatus() == ReservationStatus.AWAITING_PAYMENT
             || reservation.getStatus() == ReservationStatus.PAYMENT_GRACE
             || reservation.getStatus() == ReservationStatus.PAYMENT_REVIEW) {
@@ -488,6 +489,17 @@ public class VnpayService {
                 "Thanh toán thành công",
                 "VNPay đã xác nhận thanh toán cọc cho đơn "
                     + reservation.getReservationCode() + ".",
+                reservation.getId()
+            );
+        }
+        if (previousReservationStatus != ReservationStatus.CONFIRMED
+            && reservation.getStatus() == ReservationStatus.CONFIRMED) {
+            notificationService.createFacilityOperationsNotifications(
+                reservation.getFacility().getId(),
+                NotificationType.RESERVATION,
+                "Có đơn đã xác nhận chờ phân kho",
+                "Đơn " + reservation.getReservationCode()
+                    + " đã thanh toán cọc và đang chờ nhân viên phân gian kho.",
                 reservation.getId()
             );
         }
