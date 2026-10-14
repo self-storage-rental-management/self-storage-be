@@ -18,6 +18,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, JpaSpecificationExecutor<ReturnCase> {
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from ReturnCase r where r.id = :id and r.customer.id = :customerId")
+    Optional<ReturnCase> findOwnedForUpdate(@Param("id") UUID id, @Param("customerId") UUID customerId);
 
     @EntityGraph(attributePaths = {"customer", "storageUnit"})
     @Query(value = """
