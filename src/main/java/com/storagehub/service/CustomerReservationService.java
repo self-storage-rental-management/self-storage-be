@@ -219,6 +219,13 @@ public class CustomerReservationService {
             "Đơn " + saved.getReservationCode() + " đã được xác nhận nhận kho và tạo hồ sơ thuê.",
             saved.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            saved.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng đã xác nhận nhận kho",
+            "Khách hàng đã xác nhận nhận kho cho đơn " + saved.getReservationCode()
+                + ". Hồ sơ thuê đã được tạo.",
+            saved.getId()
+        );
         return toDetailResponse(saved);
     }
 
@@ -244,6 +251,13 @@ public class CustomerReservationService {
         auditLogService.recordMutation(
             saved.getCustomer(), "CUSTOMER_CHECKIN_APPOINTMENT_SET", "Reservation", saved.getId(),
             saved.getFacility().getId(), null, Map.of("appointmentAt", saved.getAppointmentAt())
+        );
+        notificationService.createFacilityOperationsNotifications(
+            saved.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng đã đặt lịch nhận kho",
+            "Khách hàng đã đặt lịch nhận kho cho đơn " + saved.getReservationCode()
+                + " vào " + saved.getAppointmentAt() + ".",
+            saved.getId()
         );
         return toSummaryResponse(saved);
     }
