@@ -26,5 +26,6 @@ public record ManagerUnitTypeRequest(
     @Size(max = 2800000, message = "Ảnh loại kho quá lớn; vui lòng chọn ảnh không quá 2 MB.") String imageUrl,
     @Min(0) int physicalUnitCount,
     @Size(max = 32) String floor,
-    @Size(max = 32) String zone
+    @Size(max = 32) String zone,
+    @Size(max = 2800000, message = "Ảnh chi tiết quá lớn; vui lòng chọn ảnh không quá 2 MB.") String detailImageUrl
 ) {}

@@ -132,7 +132,8 @@ public class FacilityLifecycleService {
         ManagerUnitTypeRequest after = normalizedChange(request);
         if (!technicalChanged && java.util.Objects.equals(type.getName(), after.name())
             && java.util.Objects.equals(type.getDescription(), after.description())
-            && java.util.Objects.equals(type.getImageUrl(), after.imageUrl())) {
+            && java.util.Objects.equals(type.getImageUrl(), after.imageUrl())
+            && java.util.Objects.equals(type.getDetailImageUrl(), after.detailImageUrl())) {
             throw ApiExceptions.conflict("Thông tin loại kho chưa có thay đổi.");
         }
         var change = new com.storagehub.domain.model.UnitTypeChangeRequest();
@@ -154,13 +155,13 @@ public class FacilityLifecycleService {
         return new ManagerUnitTypeRequest(t.getCode(), t.getName(), t.getDescription(), t.getLengthM(), t.getWidthM(),
             t.getHeightM(), t.getMaxLoadKg(), t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(),
             t.getAisleWidthM(), t.getTrolleyType(), t.getSmallBoxCapacity() == null ? 0 : t.getSmallBoxCapacity(),
-            t.getLargeBoxCapacity() == null ? 0 : t.getLargeBoxCapacity(), t.getImageUrl(), 0, null, null);
+            t.getLargeBoxCapacity() == null ? 0 : t.getLargeBoxCapacity(), t.getImageUrl(), 0, null, null, t.getDetailImageUrl());
     }
 
     private ManagerUnitTypeRequest normalizedChange(ManagerUnitTypeRequest r) {
         return new ManagerUnitTypeRequest(r.code().trim(), r.name().trim(), clean(r.description()), r.lengthM(),
             r.widthM(), r.heightM(), r.maxLoadKg(), r.rackCount(), r.rackLengthM(), r.rackWidthM(), r.rackHeightM(),
-            r.aisleWidthM(), r.trolleyType().trim(), r.smallBoxCapacity(), r.largeBoxCapacity(), clean(r.imageUrl()), 0, null, null);
+            r.aisleWidthM(), r.trolleyType().trim(), r.smallBoxCapacity(), r.largeBoxCapacity(), clean(r.imageUrl()), 0, null, null, clean(r.detailImageUrl()));
     }
 
     private String json(Object value) {
@@ -205,7 +206,7 @@ public class FacilityLifecycleService {
             if (technicalChanged(type, after) && reservations.existsByUnitType_Id(type.getId())) {
                 throw ApiExceptions.conflict("Loại kho đã có hồ sơ đặt/thuê; không thể duyệt thay đổi kỹ thuật. Hãy từ chối và tạo loại kho mới.");
             }
-            if (!json(technicalSnapshot(type)).equals(change.getBeforeJson())) {
+            if (!json(technicalSnapshot(type)).equals(json(readChange(change.getBeforeJson())))) {
                 throw ApiExceptions.conflict("Thông tin gốc đã thay đổi. Hãy từ chối và yêu cầu Manager gửi lại.");
             }
             UnitTypeResponse before = unitTypeResponse(type);
@@ -334,6 +335,7 @@ public class FacilityLifecycleService {
         type.setSmallBoxCapacity(request.smallBoxCapacity());
         type.setLargeBoxCapacity(request.largeBoxCapacity());
         type.setImageUrl(request.imageUrl() == null || request.imageUrl().isBlank() ? null : request.imageUrl().trim());
+        type.setDetailImageUrl(clean(request.detailImageUrl()));
     }
 
     private void createPhysicalUnits(UnitType type, int count, String floor, String zone) {
@@ -393,6 +395,6 @@ public class FacilityLifecycleService {
             t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getAisleWidthM(), t.getTrolleyType(),
             t.getSmallBoxCapacity(), t.getLargeBoxCapacity(), t.getStatus(),
             units.countByFacility_IdAndUnitType_Id(t.getFacility().getId(), t.getId()), available,
-            units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt());
+            units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt(), t.getDetailImageUrl());
     }
 }

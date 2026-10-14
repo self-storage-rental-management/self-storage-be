@@ -109,6 +109,7 @@ class FacilityDeletionSafetyTests {
         service.updateUnitType(manager(), id, request);
         assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
         assertThat(type.getImageUrl()).isNull();
+        assertThat(type.getDetailImageUrl()).isNull();
         verify(notifications).notifyBusinessOfUnitTypeReview(eq(type), any());
         verify(unitTypes, never()).save(any());
         verify(reservations, never()).existsByUnitType_Id(any());
@@ -139,6 +140,7 @@ class FacilityDeletionSafetyTests {
         assertThat(type.getName()).isEqualTo("Kho M");
         assertThat(type.getDescription()).isEqualTo("Mô tả");
         assertThat(type.getImageUrl()).isEqualTo("/images/customer-units/kho-m.jpg");
+        assertThat(type.getDetailImageUrl()).isEqualTo("/images/customer-units/layout-m.png");
         assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
         assertThat(request.getStatus()).isEqualTo("APPROVED");
         verify(notifications).notifyUnitTypeReviewResult(request);
@@ -232,6 +234,6 @@ class FacilityDeletionSafetyTests {
         var four = new java.math.BigDecimal("4.00");
         return new com.storagehub.api.facility.ManagerUnitTypeRequest("M", "Kho M", "Mô tả", length,
             four, four, four, 4, four, four, four, four, "Xe đẩy", 10, 5,
-            "/images/customer-units/kho-m.jpg", 4, "2", "Khu B");
+            "/images/customer-units/kho-m.jpg", 4, "2", "Khu B", "/images/customer-units/layout-m.png");
     }
 }
