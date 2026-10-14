@@ -25,7 +25,7 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
           and (:status is null or t.status = :status)
           and (:priority is null or t.priority = :priority)
           and (:assignedStaffId is null or (t.assignedTo is not null and t.assignedTo.id = :assignedStaffId))
-          and (:allowedFacilityIds is null or t.facility.id in :allowedFacilityIds)
+          and (:scoped = false or t.facility.id in :allowedFacilityIds)
           and (
             :q is null or :q = ''
             or lower(t.title) like lower(concat('%', :q, '%'))
@@ -40,6 +40,7 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
         @Param("status") MaintenanceTaskStatus status,
         @Param("priority") TaskPriority priority,
         @Param("assignedStaffId") UUID assignedStaffId,
+        @Param("scoped") boolean scoped,
         @Param("allowedFacilityIds") Collection<UUID> allowedFacilityIds,
         @Param("q") String q,
         Pageable pageable

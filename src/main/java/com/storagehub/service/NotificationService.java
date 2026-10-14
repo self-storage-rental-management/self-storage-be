@@ -37,6 +37,17 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
 
+    @Transactional
+    public void notifyBusinessOfUnitTypeChange(com.storagehub.domain.model.UnitType type, boolean technical) {
+        for (User user : userRepository.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE)) {
+            createNotification(user.getId(), NotificationType.SYSTEM,
+                technical ? "Loại kho cần BO duyệt lại" : "Manager cập nhật ảnh hoặc thông tin loại kho",
+                type.getFacility().getName() + " · " + type.getCode() + " · " +
+                    (technical ? "Thông số kỹ thuật thay đổi, đang chờ duyệt." : "Thông tin đã cập nhật, BO kiểm tra thay đổi; kho vẫn được công bố."),
+                type.getId());
+        }
+    }
+
     @Transactional(readOnly = true)
     public PageResponse<NotificationResponse> list(
         ActorPrincipal actor,
