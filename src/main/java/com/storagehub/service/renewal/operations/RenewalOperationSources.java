@@ -12,9 +12,9 @@ public final class RenewalOperationSources {
     private RenewalOperationSources() {}
     public enum Capability { READ, ARRIVAL, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND }
     public interface AuthorizationSource {
-        /** Checks actual permission, current Staff assignment and evidence visibility, not just role. */
+        /** Checks current permission, facility scope and evidence visibility, not just role. */
         void require(ActorPrincipal actor, Renewal renewal, Capability capability);
-        /** Authoritative assignment+permission set, used BEFORE pagination. Missing contract is not an empty queue. */
+        /** Facility-scoped authorized set used BEFORE pagination. Historical method name retained for compatibility. */
         Set<UUID> assignedRenewalIds(ActorPrincipal actor);
     }
     public record Policy(String reference, String version, Duration signingWindow, Duration exceptionExtensionLimit) {}
@@ -33,6 +33,10 @@ public final class RenewalOperationSources {
         boolean feasible(Renewal renewal, Instant start, Instant deadline);
         /** Atomically reserves the signing slot and replaces the previous reservation without altering Check-in. */
         void reserve(Renewal renewal, Slot slot, Instant now);
+        /** Stateful calendars prevent reassignment from silently orphaning a reserved slot. */
+        default void beforeStaffAssignment(Renewal renewal,UUID nextStaff) {}
+        /** Called only after verified normal completion in the caller transaction. */
+        default void release(Renewal renewal,Instant now) {}
     }
     public interface SafetySource {
         default boolean atomic() { return false; }
@@ -41,12 +45,21 @@ public final class RenewalOperationSources {
         void retain(Renewal renewal, UUID holdRef, Instant deadline);
         void consume(Renewal renewal, UUID holdRef);
         void release(Renewal renewal, UUID holdRef);
+        /** Explicit audited correction of the earlier appointment-end deadline rule. */
+        default boolean restoreSigningWindow(Renewal renewal,Terms terms,UUID holdRef,Instant deadline) { return false; }
     }
     public enum Outcome { SUCCESS, FAILED, NOT_RECEIVED }
     public record Deposit(UUID paymentRef, UUID renewalId, Outcome outcome, BigDecimal amount, String currency, Instant paidAt) {}
     public record Statement(UUID reference, UUID renewalId, String version, Instant expiresAt,
-        BigDecimal amount, String currency, List<UUID> requiredObligations) {}
-    public record Receipt(UUID reference, UUID renewalId, UUID statementRef, BigDecimal amount, String currency, Instant receivedAt) {}
+        BigDecimal amount, String currency, List<UUID> requiredObligations,BigDecimal remainingRentalAmount,
+        BigDecimal overdueFee,BigDecimal unpostedOverdueFee) {
+        public Statement(UUID reference,UUID renewalId,String version,Instant expiresAt,BigDecimal amount,String currency,List<UUID> obligations) {
+            this(reference,renewalId,version,expiresAt,amount,currency,obligations,amount,BigDecimal.ZERO,BigDecimal.ZERO);
+        }
+    }
+    public record Receipt(UUID reference, UUID renewalId, UUID statementRef, BigDecimal amount, String currency, Instant receivedAt,UUID paymentId,String paymentMethod) {
+        public Receipt(UUID reference,UUID renewalId,UUID statementRef,BigDecimal amount,String currency,Instant receivedAt) {this(reference,renewalId,statementRef,amount,currency,receivedAt,null,"CASH");}
+    }
     public interface AccountingSource {
         default boolean atomic() { return false; }
         /** Shared engine persists attempt, verifies server amount, allocations and resource-bound idempotency. */
@@ -55,6 +68,13 @@ public final class RenewalOperationSources {
         boolean safeToExpire(Renewal renewal);
         Statement statement(Renewal renewal, Terms terms, Instant now);
         Receipt cash(Renewal renewal, UUID statementRef, String receiptReference, UUID actorId, String key, Instant now);
+        default Receipt cash(Renewal renewal,UUID statementRef,String receiptReference,UUID receiptFileId,UUID actorId,String key,Instant now) {
+            return cash(renewal,statementRef,receiptReference,actorId,key,now);
+        }
+        default Receipt balance(Renewal renewal,UUID statementRef,String receiptReference,UUID receiptFileId,String paymentMethod,UUID actorId,String key,Instant now) {
+            if(paymentMethod!=null&&!"CASH".equals(paymentMethod))throw com.storagehub.common.api.ApiExceptions.validation("Payment method not supported by this accounting source",null);
+            return cash(renewal,statementRef,receiptReference,receiptFileId,actorId,key,now);
+        }
         /** Locks/rechecks the policy-required obligation set, deposits, CASH allocations and disputes. */
         void requireFullyPaid(Renewal renewal, Terms terms, Instant now);
     }
@@ -67,5 +87,9 @@ public final class RenewalOperationSources {
         default boolean atomic() { return false; }
         /** Computes policy entitlement from actual paid less actual/pending refunds; reserves once. Not payout. */
         RefundReservation reserve(Renewal renewal, UUID incidentId, UUID approverId, String key, Instant now);
+        default ExecutedRefund execute(Renewal renewal,UUID refundId,UUID evidenceFileId,String transactionReference,UUID actor,Instant now) {
+            throw com.storagehub.common.api.ApiExceptions.conflict("Refund execution source unavailable");
+        }
     }
+    public record ExecutedRefund(UUID reference,UUID renewalId,BigDecimal amount,String currency,Instant executedAt,String environment) {}
 }

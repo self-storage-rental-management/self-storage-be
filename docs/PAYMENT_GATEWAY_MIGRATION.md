@@ -1,5 +1,13 @@
 # Migration Payment gateway intent
 
+## Gateway Ledger opt-in version 1302 — 13/10/2026
+
+`db.sandboxpaymentmigration.V2026101302__ensure_gateway_ledger_evidence` tại `classpath:db/sandboxpaymentmigration` dùng version mới vì một số DB local đã có `1202` với script Renewal resource binding cũ. Không thêm đồng thời location `db/ledger-sandbox-migration` chứa SQL cùng version `1202` trên các DB này.
+
+Migration mới kiểm tra MySQL 8.4, dữ liệu receipt hiện có và schema gateway. Nếu gateway đã tồn tại và hợp lệ, chỉ xác minh. Nếu thiếu, chạy nội dung SQL gateway `1202` bất biến để cập nhật checks receipt và tạo bảng/FK/unique evidence. Checksum CRC32 lấy từ nội dung resource chuẩn hóa LF. Không sửa bản ghi Flyway hay dữ liệu thanh toán.
+
+Runner local `-EnableRenewalPayments` thêm location mới và profile `shared-payment-schema`, xác minh target `storagehub_local` trước migrate. Không kết hợp profile này với các profile schema rollout khác. Backup trước chạy; DDL MySQL auto-commit nên bản ghi failed/schema dở dang phải được đối chiếu, không tự repair/reset hoặc baseline.
+
 Ngày kiểm chứng: 11/10/2026. Chỉ áp dụng trên DB test; chưa rollout DB chung.
 
 Chuỗi hiện tại ưu tiên develop `0909` VNPay, `1001` lịch nhận kho; ledger mới là `1103`. Bộ SQL lịch sử được tự chọn bằng customizer trên datasource thật. `0910` chỉ resolve khi đã áp dụng, không chạy thêm trên DB mới. Giữ `1101` Payment opt-in và `1102` bất biến; không sửa dữ liệu/lịch sử đã áp dụng. Xem [hướng dẫn rollout schema](RENTAL_SUPPORT_SCHEMA_ROLLOUT.md).
@@ -27,3 +35,6 @@ DDL MySQL có thể auto-commit. Backup, thử phục hồi và kiểm thử b�
 - `RentalSupportSchemaRolloutTests`, `SimulatedPaymentServiceTests`, `RentalBookingEvidenceJpaTests`: cấu hình, writer hiện hữu và nghĩa của mã legacy.
 
 Kết quả startup/HTTP và test cụ thể: báo cáo FE `docs/PAYMENT_GATEWAY_MIGRATION_REPORT_20261011.md`. Migration PASS không chứng minh full E2E hoặc dữ liệu tài chính đã đầy đủ.
+# Renewal reconciliation migration — 12/10/2026
+
+`V2026101204__renewal_payment_reconciliation.sql` adds durable work metadata and binding constraints to the shared Payment table. See [rollout and authority boundaries](RENEWAL_API_CONTRACT.md#current-payment-and-lifecycle). This migration preserves monetary history and accepted quotes and must follow 2026101203. Isolated Flyway/H2 migrate/replay was tested; MySQL rollout requires a separately configured test schema. No shared database migration was executed.

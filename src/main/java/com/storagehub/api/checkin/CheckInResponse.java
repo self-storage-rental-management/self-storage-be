@@ -40,6 +40,9 @@ public record CheckInResponse(
     Integer declaredPackageCount,
     BigDecimal declaredGoodsWeightKg,
     BigDecimal declaredGoodsVolumeM3,
+    BigDecimal declaredGoodsLengthCm,
+    BigDecimal declaredGoodsWidthCm,
+    BigDecimal declaredGoodsHeightCm,
     BigDecimal dueAtCheckIn,
     CompleteCheckInRequest handover
 ) {

@@ -69,6 +69,13 @@ public final class FinancialContractSpecifications {
             || !Objects.equals(r.getStorageUnit().getId(),t.storageUnitId()) || !Objects.equals(n.getNewEndDate(),t.newEndDate()))fail("Accepted revision identity mismatch");
         equal(n.getAmount(),t.totalAfterDiscount());
         String ref="renewal-accepted:"+revision.getId()+":quote:"+q.getId();
+        if (t.renewalDepositAmount().signum() == 0) {
+            // Previously accepted no-deposit terms are represented by one full-period payable
+            // obligation. Keep the legacy kind to avoid a schema/API enum change.
+            return List.of(new Specification(r.getId(), n.getId(), LedgerStore.Kind.RENEWAL_REMAINDER,
+                t.totalAfterDiscount(), ref + ":FULL_RENT"));
+        }
+        // Immutable quote: preserve its accepted deposit/remainder split.
         return List.of(new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_DEPOSIT,t.renewalDepositAmount(),ref+":DEPOSIT"),
             new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_REMAINDER,t.remainingRentalAmount(),ref+":REMAINDER"));
     }
