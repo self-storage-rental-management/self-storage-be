@@ -34,6 +34,7 @@ public class FacilityQueryService {
     private final UnitTypeRepository unitTypeRepository;
     private final FacilityScopeService facilityScopeService;
     private final UserFacilityScopeRepository userFacilityScopes;
+    private final com.storagehub.domain.repo.PaymentRepository payments;
 
     @Transactional(readOnly = true)
     public PageResponse<FacilityResponse> searchFacilities(
@@ -123,8 +124,18 @@ public class FacilityQueryService {
             storageUnitRepository.countByFacility_Id(facility.getId()),
             storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.available),
             storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.occupied),
-            unitTypeRepository.findMinimumMonthlyPrice(facility.getId(), UnitTypeStatus.active)
+            unitTypeRepository.findByFacility_IdOrderByCodeAsc(facility.getId()).stream()
+                .filter(type -> type.getStatus() != UnitTypeStatus.inactive && type.getMonthlyPrice() != null && type.getMonthlyPrice().signum() > 0)
+                .map(com.storagehub.domain.model.UnitType::getMonthlyPrice).min(java.math.BigDecimal::compareTo).orElse(null),
+            actor.hasRole(RoleCode.CUSTOMER) ? java.math.BigDecimal.ZERO : monthRevenue(facility.getId())
         );
+    }
+
+    private java.math.BigDecimal monthRevenue(UUID facilityId) {
+        var zone = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
+        var month = java.time.YearMonth.now(zone);
+        return payments.sumMonthReceipts(facilityId, month.atDay(1).atStartOfDay(zone).toInstant(),
+            month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant());
     }
 
     private List<String> managerNames(UUID facilityId) {

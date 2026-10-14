@@ -394,9 +394,9 @@ public class MaintenanceService {
         }
 
         boolean scoped = facilityScopeService.isFacilityScoped(actor);
-        Collection<UUID> allowedFacilityIds = List.of(new UUID(0L, 0L));
+        Collection<UUID> allowedFacilityIds = List.of(new UUID(0, 0));
         if (scoped) {
-            allowedFacilityIds = actor.facilityScopes().keySet();
+            if (!actor.facilityScopes().isEmpty()) allowedFacilityIds = actor.facilityScopes().keySet();
             if (facilityId != null) {
                 facilityScopeService.assertCanRead(actor, facilityId);
             }
