@@ -343,6 +343,7 @@ public class CustomerReservationService {
                 "Check-in appointment must be within the permitted seven-day window", null
             );
         }
+        FacilityAppointmentHours.validate(request.appointmentAt(), reservation.getFacility().getAccessHours());
         Instant previousAppointmentAt = reservation.getAppointmentAt();
         reservation.setAppointmentAt(request.appointmentAt());
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
