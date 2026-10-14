@@ -37,6 +37,24 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
 
+    @Transactional
+    public void notifyBusinessOfUnitTypeReview(com.storagehub.domain.model.UnitType type, UUID requestId) {
+        for (User user : userRepository.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE)) {
+            createNotification(user.getId(), NotificationType.SYSTEM,
+                "Yêu cầu duyệt thay đổi loại kho",
+                type.getFacility().getName() + " · " + type.getCode() + " · Manager gửi thay đổi, chờ BO duyệt.",
+                requestId);
+        }
+    }
+
+    @Transactional
+    public void notifyUnitTypeReviewResult(com.storagehub.domain.model.UnitTypeChangeRequest request) {
+        createNotification(request.getRequestedBy(), NotificationType.SYSTEM,
+            "APPROVED".equals(request.getStatus()) ? "BO đã duyệt thay đổi loại kho" : "BO từ chối thay đổi loại kho",
+            request.getFacilityName() + " · " + request.getUnitTypeCode() +
+                (request.getRejectionReason() == null ? "" : "\nLý do: " + request.getRejectionReason()), request.getUnitTypeId());
+    }
+
     @Transactional(readOnly = true)
     public PageResponse<NotificationResponse> list(
         ActorPrincipal actor,

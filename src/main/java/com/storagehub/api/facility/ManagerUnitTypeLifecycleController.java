@@ -21,6 +21,11 @@ public class ManagerUnitTypeLifecycleController {
     private final ActorContext actors;
     private final FacilityLifecycleService lifecycle;
 
+    @org.springframework.web.bind.annotation.DeleteMapping("/unit-types/{unitTypeId}")
+    public void delete(@PathVariable UUID unitTypeId) {
+        lifecycle.deleteUnitType(actors.required(), unitTypeId);
+    }
+
     @PostMapping("/facilities/{facilityId}/unit-types")
     public ApiResponse<UnitTypeResponse> create(
         @PathVariable UUID facilityId,
