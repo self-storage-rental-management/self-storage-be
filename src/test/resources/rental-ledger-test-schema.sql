@@ -18,13 +18,18 @@ CREATE TABLE rental_ledger_obligations (
  FOREIGN KEY (rental_id) REFERENCES rental_ledger_accounts(rental_id)
 );
 CREATE INDEX idx_rental_ledger_due ON rental_ledger_obligations(rental_id,due_at_ms);
+CREATE TABLE renewal_ledger_cancellation_credits (
+ id VARCHAR(36) PRIMARY KEY,rental_id VARCHAR(36) NOT NULL,obligation_id VARCHAR(36) NOT NULL,
+ amount DECIMAL(19,0) NOT NULL CHECK(amount>0),source_ref VARCHAR(200) NOT NULL,reason VARCHAR(200) NOT NULL,
+ UNIQUE(rental_id,source_ref),FOREIGN KEY(obligation_id,rental_id) REFERENCES rental_ledger_obligations(id,rental_id)
+);
 CREATE TABLE rental_ledger_receipts (
  id VARCHAR(36) PRIMARY KEY,
  rental_id VARCHAR(36) NOT NULL,
- method VARCHAR(32) NOT NULL CHECK (method='CASH' OR method='VERIFIED_BANK' OR method='SIMULATED'),
+ method VARCHAR(32) NOT NULL CHECK (method='CASH' OR method='VERIFIED_BANK' OR method='SIMULATED' OR method='VNPAY_SANDBOX'),
  amount DECIMAL(19,0) NOT NULL CHECK (amount > 0),
  evidence_ref VARCHAR(200) NOT NULL UNIQUE,
- evidence_file_id VARCHAR(36) NOT NULL,
+ evidence_file_id VARCHAR(36),
  actor_id VARCHAR(36) NOT NULL,
  received_at_ms BIGINT NOT NULL,
  UNIQUE (id,rental_id),
@@ -65,3 +70,5 @@ CREATE TABLE rental_ledger_commands (
  PRIMARY KEY (actor_id,operation,key_hash),
  FOREIGN KEY (rental_id) REFERENCES rental_ledger_accounts(rental_id)
 );
+
+CREATE TABLE rental_ledger_gateway_evidence (receipt_id VARCHAR(36) PRIMARY KEY,payment_id VARCHAR(36) NOT NULL UNIQUE,proof_log_id VARCHAR(36) NOT NULL UNIQUE,environment VARCHAR(16) NOT NULL CHECK(environment='SANDBOX'),transaction_no VARCHAR(128) NOT NULL UNIQUE,FOREIGN KEY(receipt_id) REFERENCES rental_ledger_receipts(id));

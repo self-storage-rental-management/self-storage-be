@@ -13,6 +13,7 @@ import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
+import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.List;
 import java.util.UUID;
@@ -32,6 +33,8 @@ public class FacilityQueryService {
     private final StorageUnitRepository storageUnitRepository;
     private final UnitTypeRepository unitTypeRepository;
     private final FacilityScopeService facilityScopeService;
+    private final UserFacilityScopeRepository userFacilityScopes;
+    private final com.storagehub.domain.repo.PaymentRepository payments;
 
     @Transactional(readOnly = true)
     public PageResponse<FacilityResponse> searchFacilities(
@@ -48,7 +51,7 @@ public class FacilityQueryService {
             : actor.facilityScopes().keySet().stream().toList();
         FacilityStatus effectiveStatus = actor.hasRole(RoleCode.CUSTOMER) ? FacilityStatus.active : status;
         Page<FacilityResponse> page = facilityRepository.search(effectiveStatus, clean(city), clean(query), scoped, facilityIds, pageable)
-            .map(this::toFacilityResponse);
+            .map(facility -> toFacilityResponse(facility, actor));
         return PageResponse.from(page, correlationId);
     }
 
@@ -79,7 +82,7 @@ public class FacilityQueryService {
         if (actor.hasRole(RoleCode.CUSTOMER) && facility.getStatus() != FacilityStatus.active) {
             throw com.storagehub.common.api.ApiExceptions.notFound("Facility was not found");
         }
-        return toFacilityResponse(facility);
+        return toFacilityResponse(facility, actor);
     }
 
     @Transactional(readOnly = true)
@@ -102,17 +105,44 @@ public class FacilityQueryService {
         return PageResponse.from(page, correlationId);
     }
 
-    private FacilityResponse toFacilityResponse(Facility facility) {
+    private FacilityResponse toFacilityResponse(Facility facility, ActorPrincipal actor) {
         return new FacilityResponse(
             facility.getId(),
             facility.getCode(),
             facility.getName(),
             facility.getAddress(),
             facility.getCity(),
+            facility.getPhone(),
+            facility.getAccessHours(),
+            facility.getImageUrl(),
+            facility.isClimateControlled(),
+            facility.getSecurityDescription(),
+            actor.hasRole(RoleCode.CUSTOMER) ? List.of() : managerNames(facility.getId()),
             facility.getStatus(),
             facility.getCreatedAt(),
-            facility.getUpdatedAt()
+            facility.getUpdatedAt(),
+            storageUnitRepository.countByFacility_Id(facility.getId()),
+            storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.available),
+            storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.occupied),
+            unitTypeRepository.findByFacility_IdOrderByCodeAsc(facility.getId()).stream()
+                .filter(type -> type.getStatus() != UnitTypeStatus.inactive && type.getMonthlyPrice() != null && type.getMonthlyPrice().signum() > 0)
+                .map(com.storagehub.domain.model.UnitType::getMonthlyPrice).min(java.math.BigDecimal::compareTo).orElse(null),
+            actor.hasRole(RoleCode.CUSTOMER) ? java.math.BigDecimal.ZERO : monthRevenue(facility.getId())
         );
+    }
+
+    private java.math.BigDecimal monthRevenue(UUID facilityId) {
+        var zone = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
+        var month = java.time.YearMonth.now(zone);
+        return payments.sumMonthReceipts(facilityId, month.atDay(1).atStartOfDay(zone).toInstant(),
+            month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant());
+    }
+
+    private List<String> managerNames(UUID facilityId) {
+        return userFacilityScopes.findByFacility_Id(facilityId).stream()
+            .filter(scope -> scope.getUser().getStatus() == com.storagehub.domain.model.UserStatus.ACTIVE)
+            .filter(scope -> scope.getUser().getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.MANAGER))
+            .map(scope -> scope.getUser().getFullName()).sorted().toList();
     }
 
     private StorageUnitResponse toStorageUnitResponse(StorageUnit unit) {

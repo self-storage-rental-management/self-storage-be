@@ -32,6 +32,7 @@ public class SharedRenewalEligibilityEvidenceSource implements RenewalEligibilit
             throw ApiExceptions.conflict("DEFERRED_SOURCE: Recovery evidence is stale or belongs to another rental");
         if(cutoff==null||!now.isBefore(cutoff))return Optional.empty();
         return calendar.feasible(rental,now,cutoff).map(feasible->new Evidence(rental.getId(),rental.getStorageUnit().getId(),
-            rental.getFacility().getId(),now,s.recoveryBlocked(),feasible));
+            rental.getFacility().getId(),now,s.recoveryBlocked(),feasible,
+            term.get().policyRef(),term.get().policyVersion(),cutoff));
     }
 }

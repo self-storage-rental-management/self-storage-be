@@ -24,6 +24,7 @@ import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -124,6 +125,35 @@ class ReservationQuoteServiceTests {
         assertThat(packages).singleElement().satisfies(item -> {
             assertThat(item.code()).isEqualTo("PKG-3M");
             assertThat(item.rentalMonths()).isEqualTo(3);
+        });
+    }
+
+    @Test
+    void legacyOverlappingPackages_areCollapsedToOneChoicePerDuration() {
+        LocalDate startDate = LocalDate.of(2026, 10, 10);
+        policy.setName("Gói 3 tháng cũ");
+        ReflectionTestUtils.setField(policy, "updatedAt", Instant.parse("2026-01-01T00:00:00Z"));
+        RentalPackagePolicy newer = new RentalPackagePolicy();
+        newer.setFacility(facility);
+        newer.setCode("PKG-3M-NEW");
+        newer.setName("Gói 3 tháng mới");
+        newer.setPolicyVersion("2026-09");
+        newer.setRentalMonths(3);
+        newer.setDiscountRate(new BigDecimal("0.0500"));
+        newer.setActive(true);
+        newer.setEffectiveFrom(LocalDate.of(2026, 9, 1));
+        ReflectionTestUtils.setField(newer, "updatedAt", Instant.parse("2026-09-01T00:00:00Z"));
+        when(policyRepository
+            .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(
+                facility.getId(), startDate
+            ))
+            .thenReturn(List.of(policy, newer));
+
+        var packages = service.listAvailablePackages(actor, facility.getId(), startDate);
+
+        assertThat(packages).singleElement().satisfies(item -> {
+            assertThat(item.code()).isEqualTo("PKG-3M-NEW");
+            assertThat(item.discountRate()).isEqualByComparingTo("0.0500");
         });
     }
 

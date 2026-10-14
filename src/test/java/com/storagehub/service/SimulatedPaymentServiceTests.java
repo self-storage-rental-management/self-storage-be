@@ -77,6 +77,7 @@ class SimulatedPaymentServiceTests {
 
         ReservationPricingSnapshot snapshot = new ReservationPricingSnapshot();
         snapshot.setReservation(reservation);
+        snapshot.setRentalMonths(3);
         snapshot.setReservationDepositAmount(new BigDecimal("400000.00"));
         when(paymentRepository.findByIdempotencyKey(any())).thenReturn(Optional.empty());
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), customer.getId()))
@@ -106,6 +107,11 @@ class SimulatedPaymentServiceTests {
         assertThat(response.paymentStatus()).isEqualTo(PaymentStatus.PAID);
         assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.CONFIRMED);
         assertThat(reservation.getDepositPaidAt()).isNotNull();
+        assertThat(reservation.getStartDate()).isEqualTo(
+            reservation.getDepositPaidAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+                .toLocalDate().plusDays(1)
+        );
+        assertThat(reservation.getEndDate()).isEqualTo(reservation.getStartDate().plusMonths(3));
         verify(reservationRepository).saveAndFlush(reservation);
     }
 

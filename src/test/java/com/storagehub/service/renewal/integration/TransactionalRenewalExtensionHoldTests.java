@@ -65,6 +65,16 @@ class TransactionalRenewalExtensionHoldTests {
         assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
         assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,11,1));
     }
+    @Test void auditedDeadlineCorrectionCanRestoreReleasedHoldButNotConsumedHold() {
+        var n=fixture();var ref=holds.acquire(n.getRental(),n.getId(),START,END,EXPIRY);
+        var terms=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().convertValue(Map.of(
+            "extensionStartDate",START,"extensionEndExclusive",END),com.storagehub.api.renewal.RenewalQuoteResponse.Terms.class);
+        holds.release(n,ref);clock.time=EXPIRY.plusSeconds(1);
+        assertThat(holds.restoreSigningWindow(n,terms,ref,clock.time.plusSeconds(600))).isTrue();
+        assertThat(jdbc.queryForObject("select state from renewal_extension_holds",String.class)).isEqualTo("ACTIVE");
+        holds.consume(n,ref);
+        assertThatThrownBy(()->holds.restoreSigningWindow(n,terms,ref,clock.time.plusSeconds(600))).hasMessageContaining("Consumed hold");
+    }
     @Test void changedRetryPayloadFailsWithoutAdditionalHold() {
         var n=fixture();holds.acquire(n.getRental(),n.getId(),START,END,EXPIRY);
         assertThatThrownBy(()->holds.acquire(n.getRental(),n.getId(),START,END.plusDays(1),EXPIRY)).hasMessageContaining("retry payload changed");

@@ -4,6 +4,7 @@ import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
@@ -14,6 +15,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UnitTypeRepository extends JpaRepository<UnitType, UUID> {
+
+    List<UnitType> findByFacility_IdOrderByCodeAsc(UUID facilityId);
 
     java.util.Optional<UnitType> findByFacility_IdAndCode(UUID facilityId, String code);
 

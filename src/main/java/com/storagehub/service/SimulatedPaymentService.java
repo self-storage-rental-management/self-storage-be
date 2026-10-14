@@ -109,6 +109,7 @@ public class SimulatedPaymentService {
         if (outcome == PaymentSimulationOutcome.SUCCESS) {
             payment.setStatus(PaymentStatus.PAID);
             payment.setPaidAt(now);
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), now);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(now);
             reservation.setConfirmedAt(now);
@@ -165,7 +166,7 @@ public class SimulatedPaymentService {
 
     private void requireSameRequest(Payment payment, ActorPrincipal actor, UUID reservationId) {
         if (!payment.getInitiatedBy().getId().equals(actor.userId())
-            || !payment.getReservation().getId().equals(reservationId)) {
+            || payment.getReservation()==null || !payment.getReservation().getId().equals(reservationId)) {
             throw ApiExceptions.conflict("Idempotency-Key is already used for a different request");
         }
     }

@@ -9,10 +9,88 @@ import java.util.UUID;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
+    @Query("""
+        select coalesce(sum(p.amount), 0) from Payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and p.status = com.storagehub.domain.model.PaymentStatus.PAID
+          and coalesce(p.paidAt, p.processedAt, p.createdAt) >= :start
+          and coalesce(p.paidAt, p.processedAt, p.createdAt) < :end
+        """)
+    java.math.BigDecimal sumMonthReceipts(@Param("facilityId") UUID facilityId,
+        @Param("start") java.time.Instant start, @Param("end") java.time.Instant end);
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+        "reservation", "reservation.customer", "reservation.assignedUnit",
+        "renewal", "renewal.rental", "renewal.rental.customer", "renewal.rental.storageUnit"
+    })
+    @Query(value = """
+        select p from Payment p
+        left join p.reservation reservation
+        left join reservation.customer reservationCustomer
+        left join reservation.assignedUnit reservationUnit
+        left join p.renewal renewal
+        left join renewal.rental rental
+        left join rental.customer renewalCustomer
+        left join rental.storageUnit renewalUnit
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and (:pattern is null
+            or lower(coalesce(p.gatewayTransactionNo, '')) like :pattern
+            or lower(coalesce(p.gatewayIntentId, '')) like :pattern
+            or lower(coalesce(reservation.reservationCode, '')) like :pattern
+            or lower(coalesce(reservationCustomer.fullName, '')) like :pattern
+            or lower(coalesce(reservationUnit.code, '')) like :pattern
+            or lower(coalesce(renewalCustomer.fullName, '')) like :pattern
+            or lower(coalesce(renewalUnit.code, '')) like :pattern)
+        order by coalesce(p.paidAt, p.processedAt, p.createdAt) desc, p.id desc
+        """, countQuery = """
+        select count(p) from Payment p
+        left join p.reservation reservation
+        left join reservation.customer reservationCustomer
+        left join reservation.assignedUnit reservationUnit
+        left join p.renewal renewal
+        left join renewal.rental rental
+        left join rental.customer renewalCustomer
+        left join rental.storageUnit renewalUnit
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and (:pattern is null
+            or lower(coalesce(p.gatewayTransactionNo, '')) like :pattern
+            or lower(coalesce(p.gatewayIntentId, '')) like :pattern
+            or lower(coalesce(reservation.reservationCode, '')) like :pattern
+            or lower(coalesce(reservationCustomer.fullName, '')) like :pattern
+            or lower(coalesce(reservationUnit.code, '')) like :pattern
+            or lower(coalesce(renewalCustomer.fullName, '')) like :pattern
+            or lower(coalesce(renewalUnit.code, '')) like :pattern)
+        """)
+    Page<Payment> searchFacilityPaymentHistory(
+        @Param("facilityId") UUID facilityId,
+        @Param("pattern") String pattern,
+        Pageable pageable
+    );
+
+    @Query("""
+        select p.id from Payment p where p.renewal is not null
+        and p.status = com.storagehub.domain.model.PaymentStatus.PAID
+        and p.renewalEvidenceRef is not null and p.renewalSigningPreparedAt is null
+        and p.failureCode = 'RENEWAL_PAYMENT_RECONCILIATION_REQUIRED'
+        and (p.renewalNextRetryAt is null or p.renewalNextRetryAt <= :now)
+        order by p.createdAt
+        """)
+    List<UUID> findRenewalReconciliationCandidates(@Param("now") java.time.Instant now,
+        org.springframework.data.domain.Pageable page);
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"reservation", "initiatedBy"})
+    org.springframework.data.domain.Page<Payment> findAllByReservation_Customer_Id(
+        UUID customerId, org.springframework.data.domain.Pageable pageable
+    );
+
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
     Optional<Payment> findByGatewayIntentId(String gatewayIntentId);
 
@@ -28,6 +106,15 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
         UUID reservationId,
         PaymentType purpose
     );
+    Optional<Payment> findTopByRenewal_IdAndPurposeAndGatewayTransactionNo(UUID renewalId,PaymentType purpose,String reference);
+    Optional<Payment> findTopByRenewal_IdAndPurposeOrderByCreatedAtDesc(UUID renewalId, PaymentType purpose);
+    Optional<Payment> findTopByRenewal_IdAndRenewalRevision_IdAndPurposeOrderByCreatedAtDesc(
+        UUID renewalId, UUID renewalRevisionId, PaymentType purpose);
+    List<Payment> findAllByRenewal_IdAndStatusIn(UUID renewalId,
+        Collection<com.storagehub.domain.model.PaymentStatus> statuses);
+    List<Payment> findAllByRenewal_IdOrderByCreatedAtAsc(UUID renewalId);
+    boolean existsByRenewal_IdAndStatusIn(UUID renewalId,
+        Collection<com.storagehub.domain.model.PaymentStatus> statuses);
     Optional<Payment> findTopByReservation_IdAndPurposeAndGatewayTransactionNo(
         UUID reservationId,
         PaymentType purpose,
@@ -53,8 +140,11 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     @Query("""
         select p from Payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
         where p.status = com.storagehub.domain.model.PaymentStatus.PAID
-          and (:facilityId is null or p.reservation.facility.id = :facilityId)
+          and (:facilityId is null or reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
         """)
     List<Payment> findPaidPaymentsByFacility(@Param("facilityId") UUID facilityId);
 

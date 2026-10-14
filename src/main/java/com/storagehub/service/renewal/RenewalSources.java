@@ -25,7 +25,12 @@ public final class RenewalSources {
         boolean ready(Rental rental);
     }
     public record Price(UUID packageId,String packageCode,String packageVersion,UUID unitTypeId,
-        int months,BigDecimal monthlyPrice,BigDecimal discountRate,String currency,int moneyScale) {}
+        int months,BigDecimal monthlyPrice,BigDecimal discountRate,String currency,int moneyScale,String packageName) {
+        public Price(UUID packageId,String packageCode,String packageVersion,UUID unitTypeId,
+            int months,BigDecimal monthlyPrice,BigDecimal discountRate,String currency,int moneyScale) {
+            this(packageId,packageCode,packageVersion,unitTypeId,months,monthlyPrice,discountRate,currency,moneyScale,null);
+        }
+    }
     /** Authoritative pricing + agreed currency/rounding. No adapter is provided until the owner publishes it. */
     public interface PricingSource { Optional<List<Price>> read(Rental rental,LocalDate extensionStart); }
     /** Must participate in shared booking/assignment/maintenance lock protocol; never an in-memory reservation. */

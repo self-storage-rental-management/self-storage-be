@@ -8,7 +8,7 @@ SQL đã áp dụng được chuyển nguyên nội dung sang từng thư mục 
 
 `1103` tạo đủ 7 bảng khi chưa có bảng integration; chỉ tái sử dụng ledger cũ có đúng bằng chứng `1001` và fingerprint schema MySQL 8.4 đã kiểm chứng. Bảng thiếu, cấu trúc lệch hoặc không có lịch sử phù hợp bị chặn, không tự repair/reset. Không backfill tiền, cấp quyền hoặc bật module. **Chỉ kiểm thử DB test, chưa rollout DB chung.**
 
-Chi tiết chuỗi, file và bằng chứng: [DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md](DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md).
+Chi tiết triển khai và điều kiện rollout: [RENTAL_SUPPORT_SCHEMA_ROLLOUT.md](RENTAL_SUPPORT_SCHEMA_ROLLOUT.md) và [PAYMENT_GATEWAY_MIGRATION.md](PAYMENT_GATEWAY_MIGRATION.md).
 
 ## 2026-10-11 — Reconcile migration trùng sau merge develop (DB test)
 
@@ -18,7 +18,7 @@ Thêm Java `db.migration.V2026101102__align_vnpay_and_customer_checkin_schema` �
 
 Đây là chuỗi tương thích với lịch sử DB test đã quan sát, **chưa rollout DB chung**. DB có version 0909/0910/1001 mang script khác phải đối chiếu và chuẩn bị resource tương thích riêng; không repair/delete history/baseline/ignore validation.
 
-Chi tiết, baseline compile và test: [DEVELOP_MIGRATION_RECONCILIATION_20261011.md](DEVELOP_MIGRATION_RECONCILIATION_20261011.md).
+Phương án này đã được thay thế bởi chuỗi ưu tiên develop ở mục trên.
 
 Tài liệu này ghi các thay đổi schema trong môi trường local/demo. Local dùng Hibernate `ddl-auto=update` kết hợp Flyway cho các migration tương thích; staging/production dùng Flyway và Hibernate `ddl-auto=validate`:
 
@@ -197,7 +197,7 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - Review-only DDL: `docs/sql/renewal-operations-overdue-schema.sql`; NOT an enabled migration and NOT executed by this task.
 - Runtime uses actual owner policy/accounting/calendar/assignment/evidence/hold/Recovery adapters. Until installed, related operations fail closed; no fake paid/balance/capacity/payout state.
 - `ddl-auto=update` can create additive tables on startup. Do not start against team/shared DB until schema/lock/permission owners approve. H2 test schema creation is isolated and not production migration evidence.
-- Contracts: `RENEWAL_OPERATIONS_API_CONTRACT.md`, `OVERDUE_API_CONTRACT.md`.
+- Contracts: `RENEWAL_API_CONTRACT.md#signing-and-operations-api`, `OVERDUE_API_CONTRACT.md`.
 
 ## 2026-10-08 — Support workflow (rollout pending)
 

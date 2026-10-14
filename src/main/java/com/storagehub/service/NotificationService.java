@@ -9,9 +9,15 @@ import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.NotificationRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.EnumSet;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,8 +33,30 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class NotificationService {
 
+    private static final DateTimeFormatter CHECK_IN_TIME_FORMATTER = DateTimeFormatter
+        .ofPattern("dd/MM/yyyy HH:mm")
+        .withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
+
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
+
+    @Transactional
+    public void notifyBusinessOfUnitTypeReview(com.storagehub.domain.model.UnitType type, UUID requestId) {
+        for (User user : userRepository.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE)) {
+            createNotification(user.getId(), NotificationType.SYSTEM,
+                "Yêu cầu duyệt thay đổi loại kho",
+                type.getFacility().getName() + " · " + type.getCode() + " · Manager gửi thay đổi, chờ BO duyệt.",
+                requestId);
+        }
+    }
+
+    @Transactional
+    public void notifyUnitTypeReviewResult(com.storagehub.domain.model.UnitTypeChangeRequest request) {
+        createNotification(request.getRequestedBy(), NotificationType.SYSTEM,
+            "APPROVED".equals(request.getStatus()) ? "BO đã duyệt thay đổi loại kho" : "BO từ chối thay đổi loại kho",
+            request.getFacilityName() + " · " + request.getUnitTypeCode() +
+                (request.getRejectionReason() == null ? "" : "\nLý do: " + request.getRejectionReason()), request.getUnitTypeId());
+    }
 
     @Transactional(readOnly = true)
     public PageResponse<NotificationResponse> list(

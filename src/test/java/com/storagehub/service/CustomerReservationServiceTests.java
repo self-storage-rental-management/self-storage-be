@@ -8,7 +8,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.api.reservation.CancelReservationRequest;
+import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.common.api.ApiException;
+import com.storagehub.domain.model.CheckIn;
+import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.CompatibilityResult;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.GoodsReviewStatus;
@@ -24,6 +27,9 @@ import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.model.UnitAssignment;
+import com.storagehub.domain.model.UnitAssignmentStatus;
+import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
@@ -31,6 +37,7 @@ import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
+import com.storagehub.domain.repo.UnitAssignmentRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -56,6 +63,7 @@ class CustomerReservationServiceTests {
     @Mock private PaymentRepository paymentRepository;
     @Mock private RentalRepository rentalRepository;
     @Mock private StorageUnitRepository storageUnitRepository;
+    @Mock private UnitAssignmentRepository assignmentRepository;
     @Mock private ReservationPricingSnapshotRepository snapshotRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private AuditLogService auditLogService;
@@ -69,7 +77,8 @@ class CustomerReservationServiceTests {
     @BeforeEach
     void setUp() {
         service = new CustomerReservationService(
-            reservationRepository, paymentRepository, snapshotRepository,
+            reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, assignmentRepository, null, snapshotRepository,
             goodsItemRepository, auditLogService, notificationService
         );
 
@@ -108,6 +117,47 @@ class CustomerReservationServiceTests {
     }
 
     @Test
+    void paymentHistoryIncludesArchivedReservationsAndScopesToCustomer() {
+        reservation.setArchivedAt(Instant.now());
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        Payment payment = entityWithId(new Payment());
+        payment.setReservation(reservation);
+        payment.setInitiatedBy(reservation.getCustomer());
+        payment.setPurpose(PaymentType.RESERVATION_DEPOSIT);
+        payment.setStatus(PaymentStatus.PAID);
+        payment.setAmount(new BigDecimal("100000"));
+        payment.setCurrency("VND");
+        ReflectionTestUtils.setField(payment, "createdAt", Instant.parse("2026-10-12T08:00:00Z"));
+        var pageable = org.springframework.data.domain.PageRequest.of(0, 50,
+            org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "createdAt")
+                .and(org.springframework.data.domain.Sort.by("id")));
+        when(paymentRepository.findAllByReservation_Customer_Id(actor.userId(), pageable))
+            .thenReturn(new PageImpl<>(List.of(payment), pageable, 1));
+
+        var history = service.paymentHistory(actor, 0, 50, "history-test");
+
+        assertThat(history.data()).hasSize(1);
+        assertThat(history.data().getFirst().reservationCode()).isEqualTo(reservation.getReservationCode());
+        assertThat(history.data().getFirst().createdAt()).isEqualTo(payment.getCreatedAt());
+        verify(paymentRepository).findAllByReservation_Customer_Id(actor.userId(), pageable);
+        org.mockito.Mockito.verifyNoInteractions(snapshotRepository, reservationRepository);
+    }
+
+    @Test
+    void paymentHistoryRejectsNonCustomerActors() {
+        var staff = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of(), Map.of());
+        assertThatThrownBy(() -> service.paymentHistory(staff, 0, 50, "test")).isInstanceOf(ApiException.class);
+        org.mockito.Mockito.verifyNoInteractions(paymentRepository);
+    }
+
+    @Test
+    void paymentHistoryRejectsInvalidPagination() {
+        assertThatThrownBy(() -> service.paymentHistory(actor, -1, 50, "test")).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> service.paymentHistory(actor, 0, 101, "test")).isInstanceOf(ApiException.class);
+        org.mockito.Mockito.verifyNoInteractions(paymentRepository);
+    }
+
+    @Test
     void listsOnlyReservationsOwnedByCustomer() {
         when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
@@ -121,6 +171,51 @@ class CustomerReservationServiceTests {
         verify(reservationRepository).findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
             eq(actor.userId()), eq(ReservationStatus.REJECTED), any()
         );
+    }
+
+    @Test
+    void changesCheckInAppointmentAndNotifiesFacilityStaff() {
+        service = new CustomerReservationService(
+            reservationRepository, checkInRepository, paymentRepository, rentalRepository,
+            storageUnitRepository, snapshotRepository, goodsItemRepository, auditLogService,
+            notificationService
+        );
+        Instant previousAppointment = Instant.now().plusSeconds(3_600);
+        Instant newAppointment = previousAppointment.plusSeconds(7_200);
+        reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
+        reservation.setAppointmentAt(previousAppointment);
+        CheckIn checkIn = new CheckIn();
+        checkIn.setStatus(CheckInStatus.scheduled);
+        checkIn.setScheduledAt(previousAppointment);
+
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(reservationRepository.saveAndFlush(reservation)).thenReturn(reservation);
+        when(snapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
+
+        var response = service.setCheckInAppointment(
+            actor, reservation.getId(), new CheckInAppointmentRequest(newAppointment)
+        );
+
+        assertThat(response.getAppointmentAt()).isEqualTo(newAppointment);
+        assertThat(checkIn.getScheduledAt()).isEqualTo(newAppointment);
+        verify(notificationService).notifyStaffOfCheckInAppointmentChange(reservation, previousAppointment);
+    }
+
+    @Test
+    void rejectsCheckInAppointmentBeforeRentalStartDate() {
+        reservation.setStatus(ReservationStatus.CONFIRMED);
+        reservation.setStartDate(LocalDate.now().plusDays(2));
+        Instant invalidAppointment = Instant.now().plusSeconds(3_600);
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> service.setCheckInAppointment(
+            actor, reservation.getId(), new CheckInAppointmentRequest(invalidAppointment)
+        )).isInstanceOf(ApiException.class)
+            .hasMessageContaining("rental start date");
     }
 
     @Test
@@ -171,11 +266,15 @@ class CustomerReservationServiceTests {
     }
 
     @Test
-    void cancelsConfirmedReservationWithoutRefundingPaidDepositOrReleasingAssignedUnit() {
+    void cancelsConfirmedReservationWithoutRefundingDepositAndReleasesAssignedUnit() {
         reservation.setStatus(ReservationStatus.CONFIRMED);
         StorageUnit assignedUnit = entityWithId(new StorageUnit());
         assignedUnit.setStatus(StorageUnitStatus.assigned);
         reservation.setAssignedUnit(assignedUnit);
+        UnitAssignment assignment = entityWithId(new UnitAssignment());
+        assignment.setReservation(reservation);
+        assignment.setStorageUnit(assignedUnit);
+        assignment.setStatus(UnitAssignmentStatus.ACTIVE);
         Payment payment = new Payment();
         payment.setStatus(PaymentStatus.PAID);
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
@@ -188,6 +287,9 @@ class CustomerReservationServiceTests {
             .thenReturn(Optional.of(snapshot));
         when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
             .thenReturn(List.of());
+        when(assignmentRepository.findByReservation_IdAndStatus(
+            reservation.getId(), UnitAssignmentStatus.ACTIVE
+        )).thenReturn(Optional.of(assignment));
 
         service.cancel(
             actor, reservation.getId(), new CancelReservationRequest("Đổi kế hoạch")
@@ -195,8 +297,11 @@ class CustomerReservationServiceTests {
 
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
-        assertThat(reservation.getAssignedUnit()).isSameAs(assignedUnit);
-        assertThat(assignedUnit.getStatus()).isEqualTo(StorageUnitStatus.assigned);
+        assertThat(reservation.getAssignedUnit()).isNull();
+        assertThat(assignedUnit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        assertThat(assignment.getReleaseDisposition()).isEqualTo(UnitReleaseDisposition.AVAILABLE);
+        verify(notificationService).notifyStaffOfReservationCancellation(reservation, true);
     }
 
     @Test

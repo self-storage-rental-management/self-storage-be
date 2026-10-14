@@ -21,7 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @ConditionalOnProperty(name="storagehub.integration.ledger.enabled",havingValue="true")
 public class LedgerStore {
     public enum Kind { RENT, SECURITY_DEPOSIT, RENEWAL_DEPOSIT, RENEWAL_REMAINDER }
-    public enum Method { CASH, VERIFIED_BANK, SIMULATED }
+    public enum Method { CASH, VERIFIED_BANK, SIMULATED, VNPAY_SANDBOX }
     public record Obligation(UUID id,UUID renewalId,Kind kind,BigDecimal amount,Instant dueAt,
         String sourceRef,BigDecimal allocated,BigDecimal refunded,BigDecimal outstanding) {}
     public record Receipt(UUID id,Method method,BigDecimal amount,String evidenceRef,UUID evidenceFileId,Instant receivedAt) {}
@@ -30,6 +30,8 @@ public class LedgerStore {
         public BigDecimal knownOutstanding(){return obligations.stream().map(Obligation::outstanding).reduce(BigDecimal.ZERO,BigDecimal::add);}
     }
     private final JdbcTemplate jdbc;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RenewalLedgerAdjustments> cancellationCredits;
     public LedgerStore(JdbcTemplate jdbc){this.jdbc=jdbc;}
 
     public void open(UUID rental,UUID customer,UUID facility) {
@@ -42,12 +44,89 @@ public class LedgerStore {
         required(rental);
         var accounts=jdbc.queryForList("select revision,customer_id,facility_id from rental_ledger_accounts where rental_id=?",s(rental));
         if(accounts.isEmpty())return Optional.empty();var account=accounts.getFirst();long revision=Long.parseLong(value(account,"revision"));
-        var obligations=jdbc.query("select o.*,coalesce((select sum(a.amount) from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where a.obligation_id=o.id and p.method<>'SIMULATED'),0) as allocated,coalesce((select sum(f.amount) from rental_ledger_refunds f where f.obligation_id=o.id and f.status='EXECUTED'),0) as refunded from rental_ledger_obligations o where o.rental_id=? order by o.due_at_ms,o.id",(r,i)->obligation(r),s(rental));
+        var adjustments=cancellationCredits==null?null:cancellationCredits.getIfAvailable();
+        var credits=adjustments==null?Map.<UUID,BigDecimal>of():adjustments.credits(rental);
+        var obligations=jdbc.query("select o.*,coalesce((select sum(a.amount) from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where a.obligation_id=o.id and p.method<>'SIMULATED'),0) as allocated,coalesce((select sum(f.amount) from rental_ledger_refunds f where f.obligation_id=o.id and f.status='EXECUTED'),0) as refunded from rental_ledger_obligations o where o.rental_id=? order by o.due_at_ms,o.id",(r,i)->{
+            var o=obligation(r);var outstanding=o.outstanding().subtract(credits.getOrDefault(o.id(),BigDecimal.ZERO));
+            if(outstanding.signum()<0)throw ApiExceptions.conflict("Cancellation credit accounting is inconsistent");
+            return new Obligation(o.id(),o.renewalId(),o.kind(),o.amount(),o.dueAt(),o.sourceRef(),o.allocated(),o.refunded(),outstanding);
+        },s(rental));
         var receipts=jdbc.query("select * from rental_ledger_receipts where rental_id=? order by received_at_ms,id",(r,i)->receipt(r),s(rental));
         var refunds=jdbc.query("select * from rental_ledger_refunds where rental_id=? order by id",(r,i)->refund(r),s(rental));
         long after=jdbc.queryForObject("select revision from rental_ledger_accounts where rental_id=?",Long.class,s(rental));
         if(after!=revision)throw ApiExceptions.conflict("Ledger changed during read, reload the account");
         return Optional.of(new Snapshot(rental,uuid(value(account,"customer_id")),uuid(value(account,"facility_id")),after,List.copyOf(obligations),List.copyOf(receipts),List.copyOf(refunds)));
+    }
+    public Optional<UUID> receiptEvidenceRental(String reference) {
+        text(reference,200);
+        var rows=jdbc.queryForList("select rental_id from rental_ledger_receipts where evidence_ref=?",String.class,reference);
+        if(rows.size()>1)throw ApiExceptions.conflict("Payment evidence has duplicate ledger receipts");
+        return rows.isEmpty()?Optional.empty():Optional.of(UUID.fromString(rows.getFirst()));
+    }
+    /** Read-only proof and allocation binding; a receipt reference alone is not evidence. */
+    boolean sandboxReceiptMatches(UUID rental,Receipt receipt,GatewayProof proof,String rentSource) {
+        var rows=jdbc.queryForList("select payment_id,proof_log_id,environment,transaction_no from rental_ledger_gateway_evidence where receipt_id=?",s(receipt.id()));
+        if(rows.size()!=1)return false;
+        var row=rows.getFirst();
+        if(!s(proof.paymentId()).equals(value(row,"payment_id"))||!s(proof.proofLogId()).equals(value(row,"proof_log_id"))
+            ||!"SANDBOX".equals(value(row,"environment"))||!Objects.equals(proof.transactionNo(),value(row,"transaction_no")))return false;
+        var allocations=jdbc.queryForList("select a.amount,a.rental_id,o.rental_id as obligation_rental,o.kind,o.renewal_id,o.source_ref from rental_ledger_allocations a join rental_ledger_obligations o on o.id=a.obligation_id where a.receipt_id=?",s(receipt.id()));
+        if(allocations.size()!=1)return false;
+        var allocation=allocations.getFirst();
+        return s(rental).equals(value(allocation,"rental_id"))&&s(rental).equals(value(allocation,"obligation_rental"))
+            &&"RENT".equals(value(allocation,"kind"))&&value(allocation,"renewal_id")==null
+            &&rentSource.equals(value(allocation,"source_ref"))&&receipt.amount().compareTo(new BigDecimal(value(allocation,"amount")))==0;
+    }
+    boolean renewalDepositCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID reviewer) {
+        return renewalChargeCommandMatches(obligation,spec,reviewer,"renewal-deposit:");
+    }
+    boolean renewalFullRentCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID customer) {
+        return renewalChargeCommandMatches(obligation,spec,customer,"renewal-full-rent:");
+    }
+    boolean renewalPaymentCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID customer) {
+        String prefix=spec.kind()==Kind.RENEWAL_DEPOSIT?"renewal-prepayment:":
+            spec.sourceReference().endsWith(":FULL_RENT")?"renewal-full-rent:":"renewal-remainder:";
+        return renewalChargeCommandMatches(obligation,spec,customer,prefix);
+    }
+    boolean renewalCashReceiptMatches(UUID rental,Receipt receipt,Obligation obligation) {
+        if(!Set.of(Method.CASH,Method.VERIFIED_BANK).contains(receipt.method())||receipt.evidenceFileId()==null||receipt.evidenceRef()==null
+            ||!receipt.evidenceRef().startsWith("renewal-cash:"))return false;
+        var allocations=jdbc.queryForList("select obligation_id,rental_id,amount from rental_ledger_allocations where receipt_id=?",s(receipt.id()));
+        return allocations.size()==1&&s(obligation.id()).equals(value(allocations.getFirst(),"obligation_id"))
+            &&s(rental).equals(value(allocations.getFirst(),"rental_id"))
+            &&receipt.amount().compareTo(new java.math.BigDecimal(value(allocations.getFirst(),"amount")))==0;
+    }
+    Map<UUID,BigDecimal> renewalManualAllocations(UUID rental,Receipt receipt) {
+        if(!Set.of(Method.CASH,Method.VERIFIED_BANK).contains(receipt.method())||receipt.evidenceFileId()==null
+            ||receipt.evidenceRef()==null||!receipt.evidenceRef().startsWith("renewal-cash:"))return Map.of();
+        var rows=jdbc.queryForList("select obligation_id,rental_id,amount from rental_ledger_allocations where receipt_id=?",s(receipt.id()));
+        var amounts=new LinkedHashMap<UUID,BigDecimal>();
+        for(var row:rows) {
+            var amount=new BigDecimal(value(row,"amount"));
+            if(!s(rental).equals(value(row,"rental_id"))||amount.signum()<=0
+                ||amounts.put(UUID.fromString(value(row,"obligation_id")),amount)!=null)throw ApiExceptions.conflict("Manual allocation binding invalid");
+        }
+        if(amounts.values().stream().reduce(BigDecimal.ZERO,BigDecimal::add).compareTo(receipt.amount())!=0)
+            throw ApiExceptions.conflict("Manual receipt allocation amount invalid");
+        return amounts;
+    }
+    private boolean renewalChargeCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID reviewer,String prefix) {
+        String fingerprint=hash(List.of(s(spec.rentalId()),s(spec.renewalId()),spec.kind().name(),spec.amount().toPlainString(),obligation.dueAt().toEpochMilli(),spec.sourceReference()).toString());
+        String acceptedId=spec.sourceReference().split(":")[1];
+        var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from rental_ledger_commands where actor_id=? and operation='CHARGE' and key_hash=?",s(reviewer),hash(prefix+acceptedId));
+        return rows.size()==1&&s(spec.rentalId()).equals(value(rows.getFirst(),"rental_id"))
+            &&s(obligation.id()).equals(value(rows.getFirst(),"result_id"))&&fingerprint.equals(value(rows.getFirst(),"payload_hash"));
+    }
+    boolean renewalReceiptMatches(UUID rental,Receipt receipt,GatewayProof proof,Obligation obligation) {
+        var rows=jdbc.queryForList("select payment_id,proof_log_id,environment,transaction_no from rental_ledger_gateway_evidence where receipt_id=?",s(receipt.id()));
+        if(rows.size()!=1)return false;
+        var row=rows.getFirst();
+        if(!s(proof.paymentId()).equals(value(row,"payment_id"))||!s(proof.proofLogId()).equals(value(row,"proof_log_id"))
+            ||!"SANDBOX".equals(value(row,"environment"))||!Objects.equals(proof.transactionNo(),value(row,"transaction_no")))return false;
+        var allocations=jdbc.queryForList("select obligation_id,rental_id,amount from rental_ledger_allocations where receipt_id=?",s(receipt.id()));
+        return allocations.size()==1&&s(obligation.id()).equals(value(allocations.getFirst(),"obligation_id"))
+            &&s(rental).equals(value(allocations.getFirst(),"rental_id"))
+            &&receipt.amount().compareTo(new BigDecimal(value(allocations.getFirst(),"amount")))==0;
     }
     public UUID charge(UUID rental,UUID renewal,Kind kind,BigDecimal amount,Instant due,String source,
         UUID actor,String key,long expectedRevision) {
@@ -65,11 +144,31 @@ public class LedgerStore {
     }
     public UUID receive(UUID rental,Method method,BigDecimal amount,Map<UUID,BigDecimal> allocations,
         String evidenceRef,UUID evidenceFile,UUID actor,String key,long expectedRevision,Instant receivedAt) {
-        long revision=lock(rental);required(method);money(amount,false);text(evidenceRef,200);required(evidenceFile);required(receivedAt);
+        if(method==Method.VNPAY_SANDBOX)throw ApiExceptions.validation("Sandbox receipts require authenticated gateway evidence",null);
+        required(evidenceFile);
+        return receiveCore(rental,method,amount,allocations,evidenceRef,evidenceFile,actor,key,expectedRevision,receivedAt);
+    }
+    record GatewayProof(UUID paymentId,UUID proofLogId,String transactionNo) {}
+    UUID receiveSandbox(UUID rental,BigDecimal amount,Map<UUID,BigDecimal> allocations,GatewayProof proof,
+        UUID actor,String key,long expectedRevision,Instant paidAt) {
+        required(proof);required(proof.paymentId());required(proof.proofLogId());text(proof.transactionNo(),128);
+        UUID receipt=receiveCore(rental,Method.VNPAY_SANDBOX,amount,allocations,"payment:"+proof.paymentId(),null,actor,key,expectedRevision,paidAt);
+        var old=jdbc.queryForList("select payment_id,proof_log_id,transaction_no from rental_ledger_gateway_evidence where receipt_id=?",s(receipt));
+        if(!old.isEmpty()) {
+            var row=old.getFirst();if(!s(proof.paymentId()).equals(value(row,"payment_id"))||!s(proof.proofLogId()).equals(value(row,"proof_log_id"))||!proof.transactionNo().equals(value(row,"transaction_no")))throw ApiExceptions.conflict("Gateway receipt evidence changed");
+        }else {
+            try {jdbc.update("insert into rental_ledger_gateway_evidence(receipt_id,payment_id,proof_log_id,environment,transaction_no) values(?,?,?,'SANDBOX',?)",s(receipt),s(proof.paymentId()),s(proof.proofLogId()),proof.transactionNo());}
+            catch(org.springframework.dao.DuplicateKeyException duplicate){throw ApiExceptions.conflict("Gateway transaction evidence was already allocated");}
+        }
+        return receipt;
+    }
+    private UUID receiveCore(UUID rental,Method method,BigDecimal amount,Map<UUID,BigDecimal> allocations,
+        String evidenceRef,UUID evidenceFile,UUID actor,String key,long expectedRevision,Instant receivedAt) {
+        long revision=lock(rental);required(method);money(amount,false);text(evidenceRef,200);required(receivedAt);
         if(allocations==null||allocations.isEmpty()||allocations.size()>100)throw ApiExceptions.validation("Explicit payment allocations required",null);
         var ordered=new TreeMap<UUID,BigDecimal>();allocations.forEach((id,value)->{required(id);money(value,false);ordered.put(id,value);});
         if(ordered.values().stream().reduce(BigDecimal.ZERO,BigDecimal::add).compareTo(amount)!=0)throw ApiExceptions.validation("Receipt amount must equal allocated amount",null);
-        String fingerprint=hash(List.of(s(rental),method.name(),amount.toPlainString(),ordered.toString(),evidenceRef,s(evidenceFile)).toString());
+        String fingerprint=hash(List.of(s(rental),method.name(),amount.toPlainString(),ordered.toString(),evidenceRef,evidenceFile==null?"GATEWAY":s(evidenceFile)).toString());
         var replay=replay(rental,actor,"RECEIPT",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
         if(jdbc.queryForObject("select count(*) from rental_ledger_receipts where evidence_ref=?",Long.class,evidenceRef)!=0)throw ApiExceptions.conflict("Receipt evidence was already used");
         var snapshot=read(rental).orElseThrow();
@@ -77,16 +176,26 @@ public class LedgerStore {
             var o=snapshot.obligations().stream().filter(v->v.id().equals(entry.getKey())).findFirst().orElseThrow(()->ApiExceptions.notFound("Obligation not found in this rental"));
             if(method!=Method.SIMULATED&&entry.getValue().compareTo(o.outstanding())>0)throw ApiExceptions.conflict("Receipt exceeds the unpaid obligation");
         }
-        UUID id=UUID.randomUUID();jdbc.update("insert into rental_ledger_receipts(id,rental_id,method,amount,evidence_ref,evidence_file_id,actor_id,received_at_ms) values(?,?,?,?,?,?,?,?)",s(id),s(rental),method.name(),amount,evidenceRef,s(evidenceFile),s(actor),receivedAt.toEpochMilli());
+        UUID id=UUID.randomUUID();jdbc.update("insert into rental_ledger_receipts(id,rental_id,method,amount,evidence_ref,evidence_file_id,actor_id,received_at_ms) values(?,?,?,?,?,?,?,?)",s(id),s(rental),method.name(),amount,evidenceRef,evidenceFile==null?null:s(evidenceFile),s(actor),receivedAt.toEpochMilli());
         ordered.forEach((o,value)->jdbc.update("insert into rental_ledger_allocations(receipt_id,obligation_id,rental_id,amount) values(?,?,?,?)",s(id),s(o),s(rental),value));
         bump(rental);remember(rental,actor,"RECEIPT",key,fingerprint,id);return id;
     }
     public UUID reserveRefund(UUID rental,UUID receipt,UUID obligation,BigDecimal amount,String decisionRef,
         UUID actor,String key,long expectedRevision) {
+        return reserveRefund(rental,receipt,obligation,amount,decisionRef,actor,key,expectedRevision,false);
+    }
+    UUID reserveSandboxRenewalRefund(UUID rental,Receipt receipt,Obligation obligation,GatewayProof proof,BigDecimal amount,
+        String decisionRef,UUID actor,String key,long expectedRevision) {
+        if(receipt.method()!=Method.VNPAY_SANDBOX||obligation.kind()!=Kind.RENEWAL_DEPOSIT
+            ||!renewalReceiptMatches(rental,receipt,proof,obligation))throw ApiExceptions.conflict("Verified Sandbox deposit allocation required");
+        return reserveRefund(rental,receipt.id(),obligation.id(),amount,decisionRef,actor,key,expectedRevision,true);
+    }
+    private UUID reserveRefund(UUID rental,UUID receipt,UUID obligation,BigDecimal amount,String decisionRef,
+        UUID actor,String key,long expectedRevision,boolean sandbox) {
         long revision=lock(rental);required(receipt);required(obligation);money(amount,false);text(decisionRef,200);
         String fingerprint=hash(List.of(s(rental),s(receipt),s(obligation),amount.toPlainString(),decisionRef).toString());
         var replay=replay(rental,actor,"RESERVE_REFUND",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
-        var paid=jdbc.query("select a.amount from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where p.rental_id=? and p.id=? and a.obligation_id=? and p.method<>'SIMULATED'",(r,i)->r.getBigDecimal(1),s(rental),s(receipt),s(obligation));
+        var paid=jdbc.query("select a.amount from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where p.rental_id=? and p.id=? and a.obligation_id=? and p.method in "+(sandbox?"('VNPAY_SANDBOX')":"('CASH','VERIFIED_BANK')"),(r,i)->r.getBigDecimal(1),s(rental),s(receipt),s(obligation));
         if(paid.isEmpty())throw ApiExceptions.notFound("Actual allocated receipt not found");
         BigDecimal reserved=jdbc.queryForObject("select coalesce(sum(amount),0) from rental_ledger_refunds where receipt_id=? and obligation_id=? and status in ('RESERVED','EXECUTED')",BigDecimal.class,s(receipt),s(obligation));
         if(amount.add(reserved).compareTo(paid.getFirst())>0)throw ApiExceptions.conflict("Refund exceeds available paid funds");
@@ -99,6 +208,9 @@ public class LedgerStore {
         var replay=replay(rental,actor,"EXECUTE_REFUND",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
         var rows=jdbc.query("select * from rental_ledger_refunds where rental_id=? and id=?",(r,i)->refund(r),s(rental),s(refund));
         if(rows.isEmpty())throw ApiExceptions.notFound("Refund reservation not found");if(!rows.getFirst().status().equals("RESERVED"))throw ApiExceptions.conflict("Refund is not awaiting execution");
+        var method=jdbc.queryForObject("select method from rental_ledger_receipts where id=?",String.class,s(rows.getFirst().receiptId()));
+        if("VNPAY_SANDBOX".equals(method)&&!payoutRef.startsWith("sandbox-attestation:"))
+            throw ApiExceptions.conflict("Sandbox refund cannot certify a production payout");
         if(jdbc.queryForObject("select count(*) from rental_ledger_refunds where payout_ref=?",Long.class,payoutRef)!=0)throw ApiExceptions.conflict("Payout evidence was already used");
         jdbc.update("update rental_ledger_refunds set status='EXECUTED',payout_ref=? where id=?",payoutRef,s(refund));bump(rental);remember(rental,actor,"EXECUTE_REFUND",key,fingerprint,refund);return refund;
     }
