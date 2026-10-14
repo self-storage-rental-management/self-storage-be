@@ -143,7 +143,7 @@ class ReturnSettlementServiceTests {
             "Khong con nhu cau su dung"
         );
 
-        when(rentalRepository.findByIdAndCustomer_Id(rental.getId(), customer.getId())).thenReturn(Optional.of(rental));
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
         when(returnCaseRepository.existsByRental_IdAndStatusNotIn(eq(rental.getId()), any())).thenReturn(false);
         when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
         when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {

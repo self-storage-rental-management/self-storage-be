@@ -29,15 +29,21 @@ public class RentalHandoverFileReader {
             final CompleteCheckInRequest handover;
             try { handover=mapper.readValue(checkIn.getChecklistJson(),CompleteCheckInRequest.class); }
             catch(Exception invalid){throw ApiExceptions.conflict("Completed handover document references require reconciliation");}
-            if(handover.evidenceReferences()==null)continue;
-            for(String reference:handover.evidenceReferences()) {
-                final UUID id;
-                try{id=UUID.fromString(reference);}catch(Exception invalid){throw ApiExceptions.conflict("Invalid handover file reference");}
-                var file=em.find(FileAsset.class,id);
-                if(file==null||file.getStatus()!=FileAssetStatus.ACTIVE||!"CHECK_IN".equals(file.getEntityType())
-                    ||!checkIn.getId().equals(file.getEntityId()))continue;
-                String kind=file.getOriginalName().startsWith("hop-dong-da-ky-")?"SIGNED_CONTRACT":"HANDOVER_EVIDENCE";
-                result.putIfAbsent(id,new Document(id,file.getOriginalName(),file.getContentType(),file.getSizeBytes(),file.getCreatedAt(),kind));
+            var referencedFiles=new HashSet<UUID>();
+            if(handover.evidenceReferences()!=null) {
+                for(String reference:handover.evidenceReferences()) {
+                    final UUID id;
+                    try{id=UUID.fromString(reference);}catch(Exception invalid){throw ApiExceptions.conflict("Invalid handover file reference");}
+                    referencedFiles.add(id);
+                }
+            }
+            var assets=em.createQuery("select f from FileAsset f where f.entityType=:type and f.entityId=:checkIn and f.status=:status order by f.createdAt asc",FileAsset.class)
+                .setParameter("type","CHECK_IN").setParameter("checkIn",checkIn.getId()).setParameter("status",FileAssetStatus.ACTIVE).getResultList();
+            for(var file:assets) {
+                boolean signedContract=isSignedContract(file);
+                if(!signedContract&&!referencedFiles.contains(file.getId()))continue;
+                String kind=signedContract?"SIGNED_CONTRACT":"HANDOVER_EVIDENCE";
+                result.putIfAbsent(file.getId(),new Document(file.getId(),file.getOriginalName(),file.getContentType(),file.getSizeBytes(),file.getCreatedAt(),kind));
             }
         }
         var completions=em.createQuery("select e from RenewalOperationEvent e where e.renewal.rental.id=:rental and e.renewal.status=:status and e.kind='COMPLETION' order by e.occurredAt desc,e.id desc",RenewalOperationEvent.class)
@@ -52,5 +58,9 @@ public class RentalHandoverFileReader {
             result.putIfAbsent(fileId,new Document(fileId,file.getOriginalName(),file.getContentType(),file.getSizeBytes(),file.getCreatedAt(),"SIGNED_CONTRACT"));
         }
         return List.copyOf(result.values());
+    }
+    private static boolean isSignedContract(FileAsset file) {
+        String name=Objects.toString(file.getOriginalName(),"").toLowerCase(Locale.ROOT);
+        return name.startsWith("hop-dong-da-ky-");
     }
 }

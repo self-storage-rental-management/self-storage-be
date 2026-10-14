@@ -393,8 +393,9 @@ public class MaintenanceService {
             authorizationService.require(actor, SystemPermission.VIEW_UNITS);
         }
 
-        Collection<UUID> allowedFacilityIds = null;
-        if (facilityScopeService.isFacilityScoped(actor)) {
+        boolean scoped = facilityScopeService.isFacilityScoped(actor);
+        Collection<UUID> allowedFacilityIds = List.of(new UUID(0L, 0L));
+        if (scoped) {
             allowedFacilityIds = actor.facilityScopes().keySet();
             if (facilityId != null) {
                 facilityScopeService.assertCanRead(actor, facilityId);
@@ -402,12 +403,16 @@ public class MaintenanceService {
         }
 
         Pageable pageable = pageable(page, pageSize);
+        if (scoped && allowedFacilityIds.isEmpty()) {
+            return PageResponse.from(Page.<MaintenanceTaskResponse>empty(pageable), correlationId);
+        }
         Page<MaintenanceTaskResponse> result = maintenanceTaskRepository.searchTasks(
             facilityId,
             storageUnitId,
             status,
             priority,
             assignedStaffId,
+            scoped,
             allowedFacilityIds,
             q != null ? q.trim() : null,
             pageable
