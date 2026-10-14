@@ -111,7 +111,7 @@ class SupportWorkflowIntegrationTests {
     void assignedStaffNameComesFromCommittedAssignmentInHttpListAndDetail() throws Exception {
         var created=service.create(c,new Create("Assignee name readback","TEST ONLY",facility.getId(),null,List.of()),"name-create");
         assertThat(created.assignedStaffName()).isNull();
-        service.assign(m,created.id(),new Assignment(staff.getId(),created.version(),"TEST assignment"),"name-assign");
+        service.claim(s,created.id(),new SupportCommands.Version(created.version()),"name-claim");
         new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(tx->{
             em.find(User.class,staff.getId()).setFullName("Assigned Staff Readback");
         });
@@ -215,7 +215,7 @@ class SupportWorkflowIntegrationTests {
     @Test void legacyScopedTicketIsReadOnlyUntilVerifiedMetadataExists(){
         var legacy=new SupportTicket();legacy.setCustomer(customer);legacy.setFacility(facility);legacy.setSubject("Legacy");legacy.setDescription("Needs migration");em.persist(legacy);em.flush();
         assertThat(service.detail(m,MANAGER,legacy.getId()).workflowReady()).isFalse();
-        assertThatThrownBy(()->service.assign(m,legacy.getId(),new Assignment(staff.getId(),0L,"Assign"),"legacy")).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
+        assertThatThrownBy(()->service.claim(s,legacy.getId(),new SupportCommands.Version(0L),"legacy")).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
         assertThat(count("SupportState")).isZero();
     }
     @Test void assignmentRequiresActualEligibleStaffIdAtSameFacility(){
@@ -226,10 +226,7 @@ class SupportWorkflowIntegrationTests {
         assertThatThrownBy(()->service.assign(m,t.id(),new Assignment(staff.getId(),t.version(),"Inactive"),"inactive")).isInstanceOf(ApiException.class);
         assertThat(em.find(SupportTicket.class,t.id()).getAssignedTo()).isNull();
     }
-    @Test void staffOptionsExcludeForeignStaffAndUseStableIds(){
-        var options=service.staffOptions(m,facility.getId(),query,"test").data();
-        assertThat(options).extracting(SupportResponse.StaffOption::id).containsExactlyInAnyOrder(staff.getId(),otherStaff.getId());
-    }
+
     @Test void openRequiresStaffAcceptanceBeforeResolution(){
         var t=assigned();
         assertThatThrownBy(()->service.resolve(s,t.id(),new Resolution("Done",List.of(),t.version()),"too-early")).isInstanceOf(ApiException.class);
@@ -238,20 +235,78 @@ class SupportWorkflowIntegrationTests {
         assertThat(service.accept(s,t.id(),new SupportCommands.Version(t.version()),"accept").version()).isEqualTo(accepted.version());
         assertThatThrownBy(()->service.accept(s,t.id(),new SupportCommands.Version(t.version()),"stale")).isInstanceOf(ApiException.class).hasMessageContaining("stale");
     }
+    @Test void unassignedQueueExposesOnlySafeMetadataAndClaimIsAtomicAndReplayable(){
+        var created=create();
+        var queue=service.queue(s,query,"test");
+        assertThat(queue.data()).extracting(SupportQueueItem::id).containsExactly(created.id());
+        assertThat(queue.data().get(0).version()).isEqualTo(created.version());
+        var claimed=service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-once");
+        assertThat(claimed.status()).isEqualTo(SupportTicketStatus.in_progress);
+        assertThat(claimed.assignedStaffId()).isEqualTo(staff.getId());
+        assertThat(claimed.acceptedAt()).isEqualTo(NOW);
+        assertThat(claimed.assignmentRevision()).isEqualTo(1);
+        assertThat(service.queue(s2,query,"test").data()).isEmpty();
+        assertThat(service.list(s,STAFF,query,"test").data()).extracting(SupportResponse::id).containsExactly(created.id());
+        long events=count("SupportEvent");
+        assertThat(service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-once").version()).isEqualTo(claimed.version());
+        assertThat(count("SupportEvent")).isEqualTo(events);
+        assertThatThrownBy(()->service.claim(s2,created.id(),new SupportCommands.Version(created.version()),"other-claim"))
+            .isInstanceOf(ApiException.class);
+    }
+    @Test void queueAndClaimRespectCurrentFacilityAndPermission(){
+        var created=create();
+        var foreign=actor(foreignStaff,RoleCode.STAFF,otherFacility);
+        assertThat(service.queue(foreign,query,"test").data()).isEmpty();
+        assertThatThrownBy(()->service.claim(foreign,created.id(),new SupportCommands.Version(created.version()),"foreign"))
+            .isInstanceOf(ApiException.class);
+        assertThat(service.summary(m,facility.getId()).unassignedOpen()).isEqualTo(1);
+        assertThat(service.summary(m,facility.getId()).counts().get("open")).isEqualTo(1);
+        assertThatThrownBy(()->service.summary(m,otherFacility.getId())).isInstanceOf(ApiException.class);
+        em.createQuery("delete from UserFacilityScope x where x.user.id=:id").setParameter("id",staff.getId()).executeUpdate();em.flush();
+        assertThat(service.queue(s,query,"test").data()).isEmpty();
+        assertThatThrownBy(()->service.claim(s,created.id(),new SupportCommands.Version(created.version()),"revoked"))
+            .isInstanceOf(ApiException.class);
+    }
+    @Test void assignedOrStaleTicketCannotBeClaimed(){
+        var created=create();
+        var assigned=legacyAssignment(created,staff);
+        assertThat(service.queue(s2,query,"test").data()).isEmpty();
+        assertThatThrownBy(()->service.claim(s2,created.id(),new SupportCommands.Version(created.version()),"claim-assigned"))
+            .isInstanceOf(ApiException.class);
+        assertThat(service.accept(s,created.id(),new SupportCommands.Version(assigned.version()),"legacy-accept").status())
+            .isEqualTo(SupportTicketStatus.in_progress);
+    }
+    @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void concurrentClaimsHaveOneWinnerAndFailedNotificationRollsBack() throws Exception {
+        var created=create();
+        doThrow(new IllegalStateException("Test-only delivery failure")).when(notifications)
+            .createNotification(eq(customer.getId()),eq(NotificationType.SUPPORT),anyString(),anyString(),eq(created.id()));
+        assertThatThrownBy(()->service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-failed"))
+            .isInstanceOf(IllegalStateException.class);
+        reset(notifications);
+        assertThat(service.detail(c,CUSTOMER,created.id()).assignedStaffId()).isNull();
+        assertThat(service.queue(s,query,"test").pagination().totalItems()).isEqualTo(1);
+        var start=new java.util.concurrent.CountDownLatch(1);
+        var pool=java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var first=pool.submit(()->{start.await();try{return service.claim(s,created.id(),new SupportCommands.Version(created.version()),"claim-staff-1");}catch(ApiException e){return null;}});
+            var second=pool.submit(()->{start.await();try{return service.claim(s2,created.id(),new SupportCommands.Version(created.version()),"claim-staff-2");}catch(ApiException e){return null;}});
+            start.countDown();
+            var a=first.get(30,java.util.concurrent.TimeUnit.SECONDS);
+            var b=second.get(30,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat((a==null?0:1)+(b==null?0:1)).isEqualTo(1);
+            var winner=a==null?b:a;
+            assertThat(service.detail(c,CUSTOMER,created.id()).assignedStaffId()).isEqualTo(winner.assignedStaffId());
+            assertThat(service.queue(s,query,"test").data()).isEmpty();
+        } finally {pool.shutdownNow();}
+    }
     @Test void managerCannotImpersonateAssignedStaffToComplete(){
         var t=active();
         assertThatThrownBy(()->service.resolve(m,t.id(),new Resolution("Manager done",List.of(),t.version()),"manager-complete")).isInstanceOf(ApiException.class);
         assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.in_progress);
     }
-    @Test void reassignResetsAcceptancePreservesHistoryAndRevokesOldAssignee(){
-        var t=active();var reassigned=service.assign(m,t.id(),new Assignment(otherStaff.getId(),t.version(),"Shift change"),"reassign");
-        assertThat(reassigned.status()).isEqualTo(SupportTicketStatus.open);assertThat(reassigned.acceptedAt()).isNull();
-        assertThat(reassigned.assignmentRevision()).isEqualTo(2);
-        assertThatThrownBy(()->service.staffMessage(s,t.id(),new StaffMessage("Old reply",List.of(),Visibility.PUBLIC),"old")).isInstanceOf(ApiException.class);
-        assertThatThrownBy(()->service.accept(s,t.id(),new SupportCommands.Version(t.version()),"accept")).isInstanceOf(ApiException.class);
-        assertThat(service.events(m,MANAGER,t.id(),query,"test").data()).extracting(SupportResponse.Event::type).contains("ACCEPTED","ASSIGNED");
-        assertThat(service.accept(s2,t.id(),new SupportCommands.Version(reassigned.version()),"new-accept").status()).isEqualTo(SupportTicketStatus.in_progress);
-    }
+
     @Test void sameAssigneeCannotSilentlyResetAcceptedWork(){
         var t=active();
         assertThatThrownBy(()->service.assign(m,t.id(),new Assignment(staff.getId(),t.version(),"Reset"),"same")).isInstanceOf(ApiException.class);
@@ -296,7 +351,7 @@ class SupportWorkflowIntegrationTests {
         var reopened=service.reopen(c,t.id(),new Reopen("Still broken",service.detail(c,CUSTOMER,t.id()).version()),"reopen");
         assertThat(reopened.status()).isEqualTo(SupportTicketStatus.in_progress);assertThat(reopened.resolvedAt()).isNull();
     }
-    @Test void reopenWithIneligiblePreviousStaffReturnsToManagerQueue(){
+    @Test void reopenWithIneligiblePreviousStaffReturnsToUnassignedStaffQueue(){
         var t=resolved();staff.setStatus(UserStatus.DISABLED);em.flush();
         var reopened=service.reopen(c,t.id(),new Reopen("Needs more work",t.version()),"reopen");
         assertThat(reopened.status()).isEqualTo(SupportTicketStatus.open);assertThat(reopened.assignedStaffId()).isNull();assertThat(reopened.acceptedAt()).isNull();
@@ -361,31 +416,9 @@ class SupportWorkflowIntegrationTests {
         var t=resolved();close.available=true;clock.time=NOW.plus(Duration.ofDays(7));
         service.reopen(c,t.id(),new Reopen("Not solved",t.version()),"reopen");assertThat(service.autoClose(t.id())).isFalse();
     }
-    @Test void unavailableReceiverDoesNotCreatePermanentEscalation(){
-        var t=active();
-        assertThatThrownBy(()->service.escalate(s,t.id(),new Escalate(SupportCommands.Module.PAYMENT,"Need owner",List.of(),t.version()),"escalate")).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
-        assertThat(count("SupportEscalation")).isZero();
-    }
-    @Test void routingIsNotReceiverAcknowledgementOrCompletion(){
-        receiver.enabled=true;var t=active();var e=service.escalate(s,t.id(),new Escalate(SupportCommands.Module.PAYMENT,"Payment owner needed",List.of(),t.version()),"escalate");
-        var current=service.detail(m,MANAGER,t.id());
-        var routed=service.decideEscalation(m,t.id(),e.id(),new EscalationDecision(Decision.ROUTE,"Coordinate",current.version()),"route");
-        assertThat(routed.status()).isEqualTo("ROUTED");assertThat(routed.receiverStatus()).isNull();assertThat(receiver.routes).isEqualTo(1);
-        assertThatThrownBy(()->service.resolve(s,t.id(),new Resolution("Done",List.of(),service.detail(s,STAFF,t.id()).version()),"premature")).isInstanceOf(ApiException.class);
-        receiver.status="ACKNOWLEDGED";
-        assertThatThrownBy(()->service.resolve(s,t.id(),new Resolution("Done",List.of(),service.detail(s,STAFF,t.id()).version()),"ack-only")).isInstanceOf(ApiException.class);
-        receiver.status="COMPLETED";receiver.forged=true;
-        assertThatThrownBy(()->service.escalations(m,MANAGER,t.id(),query,"test")).isInstanceOf(ApiException.class).hasMessageContaining("inconsistent");
-        receiver.forged=false;
-        assertThat(service.resolve(s,t.id(),new Resolution("Owner result verified",List.of(),service.detail(s,STAFF,t.id()).version()),"real-result").status()).isEqualTo(SupportTicketStatus.resolved);
-    }
-    @Test void managerRejectDoesNotFabricateOwnerResultAndStaffRetainsResolutionOwnership(){
-        receiver.enabled=true;var t=active();var e=service.escalate(s,t.id(),new Escalate(SupportCommands.Module.ACCOUNT,"Coordinate",List.of(),t.version()),"escalate");
-        receiver.enabled=false;
-        var rejected=service.decideEscalation(m,t.id(),e.id(),new EscalationDecision(Decision.REJECT,"Staff can answer",service.detail(m,MANAGER,t.id()).version()),"reject");
-        assertThat(rejected.status()).isEqualTo("REJECTED");assertThat(rejected.resultRef()).isNull();assertThat(receiver.routes).isZero();
-        assertThat(service.resolve(s,t.id(),new Resolution("Answered",List.of(),service.detail(s,STAFF,t.id()).version()),"resolve").resolvedBy()).isEqualTo(staff.getId());
-    }
+
+
+
     @Test void unsupportedEvidenceBlocksWithoutBypassingSharedFileOwnership(){
         assertThatThrownBy(()->service.create(c,new Create("Files","Help",facility.getId(),null,List.of(UUID.randomUUID())),"files")).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
     }
@@ -414,8 +447,7 @@ class SupportWorkflowIntegrationTests {
     @Test void linkedTicketCannotResolveUsingNarrativeInsteadOfActualModuleOutcome(){
         var rental=rentalFixture();var originalStatus=rental.getStatus();var originalEnd=rental.getContractEndDate();
         var t=service.create(c,new Create("Rental issue","Please check",null,new Link(LinkType.RENTAL,rental.getId()),List.of()),"linked");
-        t=service.assign(m,t.id(),new Assignment(staff.getId(),t.version(),"Process"),"assign-linked");
-        var accepted=service.accept(s,t.id(),new SupportCommands.Version(t.version()),"accept-linked");
+        var accepted=service.claim(s,t.id(),new SupportCommands.Version(t.version()),"claim-linked");
         assertThatThrownBy(()->service.resolve(s,accepted.id(),new Resolution("Refund pending",List.of(),accepted.version()),"pretend-done")).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
         assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.in_progress);
         assertThat(rental.getStatus()).isEqualTo(originalStatus);assertThat(rental.getContractEndDate()).isEqualTo(originalEnd);
@@ -435,13 +467,13 @@ class SupportWorkflowIntegrationTests {
             tx.executeWithoutResult(st->{assertThat(count("SupportTicket")).isEqualTo(1);assertThat(count("SupportMessage")).isEqualTo(1);});
             var assignmentStart=new java.util.concurrent.CountDownLatch(1);var successes=new ArrayList<java.util.concurrent.Future<Boolean>>();
             for(UUID staffId:List.of(staff.getId(),otherStaff.getId()))successes.add(pool.submit(()->{
-                assignmentStart.await();try{service.assign(m,created.id(),new Assignment(staffId,created.version(),"Concurrent allocation"),staffId.toString());return true;}
+                assignmentStart.await();try{service.claim(staffId.equals(staff.getId())?s:s2,created.id(),new SupportCommands.Version(created.version()),staffId.toString());return true;}
                 catch(ApiException e){assertThat(e.getStatus().value()).isEqualTo(409);return false;}
             }));
             assignmentStart.countDown();int assigned=0;for(var result:successes)if(result.get(30,java.util.concurrent.TimeUnit.SECONDS))assigned++;
             assertThat(assigned).isEqualTo(1);var current=service.detail(c,CUSTOMER,created.id());assertThat(current.assignmentRevision()).isEqualTo(1);
             var assignedActor=current.assignedStaffId().equals(staff.getId())?s:s2;
-            var accepted=service.accept(assignedActor,created.id(),new SupportCommands.Version(current.version()),"accepted");
+            var accepted=current;
             doThrow(new IllegalStateException("Test-only notification failure")).when(notifications).createNotification(eq(customer.getId()),eq(NotificationType.SUPPORT),anyString(),anyString(),eq(created.id()));
             assertThatThrownBy(()->service.resolve(assignedActor,created.id(),new Resolution("Answer",List.of(),accepted.version()),"failed-resolution")).isInstanceOf(IllegalStateException.class);
             var unchanged=service.detail(c,CUSTOMER,created.id());assertThat(unchanged.status()).isEqualTo(SupportTicketStatus.in_progress);assertThat(unchanged.resolvedAt()).isNull();
@@ -489,17 +521,7 @@ class SupportWorkflowIntegrationTests {
         assertThat(em.find(SupportTicket.class,older.id()).getUpdatedAt()).isEqualTo(sharedUpdatedAt);
         assertThat(em.find(SupportState.class,older.id()).getChangedAt()).isEqualTo(clock.time);
     }
-    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.EnumSource(Decision.class)
-    void recentActivitySortIncludesEscalationDecisionWithoutRewritingSharedTicket(Decision decision){
-        receiver.enabled=true;var older=active();
-        var escalation=service.escalate(s,older.id(),new Escalate(SupportCommands.Module.PAYMENT,"Owner review",List.of(),older.version()),"recent-escalate");
-        clock.time=NOW.plusSeconds(60);var newer=active();clock.time=NOW.plusSeconds(120);
-        em.flush();em.clear();
-        var sharedUpdatedAt=em.find(SupportTicket.class,older.id()).getUpdatedAt();
-        service.decideEscalation(m,older.id(),escalation.id(),new EscalationDecision(decision,"Coordinate",service.detail(m,MANAGER,older.id()).version()),"recent-decision");
-        assertRecentActivityOrder(older.id(),newer.id());
-        assertThat(em.find(SupportTicket.class,older.id()).getUpdatedAt()).isEqualTo(sharedUpdatedAt);
-    }
+
     @Test void recentActivitySortKeepsLegacyRowsWithoutInventingWorkflowMetadata(){
         var legacy=new SupportTicket();legacy.setCustomer(customer);legacy.setFacility(facility);legacy.setSubject("Legacy");legacy.setDescription("Read only");em.persist(legacy);em.flush();
         clock.time=legacy.getUpdatedAt().plusSeconds(60);var current=create();
@@ -539,9 +561,48 @@ class SupportWorkflowIntegrationTests {
         assertThat(count("SupportTicket")).isEqualTo(1);
     }
 
+    /** Fixture only: pre-policy persisted assignment, never a runtime Manager command. */
+    private SupportResponse legacyAssignment(SupportResponse t,User assignee) {
+        em.find(SupportTicket.class,t.id()).setAssignedTo(assignee);
+        em.find(SupportState.class,t.id()).assign(NOW);em.flush();
+        return service.detail(c,CUSTOMER,t.id());
+    }
+    @Test void managerReadOnlyAndNewEscalationsAreDisabledBeforeAnyWrite() {
+        var t=create();long events=count("SupportEvent"),receiptsBefore=count("SupportCommandReceipt");
+        assertThatThrownBy(()->service.assign(m,t.id(),new Assignment(staff.getId(),t.version(),"Assign"),"blocked")).hasMessageContaining("read-only");
+        assertThatThrownBy(()->service.decideEscalation(m,t.id(),UUID.randomUUID(),new EscalationDecision(Decision.ROUTE,"Route",t.version()),"blocked-route")).hasMessageContaining("read-only");
+        assertThatThrownBy(()->service.escalate(s,t.id(),new Escalate(SupportCommands.Module.PAYMENT,"Route",List.of(),t.version()),"blocked-escalation")).hasMessageContaining("disabled");
+        assertThat(count("SupportEvent")).isEqualTo(events);assertThat(count("SupportCommandReceipt")).isEqualTo(receiptsBefore);
+        assertThat(count("SupportEscalation")).isZero();assertThat(service.detail(m,MANAGER,t.id()).assignedStaffId()).isNull();
+    }
+    @Test void managerMonitoringRequiresOnlyReadPermissionAndReadScope() {
+        var t=active();var view=em.createQuery("select p from Permission p where p.code=:code",Permission.class)
+            .setParameter("code",SystemPermission.VIEW_SUPPORT.code()).getSingleResult();
+        manager.getRoles().forEach(r->r.setPermissions(new HashSet<>(Set.of(view))));
+        em.createQuery("update UserFacilityScope f set f.scopeLevel=:level where f.user.id=:id")
+            .setParameter("level",FacilityScopeLevel.READ).setParameter("id",manager.getId()).executeUpdate();em.flush();em.clear();
+        var readActor=new ActorPrincipal(manager.getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_SUPPORT.code()),Map.of(facility.getId(),FacilityScopeLevel.READ));
+        assertThat(service.detail(readActor,MANAGER,t.id()).id()).isEqualTo(t.id());
+        assertThat(service.summary(readActor,facility.getId()).unassignedOpen()).isZero();
+    }
+    @Test void managerWithStaffRoleCannotClaimThroughTheStaffEndpoint() {
+        var t=create();
+        var both=new ActorPrincipal(m.userId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER,RoleCode.STAFF),
+            m.permissions(),m.facilityScopes());
+        assertThatThrownBy(()->service.claim(both,t.id(),new SupportCommands.Version(t.version()),"manager-as-staff"))
+            .hasMessageContaining("read-only");
+        assertThat(service.detail(c,CUSTOMER,t.id()).assignedStaffId()).isNull();
+    }
+    @Test void historicalUnresolvedEscalationsAreNotSilentlyIgnoredByNewPolicy() {
+        var t=active();var ticket=em.find(SupportTicket.class,t.id());
+        em.persist(new SupportEscalation(ticket,SupportCommands.Module.PAYMENT.name(),"Historical owner review",staff.getId(),"[]",NOW));em.flush();
+        assertThatThrownBy(()->service.resolve(s,t.id(),new Resolution("Done",List.of(),t.version()),"unverified-history"))
+            .hasMessageContaining("Trusted escalation result unavailable");
+        assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.in_progress);
+    }
     private SupportResponse create(){return service.create(c,new Create("Question","Help",facility.getId(),null,List.of()),UUID.randomUUID().toString());}
-    private SupportResponse assigned(){var t=create();return service.assign(m,t.id(),new Assignment(staff.getId(),t.version(),"Assigned by ID"),UUID.randomUUID().toString());}
-    private SupportResponse active(){var t=assigned();return service.accept(s,t.id(),new SupportCommands.Version(t.version()),UUID.randomUUID().toString());}
+    private SupportResponse assigned(){return legacyAssignment(create(),staff);}
+    private SupportResponse active(){var t=create();return service.claim(s,t.id(),new SupportCommands.Version(t.version()),UUID.randomUUID().toString());}
     private SupportResponse resolved(){var t=active();return service.resolve(s,t.id(),new Resolution("Answered",List.of(),t.version()),UUID.randomUUID().toString());}
     private Rental rentalFixture(){
         var one=java.math.BigDecimal.ONE;var zero=java.math.BigDecimal.ZERO;

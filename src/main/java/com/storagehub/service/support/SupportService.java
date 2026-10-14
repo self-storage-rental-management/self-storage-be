@@ -65,6 +65,46 @@ public class SupportService {
     @Transactional(readOnly=true)
     public SupportResponse detail(ActorPrincipal actor,Audience audience,UUID id){return response(visible(actor,audience,id,false));}
 
+    @Transactional(readOnly=true)
+    public SupportStatusSummary summary(ActorPrincipal actor,UUID facilityId) {
+        authorize(actor,Audience.MANAGER,false);
+        requireScope(actor,facilityId,FacilityScopeLevel.READ);
+        var counts=new LinkedHashMap<String,Long>();
+        for(var status:SupportTicketStatus.values())counts.put(status.name(),0L);
+        var rows=em.createQuery("select t.status,count(t) from SupportTicket t where t.facility.id=:facility group by t.status",Object[].class)
+            .setParameter("facility",facilityId).getResultList();
+        for(var row:rows)counts.put(((SupportTicketStatus)row[0]).name(),(Long)row[1]);
+        long unassigned=em.createQuery("select count(t) from SupportTicket t join SupportState w on w.id=t.id where t.facility.id=:facility and t.status=:open and t.assignedTo is null and w.acceptedBy is null and w.acceptedAt is null",Long.class)
+            .setParameter("facility",facilityId).setParameter("open",SupportTicketStatus.open).getSingleResult();
+        return new SupportStatusSummary(Map.copyOf(counts),unassigned);
+    }
+
+    @Transactional(readOnly=true)
+    public PageResponse<SupportQueueItem> queue(ActorPrincipal actor,SupportQuery q,String correlation) {
+        authorize(actor,Audience.STAFF,false);
+        var scopes=actor.facilityScopes().entrySet().stream()
+            .filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.OPERATE))
+            .map(Map.Entry::getKey).filter(id->currentScope(actor.userId(),id,FacilityScopeLevel.OPERATE)).toList();
+        if(scopes.isEmpty())return page(List.of(),q,0,correlation);
+        String where=" where t.status=:open and t.assignedTo is null and t.facility.id in :scopes"
+            +" and w.acceptedBy is null and w.acceptedAt is null";
+        var params=new HashMap<String,Object>();params.put("open",SupportTicketStatus.open);params.put("scopes",scopes);
+        if(q.status()!=null&&q.status()!=SupportTicketStatus.open)return page(List.of(),q,0,correlation);
+        if(!q.search().isEmpty()){
+            where+=" and lower(t.subject) like :search escape '!'";
+            params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");
+        }
+        String join=" from SupportTicket t join SupportState w on w.id=t.id";
+        String sort=q.sort().equals("updatedAt")?"coalesce(w.changedAt,t.updatedAt)":"t."+q.sort();
+        var rows=em.createQuery("select t.id,t.facility.id,t.subject,t.createdAt,w.version"+join+where
+            +" order by "+sort+(q.descending()?" desc":" asc")+(q.sort().equals("id")?"":", t.id asc"),Object[].class);
+        var count=em.createQuery("select count(t)"+join+where,Long.class);
+        params.forEach((k,v)->{rows.setParameter(k,v);count.setParameter(k,v);});
+        var items=rows.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList().stream()
+            .map(row->new SupportQueueItem((UUID)row[0],(UUID)row[1],(String)row[2],(Instant)row[3],(Long)row[4])).toList();
+        return page(items,q,count.getSingleResult(),correlation);
+    }
+
     public SupportResponse create(ActorPrincipal actor,Create body,String key){return create(actor,body,key,null);}
     private SupportResponse create(ActorPrincipal actor,Create body,String key,UUID parent) {
         authorize(actor,Audience.CUSTOMER,true);lockActor(actor);
@@ -88,7 +128,7 @@ public class SupportService {
     }
     @Transactional(readOnly=true)
     public PageResponse<SupportResponse.StaffOption> staffOptions(ActorPrincipal actor,UUID facility,SupportQuery q,String correlation) {
-        authorize(actor,Audience.MANAGER,true);requireScope(actor,facility,FacilityScopeLevel.MANAGE);
+        authorize(actor,Audience.MANAGER,false);requireScope(actor,facility,FacilityScopeLevel.READ);
         // user_facility_scopes is unique(user_id, facility_id); DISTINCT is unnecessary and can
         // make ORDER BY a foreign-key expression invalid on H2/MySQL-compatible dialects.
         var users=em.createQuery("select s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel in :levels and s.user.status=:active order by s.user.fullName,s.user.id",User.class)
@@ -97,14 +137,7 @@ public class SupportService {
         int from=Math.min(q.page()*q.size(),users.size());return page(users.subList(from,Math.min(from+q.size(),users.size())),q,users.size(),correlation);
     }
     public SupportResponse assign(ActorPrincipal actor,UUID id,Assignment body,String key) {
-        var ticket=command(actor,Audience.MANAGER,id);Object payload=payload(id,body);
-        var replay=receipts.replay(actor.userId(),"support_assign",key,payload,SupportResponse.class);if(replay.isPresent())return replay.get();
-        var state=requiredState(ticket,body.expectedVersion());nonterminal(ticket);
-        var staff=em.find(User.class,body.assignedStaffId());if(!eligible(staff,ticket.getFacility().getId()))throw ApiExceptions.validation("Staff must be active with Support permissions and OPERATE scope at this facility",null);
-        if(ticket.getAssignedTo()!=null&&ticket.getAssignedTo().getId().equals(staff.getId()))throw ApiExceptions.conflict("Staff is already assigned; acceptance cannot be reset silently");
-        ticket.setAssignedTo(staff);ticket.setStatus(SupportTicketStatus.open);state.assign(now());
-        event(actor,ticket,state,"ASSIGNED",text(body.reason(),2000));notify(staff.getId(),ticket,"Support assigned",ticket.getSubject());
-        return finish(actor,"support_assign",key,payload,ticket);
+        throw ApiExceptions.forbidden("Manager Support is read-only; Staff must claim requests directly");
     }
     public SupportResponse accept(ActorPrincipal actor,UUID id,Version body,String key) {
         var ticket=command(actor,Audience.STAFF,id);Object payload=payload(id,body);
@@ -112,6 +145,28 @@ public class SupportService {
         var state=requiredState(ticket,body.expectedVersion());requireStatus(ticket,SupportTicketStatus.open);
         state.accept(actor.userId(),now());ticket.setStatus(SupportTicketStatus.in_progress);event(actor,ticket,state,"ACCEPTED","Staff accepted current assignment");
         notifyManagers(ticket,"Staff accepted Support",ticket.getSubject());return finish(actor,"support_accept",key,payload,ticket);
+    }
+    public SupportResponse claim(ActorPrincipal actor,UUID id,Version body,String key) {
+        var staff=authorize(actor,Audience.STAFF,true);lockActor(actor);
+        var ticket=em.find(SupportTicket.class,id,LockModeType.PESSIMISTIC_WRITE);
+        if(ticket==null||ticket.getFacility()==null)throw ApiExceptions.notFound("Support ticket not found");
+        em.refresh(ticket,LockModeType.PESSIMISTIC_WRITE);
+        requireScope(actor,ticket.getFacility().getId(),FacilityScopeLevel.OPERATE);
+        if(!eligible(staff,ticket.getFacility().getId()))throw ApiExceptions.forbidden("Current Staff is not eligible for Support at this facility");
+        Object payload=payload(id,body);
+        var replay=receipts.replay(actor.userId(),"support_claim",key,payload,SupportResponse.class);
+        if(replay.isPresent())return replay.get();
+        var state=requiredState(ticket,body.expectedVersion());
+        if(ticket.getStatus()!=SupportTicketStatus.open||ticket.getAssignedTo()!=null
+            ||state.getAcceptedBy()!=null||state.getAcceptedAt()!=null)
+            throw ApiExceptions.conflict("Support ticket is already claimed or unavailable");
+        var at=now();ticket.setAssignedTo(staff);state.assign(at);
+        event(actor,ticket,state,"ASSIGNED","Staff claimed unassigned ticket");
+        state.accept(actor.userId(),at);ticket.setStatus(SupportTicketStatus.in_progress);
+        event(actor,ticket,state,"ACCEPTED","Claiming Staff accepted ticket");
+        notify(ticket.getCustomer().getId(),ticket,"Support ticket received",ticket.getSubject());
+        notifyManagers(ticket,"Staff claimed Support",ticket.getSubject());
+        return finish(actor,"support_claim",key,payload,ticket);
     }
     public SupportResponse.Message customerMessage(ActorPrincipal actor,UUID id,CustomerMessage body,String key) {
         var ticket=command(actor,Audience.CUSTOMER,id);Object payload=payload(id,body);
@@ -175,28 +230,10 @@ public class SupportService {
         return finish(actor,"support_reopen",key,payload,ticket);
     }
     public SupportResponse.Escalation escalate(ActorPrincipal actor,UUID id,Escalate body,String key) {
-        var ticket=command(actor,Audience.STAFF,id);Object payload=payload(id,body);
-        var replay=receipts.replay(actor.userId(),"support_escalate",key,payload,SupportResponse.Escalation.class);if(replay.isPresent())return replay.get();
-        var state=requiredState(ticket,body.expectedVersion());requireStatus(ticket,SupportTicketStatus.in_progress);requireAccepted(ticket,state);
-        var source=receiver(body.targetModule());
-        if(em.createQuery("select count(e) from SupportEscalation e where e.ticket.id=:id and e.targetModule=:module and e.status<>'REJECTED'",Long.class).setParameter("id",id).setParameter("module",body.targetModule().name()).getSingleResult()>0)throw ApiExceptions.conflict("Module escalation already exists; do not duplicate receiving work");
-        var files=files(body.evidenceFileIds());attach(actor,ticket,Visibility.INTERNAL,files);
-        var escalation=new SupportEscalation(ticket,body.targetModule().name(),text(body.reason(),2000),actor.userId(),receipts.json(files),now());em.persist(escalation);state.touch(now());
-        event(actor,ticket,state,"ESCALATED",body.reason());notifyManagers(ticket,"Support escalation needs coordination",ticket.getSubject());em.flush();
-        var result=escalationResponse(escalation,source);receipts.remember(actor.userId(),"support_escalate",key,payload,result);audit(actor,ticket,"support_escalate");return result;
+        throw ApiExceptions.forbidden("Support now supports direct Customer and Staff interaction; new module escalations are disabled");
     }
     public SupportResponse.Escalation decideEscalation(ActorPrincipal actor,UUID id,UUID escalationId,EscalationDecision body,String key) {
-        var ticket=command(actor,Audience.MANAGER,id);Object payload=Arrays.asList(id,escalationId,body);
-        var replay=receipts.replay(actor.userId(),"support_escalation_decision",key,payload,SupportResponse.Escalation.class);if(replay.isPresent())return replay.get();
-        var state=requiredState(ticket,body.expectedVersion());nonterminal(ticket);
-        var escalation=em.find(SupportEscalation.class,escalationId);if(escalation==null||!escalation.getTicket().getId().equals(id))throw ApiExceptions.notFound("Escalation not found");
-        if(!escalation.getStatus().equals("REQUESTED"))throw ApiExceptions.conflict("Escalation already coordinated");
-        if(body.action()==null)throw ApiExceptions.validation("Explicit escalation decision required",null);
-        boolean route=body.action()==Decision.ROUTE;UUID ref=null;EscalationSource source=null;
-        if(route){source=receiver(Module.valueOf(escalation.getTargetModule()));ref=source.route(ticket,escalation,actor.userId(),key,now());if(ref==null)throw deferred("No durable receiver/outbox reference");}
-        escalation.decision(route,text(body.reason(),2000),actor.userId(),ref,now());state.touch(now());event(actor,ticket,state,route?"ESCALATION_ROUTED":"ESCALATION_REJECTED",body.reason());
-        if(ticket.getAssignedTo()!=null)notify(ticket.getAssignedTo().getId(),ticket,"Support escalation coordinated",ticket.getSubject());em.flush();
-        var result=escalationResponse(escalation,source);receipts.remember(actor.userId(),"support_escalation_decision",key,payload,result);audit(actor,ticket,"support_escalation_decision");return result;
+        throw ApiExceptions.forbidden("Manager Support is read-only; Staff must claim requests directly");
     }
     @Transactional(readOnly=true)
     public PageResponse<SupportResponse.Message> messages(ActorPrincipal actor,Audience audience,UUID id,SupportQuery q,String correlation) {
@@ -229,6 +266,8 @@ public class SupportService {
     }
 
     private User authorize(ActorPrincipal actor,Audience audience,boolean write) {
+        if(write&&actor!=null&&actor.hasRole(RoleCode.MANAGER))throw ApiExceptions.forbidden("Manager Support is read-only");
+        if(audience==Audience.MANAGER&&write)throw ApiExceptions.forbidden("Manager Support is read-only");
         if(actor==null)throw ApiExceptions.unauthorized("Authentication required");var user=em.find(User.class,actor.userId());
         if(user==null||user.getStatus()!=UserStatus.ACTIVE)throw ApiExceptions.forbidden("Actor is not active");
         RoleCode role=RoleCode.valueOf(audience.name());if(!actor.hasRole(role)||!hasRole(user,role))throw ApiExceptions.forbidden("Support actor role required");
@@ -270,7 +309,7 @@ public class SupportService {
             switch(link.type()) {
                 case RENTAL -> {var r=em.find(Rental.class,link.id());if(r!=null&&r.getCustomer().getId().equals(actor.userId()))facility=r.getFacility();}
                 case RESERVATION -> {var r=em.find(Reservation.class,link.id());if(r!=null&&r.getCustomer().getId().equals(actor.userId()))facility=r.getFacility();}
-                case PAYMENT -> {var p=em.find(Payment.class,link.id());if(p!=null&&p.getReservation().getCustomer().getId().equals(actor.userId()))facility=p.getReservation().getFacility();}
+                case PAYMENT -> {var p=em.find(Payment.class,link.id());if(p!=null&&p.getReservation()!=null&&p.getReservation().getCustomer().getId().equals(actor.userId()))facility=p.getReservation().getFacility();else if(p!=null&&p.getRenewal()!=null&&p.getRenewal().getRental().getCustomer().getId().equals(actor.userId()))facility=p.getRenewal().getRental().getFacility();}
                 case STORAGE_UNIT -> {var rows=em.createQuery("select r.facility from Rental r where r.customer.id=:customer and r.storageUnit.id=:unit",Facility.class).setParameter("customer",actor.userId()).setParameter("unit",link.id()).setMaxResults(1).getResultList();if(!rows.isEmpty())facility=rows.getFirst();}
             }
             if(facility==null)throw ApiExceptions.notFound("Owned linked record not found");if(requested!=null&&!facility.getId().equals(requested))throw ApiExceptions.validation("Facility conflicts with linked record",null);
@@ -324,7 +363,7 @@ public class SupportService {
     private SupportResponse.Message finishMessage(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket,SupportMessage message){em.flush();var result=messageResponse(actor,ticket,message);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private void audit(ActorPrincipal actor,SupportTicket ticket,String operation){audit.recordMutation(em.getReference(User.class,actor.userId()),operation,"SupportTicket",ticket.getId(),ticket.getFacility().getId(),null,Map.of("status",ticket.getStatus().name()));}
     private void notify(UUID recipient,SupportTicket ticket,String title,String content){notifications.createNotification(recipient,NotificationType.SUPPORT,title,content,ticket.getId());}
-    private void notifyManagers(SupportTicket ticket,String title,String content){var managers=em.createQuery("select distinct s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel=:level and s.user.status=:active",User.class).setParameter("facility",ticket.getFacility().getId()).setParameter("level",FacilityScopeLevel.MANAGE).setParameter("active",UserStatus.ACTIVE).getResultList();for(var u:managers)if(hasRole(u,RoleCode.MANAGER)&&hasPermission(u,SystemPermission.VIEW_SUPPORT)&&hasPermission(u,SystemPermission.MANAGE_SUPPORT))notify(u.getId(),ticket,title,content);}
+    private void notifyManagers(SupportTicket ticket,String title,String content){var managers=em.createQuery("select distinct s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel=:level and s.user.status=:active",User.class).setParameter("facility",ticket.getFacility().getId()).setParameter("level",FacilityScopeLevel.MANAGE).setParameter("active",UserStatus.ACTIVE).getResultList();for(var u:managers)if(hasRole(u,RoleCode.MANAGER)&&hasPermission(u,SystemPermission.VIEW_SUPPORT))notify(u.getId(),ticket,title,content);}
     private <T> PageResponse<T> page(List<T> rows,SupportQuery q,long total,String correlation){return new PageResponse<>(List.copyOf(rows),new PageResponse.Pagination(q.page(),q.size(),total,(int)((total+q.size()-1)/q.size()),q.sort()+","+(q.descending()?"desc":"asc")),correlation);}
     private Object payload(UUID id,Object body){return Arrays.asList(id,body);}
     private String text(String value,int limit){if(value==null||value.isBlank()||value.length()>limit)throw ApiExceptions.validation("Text must contain 1–"+limit+" characters",null);return value.trim();}

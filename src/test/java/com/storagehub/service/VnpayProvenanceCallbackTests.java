@@ -23,10 +23,11 @@ class VnpayProvenanceCallbackTests {
     final VnpayProperties config = new VnpayProperties();
     final PaymentRepository payments = mock(PaymentRepository.class);
     final ReservationRepository reservations = mock(ReservationRepository.class);
+    final ReservationPricingSnapshotRepository snapshots = mock(ReservationPricingSnapshotRepository.class);
     final AuditLogService audit = mock(AuditLogService.class);
     final NotificationService notifications = mock(NotificationService.class);
     final VnpayService service = new VnpayService(config, payments, mock(PaymentComplaintRepository.class),
-        reservations, mock(ReservationPricingSnapshotRepository.class), mock(UserRepository.class),
+        reservations, snapshots, mock(UserRepository.class),
         mock(AdminAuthorizationService.class), audit, notifications, new ObjectMapper());
     <T extends BaseEntity> T id(T entity) { ReflectionTestUtils.setField(entity, "id", UUID.randomUUID()); return entity; }
     Payment fixture() {
@@ -37,8 +38,41 @@ class VnpayProvenanceCallbackTests {
         p.setReservation(r); p.setAmount(new BigDecimal("100")); p.setCurrency("VND");
         p.setPurpose(PaymentType.RESERVATION_DEPOSIT); p.setStatus(PaymentStatus.PENDING);
         p.setGatewayProvider("VNPAY"); p.setGatewayIntentId("intent");
+        var snapshot = new ReservationPricingSnapshot();
+        snapshot.setRentalMonths(1);
+        when(snapshots.findByReservation_Id(r.getId())).thenReturn(Optional.of(snapshot));
         when(payments.findByGatewayIntentIdForUpdate("intent")).thenReturn(Optional.of(p));
         return p;
+    }
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void transactionReceiptPreservesReservationAndRenewalPaymentMetadata(boolean renewal) {
+        var payment = fixture();
+        var initiator = id(new User()); initiator.setFullName("Test Customer");
+        payment.setInitiatedBy(initiator);
+        payment.setGatewayBankCode("TEST_BANK");
+        payment.setPaidAt(Instant.parse("2026-10-11T01:00:00Z"));
+        var reservationId = payment.getReservation().getId();
+        if (renewal) {
+            payment.setReservation(null);
+            payment.setRenewal(id(new Renewal()));
+            payment.setPurpose(PaymentType.RENEWAL);
+        }
+        com.storagehub.api.payment.VnpayTransactionResponse result =
+            ReflectionTestUtils.invokeMethod(service, "response", payment, "Test receipt");
+        assertThat(result.reservationId()).isEqualTo(renewal ? null : reservationId);
+        assertThat(result.reservationStatus()).isEqualTo(renewal ? null : ReservationStatus.AWAITING_PAYMENT);
+        assertThat(result.purpose()).isEqualTo(payment.getPurpose());
+        assertThat(result.paymentMethod()).isEqualTo("TEST_BANK");
+        assertThat(result.paidAt()).isEqualTo(payment.getPaidAt());
+        assertThat(result.initiatedByName()).isEqualTo("Test Customer");
+    }
+    @Test void transactionReceiptPreservesUnknownInitiatorAndGatewayMethodFallback() {
+        var payment = fixture(); payment.setInitiatedBy(null); payment.setGatewayBankCode(" ");
+        com.storagehub.api.payment.VnpayTransactionResponse result =
+            ReflectionTestUtils.invokeMethod(service, "response", payment, "Test receipt");
+        assertThat(result.initiatedByName()).isNull();
+        assertThat(result.paymentMethod()).isEqualTo("VNPAY");
     }
     Map<String, String> callback(Map<String, String> changes) throws Exception {
         var q = new TreeMap<String, String>();

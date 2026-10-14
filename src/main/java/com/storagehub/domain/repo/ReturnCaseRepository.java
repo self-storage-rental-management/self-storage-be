@@ -13,8 +13,44 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, JpaSpecificationExecutor<ReturnCase> {
+
+    @EntityGraph(attributePaths = {"customer", "storageUnit"})
+    @Query(value = """
+        select returnCase from ReturnCase returnCase
+        join returnCase.customer customer
+        join returnCase.storageUnit storageUnit
+        where returnCase.facility.id = :facilityId
+          and returnCase.status = com.storagehub.domain.model.ReturnCaseStatus.completed
+          and returnCase.settlementPaidAt is not null
+          and (returnCase.netRefundAmount > 0 or returnCase.amountDueFromCustomer > 0)
+          and (:pattern is null
+            or lower(coalesce(returnCase.settlementPaymentId, '')) like :pattern
+            or lower(coalesce(customer.fullName, '')) like :pattern
+            or lower(coalesce(storageUnit.code, '')) like :pattern)
+        order by returnCase.settlementPaidAt desc, returnCase.id desc
+        """, countQuery = """
+        select count(returnCase) from ReturnCase returnCase
+        join returnCase.customer customer
+        join returnCase.storageUnit storageUnit
+        where returnCase.facility.id = :facilityId
+          and returnCase.status = com.storagehub.domain.model.ReturnCaseStatus.completed
+          and returnCase.settlementPaidAt is not null
+          and (returnCase.netRefundAmount > 0 or returnCase.amountDueFromCustomer > 0)
+          and (:pattern is null
+            or lower(coalesce(returnCase.settlementPaymentId, '')) like :pattern
+            or lower(coalesce(customer.fullName, '')) like :pattern
+            or lower(coalesce(storageUnit.code, '')) like :pattern)
+        """)
+    Page<ReturnCase> searchFacilityPaymentSettlements(
+        @Param("facilityId") UUID facilityId,
+        @Param("pattern") String pattern,
+        Pageable pageable
+    );
 
     Optional<ReturnCase> findByIdAndCustomer_Id(UUID id, UUID customerId);
 

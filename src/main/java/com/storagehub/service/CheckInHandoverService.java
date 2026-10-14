@@ -62,6 +62,8 @@ public class CheckInHandoverService {
 
     @Autowired
     private AccessCredentialService accessCredentialService;
+    @Autowired
+    private ManualRentalPaymentService manualRentalPayments;
 
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
@@ -323,37 +325,12 @@ public class CheckInHandoverService {
         if (request.amount().compareTo(snapshot.getDueAtCheckIn()) != 0) {
             throw ApiExceptions.validation("Payment amount must match the remaining check-in amount", Map.of("expectedAmount", snapshot.getDueAtCheckIn()));
         }
-        String paymentMethod = request.paymentMethod().trim().toUpperCase(Locale.ROOT);
-        if (!paymentMethod.equals("CASH") && !paymentMethod.equals("BANK_TRANSFER")) {
-            throw ApiExceptions.validation("paymentMethod must be CASH or BANK_TRANSFER", Map.of("paymentMethod", request.paymentMethod()));
-        }
-        String reference = request.transactionReference().trim();
-        var existing = paymentRepository.findTopByReservation_IdAndPurposeAndGatewayTransactionNo(
-            reservation.getId(), PaymentType.RENTAL_BALANCE, reference
-        );
-        if (existing.isPresent()) {
-            return toPaymentResponse(existing.get());
-        }
-
         User operator = requireActor(actor);
         Instant now = Instant.now();
-        Payment payment = new Payment();
-        payment.setInitiatedBy(operator);
-        payment.setReservation(reservation);
-        payment.setAmount(request.amount());
-        payment.setCurrency("VND");
-        payment.setPurpose(PaymentType.RENTAL_BALANCE);
-        payment.setStatus(PaymentStatus.PAID);
-        payment.setIdempotencyKey("CHECKIN-BALANCE-" + checkInId + "-" + reference);
-        payment.setGatewayIntentId("MANUAL-CHECKIN-" + UUID.randomUUID());
-        payment.setGatewayProvider("MANUAL");
-        payment.setGatewayTransactionNo(reference);
-        payment.setGatewayBankCode(paymentMethod);
-        payment.setGatewayResponseCode("00");
-        payment.setGatewayTransactionStatus("PAID");
-        payment.setPaidAt(now);
-        payment.setProcessedAt(now);
-        Payment saved = paymentRepository.saveAndFlush(payment);
+        var recorded = manualRentalPayments.booking(reservation,checkInId,operator,snapshot.getDueAtCheckIn(),request.amount(),
+            request.paymentMethod(),request.transactionReference().trim(),now);
+        Payment saved=recorded.payment();
+        if(!recorded.created())return toPaymentResponse(saved);
         auditLogService.recordMutation(
             operator, "CHECKIN_REMAINING_PAYMENT_RECORDED", "Payment", saved.getId(),
             reservation.getFacility().getId(), null, toPaymentResponse(saved)
@@ -544,6 +521,7 @@ public class CheckInHandoverService {
         UnitAssignment assignment
     ) {
         StorageUnit unit = assignment.getStorageUnit();
+        BigDecimal[] declaredDimensions = declaredGoodsDimensions(reservation.getId());
         return new CheckInResponse(
             checkIn == null ? null : checkIn.getId(),
             checkIn == null ? null : checkIn.getStatus(),
@@ -562,7 +540,8 @@ public class CheckInHandoverService {
             assignment.getId(), assignment.getStatus(), reservation.getStartDate(),
             reservation.getEndDate(), declaredPackageCount(reservation.getId()),
             reservation.getTotalGoodsWeightKg(),
-            reservation.getTotalGoodsVolumeM3(), dueAtCheckIn(reservation.getId()), readHandover(checkIn)
+            reservation.getTotalGoodsVolumeM3(), declaredDimensions[0], declaredDimensions[1],
+            declaredDimensions[2], dueAtCheckIn(reservation.getId()), readHandover(checkIn)
         );
     }
 
@@ -609,6 +588,28 @@ public class CheckInHandoverService {
             return null;
         }
         return goodsItems.stream().mapToInt(item -> item.getQuantity()).sum();
+    }
+
+    /**
+     * Returns the largest declared package dimensions, orientation-normalized.
+     * These values are shown to the operator and are also used to prevent a
+     * handover from silently accepting a materially different package size.
+     */
+    private BigDecimal[] declaredGoodsDimensions(UUID reservationId) {
+        BigDecimal[] largest = {null, null, null};
+        for (var item : goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId)) {
+            if (item.getLengthCm() == null || item.getWidthCm() == null || item.getHeightCm() == null) {
+                continue;
+            }
+            BigDecimal[] dimensions = {item.getLengthCm(), item.getWidthCm(), item.getHeightCm()};
+            Arrays.sort(dimensions);
+            for (int index = 0; index < dimensions.length; index++) {
+                if (largest[index] == null || dimensions[index].compareTo(largest[index]) > 0) {
+                    largest[index] = dimensions[index];
+                }
+            }
+        }
+        return largest;
     }
 
     private String writeHandover(CompleteCheckInRequest request) {
@@ -671,11 +672,27 @@ public class CheckInHandoverService {
         boolean volumeVaries = exceedsTolerance(
             request.actualMeasurements().actualVolumeM3(), reservation.getTotalGoodsVolumeM3(), new BigDecimal("0.000100")
         );
-        if (!packageCountVaries && !weightVaries && !volumeVaries) {
+        BigDecimal[] declaredDimensions = declaredGoodsDimensions(reservation.getId());
+        boolean dimensionsVaries = false;
+        if (declaredDimensions[0] != null) {
+            BigDecimal[] actualDimensions = {
+                request.actualMeasurements().lengthCm(),
+                request.actualMeasurements().widthCm(),
+                request.actualMeasurements().heightCm()
+            };
+            Arrays.sort(actualDimensions);
+            for (int index = 0; index < actualDimensions.length; index++) {
+                if (exceedsTolerance(actualDimensions[index], declaredDimensions[index], new BigDecimal("0.5"))) {
+                    dimensionsVaries = true;
+                    break;
+                }
+            }
+        }
+        if (!packageCountVaries && !weightVaries && !volumeVaries && !dimensionsVaries) {
             return;
         }
         if (!request.actualMeasurements().varianceAccepted()) {
-            throw ApiExceptions.conflict("Actual goods differ from the reservation and the variance is not accepted");
+            throw ApiExceptions.conflict("Actual goods dimensions or measurements differ from the reservation and the variance is not accepted");
         }
         if (request.varianceReason() == null || request.varianceReason().isBlank()) {
             throw ApiExceptions.validation("varianceReason is required when actual goods differ", null);

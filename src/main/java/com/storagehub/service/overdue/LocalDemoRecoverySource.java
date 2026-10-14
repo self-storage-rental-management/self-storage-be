@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,7 +20,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /** Local-demo Recovery authority. This covers Recovery cases created by this application only. */
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "storagehub.integration.local-demo-operational-sources.enabled", havingValue = "true")
+@ConditionalOnExpression("!${storagehub.integration.recovery-tasks.enabled:false} && (${storagehub.integration.local-demo-operational-sources.enabled:false} || ${storagehub.integration.local-demo-recovery.enabled:false})")
 @Transactional(propagation = Propagation.MANDATORY)
 public class LocalDemoRecoverySource implements OverdueSources.RecoverySource {
     private final JdbcTemplate jdbc;
@@ -37,9 +37,11 @@ public class LocalDemoRecoverySource implements OverdueSources.RecoverySource {
     @Override
     public java.util.Optional<OverdueSources.RecoveryState> state(Rental rental, Instant now) {
         requireContext(rental, now);
-        // Locking read avoids treating an older REPEATABLE_READ snapshot as current evidence.
+        // Writable decisions use current reads; projections remain non-locking.
+        boolean locking = TransactionSynchronizationManager.isActualTransactionActive()
+            && !TransactionSynchronizationManager.isCurrentTransactionReadOnly();
         List<RecoveryRow> states = jdbc.query(
-            "select facility_id,status from renewal_demo_recovery_cases where rental_id=? order by received_at desc for update",
+            "select facility_id,status from renewal_demo_recovery_cases where rental_id=? order by received_at desc" + (locking ? " for update" : ""),
             (rs, row) -> new RecoveryRow(uuid(rs.getBytes("facility_id")), rs.getString("status")), bytes(rental.getId()));
         if (states.stream().anyMatch(row -> !row.facilityId().equals(rental.getFacility().getId()))) {
             throw ApiExceptions.conflict("DEFERRED_SOURCE: Recovery record belongs to another facility");

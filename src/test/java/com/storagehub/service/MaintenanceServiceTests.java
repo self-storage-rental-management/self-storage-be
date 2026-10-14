@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -19,18 +20,20 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.model.Role;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.TaskPriority;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.UserFacilityScope;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
-import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -124,6 +127,17 @@ class MaintenanceServiceTests {
         ReflectionTestUtils.setField(staffUser, "id", staffId);
         staffUser.setFullName("Tran Van Staff");
         staffUser.setEmail("staff@storagehub.vn");
+        staffUser.setStatus(UserStatus.ACTIVE);
+        Role staffRole = new Role();
+        staffRole.setCode(RoleCode.STAFF);
+        staffUser.setRoles(Set.of(staffRole));
+
+        UserFacilityScope staffScope = new UserFacilityScope();
+        staffScope.setUser(staffUser);
+        staffScope.setFacility(facility);
+        staffScope.setScopeLevel(com.storagehub.domain.model.FacilityScopeLevel.OPERATE);
+        lenient().when(userFacilityScopeRepository.findByUser_IdAndFacility_Id(staffId, facilityId))
+            .thenReturn(Optional.of(staffScope));
     }
 
     @Test
@@ -139,7 +153,7 @@ class MaintenanceServiceTests {
             null
         );
 
-        when(storageUnitRepository.findById(unit.getId())).thenReturn(Optional.of(unit));
+        when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
         when(userRepository.findById(managerActor.userId())).thenReturn(Optional.of(managerUser));
         when(userRepository.findById(staffUser.getId())).thenReturn(Optional.of(staffUser));
         when(maintenanceTaskRepository.save(any(MaintenanceTask.class))).thenAnswer(invocation -> {

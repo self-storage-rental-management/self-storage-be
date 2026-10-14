@@ -11,12 +11,14 @@ import lombok.NoArgsConstructor;
 @Entity @Table(name="renewal_operation_states") @Getter
 @NoArgsConstructor(access=lombok.AccessLevel.PROTECTED)
 public class RenewalOperationState {
-    public enum Phase { SIGNING, SIGNING_EXPIRED, PAYMENT_EXPIRED, COMPLETED }
+    public enum Phase { AWAITING_PAYMENT_INTENT, SIGNING, SIGNING_EXPIRED, PAYMENT_EXPIRED, COMPLETED }
     @Id private UUID id;
     @OneToOne(fetch=FetchType.LAZY,optional=false) @MapsId @JoinColumn(name="id") private Renewal renewal;
     @Enumerated(EnumType.STRING) @Column(nullable=false,length=24) private Phase phase;
     private UUID depositPaymentRef;
     private Instant depositPaidAt;
+    private UUID fullRentPaymentRef;
+    private Instant fullRentPaidAt;
     private Instant originalSigningDeadline;
     private Instant effectiveSigningDeadline;
     private Instant recoveryCutoff;
@@ -32,10 +34,19 @@ public class RenewalOperationState {
     @Column(length=100) private String policyVersion;
     @Version private long version;
     public RenewalOperationState(Renewal renewal) {this.renewal=renewal;}
+    public void awaitingPayment(Instant deadline,Instant cutoff,String policy,String version) {
+        phase=Phase.AWAITING_PAYMENT_INTENT;originalSigningDeadline=deadline;effectiveSigningDeadline=deadline;
+        recoveryCutoff=cutoff;policyRef=policy;policyVersion=version;
+    }
     public void deposit(UUID ref,Instant paid,Instant deadline,Instant cutoff,String policy,String version) {
         phase=Phase.SIGNING;depositPaymentRef=ref;depositPaidAt=paid;originalSigningDeadline=deadline;
         effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;policyRef=policy;policyVersion=version;
     }
+    public void fullRent(UUID ref,Instant paid,Instant deadline,Instant cutoff,String policy,String version) {
+        phase=Phase.SIGNING;fullRentPaymentRef=ref;fullRentPaidAt=paid;originalSigningDeadline=deadline;
+        effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;policyRef=policy;policyVersion=version;
+    }
+    public boolean hasVerifiedPayment() { return depositPaidAt!=null || fullRentPaidAt!=null; }
     public void appointment(UUID ref,Instant start,Instant end) {appointmentRef=ref;appointmentStart=start;appointmentEnd=end;arrivalRef=null;}
     public void arrival(UUID ref) {arrivalRef=ref;}
     public void proposedException(UUID ref) {pendingExceptionRef=ref;}
@@ -44,5 +55,11 @@ public class RenewalOperationState {
         phase=Phase.SIGNING;appointment(appointment,start,end);
     }
     public void expire(boolean paid) {phase=paid?Phase.SIGNING_EXPIRED:Phase.PAYMENT_EXPIRED;}
+    public void correctSigningWindow(Instant deadline,Instant cutoff,String policy,String version) {
+        if(!hasVerifiedPayment()||completedAt!=null||confirmedExceptionRef!=null||pendingExceptionRef!=null)
+            throw new IllegalStateException("Signing window cannot be corrected in this state");
+        originalSigningDeadline=deadline;effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;
+        policyRef=policy;policyVersion=version;phase=Phase.SIGNING;
+    }
     public void completed(UUID staff,Instant at) {phase=Phase.COMPLETED;completedBy=staff;completedAt=at;}
 }

@@ -7,6 +7,7 @@ public record RenewalOperationResponse(UUID renewalId,Long expectedVersion,Strin
     UUID depositPaymentRef,Instant depositPaidAt,Instant originalSigningDeadline,Instant effectiveSigningDeadline,
     Instant recoveryCutoff,UUID appointmentRef,UUID arrivalRef,UUID confirmedExceptionRef,
     UUID completedBy,Instant completedAt,List<String> missingSources,
-    Instant appointmentStart,Instant appointmentEnd,UUID pendingExceptionRef) {
+    Instant appointmentStart,Instant appointmentEnd,UUID pendingExceptionRef,
+    UUID fullRentPaymentRef,Instant fullRentPaidAt) {
     public record Event(UUID id,String kind,Instant occurredAt,UUID actorId,Object data) {}
 }

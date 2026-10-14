@@ -2,6 +2,18 @@
 
 08/10/2026. Đường dẫn gốc `/api/manager/overdue-cases`, JWT Bearer. Truy vấn cần MANAGER + VIEW_RENTALS/READ; lệnh cần MANAGE_RENTALS/MANAGE. Áp dụng phạm vi cơ sở trước khi tổng hợp dữ liệu và phân trang. Không ngầm cho Admin/Business thao tác thay Manager.
 
+### Nhiệm vụ Recovery đã được tiếp nhận
+
+Danh sách/chi tiết nhiệm vụ bổ sung `customerName` và `storageUnitCode` từ Rental liên kết. Nhiệm vụ thu hồi hiển thị chung tại Nhân viên & Nhiệm vụ của Manager và Nhiệm vụ vận hành của Staff, có loại Thu hồi kho và mở chi tiết ngay trong trang nhiệm vụ. Không còn tab thu hồi riêng ở Theo dõi quá hạn hoặc Ký gia hạn. Trạng thái nhiệm vụ: `OPEN` (chờ xử lý), `IN_PROGRESS` (đang xử lý), `CLOSED` (đã đóng); màn hình đọc không tự thực hiện kiểm kê, thanh lý tài sản hoặc giải phóng gian. Staff xem nhiệm vụ chưa đóng trong phạm vi được cấp quyền; không suy ra người được phân công hoặc hạn xử lý từ thời điểm tiếp nhận.
+
+API renewal-risk bổ sung `repossessionStatus`, `repossessionStartedAt`, `recoveryTaskId`. Có task `OPEN`/`IN_PROGRESS` trả `REPOSSESSION_STARTED`, thời điểm thực từ `received_at`; task `CLOSED` trả `REPOSSESSION_CLOSED`. Không có receiver/task trả `NOT_CONFIRMED` và hai trường tham chiếu/thời điểm null. Ngày quá hạn thứ 8 hoặc `repossessionStartsAt` chỉ là điều kiện thời gian, không phải chứng cứ task đã được tạo. Marker này do nhiệm vụ Recovery sở hữu; không đổi enum vòng đời Rental hoặc trạng thái vật lý StorageUnit. Có task thì `withinOrdinaryRenewalWindow=false`, kể cả khi nguồn term hiện tại thiếu.
+
+Runner `run-rental-support-dev.ps1` tự bật `EnableAutoRecovery` khi `EnableRenewalPayments` được bật hoặc suy ra từ cấu hình VNPay. Có thể chỉ định `-EnableAutoRecovery:$false` để tắt rõ ràng. Runner thêm migration `db/recovery-migration` và bật hai cờ trong cấu hình local; cấu hình dùng chung vẫn mặc định tắt. Triển khai khác cần cả `STORAGEHUB_RECOVERY_TASKS_ENABLED=true`, `STORAGEHUB_RENEWAL_AUTO_RECOVERY_ENABLED=true`, profile `shared-payment-schema`, schema integration và nguồn policy/thời hạn/hold đã cấu hình.
+
+Trong writer local dùng chung DB, `RecoveryTaskSource.requireNoPersistedHandoff` chặn mọi nhiệm vụ đã ghi nhận cho Rental, kể cả đã đóng; không có task cho phép tiếp tục các kiểm tra thời hạn, Return, hold và thanh toán hiện có. Đây chỉ là kiểm tra phạm vi DB local. API đọc trạng thái Recovery vẫn trả UNKNOWN khi thiếu bằng chứng, và writer dùng nguồn Recovery bên ngoài vẫn từ chối trạng thái không xác định.
+
+Khi bật `storagehub.integration.recovery-tasks.enabled=true` và chạy migration `db/recovery-migration`, `RecoveryTaskSource` tiếp nhận `RENTAL_TERM` đủ điều kiện trong cùng transaction với sự kiện bàn giao. Tạo một `recovery_tasks` trạng thái `OPEN` cho mỗi Rental; đây là nhiệm vụ để cơ sở xử lý, chưa phải biên bản kiểm kê hay xác nhận đã thu hồi xong. Manager/Staff có quyền `VIEW_RENTALS` và scope READ xem danh sách bằng `GET /api/{manager|staff}/recovery-tasks?facilityId=<UUID>&page=0&size=20`, xem chi tiết bằng `GET /api/{manager|staff}/recovery-tasks/{id}`. API đọc trạng thái trả `INTERNAL_TASK` khi có nhiệm vụ đang mở; khi không có task trả `UNKNOWN`, không xác nhận chắc chắn không có Recovery ngoài hệ thống. Worker ngày thứ 8 và giới hạn kích hoạt được mô tả tại [Renewal contract](RENEWAL_API_CONTRACT.md).
+
 ## Tham chiếu và dữ liệu tổng hợp
 
 Hồ sơ xử lý là dữ liệu tổng hợp có tham chiếu ổn định, KHÔNG phải thực thể nghiệp vụ mới được tạo:
@@ -33,6 +45,14 @@ Bàn giao Recovery cần RENTAL_TERM đủ điều kiện theo policy hiện t�
 MVP KHÔNG cung cấp endpoint tính phí/miễn phí/phạt mới hoặc endpoint Customer thanh toán nghĩa vụ. Phí đã được chủ nguồn xác lập vẫn nằm trong outstanding có thẩm quyền; tải lại/theo dõi xử lý không thu phí lần nữa.
 
 ## Nguồn, lưu trữ và triển khai
+
+### API đọc trạng thái Recovery cho Staff — 13/10/2026
+
+`GET /api/staff/rentals/{rentalId}/recovery-state` cần JWT STAFF, quyền `rentals:read` hiện hành trong DB/claims và phạm vi READ của cơ sở. Response `ApiResponse.data` gồm `rentalId`, `facilityId`, `checkedAt` từ server, `sourceCoverage`, `recoveryBlocked`.
+
+API gọi đúng `RecoverySource.state(Rental, now)` đang đăng ký. Không có receiver hoặc không có bằng chứng trả `sourceCoverage=UNKNOWN`, `recoveryBlocked=null`; không suy false từ bảng trống. Provider demo trả `LOCAL_DEMO`, receiver nhiệm vụ nội bộ trả `INTERNAL_TASK` khi có task mở, nguồn có coverage đầy đủ trả `VERIFIED`. Sai Rental/cơ sở/thời điểm trả 409 DEFERRED_SOURCE. Cơ sở ngoài phạm vi/hồ sơ không tồn tại trả 404; thiếu role/grant trả 403.
+
+GET không nhận bàn giao, đổi trạng thái hay tạo ACK. POST recovery-handoffs hiện có vẫn là lệnh điều phối bàn giao và yêu cầu receiver có thẩm quyền. Receiver nhiệm vụ nội bộ chỉ chứng nhận task đã lưu; dữ liệu do hệ thống thu hồi khác quản lý vẫn cần provider riêng.
 
 `service/overdue/OverdueSources.java`: FinancialSource, TermSource (chỉ đọc policy BO/nguồn gốc ngày), ReminderSource (policy + đưa vào hàng đợi trong giao dịch), RecoverySource (bên nhận thực tham gia giao dịch). Không cài dữ liệu giả/lớp triển khai mặc định chạy thực tế. Thiếu nguồn => đọc PARTIAL hoặc lệnh trả 409 DEFERRED_SOURCE; không trả 0/[] như thể thành công.
 

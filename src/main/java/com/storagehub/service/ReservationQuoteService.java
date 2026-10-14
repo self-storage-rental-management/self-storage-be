@@ -32,7 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ReservationQuoteService {
 
-    private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
+    private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private static final long QUOTE_VALID_MINUTES = 15;
 
     private final ReservationCompatibilityService compatibilityService;
