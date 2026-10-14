@@ -56,7 +56,7 @@ public class UnitType extends BaseEntity {
     @Column(name = "security_deposit_amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal securityDepositAmount = BigDecimal.ZERO;
 
-    @Column(length = 1000)
+    @Column(columnDefinition = "LONGTEXT")
     private String imageUrl;
 
     @Column(nullable = false, precision = 10, scale = 2)
