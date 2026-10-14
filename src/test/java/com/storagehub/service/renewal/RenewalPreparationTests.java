@@ -22,10 +22,10 @@ class RenewalPreparationTests {
         assertThat(mapper.readValue("{\"pricingPackageCode\":\"MONTHLY\"}",RenewalCommands.Quote.class).pricingPackageCode()).isEqualTo("MONTHLY");
         assertThatThrownBy(()->mapper.readValue("{\"pricingPackageCode\":\"MONTHLY\",\"amount\":1}",RenewalCommands.Quote.class)).isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
     }
-    @Test void approvedWholeMonthClampAndPricing(){
-        var t=RenewalTermCalculator.calculate(LocalDate.of(2027,1,30),1,new BigDecimal("9500000"),new BigDecimal("0.03"),new BigDecimal("0.20"));
+    @Test void fullRentWholeMonthClampAndPricingWithoutDeposit(){
+        var t=RenewalTermCalculator.calculate(LocalDate.of(2027,1,30),1,new BigDecimal("9500000"),new BigDecimal("0.03"),BigDecimal.ZERO);
         assertThat(t.startDate()).isEqualTo(LocalDate.of(2027,1,31));assertThat(t.newEndDate()).isEqualTo(LocalDate.of(2027,2,27));
-        assertThat(t.netRent()).isEqualByComparingTo("9215000");assertThat(t.depositAmount()).isEqualByComparingTo("1843000");
+        assertThat(t.netRent()).isEqualByComparingTo("9215000");assertThat(t.depositAmount()).isZero();
         assertThat(t.depositAmount().add(t.remainder())).isEqualByComparingTo(t.netRent());
         assertThat(RenewalTermCalculator.calculate(LocalDate.of(2028,1,30),1,BigDecimal.ONE,BigDecimal.ZERO,BigDecimal.ZERO).endExclusive()).isEqualTo(LocalDate.of(2028,2,29));
     }

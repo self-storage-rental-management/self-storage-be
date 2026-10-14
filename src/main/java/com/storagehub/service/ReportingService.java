@@ -65,10 +65,11 @@ public class ReportingService {
     private final ActivityLogRepository activityLogRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
+    private final ReportingPaymentEvidence reportingPaymentEvidence;
 
     @Transactional(readOnly = true)
     public ManagerReportSummaryResponse getManagerSummary(ActorPrincipal actor, UUID facilityId) {
-        authorizationService.require(actor, SystemPermission.VIEW_UNITS);
+        authorizationService.require(actor, SystemPermission.VIEW_REPORTS);
 
         UUID targetFacilityId = facilityId;
         if (targetFacilityId == null) {
@@ -140,9 +141,7 @@ public class ReportingService {
             .count();
 
         List<Payment> paidPayments = paymentRepository.findPaidPaymentsByFacility(targetFacilityId);
-        BigDecimal collectedRevenue = paidPayments.stream()
-            .map(Payment::getAmount)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal collectedRevenue = reportingPaymentEvidence.reportableCollectedRevenue(paidPayments).orElse(null);
 
         YearMonth currentYearMonth = YearMonth.now();
         Instant startOfMonth = currentYearMonth.atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC);
@@ -190,7 +189,7 @@ public class ReportingService {
         int size,
         String correlationId
     ) {
-        authorizationService.require(actor, SystemPermission.VIEW_UNITS);
+        authorizationService.require(actor, SystemPermission.VIEW_REPORTS);
 
         UUID targetFacilityId = facilityId;
         if (targetFacilityId != null) {

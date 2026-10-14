@@ -27,11 +27,18 @@ class SupportSwaggerTests {
             assertThat(list.isMissingNode()).isFalse();assertThat(list.path("security").toString()).contains("bearerAuth");
             assertThat(list.path("parameters").toString()).contains("page","size","status","search");
         }
-        for(String suffix:new String[]{"accept","resolution","request-information","escalations"}){
+        for(String suffix:new String[]{"claim","accept","resolution","request-information"}){
             var op=paths.path("/api/staff/support-workflows/{id}/"+suffix).path("post");
             assertThat(op.isMissingNode()).as(suffix).isFalse();assertThat(op.path("parameters").toString()).contains("Idempotency-Key");
             assertThat(op.path("responses").has("409")).isTrue();
         }
+        assertThat(paths.has("/api/manager/support-tickets/{id}/assignment")).isFalse();
+        assertThat(paths.has("/api/manager/support-tickets/{id}/escalations/{escalationId}/decision")).isFalse();
+        assertThat(paths.path("/api/staff/support-workflows/{id}/escalations").has("post")).isFalse();
+        paths.fields().forEachRemaining(entry->{
+            if(entry.getKey().startsWith("/api/manager/support-tickets"))
+                assertThat(entry.getValue().fieldNames()).toIterable().noneMatch(method->java.util.Set.of("post","put","patch","delete").contains(method));
+        });
         assertThat(paths.has("/api/manager/support-tickets/{id}/resolution")).isFalse();
         assertThat(paths.has("/api/customer/support-workflows/{id}/events")).isFalse();
         assertThat(paths.has("/api/customer/support-tickets/{id}/close")).isFalse();
@@ -54,8 +61,11 @@ class SupportSwaggerTests {
         assertHandler(RequestMethod.GET,workflowPath("customer")+"/{id}",CustomerSupportController.class);
         assertHandler(RequestMethod.POST,workflowPath("customer")+"/{id}/messages",CustomerSupportController.class);
         assertHandler(RequestMethod.GET,workflowPath("staff"),StaffSupportController.class);
+        assertHandler(RequestMethod.GET,workflowPath("staff")+"/queue",StaffSupportController.class);
+        assertHandler(RequestMethod.POST,workflowPath("staff")+"/{id}/claim",StaffSupportController.class);
         assertHandler(RequestMethod.POST,workflowPath("staff")+"/{id}/accept",StaffSupportController.class);
         assertHandler(RequestMethod.GET,workflowPath("manager"),ManagerSupportController.class);
+        assertHandler(RequestMethod.GET,workflowPath("manager")+"/summary",ManagerSupportController.class);
     }
 
     private void assertHandler(RequestMethod method,String path,Class<?> controller) {

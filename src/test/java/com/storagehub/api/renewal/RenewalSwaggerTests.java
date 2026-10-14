@@ -31,10 +31,11 @@ class RenewalSwaggerTests {
             var unauthorized=client.send(HttpRequest.newBuilder(URI.create(base+"/api/"+role+"/renewals")).GET().build(),HttpResponse.BodyHandlers.ofString());
             assertThat(unauthorized.statusCode()).isEqualTo(401);
         }
-        for(String path:new String[]{"/api/customer/rentals/{id}/renewal-quote","/api/customer/rentals/{id}/renewal-requests","/api/customer/renewals/{id}/cancel","/api/manager/renewals/{id}/decision"}) {
+        for(String path:new String[]{"/api/customer/rentals/{id}/renewal-quote","/api/customer/rentals/{id}/renewal-requests","/api/customer/renewals/{id}/cancel"}) {
             var responses=paths.path(path).path("post").path("responses");
             assertThat(responses.has("409")).isTrue();
             assertThat(responses.has(path.endsWith("renewal-requests")?"201":"200")).isTrue();
         }
+        assertThat(paths.path("/api/manager/renewals/{id}/decision").isMissingNode()).isTrue();
     }
 }

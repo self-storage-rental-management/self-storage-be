@@ -1,12 +1,12 @@
 # D5 — Đặc tả API hỗ trợ
 
-Trạng thái: triển khai BE theo hướng bổ sung, 08/10/2026. Tích hợp nguồn dùng chung và triển khai schema vẫn phải đáp ứng các điều kiện kiểm soát. Tài liệu mô tả hành vi đã triển khai, không khẳng định mọi phụ thuộc đã được đưa vào vận hành.
+Nghiệp vụ hiện hành cập nhật 13/10/2026: Customer trao đổi trực tiếp với Staff; Staff tự nhận yêu cầu. Manager chỉ xem và theo dõi trong phạm vi cơ sở. Tích hợp nguồn dùng chung và triển khai schema vẫn phải đáp ứng các điều kiện kiểm soát.
 
 ## Trách nhiệm và ranh giới
 
 - Customer phụ trách tạo yêu cầu/trao đổi công khai, chủ động mở lại và xác nhận kết quả xử lý.
-- Facility Manager chỉ phụ trách phân công/giao lại trong phạm vi cơ sở và điều phối yêu cầu chuyển module xử lý (escalation).
-- Facility Staff đang hoạt động, hiện được phân công phụ trách việc nhận, xử lý, yêu cầu bổ sung và báo kết quả.
+- Facility Manager chỉ đọc danh sách, tổng hợp, chi tiết và lịch sử trong phạm vi cơ sở; không phân công, giao lại, nhắn tin, quyết định chuyển tiếp hay thay đổi trạng thái.
+- Facility Staff đang hoạt động tự nhận yêu cầu chưa có người xử lý qua claim, rồi trao đổi, yêu cầu bổ sung và báo kết quả. Khóa ticket bảo đảm một Staff nhận thành công; Staff khác không truy cập nội dung sau khi ticket được nhận.
 - Business Operations sở hữu policy SLA/đóng yêu cầu và lịch làm việc. Support áp dụng policy; không tạo policy riêng hoặc sửa dữ liệu BO.
 - Chủ các module dùng chung sở hữu kết quả thanh toán/hoàn tiền/trả kho/bảo trì/tài khoản/gia hạn/quá hạn. Tin nhắn Support không phải bằng chứng các thao tác đó đã thành công.
 - Tái sử dụng nguyên trạng `SupportTicket`, `SupportTicketStatus`, `User`, quyền, phạm vi cơ sở và dịch vụ file hiện có. Không có nguồn phân công nhiệm vụ song song, backend mới, API bên ngoài hoặc bản ghi nghiệp vụ tạo sẵn.
@@ -15,9 +15,9 @@ Trạng thái: triển khai BE theo hướng bổ sung, 08/10/2026. Tích hợp 
 
 Mọi đường dẫn sử dụng xác thực Bearer và cấu trúc bao phản hồi hiện có (`ApiResponse`, `PageResponse`, `ApiErrorResponse`, correlation ID).
 
-Kiểm tra lại trạng thái/role/quyền/phạm vi cơ sở hiện được lưu của người dùng, không chỉ dựa vào thông tin trong token. Customer phải sở hữu ticket và mọi hồ sơ liên kết. Manager đọc cần `VIEW_SUPPORT` + phạm vi READ; lệnh cần `MANAGE_SUPPORT` + phạm vi MANAGE. Staff phải là người đang được phân công, có `VIEW_SUPPORT` và `MANAGE_SUPPORT`, cùng phạm vi OPERATE/MANAGE. Giao lại thu hồi quyền đọc, thực thi lệnh và nhận lại kết quả lệnh đã lưu của Staff cũ.
+Kiểm tra trạng thái/role/quyền/phạm vi cơ sở hiện trong DB và token. Customer phải sở hữu ticket và hồ sơ liên kết. Manager đọc chỉ cần `VIEW_SUPPORT` + READ; không có API mutation. Principal có role MANAGER không được dùng role STAFF đồng thời để thực hiện lệnh Support. Staff cần `VIEW_SUPPORT` + `MANAGE_SUPPORT` và OPERATE/MANAGE tại cơ sở để xem hàng đợi an toàn và claim; nội dung/trao đổi sau claim chỉ thuộc Staff hiện đang xử lý.
 
-**Điều kiện triển khai:** `RoleDataInitializer` hiện không cấp `MANAGE_SUPPORT` cho STAFF. Tác vụ này chủ ý không thay đổi điều đó. Chủ phần phân quyền phải duyệt/cấp quyền qua cơ chế role hiện có trước khi Staff vận hành D5; nếu chưa cấp, API từ chối truy cập và danh sách Staff loại người không đủ điều kiện. Không dùng token Manager để vượt chặn.
+`RoleDataInitializer` hiện có `VIEW_SUPPORT` và `MANAGE_SUPPORT` trong bộ quyền STAFF mặc định. Quyền đã bị thu hồi/tùy chỉnh và phạm vi cơ sở vẫn được kiểm tra thực tế; thay đổi này không tự cấp lại quyền hay sửa DB. Manager có `MANAGE_SUPPORT` do lịch sử/kế thừa cũng không được thao tác Support.
 
 Ticket cũ không có cơ sở bị loại khỏi danh sách theo phạm vi và trả 404; không ngầm có quyền phân loại/xử lý toàn hệ thống. Ticket cũ có cơ sở trong phạm vi nhưng chưa có metadata workflow đã xác minh được đọc với `workflowReady=false`, không được thay đổi. Không tự bổ sung ngược dữ liệu.
 
@@ -42,17 +42,16 @@ Tiền tố D5 `C = /api/customer/support-workflows`, `M = /api/manager/support-
 | POST C/{id}/reopen | Chủ động chuyển resolved → in_progress/open |
 | POST C/{id}/follow-ups | Ticket mới liên kết ticket cha đã đóng; 201 |
 | GET M, GET M/{id} | Danh sách/chi tiết trong phạm vi |
-| GET M/staff-options?facilityId=UUID | ID Staff đủ điều kiện trong cơ sở quản lý; page/size |
-| POST M/{id}/assignment | Phân công/giao lại bằng ID và lý do |
+| GET M/summary?facilityId=UUID | Tổng hợp trạng thái trong phạm vi READ |
 | GET M/{id}/messages, /events, /escalations | Dữ liệu nội bộ/công khai trong phạm vi |
-| POST M/{id}/escalations/{escalationId}/decision | Chỉ ROUTE/REJECT |
 | GET S, GET S/{id} | Danh sách/chi tiết hiện được phân công |
+| GET S/queue | Hàng đợi chưa được nhận: chỉ metadata an toàn, lọc phạm vi trước phân trang |
+| POST S/{id}/claim | Staff tự nhận và bắt đầu xử lý trong cùng transaction |
 | POST S/{id}/accept | open → in_progress |
 | GET S/{id}/messages, /events, /escalations | Dữ liệu thuộc phân công hiện tại |
 | POST S/{id}/messages | Phản hồi PUBLIC hoặc ghi chú INTERNAL; 201 |
 | POST S/{id}/request-information | in_progress → waiting_customer |
 | POST S/{id}/resolution | in_progress → resolved, kết quả đã xác minh |
-| POST S/{id}/escalations | Đề nghị điều phối tới module được phép; 201 |
 
 Không có endpoint Manager báo xử lý xong, dòng thời gian nội bộ cho Customer, endpoint chọn người nhận tùy ý, endpoint client ghi ACK/kết quả, hoặc endpoint công khai tự đóng.
 
@@ -80,19 +79,19 @@ Ví dụ liên kết hồ sơ thuộc Customer (cơ sở được suy ra; nếu 
 
 Loại liên kết: `RENTAL`, `RESERVATION`, `PAYMENT`, `STORAGE_UNIT`. Quyền sở hữu Payment theo Customer của Reservation tương ứng, không chỉ theo người khởi tạo thanh toán. Liên kết gian kho yêu cầu quan hệ Rental với Customer, không chỉ biết UUID gian kho. Khi không liên kết hồ sơ, cần ID cơ sở đang hoạt động.
 
-Phân công: `{"assignedStaffId":"<eligible-uuid>","expectedVersion":0,"reason":"Shift allocation"}`. Phiên bản trên chỉ để minh họa; luôn dùng giá trị hiện tại thực tế.
+Tự nhận: `POST S/{id}/claim`, body `{"expectedVersion":0}`, header `Idempotency-Key`. Phiên bản lấy từ queue hiện tại; claim ghi người xử lý, sự kiện ASSIGNED/ACCEPTED và chuyển open → in_progress trong cùng transaction. Retry đúng key/payload đọc lại kết quả; Staff cạnh tranh hoặc stale version trả 409.
 
 Nhận việc: `{"expectedVersion":1}`. Tin nhắn Staff: `{"body":"Progress update","visibility":"PUBLIC","evidenceFileIds":[]}`. Tin nhắn Customer: `{"body":"Requested details","expectedVersion":2}`. Yêu cầu bổ sung: `{"message":"Please provide details","expectedVersion":2}`. Báo kết quả: `{"summary":"Outcome and explanation","expectedVersion":3}`. Mở lại: `{"reason":"Issue persists","expectedVersion":4}`. Đóng: `{"expectedVersion":4,"feedback":"Confirmed"}`.
 
 ## Vòng đời
 
-- Ticket mới: `open`, chưa phân công, nằm trong hàng đợi Manager. Manager phân công vẫn giữ `open` cho đến khi Staff nhận.
-- Chỉ giao lại khi chưa ở trạng thái kết thúc: ID Staff mới, bắt buộc lý do, tăng phiên bản phân công, xóa xác nhận đã nhận, giữ sự kiện/tin nhắn bất biến, trạng thái `open`.
-- Staff phải nhận phân công hiện tại trước khi nhắn/xử lý/báo kết quả. Không có luồng Manager hoàn thành thay Staff.
+- Ticket mới: `open`, chưa có người xử lý, nằm trong hàng đợi Staff theo cơ sở. Manager đọc để theo dõi.
+- Staff claim ghi người xử lý và chấp nhận việc ngay; không có bước Manager phân công/giao lại. `/accept` chỉ giữ cho hồ sơ lịch sử đã được phân công nhưng chưa nhận.
+- Staff phải là người đã nhận hiện tại trước khi nhắn/xử lý/báo kết quả.
 - `request-information` tạo câu hỏi PUBLIC và chuyển `waiting_customer`; ghi chú INTERNAL không đổi trạng thái hoặc thông báo Customer. Phản hồi PUBLIC của Customer kèm phiên bản tiếp tục `in_progress`.
 - Phản hồi PUBLIC của Staff thông báo Customer và ghi thời điểm phản hồi công khai đầu/cuối. Ghi chú nội bộ không thực hiện hai việc này.
 - Báo kết quả cần Staff hiện tại đã nhận, trạng thái `in_progress`, nội dung kết quả, kết quả mục tiêu liên kết đã xác minh nếu có, và không còn escalation chưa giải quyết. Ticket hỏi thông tin chung không liên kết có thể được xử lý xong bằng giải thích của Staff.
-- Trả lời ticket `resolved` không âm thầm mở lại. Chủ động mở lại trả cho Staff đủ điều kiện đã nhận (`in_progress`), hoặc xóa phân công không còn đủ điều kiện và trả về hàng đợi Manager (`open`).
+- Trả lời ticket `resolved` không âm thầm mở lại. Chủ động mở lại trả cho Staff đủ điều kiện đã nhận (`in_progress`), hoặc xóa người xử lý không còn đủ điều kiện và trả về hàng đợi Staff để claim (`open`).
 - Ticket `closed` không thể được trả lời/mở lại/giao lại. Customer tạo yêu cầu tiếp nối liên kết cùng cơ sở; không sao chép nội dung hoặc file nội bộ.
 - Đóng ticket không xóa nợ, đánh dấu hoàn tiền đã chi, giải phóng gian kho, đóng hồ sơ Return hoặc hoàn thành nhiệm vụ của module khác.
 
@@ -107,7 +106,7 @@ Các giao diện mở rộng nằm trong `SupportSources`; **không cài đặt 
 | ClosePolicySource | Policy/phiên bản BO, quyền Customer đóng và hạn tự đóng có thẩm quyền. Thiếu: chặn đóng/tự đóng. Hạn không được trước thời điểm resolved + 7 ngày lịch. |
 | NotificationSource | Bằng chứng delivery của thông báo kết quả/thời gian xem xét, gắn đúng ticket, Customer, RESOLVED event hiện tại và policy/version. `consistentThroughClose()` mặc định false; chưa có authoritative adapter thì auto-close bị chặn. Không dùng notification queued/persisted làm delivery proof. |
 | ResolutionSource | Xác minh kết quả mục tiêu liên kết thực tế. Thiếu: chặn báo xử lý xong ticket liên kết và đóng cuối cùng; ghi chú/đang chờ hoàn tiền không được tính là kết quả. |
-| EscalationSource | Phải công bố module hỗ trợ + chuyển tiếp trong giao dịch/bền vững. Thiếu: từ chối escalation trước khi tạo yêu cầu chưa giải quyết không có đường xử lý tiếp. ACK/kết quả đáng tin cậy đọc từ bên nhận và phải khớp tham chiếu ticket/escalation/bên nhận. |
+| EscalationSource | Chỉ đọc/xác minh kết quả điều phối lịch sử. Thiếu nguồn thì kết quả cũ vẫn UNKNOWN và chặn resolve/close; không tạo chuyển tiếp mới. |
 
 Mục tiêu SLA đã duyệt: HIGH 1 / MEDIUM 4 / LOW 8 giờ làm việc để phản hồi đầu tiên; yêu cầu chưa giải quyết phải cập nhật mỗi ngày làm việc. `waiting_customer` tạm dừng xử lý chủ động, không xóa nghĩa vụ phản hồi đầu/cập nhật đã phát sinh. Chờ nội bộ không phải chờ Customer. Bộ kết nối phụ trách tính lịch và hạch toán lịch sử tạm dừng; cấm thay bằng cách tính thời gian thực trôi qua không xét lịch. Phần lõi lưu thời điểm phân công/phản hồi và lịch sử sự kiện để tích hợp. Chế độ thiếu nguồn **không** khẳng định giám sát/cảnh báo SLA đang hoạt động.
 
@@ -117,15 +116,13 @@ Thông báo được tạo trong giao dịch resolve/auto-close vẫn dùng `Not
 
 `SupportAutoCloseCoordinator` chỉ được bật chủ động (`app.support.auto-close.enabled=true`; không có/false thì không tạo bean/job). Thành phần quét metadata đã xử lý được xác minh theo từng lô có giới hạn bằng phân trang theo khóa, với giao dịch khóa độc lập cho từng ticket; thiếu nguồn không đồng nghĩa đóng thành công và không làm các ticket phía sau bị bỏ đói. Cấu hình: batch-size mặc định 100, cho phép 1..500; initial-delay-ms/fixed-delay-ms mặc định 60000. Không bật hoặc thêm thuộc tính nào vào cấu hình chung. Chủ policy/lịch/schema phải cung cấp nguồn và duyệt kích hoạt/giới hạn quét trước khi dùng. Cạnh tranh giữa nhiều instance được xử lý bằng khóa ticket và kiểm tra lại trạng thái resolved, không giả định chỉ có một instance lập lịch.
 
-## Điều phối sang module khác (escalation)
+## Lịch sử điều phối và các API đã gỡ
 
-Yêu cầu: `{"targetModule":"PAYMENT","reason":"Owner verification needed","expectedVersion":3}`.
+Nghiệp vụ mới chỉ có tương tác Customer/Staff. Đã gỡ POST Manager assignment, POST Manager escalation decision, GET Manager staff-options và POST Staff escalations. Manager chỉ có GET; các lệnh nội bộ cũ cũng từ chối trước khi đọc receipt/mutation, nên idempotency cũ không hồi sinh thao tác đã bị gỡ.
 
-Module được phép: PAYMENT, RETURN_SETTLEMENT, MAINTENANCE, HANDOVER, ACCOUNT, RENEWAL, OVERDUE. Chuyển tiếp tới bên nhận theo quyền/phạm vi module, không theo tên lập trình viên hoặc ID người nhận tùy ý. Bằng chứng là INTERNAL.
+GET messages/events/escalations vẫn giữ lịch sử có phạm vi. Manager được đọc file theo quyền nhưng không upload/attach bằng chứng Support. Không xóa sự kiện, người xử lý hoặc receiver reference cũ. Các escalation lịch sử chưa có kết quả thật tiếp tục chặn resolve/close; không tự đánh dấu REJECTED/COMPLETED để bỏ qua. Liên kết Payment/Return/Renewal vẫn cần xác minh kết quả thật của module trước khi báo giải quyết xong. Yêu cầu cũ đã có Staff nhận tiếp tục do người đó xử lý.
 
-Quyết định Manager: `{"action":"ROUTE","reason":"Route to authorized owner","expectedVersion":4}` (hoặc REJECT).
-
-Trạng thái điều phối được lưu: REQUESTED, ROUTED, REJECTED. ROUTED có nghĩa có tham chiếu tiếp nhận/outbox bền vững, **không** phải ACK hoặc công việc thành công. Trạng thái bên nhận đã xác minh được tổng hợp riêng thành ACKNOWLEDGED, REJECTED, COMPLETED; COMPLETED cần tham chiếu kết quả thật. Kết quả bên nhận còn chờ/chưa xác định chặn báo xử lý xong. Manager có thể từ chối điều phối kèm lý do, không giả kết quả hoàn tất của chủ module. Không thay đổi trực tiếp bản ghi do module khác sở hữu.
+UI chưa được sửa trong tác vụ này. Client gọi API mutation đã gỡ cần được cập nhật ở một thay đổi giao diện riêng; contract BE không fallback sang thao tác Manager cũ.
 
 ## Ý nghĩa truy vấn / phản hồi
 

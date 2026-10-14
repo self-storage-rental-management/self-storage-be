@@ -156,7 +156,7 @@ public class SimulatedPaymentService {
 
     private void requireSameRequest(Payment payment, ActorPrincipal actor, UUID reservationId) {
         if (!payment.getInitiatedBy().getId().equals(actor.userId())
-            || !payment.getReservation().getId().equals(reservationId)) {
+            || payment.getReservation()==null || !payment.getReservation().getId().equals(reservationId)) {
             throw ApiExceptions.conflict("Idempotency-Key is already used for a different request");
         }
     }

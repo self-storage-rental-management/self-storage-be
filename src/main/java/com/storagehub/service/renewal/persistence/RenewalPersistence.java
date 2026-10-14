@@ -64,7 +64,7 @@ public class RenewalPersistence {
         em.persist(revision);workflow.accept(revision);em.flush();
     }
     public void releaseSlot(RenewalWorkflow workflow) {
-        if(!Set.of(RenewalStatus.rejected,RenewalStatus.cancelled,RenewalStatus.completed).contains(workflow.getRenewal().getStatus()))
+        if(!Set.of(RenewalStatus.rejected,RenewalStatus.cancelled,RenewalStatus.completed,RenewalStatus.payment_expired).contains(workflow.getRenewal().getStatus()))
             throw ApiExceptions.conflict("Nonterminal renewal cannot release its open slot");
         var slot=em.find(RenewalOpenSlot.class,workflow.getRenewal().getRental().getId(),LockModeType.PESSIMISTIC_WRITE);
         if(slot==null||!slot.getRenewal().getId().equals(workflow.getId()))throw ApiExceptions.conflict("Open slot does not match renewal");
@@ -89,7 +89,7 @@ public class RenewalPersistence {
     private static void requireBinding(Renewal renewal,RenewalQuote quote) {
         if(renewal.getId()==null||!renewal.getRental().getId().equals(quote.getRental().getId())||!renewal.getRequestedBy().getId().equals(quote.getCustomer().getId()))
             throw ApiExceptions.conflict("Accepted quote does not match renewal owner/rental");
-        if(renewal.getStatus()!=RenewalStatus.pending)throw ApiExceptions.conflict("Only pending renewal accepts terms");
+        if(renewal.getStatus()!=RenewalStatus.pending&&renewal.getStatus()!=RenewalStatus.accepted)throw ApiExceptions.conflict("Only an unstarted renewal accepts terms");
     }
     private static void validateKey(String operation,String key) {
         if(operation==null||operation.isBlank()||operation.length()>32||key==null||key.isBlank()||key.length()>100)
