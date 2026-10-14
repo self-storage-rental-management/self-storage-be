@@ -59,7 +59,7 @@ public class MaintenanceService {
     @Transactional
     public MaintenanceTaskResponse createTask(ActorPrincipal actor, CreateMaintenanceTaskRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_INVENTORY);
-        StorageUnit unit = storageUnitRepository.findById(request.storageUnitId())
+        StorageUnit unit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
 
         facilityScopeService.assertCanManage(actor, unit.getFacility().getId());
@@ -388,7 +388,10 @@ public class MaintenanceService {
         int pageSize,
         String correlationId
     ) {
-        authorizationService.require(actor, SystemPermission.VIEW_UNITS);
+        if (!actor.hasPermission(SystemPermission.VIEW_UNITS)
+            && !actor.hasPermission(SystemPermission.MANAGE_STAFF_TASKS)) {
+            authorizationService.require(actor, SystemPermission.VIEW_UNITS);
+        }
 
         Collection<UUID> allowedFacilityIds = null;
         if (facilityScopeService.isFacilityScoped(actor)) {

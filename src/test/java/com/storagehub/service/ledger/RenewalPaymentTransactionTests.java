@@ -124,6 +124,35 @@ class RenewalPaymentTransactionTests {
         assertThat(read(id).getStatus()).isEqualTo(PaymentStatus.PAID);
         assertThat(read(id).getFailureCode()).isEqualTo("PAYMENT_AFTER_DEADLINE");assertThat(receiptCount(id)).isZero();
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void paidSelectedAppointmentKeepsSigningWindowEvenAfterAppointmentEnd(boolean expired) throws Exception {
+        UUID id=fixture();tx.executeWithoutResult(s->gateway.processCallback(callbackUnchecked(id)));
+        Instant start=NOW.plusSeconds(expired?900:2700),end=start.plusSeconds(1800),cutoff=NOW.plusSeconds(172800);
+        tx.executeWithoutResult(s->{
+            var p=payments.findById(id).orElseThrow();
+            var state=new com.storagehub.service.renewal.operations.RenewalOperationState(p.getRenewal());
+            state.awaitingPayment(end,cutoff,"selected","1");state.appointment(UUID.randomUUID(),start,end);em.persist(state);
+        });
+        when(safety.atomic()).thenReturn(true);when(calendar.atomic()).thenReturn(true);
+        when(safety.check(any(),any(),any(),any())).thenReturn(cutoff);
+        when(calendar.slot(any(),eq(start))).thenReturn(Optional.of(new RenewalOperationSources.Slot("slot",start,end)));
+        when(finance.consistentThroughApproval()).thenReturn(true);
+        when(finance.read(any())).thenReturn(Optional.of(new RenewalSources.Financial(NOW,List.of(),false)));
+        worker.reconcile(id);
+        assertThat(read(id).getStatus()).isEqualTo(PaymentStatus.PAID);
+        assertThat(receiptCount(id)).isEqualTo(1);
+        assertThat(read(id).getRenewalSigningPreparedAt()).as(read(id).getFailureReason()).isNotNull();
+        tx.executeWithoutResult(s->{
+            var p=payments.findById(id).orElseThrow();
+            var state=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,p.getRenewal().getId());
+            assertThat(state.getEffectiveSigningDeadline()).isEqualTo(cutoff);
+            assertThat(state.getEffectiveSigningDeadline()).isAfter(end);
+        });
+    }
+    private Map<String,String> callbackUnchecked(UUID id) {
+        try{return callback(id,Map.of());}catch(Exception error){throw new IllegalStateException(error);}
+    }
     @Test void signingCanRetryAfterAllocationWithoutExtendingRentalOrDuplicatingReceipt() throws Exception {
         UUID id=fixture();var callback=callback(id,Map.of());tx.executeWithoutResult(s->gateway.processCallback(callback));worker.reconcile(id);
         when(safety.atomic()).thenReturn(true);when(calendar.atomic()).thenReturn(true);
@@ -167,27 +196,142 @@ class RenewalPaymentTransactionTests {
         tx.executeWithoutResult(s->{var p=payments.findById(id).orElseThrow();p.getRenewal().setStatus(RenewalStatus.cancelled);});
         worker.reconcile(id);assertThat(receiptCount(id)).isZero();assertThat(read(id).getStatus()).isEqualTo(PaymentStatus.PAID);
     }
+    @Test void signingExpiryForfeitsVerifiedDepositOnceWithoutExtendingTheRental() throws Exception {
+        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(4)));
+        UUID renewalId=tx.execute(s->payments.findById(payment).orElseThrow().getRenewal().getId());
+        tx.executeWithoutResult(s->{assertThat(source.reconcile(renewalId)).isTrue();assertThat(source.reconcile(renewalId)).isFalse();
+            assertThat(source.read(renewalId).status()).isEqualTo("FORFEITED");
+            var n=em.find(Renewal.class,renewalId);assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
+            assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
+            assertThat(ledger.read(n.getRental().getId()).orElseThrow().knownOutstanding()).isZero();
+        });
+    }
+    @Test void unresolvedFacilityIncidentPreventsAutomaticDepositForfeiture() throws Exception {
+        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(4)));
+        tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();incident(n,false);
+            assertThat(source.reconcile(n.getId())).isTrue();assertThat(source.read(n.getId()).status()).isEqualTo("REVIEW_REQUIRED");});
+    }
+    @Test void depositSettlementAfterRecoveryPreservesANewerRenewalOpenSlot() throws Exception {
+        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(4)));
+        tx.executeWithoutResult(s->{
+            var old=payments.findById(payment).orElseThrow().getRenewal();
+            em.remove(em.find(RenewalOpenSlot.class,old.getRental().getId()));em.flush();
+            var next=new Renewal();next.setRental(old.getRental());next.setRequestedBy(old.getRequestedBy());next.setStatus(RenewalStatus.accepted);
+            next.setAmount(old.getAmount());next.setNewEndDate(old.getNewEndDate());em.persist(next);em.persist(new RenewalOpenSlot(old.getRental(),next));em.flush();
+            assertThat(source.reconcile(old.getId())).isTrue();
+            assertThat(em.find(RenewalOpenSlot.class,old.getRental().getId()).getRenewal().getId()).isEqualTo(next.getId());
+        });
+    }
+    @Test void refundReservationAndSandboxAttestationAreCommittedOnceAndNeverBecomeProductionPayouts() throws Exception {
+        UUID payment=paidDeposit(false);Instant now=NOW.plus(Duration.ofDays(4));var source=depositSource(now);
+        UUID refund=tx.execute(s->{var n=payments.findById(payment).orElseThrow().getRenewal();var incident=incident(n,true);
+            var reserved=source.reserve(n,incident,n.getRequestedBy().getId(),"test-refund-"+n.getId(),now);
+            assertThat(source.read(n.getId()).status()).isEqualTo("REFUND_APPROVED");
+            assertThat(n.getStatus()).isEqualTo(RenewalStatus.cancelled);assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
+            return reserved.reference();});
+        assertThat(read(payment).getRefundedAmount()).isZero();
+        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var account=ledger.read(p.getRenewal().getRental().getId()).orElseThrow();
+            ledger.executeRefund(account.rentalId(),account.refunds().getFirst().id(),"production-payout",p.getInitiatedBy().getId(),"forbidden-production-payout",account.revision());})).hasMessageContaining("Sandbox refund");
+        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var done=source.execute(p.getRenewal(),refund,UUID.randomUUID(),"sandbox-refund-"+refund,p.getInitiatedBy().getId(),now.plusSeconds(1));
+            assertThat(done.environment()).isEqualTo("SANDBOX");assertThat(done.amount()).isEqualByComparingTo("40");
+            assertThat(source.read(p.getRenewal().getId()).status()).isEqualTo("REFUNDED");});
+        assertThat(read(payment).getRefundedAmount()).isEqualByComparingTo("40");
+        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();assertThat(ledger.read(p.getRenewal().getRental().getId()).orElseThrow().knownOutstanding()).isZero();});
+        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();source.execute(p.getRenewal(),refund,UUID.randomUUID(),"duplicate",p.getInitiatedBy().getId(),now.plusSeconds(2));})).hasMessageContaining("awaiting execution");
+    }
+    @Test void dailyFeesUseActualAllocationsAndASecondDayCanBePaidWithoutPayingRentAgain() throws Exception {
+        UUID payment=paidDeposit(true);Instant first=NOW.plusSeconds(3600),second=NOW.plus(Duration.ofDays(1));
+        var provider=new org.springframework.beans.factory.support.StaticListableBeanFactory();provider.addBean("finance",finance);
+        var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(accounting,"manualPayments",new ManualRentalPaymentService(payments,audit));
+        var periods=mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        when(periods.require(any())).thenAnswer(call->{var r=(Rental)call.getArgument(0);return com.storagehub.service.rental.period.RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE,"period").orElseThrow();});
+        var policyService=mock(com.storagehub.service.renewal.integration.RenewalPolicyPublicationService.class);var published=mock(com.storagehub.api.renewal.PublishedRenewalPolicy.class);
+        when(published.term()).thenReturn(new com.storagehub.api.renewal.PublishedRenewalPolicy.Term("calendar","Asia/Ho_Chi_Minh",3,6,7,8,LocalTime.of(17,0),LocalTime.MIDNIGHT));
+        when(policyService.read(any(),any())).thenReturn(Optional.of(new com.storagehub.service.renewal.integration.RenewalPolicyPublicationService.Stored("policy",published)));
+        org.springframework.test.util.ReflectionTestUtils.setField(accounting,"fees",new RenewalOverdueFeeService(em,periods,policyService));
+        tx.executeWithoutResult(s->{var rows=em.createQuery("select x from SystemSetting x where x.settingKey='lateFeeAmount'",SystemSetting.class).getResultList();
+            var setting=rows.isEmpty()?new SystemSetting():rows.getFirst();setting.setSettingKey("lateFeeAmount");setting.setValue("5");setting.setSettingType("number");setting.setGroupName("test");setting.setLabel("test");if(rows.isEmpty())em.persist(setting);});
+        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var n=p.getRenewal();var terms=decodeTerms(p);
+            var statement=accounting.statement(n,terms,first);assertThat(statement.remainingRentalAmount()).isEqualByComparingTo("60");assertThat(statement.overdueFee()).isEqualByComparingTo("5");
+            recordFeeCash(accounting,n,statement,"fee-day-one",first);accounting.requireFullyPaid(n,terms,first);
+        });
+        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();accounting.requireFullyPaid(p.getRenewal(),decodeTerms(p),second);})).hasMessageContaining("Daily overdue fee");
+        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var n=p.getRenewal();var terms=decodeTerms(p);var statement=accounting.statement(n,terms,second);
+            assertThat(statement.remainingRentalAmount()).isZero();assertThat(statement.overdueFee()).isEqualByComparingTo("5");
+            recordFeeCash(accounting,n,statement,"fee-day-two",second);accounting.requireFullyPaid(n,terms,second);
+            var manual=payments.findAllByRenewal_IdAndStatusIn(n.getId(),List.of(PaymentStatus.PAID)).stream().filter(v->v.getPurpose()==PaymentType.RENTAL_BALANCE).toList();
+            assertThat(manual).hasSize(2);assertThat(manual.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO,BigDecimal::add)).isEqualByComparingTo("70");
+        });
+    }
+    private RenewalQuoteResponse.Terms decodeTerms(Payment payment){try{return mapper.readValue(payment.getRenewalRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);}catch(Exception e){throw new IllegalStateException(e);}}
+    private void recordFeeCash(RenewalLedgerAccountingConfiguration.Accounting source,Renewal n,RenewalOperationSources.Statement statement,String reference,Instant now) {
+        var f=new FileAsset();f.setEntityType("DUONG_RENEWAL_CASH_RECEIPT");f.setEntityId(n.getId());f.setUploadedBy(n.getRequestedBy());
+        f.setOriginalName(reference+".pdf");f.setStorageKey("test-only/"+reference);f.setContentType("application/pdf");f.setSizeBytes(1L);f.setChecksumSha256("0".repeat(64));em.persist(f);em.flush();
+        var receipt=source.balance(n,statement.reference(),reference,f.getId(),"CASH",n.getRequestedBy().getId(),reference+":"+n.getId(),now);
+        try{em.persist(new com.storagehub.service.renewal.operations.RenewalOperationEvent(n,"CASH",now,n.getRequestedBy().getId(),mapper.writeValueAsString(receipt)));em.flush();}
+        catch(Exception e){throw new IllegalStateException(e);}
+    }
+    private UUID paidDeposit(boolean overdue) throws Exception {
+        UUID id=fixture(true,overdue);when(safety.atomic()).thenReturn(true);when(calendar.atomic()).thenReturn(true);
+        when(policy.read(any())).thenReturn(Optional.of(new RenewalOperationSources.Policy("test","v1",Duration.ofDays(3),Duration.ofHours(1))));
+        when(safety.check(any(),any(),any(),any())).thenReturn(NOW.plus(Duration.ofDays(5)));
+        when(calendar.feasible(any(Renewal.class),any(),any())).thenReturn(true);
+        when(finance.consistentThroughApproval()).thenReturn(true);when(finance.read(any())).thenReturn(Optional.of(new RenewalSources.Financial(NOW,List.of(),false)));
+        tx.executeWithoutResult(s->gateway.processCallback(callbackUnchecked(id)));worker.reconcile(id);
+        assertThat(read(id).getRenewalSigningPreparedAt()).as(read(id).getFailureReason()).isNotNull();
+        tx.executeWithoutResult(s->{var n=payments.findById(id).orElseThrow().getRenewal();n.getRental().getStorageUnit().setStatus(StorageUnitStatus.occupied);
+            var state=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,n.getId());
+            var slot=new RenewalOperationSources.Slot("slot",NOW.plusSeconds(7200),NOW.plusSeconds(9000));
+            try{var event=new com.storagehub.service.renewal.operations.RenewalOperationEvent(n,"APPOINTMENT",NOW,null,mapper.writeValueAsString(slot));em.persist(event);em.flush();state.appointment(event.getId(),slot.start(),slot.end());}
+            catch(Exception e){throw new IllegalStateException(e);}
+        });return id;
+    }
+    private UUID incident(Renewal n,boolean reviewed) {
+        var state=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,n.getId());
+        try {var event=new com.storagehub.service.renewal.operations.RenewalOperationEvent(n,"INCIDENT",NOW.plusSeconds(7200),n.getRequestedBy().getId(),mapper.writeValueAsString(Map.of("appointmentRef",state.getAppointmentRef())));em.persist(event);em.flush();
+            if(reviewed)em.persist(new com.storagehub.service.renewal.operations.RenewalOperationEvent(n,"FAULT_REVIEW",NOW.plusSeconds(8000),n.getRequestedBy().getId(),mapper.writeValueAsString(Map.of("incidentId",event.getId(),"facilityFault",true))));
+            em.flush();return event.getId();
+        }catch(Exception e){throw new IllegalStateException(e);}
+    }
+    private RenewalDepositSettlementService depositSource(Instant now) {
+        var sources=new org.springframework.beans.factory.support.StaticListableBeanFactory();sources.addBean("calendar",calendar);sources.addBean("safety",safety);sources.addBean("policy",policy);
+        sources.addBean("clock",Clock.fixed(now,ZoneOffset.UTC));sources.addBean("operations",mock(com.storagehub.service.renewal.operations.RenewalOperationService.class));
+        sources.addBean("credits",new RenewalLedgerAdjustments(jdbc));
+        org.springframework.test.util.ReflectionTestUtils.setField(ledger,"cancellationCredits",sources.getBeanProvider(RenewalLedgerAdjustments.class));
+        var source=new RenewalDepositSettlementService(em,mapper,ledger,payments,provenance,new RenewalPersistence(em,mapper),audit,mock(NotificationService.class),
+            sources.getBeanProvider(Clock.class),sources.getBeanProvider(RenewalOperationSources.PolicySource.class),sources.getBeanProvider(RenewalOperationSources.CalendarSource.class),
+            sources.getBeanProvider(RenewalOperationSources.SafetySource.class),sources.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationService.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(source,"cancellationCredits",sources.getBeanProvider(RenewalLedgerAdjustments.class));return source;
+    }
     Payment read(UUID id){return payments.findById(id).orElseThrow();}
     long receiptCount(UUID id){return jdbc.queryForObject("select count(*) from rental_ledger_receipts where evidence_ref=?",Long.class,"payment:"+id);}
     Map<String,String> callback(UUID id,Map<String,String> changes) throws Exception {
-        var q=new TreeMap<String,String>();q.put("vnp_TxnRef",read(id).getGatewayIntentId());q.put("vnp_Amount","10000");q.put("vnp_TmnCode","TEST");
+        var q=new TreeMap<String,String>();q.put("vnp_TxnRef",read(id).getGatewayIntentId());q.put("vnp_Amount",read(id).getAmount().movePointRight(2).toPlainString().split("\\.")[0]);q.put("vnp_TmnCode","TEST");
         q.put("vnp_ResponseCode","00");q.put("vnp_TransactionStatus","00");q.put("vnp_TransactionNo","test-"+id);q.put("vnp_PayDate","20261011080000");q.putAll(changes);
         var data=q.entrySet().stream().map(e->java.net.URLEncoder.encode(e.getKey(),java.nio.charset.StandardCharsets.UTF_8)+"="+java.net.URLEncoder.encode(e.getValue(),java.nio.charset.StandardCharsets.UTF_8)).reduce((a,b)->a+"&"+b).orElseThrow();
         var mac=Mac.getInstance("HmacSHA512");mac.init(new SecretKeySpec("test-only".getBytes(java.nio.charset.StandardCharsets.UTF_8),"HmacSHA512"));
         q.put("vnp_SecureHash",HexFormat.of().formatHex(mac.doFinal(data.getBytes(java.nio.charset.StandardCharsets.UTF_8))));return q;
     }
-    UUID fixture() throws Exception {
+    UUID fixture() throws Exception {return fixture(false,false);}
+    UUID fixture(boolean deposit,boolean overdue) throws Exception {
         return tx.execute(s->{
-            var rental=rentalFixture();var n=new Renewal();n.setRental(rental);n.setRequestedBy(rental.getCustomer());n.setStatus(RenewalStatus.accepted);n.setAmount(new BigDecimal("100"));n.setNewEndDate(LocalDate.of(2026,11,30));em.persist(n);
-            var terms=new RenewalQuoteResponse.Terms(rental.getContractEndDate(),LocalDate.of(2026,11,1),LocalDate.of(2026,12,1),n.getNewEndDate(),rental.getStorageUnit().getUnitType().getId(),"TEST",UUID.randomUUID(),"v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),"VND","test","v1",rental.getStorageUnit().getId(),rental.getFacility().getId());
+            var rental=rentalFixture();if(overdue)rental.setContractEndDate(LocalDate.of(2026,10,10));
+            var start=rental.getContractEndDate().plusDays(1);var end=start.plusMonths(1);
+            var n=new Renewal();n.setRental(rental);n.setRequestedBy(rental.getCustomer());n.setStatus(RenewalStatus.accepted);n.setAmount(new BigDecimal("100"));n.setNewEndDate(end.minusDays(1));em.persist(n);
+            var terms=new RenewalQuoteResponse.Terms(rental.getContractEndDate(),start,end,n.getNewEndDate(),rental.getStorageUnit().getUnitType().getId(),"TEST",UUID.randomUUID(),"v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),deposit?new BigDecimal("40"):BigDecimal.ZERO,deposit?new BigDecimal("60"):new BigDecimal("100"),"VND","test","v1",rental.getStorageUnit().getId(),rental.getFacility().getId());
             try {
                 String json=mapper.writeValueAsString(terms);String hash=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
                 var quote=new RenewalQuote(rental,rental.getCustomer(),json,hash,NOW.minusSeconds(120),NOW.plusSeconds(120));em.persist(quote);
                 var revision=new RenewalAcceptedRevision(n,quote,1,NOW,null);em.persist(revision);
-                var workflow=new RenewalWorkflow(n,revision);workflow.paymentReady(NOW.plusSeconds(3600),UUID.randomUUID());em.persist(workflow);em.flush();
+                var workflow=new RenewalWorkflow(n,revision);workflow.paymentReady(NOW.plusSeconds(3600),UUID.randomUUID());em.persist(workflow);em.persist(new RenewalOpenSlot(rental,n));em.flush();
                 ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId());
-                var spec=FinancialContractSpecifications.accepted(revision,terms).getFirst();ledger.charge(rental.getId(),n.getId(),spec.kind(),spec.amount(),workflow.getPaymentDeadline(),spec.sourceReference(),rental.getCustomer().getId(),"renewal-full-rent:"+revision.getId(),0);
-                var p=new Payment();p.setInitiatedBy(rental.getCustomer());p.setRenewal(n);p.setRenewalRevision(revision);p.setPaymentDeadline(workflow.getPaymentDeadline());p.setAmount(new BigDecimal("100"));p.setCurrency("VND");p.setPurpose(PaymentType.RENEWAL);p.setGatewayProvider("VNPAY");p.setGatewayIntentId("test-"+UUID.randomUUID());p.setIdempotencyKey(UUID.randomUUID().toString());payments.saveAndFlush(p);return p.getId();
+                var spec=FinancialContractSpecifications.accepted(revision,terms).getFirst();ledger.charge(rental.getId(),n.getId(),spec.kind(),spec.amount(),workflow.getPaymentDeadline(),spec.sourceReference(),rental.getCustomer().getId(),(deposit?"renewal-prepayment:":"renewal-full-rent:")+revision.getId(),0);
+                if(deposit) {
+                    var remainder=FinancialContractSpecifications.accepted(revision,terms).getLast();
+                    ledger.charge(rental.getId(),n.getId(),remainder.kind(),remainder.amount(),workflow.getPaymentDeadline(),remainder.sourceReference(),rental.getCustomer().getId(),"renewal-remainder:"+revision.getId(),1);
+                }
+                var p=new Payment();p.setInitiatedBy(rental.getCustomer());p.setRenewal(n);p.setRenewalRevision(revision);p.setPaymentDeadline(workflow.getPaymentDeadline());p.setAmount(new BigDecimal(deposit?"40":"100"));p.setCurrency("VND");p.setPurpose(PaymentType.RENEWAL);p.setGatewayProvider("VNPAY");p.setGatewayIntentId("test-"+UUID.randomUUID());p.setIdempotencyKey(UUID.randomUUID().toString());payments.saveAndFlush(p);return p.getId();
             } catch(Exception e){throw new IllegalStateException(e);}
         });
     }

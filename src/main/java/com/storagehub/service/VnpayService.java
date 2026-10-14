@@ -142,7 +142,7 @@ public class VnpayService {
         return paymentUrl(saved, clientIp);
     }
 
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public RenewalVnpayPaymentResponse createRenewalPaymentUrl(
         ActorPrincipal actor, UUID renewalId, String idempotencyKey, String clientIp
     ) {
@@ -171,7 +171,7 @@ public class VnpayService {
             java.util.List.of(PaymentStatus.PENDING,PaymentStatus.PROCESSING,PaymentStatus.NOT_RECEIVED,PaymentStatus.PAID));
         if(!attempts.isEmpty()) {
             if(attempts.stream().anyMatch(value->value.getStatus()==PaymentStatus.PAID))
-                throw ApiExceptions.conflict("Renewal full-rent payment has already been received");
+                throw ApiExceptions.conflict("Renewal initial rental payment has already been received");
             if(attempts.size()==1&&attempts.getFirst().getRenewalRevision()!=null
                 &&attempts.getFirst().getRenewalRevision().getId().equals(prepared.revision().getId())
                 &&attempts.getFirst().getInitiatedBy().getId().equals(actor.userId())) {
@@ -187,7 +187,7 @@ public class VnpayService {
         payment.setRenewal(prepared.renewal());
         payment.setRenewalRevision(prepared.revision());
         payment.setPaymentDeadline(prepared.paymentDeadline());
-        payment.setAmount(prepared.terms().totalAfterDiscount());
+        payment.setAmount(renewalInitialAmount(prepared.terms()));
         payment.setCurrency(prepared.terms().currency());
         payment.setPurpose(PaymentType.RENEWAL);
         payment.setStatus(PaymentStatus.PENDING);
@@ -561,9 +561,12 @@ public class VnpayService {
         return properties.getPayUrl() + "?" + query + "&vnp_SecureHash=" + hmac(query);
     }
 
+    private static java.math.BigDecimal renewalInitialAmount(com.storagehub.api.renewal.RenewalQuoteResponse.Terms terms) {
+        return terms.renewalDepositAmount().signum()>0?terms.renewalDepositAmount():terms.totalAfterDiscount();
+    }
     private void requireRenewalIntentBinding(Payment payment,RenewalWorkflowService.PreparedPayment prepared) {
         if(payment.getPurpose()!=PaymentType.RENEWAL||!"VNPAY".equals(payment.getGatewayProvider())
-            ||payment.getAmount()==null||payment.getAmount().compareTo(prepared.terms().totalAfterDiscount())!=0
+            ||payment.getAmount()==null||payment.getAmount().compareTo(renewalInitialAmount(prepared.terms()))!=0
             ||!java.util.Objects.equals(payment.getCurrency(),prepared.terms().currency())
             ||!java.util.Objects.equals(payment.getPaymentDeadline(),prepared.paymentDeadline()))
             throw ApiExceptions.conflict("Renewal payment amount, purpose, currency or deadline binding changed");
@@ -587,7 +590,7 @@ public class VnpayService {
 
     private String renewalPaymentMessage(Payment payment) {
         if(payment.getFailureCode()!=null)return "Payment received; Renewal reconciliation is required";
-        return payment.getStatus()==PaymentStatus.PAID?"Renewal full-rent payment recorded"
+        return payment.getStatus()==PaymentStatus.PAID?"Renewal initial rental payment recorded"
             :payment.getStatus()==PaymentStatus.FAILED?"VNPay Renewal payment failed":"Renewal payment is awaiting VNPay confirmation";
     }
 

@@ -1,6 +1,8 @@
 # Explicit local test rollout; never changes the shared application defaults.
 param(
     [switch]$EnableRenewalPayments,
+    [switch]$EnableStaffSigningCalendar,
+    [switch]$EnableAutoRecovery,
     [string]$VnpayConfigPath
 )
 $ErrorActionPreference = 'Stop'
@@ -10,6 +12,14 @@ if (-not (Test-Path -LiteralPath $rentalLocalRunner)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($env:SPRING_APPLICATION_JSON)) {
     throw 'SPRING_APPLICATION_JSON is already set. Use a fresh terminal; this runner will not overwrite another configuration.'
+}
+
+# Use the existing shared merchant configuration for ordinary local launches.
+if (-not $PSBoundParameters.ContainsKey('VnpayConfigPath')) {
+    $rentalDefaultGatewayPath = Join-Path $PSScriptRoot '.local/vnpay.json'
+    if (Test-Path -LiteralPath $rentalDefaultGatewayPath -PathType Leaf) {
+        $VnpayConfigPath = $rentalDefaultGatewayPath
+    }
 }
 
 # Fixed test datasource prevents inherited configuration from targeting Render/TiDB.
@@ -30,6 +40,10 @@ $rentalLocalConfiguration = @{
     'logging.level.root' = 'INFO'
     'logging.level.org.hibernate.SQL' = 'WARN'
 }
+if ($EnableStaffSigningCalendar) {
+    $rentalLocalConfiguration['spring.flyway.locations'] += 'classpath:db/renewal-calendar-migration'
+    $rentalLocalConfiguration['storagehub.integration.renewal-signing-calendar.enabled'] = $true
+}
 if ($VnpayConfigPath) {
     $rentalGatewayPath = (Resolve-Path -LiteralPath $VnpayConfigPath -ErrorAction Stop).Path
     if ((Get-Item -LiteralPath $rentalGatewayPath).PSIsContainer) {
@@ -46,8 +60,29 @@ if ($VnpayConfigPath) {
         $rentalLocalConfiguration[$rentalGatewaySetting.Name] = $rentalGatewaySetting.Value
     }
 }
+if (-not $PSBoundParameters.ContainsKey('EnableRenewalPayments')) {
+    $rentalGatewayEnabled = $rentalLocalConfiguration['app.vnpay.enabled']
+    if ($null -eq $rentalGatewayEnabled) { $rentalGatewayEnabled = $env:STORAGEHUB_VNPAY_ENABLED }
+    $EnableRenewalPayments = ([string]$rentalGatewayEnabled) -eq 'true'
+}
+if (-not $PSBoundParameters.ContainsKey('EnableAutoRecovery')) {
+    $EnableAutoRecovery = $EnableRenewalPayments
+}
+if ($EnableAutoRecovery -and -not $EnableRenewalPayments) {
+    throw 'EnableAutoRecovery requires the local Renewal Payment schema and verified Payment reconciliation.'
+}
 if ($EnableRenewalPayments) {
-    # Explicit local opt-in uses the shared Payment merchant, never a Renewal-specific gateway.
+    $rentalLocalConfiguration['spring.flyway.locations'] += 'classpath:db/sandboxpaymentmigration'
+    $rentalLocalConfiguration['spring.profiles.include'] = @('shared-payment-schema')
+    $rentalLocalConfiguration['storagehub.schema-rollout.expected-database'] = 'storagehub_local'
+    $rentalLocalConfiguration['storagehub.integration.renewal-simple-payment.enabled'] = $true
+    $rentalLocalConfiguration['storagehub.integration.renewal-signing-window-correction.enabled'] = $true
+    if ($EnableAutoRecovery) {
+        $rentalLocalConfiguration['spring.flyway.locations'] += 'classpath:db/recovery-migration'
+        $rentalLocalConfiguration['storagehub.integration.recovery-tasks.enabled'] = $true
+        $rentalLocalConfiguration['storagehub.integration.renewal-auto-recovery.enabled'] = $true
+    }
+    # Both flows use the shared Payment merchant loaded from local JSON or environment.
     foreach ($rentalGatewayRequirement in @(
         @('app.vnpay.tmn-code', 'STORAGEHUB_VNPAY_TMN_CODE'),
         @('app.vnpay.hash-secret', 'STORAGEHUB_VNPAY_HASH_SECRET')

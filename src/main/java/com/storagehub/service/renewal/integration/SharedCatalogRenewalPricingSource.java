@@ -92,7 +92,7 @@ public class SharedCatalogRenewalPricingSource implements RenewalSources.Pricing
                 throw inconsistent("Effective package price metadata is invalid or ambiguous");
             }
             result.add(new RenewalSources.Price(pack.getId(), pack.getCode(), pack.getPolicyVersion(),
-                type.getId(), pack.getRentalMonths(), monthlyPrice, pack.getDiscountRate(), "VND", 2));
+                type.getId(), pack.getRentalMonths(), monthlyPrice, pack.getDiscountRate(), "VND", 2, pack.getName()));
         }
         result.sort(Comparator.comparingInt(RenewalSources.Price::months)
             .thenComparing(RenewalSources.Price::packageCode));

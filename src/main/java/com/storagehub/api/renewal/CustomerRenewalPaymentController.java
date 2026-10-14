@@ -26,7 +26,7 @@ public class CustomerRenewalPaymentController {
     private final VnpayService payments;
 
     @PostMapping("/payment-intents")
-    @Operation(summary="Create a resource-bound full-rent VNPay payment intent",description="Amount and accepted revision are resolved by the server. Readiness sources, financial obligations, Recovery cutoff and extension hold are rechecked in the write transaction.")
+    @Operation(summary="Create a resource-bound Renewal VNPay payment intent",description="Server resolves the accepted deposit amount, or full rent for an earlier zero-deposit quote. Payment opening checks follow the configured policy; signing preparation separately checks extension rights and calendar.")
     public ApiResponse<RenewalVnpayPaymentResponse> create(
         @PathVariable UUID renewalId,
         @RequestHeader("Idempotency-Key") String key,
