@@ -21,7 +21,10 @@ public class ManualRentalPaymentService {
 
     public record Recorded(Payment payment,boolean created) {}
     public Recorded booking(Reservation reservation,UUID checkIn,User actor,BigDecimal expected,BigDecimal amount,String method,String reference,Instant now) {
-        return record(reservation,null,null,actor,expected,amount,method,reference,"CHECKIN-BALANCE-"+checkIn+"-"+reference,null,now);
+        return booking(reservation,checkIn,actor,expected,amount,method,reference,null,now);
+    }
+    public Recorded booking(Reservation reservation,UUID checkIn,User actor,BigDecimal expected,BigDecimal amount,String method,String reference,UUID evidenceFileId,Instant now) {
+        return record(reservation,null,null,actor,expected,amount,method,reference,"CHECKIN-BALANCE-"+checkIn+"-"+reference,evidenceFileId,now);
     }
     public Recorded renewal(Renewal renewal,RenewalAcceptedRevision revision,User actor,BigDecimal expected,String method,String reference,String key,UUID file,Instant now) {
         return renewal(renewal,revision,actor,expected,method,reference,key,file,now,false);
