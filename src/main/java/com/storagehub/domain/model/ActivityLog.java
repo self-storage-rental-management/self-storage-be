@@ -37,11 +37,11 @@ public class ActivityLog extends BaseEntity {
     private UUID entityId;
   
     @Lob
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "LONGTEXT")
     private String beforeStateJson;
 
     @Lob
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "LONGTEXT")
     private String afterStateJson;
 
     @Column(nullable = false, length = 64)
