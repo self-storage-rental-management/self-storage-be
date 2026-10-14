@@ -56,8 +56,12 @@ public class RenewalCalendarStore {
             (rs,i)->new Booking(uuid(rs.getBytes(1)),uuid(rs.getBytes(2)),uuid(rs.getBytes(3)),rs.getTimestamp(4).toInstant(),rs.getTimestamp(5).toInstant(),rs.getString(6)),bytes(renewal)).stream().findFirst();
     }
     public boolean legacyAppointmentsUncovered(Instant now) {
+        return legacyAppointmentsUncovered(now, null);
+    }
+    public boolean legacyAppointmentsUncovered(Instant now, UUID excluding) {
         // A Staff may work at multiple facilities: incomplete historical coverage anywhere is UNKNOWN.
-        Long count=jdbc.queryForObject("select count(*) from renewal_operation_states s join renewals n on n.id=s.id where s.phase='SIGNING' and s.appointment_end>? and not exists (select 1 from renewal_signing_reservations b where b.renewal_id=n.id and b.status='RESERVED' and b.appointment_start=s.appointment_start and b.appointment_end=s.appointment_end)",Long.class,Timestamp.from(now));
+        // The caller may replace its own legacy appointment with a real reservation atomically.
+        Long count=jdbc.queryForObject("select count(*) from renewal_operation_states s join renewals n on n.id=s.id where s.phase='SIGNING' and s.appointment_end>? and (? is null or n.id<>?) and not exists (select 1 from renewal_signing_reservations b where b.renewal_id=n.id and b.status='RESERVED' and b.appointment_start=s.appointment_start and b.appointment_end=s.appointment_end)",Long.class,Timestamp.from(now),excluding==null?null:bytes(excluding),excluding==null?null:bytes(excluding));
         return count==null||count>0;
     }
     public void reserve(UUID renewal,UUID facility,UUID staff,UUID quote,Instant start,Instant end,Instant now) {

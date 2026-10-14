@@ -1,10 +1,26 @@
 # Migration Payment gateway intent
 
+## Trùng phiên bản sau merge develop - 14/10/2026
+
+Develop dùng 2026101301 cho cleanup gói thuê và 2026101302 cho thông tin cơ sở; hai version này trước đây đã được renewal opt-in dùng cho calendar và gateway. `DevelopMigrationHistoryLocations` đọc lịch sử thật để chọn đúng script/class đã áp dụng, giữ nguyên nội dung, checksum và identity lịch sử. Không chạy repair, reset hoặc sửa flyway_schema_history.
+
+- Database mới hoặc đã chạy develop: resolve SQL develop 1301/1302; gateway mới dùng Java migration 2026101404.
+- Database đã chạy calendar/gateway cũ: resolve lại đúng SQL calendar 1301 và class JDBC gateway 1302. Bridge 1401/1402 áp dụng phần develop bị trùng; các migration develop thấp hơn chưa áp dụng được chạy out-of-order trong trường hợp lịch sử legacy đã xác định.
+- Calendar mới dùng location `classpath:db/renewalcalendarmigration`, version 2026101403. Location cũ `db/renewal-calendar-migration` được customizer chuyển sang location mới. Calendar đã có history 1301 không tạo lại bảng; bảng có sẵn nhưng thiếu history hợp lệ sẽ dừng.
+- Runner giữ `classpath:db/sandboxpaymentmigration` như tùy chọn bật gateway; customizer loại bỏ việc scan class 1302 trùng và đăng ký class phù hợp một cách tường minh.
+- Migration không rõ nguồn hoặc failed phải dừng để đối chiếu. Sau thay đổi location, cần build sạch để loại bỏ resource cũ còn trong target/classes. Không tự áp dụng trên DB chung trong lượt sửa này.
+
 ## Gateway Ledger opt-in version 1302 — 13/10/2026
 
 `db.sandboxpaymentmigration.V2026101302__ensure_gateway_ledger_evidence` tại `classpath:db/sandboxpaymentmigration` dùng version mới vì một số DB local đã có `1202` với script Renewal resource binding cũ. Không thêm đồng thời location `db/ledger-sandbox-migration` chứa SQL cùng version `1202` trên các DB này.
 
 Migration mới kiểm tra MySQL 8.4, dữ liệu receipt hiện có và schema gateway. Nếu gateway đã tồn tại và hợp lệ, chỉ xác minh. Nếu thiếu, chạy nội dung SQL gateway `1202` bất biến để cập nhật checks receipt và tạo bảng/FK/unique evidence. Checksum CRC32 lấy từ nội dung resource chuẩn hóa LF. Không sửa bản ghi Flyway hay dữ liệu thanh toán.
+
+Nếu Flyway history đã ghi nhận thành công SQL `V2026101202__sandbox_gateway_ledger_evidence.sql`, history router tự thêm `classpath:db/ledger-sandbox-migration` để Flyway xác minh bản gốc và checksum. Database mới hoặc database có script `1202` khác không được tự thêm location này. Lỗi `Detected applied migration not resolved locally: 2026101202` của lịch sử gateway được xử lý bằng cách khôi phục đường dẫn resource, không dùng repair hoặc bỏ validation.
+
+Với lịch sử `V2026101202__add_renewal_vnpay_resource_binding.sql`, router dùng bản SQL nguyên gốc tại `db/migration-history/legacy-binding-1202`, checksum `2025292548`, và không chạy lại cùng nội dung dưới version `1203`. Database mới hoặc đã áp dụng `1203` dùng `db/migration-history/develop-1203`. Cần `mvn clean compile` sau khi đổi các location để xóa resource cũ trong `target/classes`; không sửa history database.
+
+Nếu history đã có cả `1202` và `1203` với hai tên resource-binding này, router cung cấp cả hai resource nguyên gốc cho Flyway validate checksum. Hai version đã áp dụng không chạy lại; không xóa hoặc sửa các bản ghi lịch sử.
 
 Runner local `-EnableRenewalPayments` thêm location mới và profile `shared-payment-schema`, xác minh target `storagehub_local` trước migrate. Không kết hợp profile này với các profile schema rollout khác. Backup trước chạy; DDL MySQL auto-commit nên bản ghi failed/schema dở dang phải được đối chiếu, không tự repair/reset hoặc baseline.
 

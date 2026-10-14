@@ -37,7 +37,7 @@ public class StaffRenewalSigningCalendarSource implements RenewalOperationSource
     }
     @Override public boolean feasible(Renewal renewal,Instant now,Instant deadline) {
         var rental=renewal.getRental();UUID facility=rental.getFacility().getId();
-        if(store.legacyAppointmentsUncovered(now))throw deferred("Historical signing appointments require calendar reconciliation");
+        if(store.legacyAppointmentsUncovered(now,renewal.getId()))throw deferred("Historical signing appointments require calendar reconciliation");
         List<UUID> staff=eligibleStaff(facility);
         return store.facilityActive(facility)&&anySlot(staff,now,deadline,renewal.getId());
     }
@@ -67,7 +67,7 @@ public class StaffRenewalSigningCalendarSource implements RenewalOperationSource
         store.lockFacility(facility);
         if(slot==null||!slot.start().isAfter(now)||!slot.end().equals(slot.start().plus(LENGTH))||!ServiceCalendarPolicy.isAppointmentStart(slot.start())
             ||!reference(renewal,slot.start()).equals(slot.reference()))throw ApiExceptions.conflict("Signing slot changed");
-        if(store.legacyAppointmentsUncovered(now))throw deferred("Historical signing appointments require calendar reconciliation");
+        if(store.legacyAppointmentsUncovered(now,renewal.getId()))throw deferred("Historical signing appointments require calendar reconciliation");
         var workflow=em.find(com.storagehub.service.renewal.persistence.RenewalWorkflow.class,renewal.getId());
         if(workflow==null||workflow.getAcceptedRevision()==null)throw deferred("Accepted Renewal revision is unavailable");
         // A slot consumes one unit of Staff capacity automatically; no Manager assignment or Staff ownership gate.
