@@ -22,6 +22,11 @@ public class BusinessFacilityLifecycleController {
     private final ActorContext actors;
     private final FacilityLifecycleService lifecycle;
 
+    @org.springframework.web.bind.annotation.DeleteMapping("/facilities/{facilityId}")
+    public void delete(@PathVariable UUID facilityId) {
+        lifecycle.deleteFacility(actors.required(), facilityId);
+    }
+
     @PatchMapping("/facilities/{facilityId}")
     public ApiResponse<FacilityResponse> update(
         @PathVariable UUID facilityId,
