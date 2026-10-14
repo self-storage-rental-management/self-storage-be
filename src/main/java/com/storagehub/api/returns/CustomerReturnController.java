@@ -35,6 +35,12 @@ public class CustomerReturnController {
         );
     }
 
+    @org.springframework.web.bind.annotation.PatchMapping("/returns/{returnId}/request")
+    public ApiResponse<ReturnCaseResponse> updateReturnRequest(@PathVariable UUID returnId,
+        @Valid @RequestBody CustomerCreateReturnRequest request) {
+        return new ApiResponse<>(returnSettlementService.updateCustomerReturnRequest(actorContext.required(), returnId, request), CorrelationIdContext.current());
+    }
+
     @GetMapping("/returns")
     public PageResponse<ReturnCaseResponse> listReturns(
         @RequestParam(defaultValue = "0") int page,
