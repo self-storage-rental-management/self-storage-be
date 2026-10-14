@@ -393,9 +393,10 @@ public class MaintenanceService {
             authorizationService.require(actor, SystemPermission.VIEW_UNITS);
         }
 
-        Collection<UUID> allowedFacilityIds = null;
-        if (facilityScopeService.isFacilityScoped(actor)) {
-            allowedFacilityIds = actor.facilityScopes().keySet();
+        boolean scoped = facilityScopeService.isFacilityScoped(actor);
+        Collection<UUID> allowedFacilityIds = List.of(new UUID(0, 0));
+        if (scoped) {
+            if (!actor.facilityScopes().isEmpty()) allowedFacilityIds = actor.facilityScopes().keySet();
             if (facilityId != null) {
                 facilityScopeService.assertCanRead(actor, facilityId);
             }
@@ -408,6 +409,7 @@ public class MaintenanceService {
             status,
             priority,
             assignedStaffId,
+            scoped,
             allowedFacilityIds,
             q != null ? q.trim() : null,
             pageable
