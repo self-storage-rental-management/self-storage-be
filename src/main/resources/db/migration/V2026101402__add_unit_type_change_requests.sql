@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS unit_type_change_requests (
+ id BINARY(16) PRIMARY KEY,
+ created_at DATETIME(6) NOT NULL,
+ updated_at DATETIME(6) NOT NULL,
+ unit_type_id BINARY(16) NOT NULL,
+ facility_id BINARY(16) NOT NULL,
+ requested_by BINARY(16) NOT NULL,
+ requester_name VARCHAR(255) NOT NULL,
+ facility_name VARCHAR(255) NOT NULL,
+ unit_type_code VARCHAR(255) NOT NULL,
+ before_json LONGTEXT NOT NULL,
+ after_json LONGTEXT NOT NULL,
+ status VARCHAR(255) NOT NULL,
+ reviewed_by BINARY(16),
+ reviewed_at DATETIME(6),
+ rejection_reason VARCHAR(500),
+ INDEX idx_type_change_pending(unit_type_id, status),
+ CONSTRAINT fk_type_change_type FOREIGN KEY (unit_type_id) REFERENCES unit_types(id),
+ CONSTRAINT fk_type_change_facility FOREIGN KEY (facility_id) REFERENCES facilities(id),
+ CONSTRAINT fk_type_change_requester FOREIGN KEY (requested_by) REFERENCES users(id)
+);
