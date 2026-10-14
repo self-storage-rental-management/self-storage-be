@@ -66,8 +66,10 @@ public class ReturnSettlementService {
         UUID rentalId,
         CustomerCreateReturnRequest request
     ) {
-        Rental rental = rentalRepository.findByIdAndCustomer_Id(rentalId, actor.userId())
+        Rental rental = rentalRepository.findByIdForUpdate(rentalId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found for this customer"));
+        if (!rental.getCustomer().getId().equals(actor.userId()))
+            throw ApiExceptions.notFound("Rental was not found for this customer");
 
         if (rental.getStatus() != RentalStatus.active) {
             throw ApiExceptions.conflict("Only active rentals can request return");
