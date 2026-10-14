@@ -40,6 +40,7 @@ public class FacilityLifecycleService {
     private final AuditLogService audit;
     private final UserFacilityScopeRepository userFacilityScopes;
     private final com.storagehub.domain.repo.ReservationRepository reservations;
+    private final NotificationService notifications;
 
     @Transactional
     public void deleteFacility(ActorPrincipal actor, UUID facilityId) {
@@ -110,19 +111,69 @@ public class FacilityLifecycleService {
 
     @Transactional
     public UnitTypeResponse updateUnitType(ActorPrincipal actor, UUID unitTypeId, ManagerUnitTypeRequest request) {
-        UnitType type = unitTypes.findById(unitTypeId)
+        UnitType type = unitTypes.findByIdForUpdate(unitTypeId)
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         UUID facilityId = type.getFacility().getId();
         requireManager(actor, facilityId);
+        if (!type.getCode().equalsIgnoreCase(request.code().trim())) {
+            throw ApiExceptions.conflict("Không thể đổi mã loại kho đã tạo.");
+        }
+        boolean technicalChanged = technicalChanged(type, request);
+        if (technicalChanged && reservations.existsByUnitType_Id(unitTypeId)) {
+            throw ApiExceptions.conflict("Loại kho đã có hồ sơ đặt/thuê. Không thể thay đổi thông số kỹ thuật; hãy tạo loại kho mới để giữ thông tin đã cam kết.");
+        }
         UnitTypeResponse before = unitTypeResponse(type);
         applyTechnical(type, request);
-        if (type.getStatus() == UnitTypeStatus.active) {
+        if (technicalChanged && type.getStatus() == UnitTypeStatus.active) {
             type.setStatus(UnitTypeStatus.awaiting_pricing);
         }
         UnitType saved = unitTypes.save(type);
         UnitTypeResponse after = unitTypeResponse(saved);
         audit.recordMutation("UNIT_TYPE_UPDATED_BY_MANAGER", "UnitType", saved.getId(), facilityId, before, after);
+        notifications.notifyBusinessOfUnitTypeChange(saved, technicalChanged);
         return after;
+    }
+
+    private boolean different(BigDecimal before, BigDecimal after) {
+        return before == null || after == null ? before != after : before.compareTo(after) != 0;
+    }
+
+    private boolean technicalChanged(UnitType t, ManagerUnitTypeRequest r) {
+        return different(t.getLengthM(), r.lengthM()) || different(t.getWidthM(), r.widthM())
+            || different(t.getHeightM(), r.heightM()) || different(t.getMaxLoadKg(), r.maxLoadKg())
+            || t.getRackCount() != r.rackCount() || different(t.getRackLengthM(), r.rackLengthM())
+            || different(t.getRackWidthM(), r.rackWidthM()) || different(t.getRackHeightM(), r.rackHeightM())
+            || different(t.getAisleWidthM(), r.aisleWidthM())
+            || !java.util.Objects.equals(t.getTrolleyType(), r.trolleyType().trim())
+            || !java.util.Objects.equals(t.getSmallBoxCapacity(), r.smallBoxCapacity())
+            || !java.util.Objects.equals(t.getLargeBoxCapacity(), r.largeBoxCapacity());
+    }
+
+    @Transactional
+    public void deleteUnitType(ActorPrincipal actor, UUID unitTypeId) {
+        UnitType type = unitTypes.findByIdForUpdate(unitTypeId)
+            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        UUID facilityId = type.getFacility().getId();
+        requireManager(actor, facilityId);
+        if (reservations.existsByUnitType_Id(unitTypeId)) {
+            throw ApiExceptions.conflict("Không thể xóa loại kho đã có hồ sơ đặt hoặc thuê.");
+        }
+        var physicalUnits = units.findByFacility_Id(facilityId).stream()
+            .filter(unit -> unit.getUnitType().getId().equals(unitTypeId))
+            .map(unit -> units.findByIdForUpdate(unit.getId()).orElseThrow()).toList();
+        if (physicalUnits.stream().anyMatch(unit -> unit.getStatus() != StorageUnitStatus.available)) {
+            throw ApiExceptions.conflict("Chỉ được xóa loại kho khi mọi gian kho đều trống và không có dữ liệu liên quan.");
+        }
+        UnitTypeResponse before = unitTypeResponse(type);
+        try {
+            units.deleteAll(physicalUnits);
+            units.flush();
+            unitTypes.delete(type);
+            unitTypes.flush();
+        } catch (org.springframework.dao.DataIntegrityViolationException exception) {
+            throw ApiExceptions.conflict("Loại kho hoặc gian kho đã có hồ sơ liên quan, không thể xóa để bảo toàn lịch sử.");
+        }
+        audit.recordMutation("UNIT_TYPE_DELETED_BY_MANAGER", "UnitType", unitTypeId, facilityId, before, null);
     }
 
     @Transactional
@@ -156,19 +207,19 @@ public class FacilityLifecycleService {
         List<UnitType> candidates = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).stream()
             .filter(type -> type.getStatus() == UnitTypeStatus.awaiting_pricing || type.getStatus() == UnitTypeStatus.active)
             .toList();
-        if (candidates.isEmpty()) throw ApiExceptions.conflict("Manager must define at least one unit type before publication");
+        if (candidates.isEmpty()) throw ApiExceptions.conflict("Chưa thể công bố: Manager cần khai báo ít nhất một loại kho thực tế.");
         for (UnitType type : candidates) {
             if (type.getMonthlyPrice() == null || type.getMonthlyPrice().signum() <= 0) {
-                throw ApiExceptions.conflict("Every published unit type must have an effective monthly price");
+                throw ApiExceptions.conflict("Chưa thể công bố: loại kho " + type.getCode() + " chưa được BO cấu hình giá thuê lớn hơn 0.");
             }
             if (units.countByFacility_IdAndUnitType_IdAndStatus(facilityId, type.getId(), StorageUnitStatus.available) <= 0) {
-                throw ApiExceptions.conflict("Every published unit type must have available physical inventory");
+                throw ApiExceptions.conflict("Chưa thể công bố: loại kho " + type.getCode() + " chưa có gian kho sẵn sàng.");
             }
         }
         boolean hasEffectivePackage = packages
             .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(facilityId, LocalDate.now())
             .stream().anyMatch(p -> p.getEffectiveTo() == null || !p.getEffectiveTo().isBefore(LocalDate.now()));
-        if (!hasEffectivePackage) throw ApiExceptions.conflict("BO must configure an effective rental package before publication");
+        if (!hasEffectivePackage) throw ApiExceptions.conflict("Chưa thể công bố: cơ sở chưa được gán gói thuê đang áp dụng và còn hiệu lực. Vào Chính sách thuê để thêm cơ sở vào gói thuê.");
 
         candidates.forEach(type -> type.setStatus(UnitTypeStatus.active));
         unitTypes.saveAll(candidates);

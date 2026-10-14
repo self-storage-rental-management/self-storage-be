@@ -22,6 +22,7 @@ class FacilityDeletionSafetyTests {
     @Mock AuditLogService audit;
     @Mock UserFacilityScopeRepository userFacilityScopes;
     @Mock ReservationRepository reservations;
+    @Mock NotificationService notifications;
     @InjectMocks FacilityLifecycleService service;
 
     private final UUID id = UUID.randomUUID();
@@ -54,5 +55,86 @@ class FacilityDeletionSafetyTests {
         ActorPrincipal customer = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
         assertThatThrownBy(() -> service.deleteFacility(customer, id)).hasMessageContaining("Only Business");
         verifyNoInteractions(facilities);
+    }
+
+    private ActorPrincipal manager() {
+        return new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.MANAGER),
+            Set.of(SystemPermission.MANAGE_INVENTORY.code()), Map.of(id, FacilityScopeLevel.MANAGE));
+    }
+
+    private UnitType mockType() {
+        UnitType type = mock(UnitType.class);
+        Facility facility = mock(Facility.class);
+        when(facility.getId()).thenReturn(id);
+        when(type.getFacility()).thenReturn(facility);
+        when(unitTypes.findByIdForUpdate(id)).thenReturn(Optional.of(type));
+        return type;
+    }
+
+    @Test void managerCannotDeleteTypeWithBookingHistory() {
+        mockType();
+        when(reservations.existsByUnitType_Id(id)).thenReturn(true);
+        assertThatThrownBy(() -> service.deleteUnitType(manager(), id)).hasMessageContaining("hồ sơ");
+        verify(unitTypes, never()).delete(any());
+        verify(units, never()).deleteAll(anyList());
+    }
+
+    @Test void managerCannotDeleteNonEmptyType() {
+        UnitType type = mockType();
+        when(type.getId()).thenReturn(id);
+        StorageUnit unit = mock(StorageUnit.class);
+        when(unit.getId()).thenReturn(id);
+        when(unit.getUnitType()).thenReturn(type);
+        when(unit.getStatus()).thenReturn(StorageUnitStatus.reserved);
+        when(units.findByFacility_Id(id)).thenReturn(List.of(unit));
+        when(units.findByIdForUpdate(id)).thenReturn(Optional.of(unit));
+        assertThatThrownBy(() -> service.deleteUnitType(manager(), id)).hasMessageContaining("trống");
+        verify(unitTypes, never()).delete(any());
+    }
+
+    @Test void managerCannotDeleteAnotherFacilityType() {
+        mockType();
+        ActorPrincipal actor = manager();
+        doThrow(new IllegalStateException("outside facility scope")).when(scopes).assertCanManage(actor, id);
+        assertThatThrownBy(() -> service.deleteUnitType(actor, id)).hasMessageContaining("scope");
+        verify(unitTypes, never()).delete(any());
+    }
+
+    @Test void imageEditKeepsPublishedStatusAndNotifiesBusiness() {
+        UnitType type = editableType();
+        var request = technicalRequest(new java.math.BigDecimal("4.00"));
+        service.updateUnitType(manager(), id, request);
+        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
+        assertThat(type.getImageUrl()).isEqualTo("/images/customer-units/kho-m.jpg");
+        verify(notifications).notifyBusinessOfUnitTypeChange(type, false);
+        verify(reservations, never()).existsByUnitType_Id(any());
+    }
+
+    @Test void technicalEditRequiresReviewAndNotifiesBusiness() {
+        UnitType type = editableType();
+        service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("5")));
+        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.awaiting_pricing);
+        verify(notifications).notifyBusinessOfUnitTypeChange(type, true);
+    }
+
+    private UnitType editableType() {
+        UnitType type = new UnitType();
+        Facility facility = mock(Facility.class);
+        when(facility.getId()).thenReturn(id);
+        type.setFacility(facility); type.setCode("M"); type.setStatus(UnitTypeStatus.active);
+        var four = new java.math.BigDecimal("4");
+        type.setLengthM(four); type.setWidthM(four); type.setHeightM(four); type.setMaxLoadKg(four);
+        type.setRackCount(4); type.setRackLengthM(four); type.setRackWidthM(four); type.setRackHeightM(four);
+        type.setAisleWidthM(four); type.setTrolleyType("Xe đẩy"); type.setSmallBoxCapacity(10); type.setLargeBoxCapacity(5);
+        when(unitTypes.findByIdForUpdate(id)).thenReturn(Optional.of(type));
+        when(unitTypes.save(type)).thenReturn(type);
+        return type;
+    }
+
+    private com.storagehub.api.facility.ManagerUnitTypeRequest technicalRequest(java.math.BigDecimal length) {
+        var four = new java.math.BigDecimal("4.00");
+        return new com.storagehub.api.facility.ManagerUnitTypeRequest("M", "Kho M", "Mô tả", length,
+            four, four, four, 4, four, four, four, four, "Xe đẩy", 10, 5,
+            "/images/customer-units/kho-m.jpg", 4, "2", "Khu B");
     }
 }
