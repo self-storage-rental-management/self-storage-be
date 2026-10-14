@@ -173,9 +173,7 @@ public class LocalDemoDataInitializer {
                     unit.setCode(code);
                     unit.setFloor(String.valueOf(definition.floor()));
                     unit.setZone(definition.zone());
-                    unit.setStatus(isOccupied(facilityCode, definition.code(), number)
-                        ? StorageUnitStatus.occupied
-                        : StorageUnitStatus.available);
+                    unit.setStatus(StorageUnitStatus.available);
                     StorageUnit saved = storageUnitRepository.saveAndFlush(unit);
                     existing.put(saved.getCode(), saved);
                     createdCount++;
@@ -271,13 +269,6 @@ public class LocalDemoDataInitializer {
             new RentalPackageDefinition("DEMO_12M", "Gói thuê 12 tháng", 12, new BigDecimal("0.10")),
             new RentalPackageDefinition("DEMO_24M", "Gói thuê 24 tháng", 24, new BigDecimal("0.15"))
         );
-    }
-
-    private boolean isOccupied(String facilityCode, String unitTypeCode, int number) {
-        if ("BD-F01".equals(facilityCode) && "XL".equals(unitTypeCode)) {
-            return number <= 2;
-        }
-        return number == 1 && !"XL".equals(unitTypeCode);
     }
 
     private String unitTypeKey(String facilityCode, String unitTypeCode) {
