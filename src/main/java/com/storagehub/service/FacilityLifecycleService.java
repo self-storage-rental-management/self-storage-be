@@ -39,6 +39,23 @@ public class FacilityLifecycleService {
     private final AdminAuthorizationService authorization;
     private final AuditLogService audit;
     private final UserFacilityScopeRepository userFacilityScopes;
+    private final com.storagehub.domain.repo.ReservationRepository reservations;
+
+    @Transactional
+    public void deleteFacility(ActorPrincipal actor, UUID facilityId) {
+        requireBusiness(actor);
+        Facility facility = facility(facilityId);
+        if (reservations.existsByFacility_Id(facilityId)) {
+            throw ApiExceptions.conflict("Cơ sở đã có hồ sơ đặt hoặc thuê kho. Vui lòng chuyển sang Ngừng hoạt động để giữ lịch sử.");
+        }
+        if (units.countByFacility_Id(facilityId) > 0 || !unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).isEmpty()
+            || !userFacilityScopes.findByFacility_Id(facilityId).isEmpty()
+            || !packages.findByFacility_IdOrderByRentalMonthsAsc(facilityId).isEmpty()) {
+            throw ApiExceptions.conflict("Cơ sở đã có kho hoặc phân công nhân sự. Vui lòng chuyển sang Ngừng hoạt động để giữ lịch sử.");
+        }
+        facilities.delete(facility);
+        facilities.flush();
+    }
 
     @Transactional
     public FacilityResponse updateFacility(ActorPrincipal actor, UUID facilityId, UpdateFacilityRequest request) {
