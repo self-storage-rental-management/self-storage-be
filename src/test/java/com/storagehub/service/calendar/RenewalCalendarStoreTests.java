@@ -38,7 +38,7 @@ class RenewalCalendarStoreTests {
         jdbc.execute("create table renewal_operation_states(id binary(16) primary key,phase varchar(24),appointment_start timestamp(6),appointment_end timestamp(6))");
         // H2 2.4 CHECK optimization retains its DDL session; keep that session alive while exercising inserts.
         schemaConnection=ds.getConnection();
-        new ResourceDatabasePopulator(new ClassPathResource("db/renewal-calendar-migration/V2026101301__create_staff_renewal_signing_calendar.sql")).populate(schemaConnection);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration-history/legacy-calendar-1301/V2026101301__create_staff_renewal_signing_calendar.sql")).populate(schemaConnection);
         jdbc.update("insert into users values(?)",bytes(staff));
         for(UUID id:new UUID[]{facilityA,facilityB})jdbc.update("insert into facilities values(?,'active')",bytes(id));
         for(UUID id:new UUID[]{a,b})jdbc.update("insert into renewals values(?)",bytes(id));
