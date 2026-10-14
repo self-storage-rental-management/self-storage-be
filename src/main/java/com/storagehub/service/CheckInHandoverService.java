@@ -210,6 +210,12 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Lịch nhận kho đã được xác nhận",
+            "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
+            reservation.getId()
+        );
         return toResponse(reservation, saved, assignment);
     }
 
@@ -300,6 +306,13 @@ public class CheckInHandoverService {
                 + " đã được nhân viên bàn giao và đang chờ bạn xác nhận.",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Bàn giao đã hoàn tất, chờ khách xác nhận",
+            "Đơn " + reservation.getReservationCode()
+                + " đã bàn giao gian kho và đang chờ khách hàng xác nhận nhận kho.",
+            reservation.getId()
+        );
         return toResponse(reservation, saved, assignment);
     }
 
@@ -341,6 +354,12 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.PAYMENT,
+            "Đã ghi nhận thanh toán khi nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
+            reservation.getId()
+        );
         return toPaymentResponse(saved);
     }
 
@@ -377,6 +396,12 @@ public class CheckInHandoverService {
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Ghi nhận không đến nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng không đến nhận kho",
             "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
             reservation.getId()
         );
@@ -468,6 +493,12 @@ public class CheckInHandoverService {
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Từ chối nhận kho",
+            "Đơn " + reservation.getReservationCode() + " chưa thể nhận kho: " + request.reason().trim(),
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Đã từ chối bàn giao kho",
             "Đơn " + reservation.getReservationCode() + " chưa thể nhận kho: " + request.reason().trim(),
             reservation.getId()
         );
