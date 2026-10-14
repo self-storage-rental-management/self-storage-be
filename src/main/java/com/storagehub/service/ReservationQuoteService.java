@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.LinkedHashMap;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,7 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ReservationQuoteService {
 
-    private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
+    private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private static final long QUOTE_VALID_MINUTES = 15;
 
     private final ReservationCompatibilityService compatibilityService;
@@ -50,7 +51,7 @@ public class ReservationQuoteService {
             throw ApiExceptions.forbidden("Only customers can read reservation rental packages");
         }
         LocalDate effectiveDate = startDate == null ? LocalDate.now() : startDate;
-        return policyRepository
+        List<RentalPackagePolicy> effective = policyRepository
             .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(
                 facilityId,
                 effectiveDate
@@ -58,6 +59,18 @@ public class ReservationQuoteService {
             .stream()
             .filter(policy -> policy.getEffectiveTo() == null
                 || !policy.getEffectiveTo().isBefore(effectiveDate))
+            .toList();
+
+        // Defensive cleanup for legacy rows created before the uniqueness rule.
+        // Prefer the policy with the newest effective start for each duration so
+        // Customer can never receive two choices for the same number of months.
+        var uniqueByMonths = new LinkedHashMap<Integer, RentalPackagePolicy>();
+        effective.stream()
+            .sorted(java.util.Comparator.comparing(RentalPackagePolicy::getEffectiveFrom).reversed()
+                .thenComparing(RentalPackagePolicy::getUpdatedAt, java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+            .forEach(policy -> uniqueByMonths.putIfAbsent(policy.getRentalMonths(), policy));
+        return uniqueByMonths.values().stream()
+            .sorted(java.util.Comparator.comparingInt(RentalPackagePolicy::getRentalMonths))
             .map(policy -> new ReservationRentalPackageResponse(
                 policy.getCode(),
                 policy.getName(),
@@ -98,7 +111,9 @@ public class ReservationQuoteService {
         BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
         BigDecimal totalAfterDiscount = money(subtotal.subtract(discountAmount));
         BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
-        BigDecimal securityDepositAmount = monthlyPrice;
+        BigDecimal securityDepositAmount = money(
+            unitType.getSecurityDepositAmount() == null ? monthlyPrice : unitType.getSecurityDepositAmount()
+        );
         BigDecimal remainingRentalAmount = money(totalAfterDiscount.subtract(reservationDepositAmount));
         BigDecimal dueAtCheckIn = money(remainingRentalAmount.add(securityDepositAmount));
         BigDecimal totalInitialObligation = money(totalAfterDiscount.add(securityDepositAmount));

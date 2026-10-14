@@ -78,6 +78,7 @@ class LocalDemoOperationalSourcesTests {
         UUID facilityId = UUID.randomUUID(), renewalId = UUID.randomUUID();
         Facility facility = mock(Facility.class);
         when(facility.getId()).thenReturn(facilityId);
+        when(facility.getStatus()).thenReturn(com.storagehub.domain.model.FacilityStatus.active);
         when(em.find(eq(Facility.class), eq(facilityId), eq(LockModeType.PESSIMISTIC_WRITE))).thenReturn(facility);
         Rental rental = mockRental(UUID.randomUUID(), facilityId);
         Renewal renewal = mock(Renewal.class);
@@ -98,6 +99,26 @@ class LocalDemoOperationalSourcesTests {
         assertThat(jdbc.queryForObject("select count(*) from renewal_demo_signing_appointments", Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select appointment_start from renewal_demo_signing_appointments where renewal_id=?", java.sql.Timestamp.class, bytes(renewalId)).toInstant()).isEqualTo(next.start());
         assertThat(source.feasible(rental, first.start(), first.end())).contains(true);
+    }
+
+    @Test
+    void inactiveFacilityCannotReserveEvenWhenSlotWasPreviouslyAvailable() {
+        UUID facilityId = UUID.randomUUID(), renewalId = UUID.randomUUID();
+        Facility facility = mock(Facility.class);
+        when(facility.getId()).thenReturn(facilityId);
+        when(facility.getStatus()).thenReturn(com.storagehub.domain.model.FacilityStatus.inactive);
+        when(em.find(eq(Facility.class), eq(facilityId), eq(LockModeType.PESSIMISTIC_WRITE))).thenReturn(facility);
+        Renewal renewal = mock(Renewal.class);
+        when(renewal.getId()).thenReturn(renewalId);
+        Rental rental = mockRental(UUID.randomUUID(), facilityId);
+        when(renewal.getRental()).thenReturn(rental);
+        var source = new LocalDemoSigningCalendarSource(jdbc, em);
+        Instant start = java.time.LocalDate.of(2026, 10, 12).atTime(8, 0)
+            .atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
+        var slot = new RenewalOperationSources.Slot(facilityId + ":" + start, start, start.plusSeconds(1800));
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> source.reserve(renewal, slot, start.minusSeconds(60))))
+            .hasMessageContaining("facility is not active");
+        assertThat(jdbc.queryForObject("select count(*) from renewal_demo_signing_appointments", Integer.class)).isZero();
     }
 
     @Test

@@ -37,8 +37,7 @@ public class PublishedRenewalPolicyAdapters implements RenewalSources.PolicySour
         var period=periods.read(r);if(period.isEmpty())return Optional.empty();
         return policies.read(r.getFacility().getId(),now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate()).filter(s->s.policy().term()!=null).map(s->{
             var t=s.policy().term();var last=period.get().lastPermittedDate();var zone=ZoneId.of(t.timezone());
-            return new OverdueSources.Term(s.reference(),s.policy().version(),last,t.warningThroughDay(),t.seriousThroughDay(),t.urgentThroughDay(),t.recoveryFromDay(),
-                last.plusDays(t.urgentThroughDay()).atTime(t.recoveryCutoffTime()).atZone(zone).toInstant(),last.plusDays(t.recoveryFromDay()).atTime(t.recoveryStartTime()).atZone(zone).toInstant());
+            return com.storagehub.service.overdue.RenewalOverdueTimeline.term(s.reference(),s.policy().version(),last,zone);
         });
     }
     public void requireFacilityFault(Renewal n,UUID incident,UUID reviewer) {

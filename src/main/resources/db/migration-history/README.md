@@ -14,4 +14,4 @@ Never add this root directory to Flyway locations: scanning all variants would d
 
 Unknown/failed/duplicate history stops without repair, baseline, reset, ignore or out-of-order. SQL content is immutable; folder relocation does not change Flyway SQL checksum. `V2026101102` stays immutable and fills verified missing VNPay/appointment columns for legacy history. New `V2026101103` creates seven ledger/outbox tables on an empty integration schema, or reuses only the exact verified legacy ledger schema with matching applied history. Partial/orphan/drifted tables remain blocked.
 
-Verified engine: MySQL 8.4.11. TiDB/shared DB is not certified or migrated by this change. See `docs/DEVELOP_PREFERRED_MIGRATION_REPORT_20261011.md`.
+Verified engine: MySQL 8.4.11. TiDB/shared DB is not certified or migrated by this change. See `docs/RENTAL_SUPPORT_SCHEMA_ROLLOUT.md`.

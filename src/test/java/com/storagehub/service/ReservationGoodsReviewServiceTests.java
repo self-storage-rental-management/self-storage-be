@@ -21,6 +21,7 @@ import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
@@ -46,6 +47,7 @@ class ReservationGoodsReviewServiceTests {
 
     @Mock private ReservationRepository reservationRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
+    @Mock private FileAssetRepository fileAssetRepository;
     @Mock private UserRepository userRepository;
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private AuditLogService auditLogService;
@@ -61,7 +63,7 @@ class ReservationGoodsReviewServiceTests {
     @BeforeEach
     void setUp() {
         service = new ReservationGoodsReviewService(
-            reservationRepository, goodsItemRepository, userRepository,
+            reservationRepository, goodsItemRepository, fileAssetRepository, userRepository,
             authorizationService, new FacilityScopeService(), auditLogService, notificationService
         );
         reviewer = entityWithId(new User());

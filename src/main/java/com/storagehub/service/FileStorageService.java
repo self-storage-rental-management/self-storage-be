@@ -5,6 +5,7 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.config.FileProperties;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.FileAsset;
+import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.PaymentComplaint;
@@ -163,11 +164,37 @@ public class FileStorageService {
                 return;
             }
         }
-        if ("MAINTENANCE_TASK".equals(asset.getEntityType()) && asset.getEntityId() != null) {
-            var task = maintenanceTaskRepository.findById(asset.getEntityId())
+        if ("RESERVATION_GOODS_ITEM".equals(asset.getEntityType())
+            && asset.getEntityId() != null) {
+            ReservationGoodsItem goodsItem = reservationGoodsItemRepository
+                .findById(asset.getEntityId())
                 .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
-            authorizationService.require(actor, SystemPermission.VIEW_UNITS);
-            facilityScopeService.assertCanRead(actor, task.getFacility().getId());
+
+            authorizationService.require(
+                actor,
+                SystemPermission.VIEW_RESERVATIONS
+            );
+            facilityScopeService.assertCanRead(
+                actor,
+                goodsItem.getReservation().getFacility().getId()
+            );
+            return;
+        }
+
+        if ("MAINTENANCE_TASK".equals(asset.getEntityType())
+            && asset.getEntityId() != null) {
+            var task = maintenanceTaskRepository
+                .findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+
+            authorizationService.require(
+                actor,
+                SystemPermission.VIEW_UNITS
+            );
+            facilityScopeService.assertCanRead(
+                actor,
+                task.getFacility().getId()
+            );
             return;
         }
         throw ApiExceptions.notFound("File was not found");
@@ -253,10 +280,16 @@ public class FileStorageService {
             throw ApiExceptions.validation("Goods attachments must be images", null);
         }
 
-        ReservationGoodsItem goodsItem = reservationGoodsItemRepository.findById(entityId)
+        ReservationGoodsItem goodsItem = reservationGoodsItemRepository.findByIdForUpdate(entityId)
             .orElseThrow(() -> ApiExceptions.notFound("Reservation goods item was not found"));
         if (!goodsItem.getReservation().getCustomer().getId().equals(actor.userId())) {
             throw ApiExceptions.forbidden("The goods item does not belong to the current customer");
+        }
+        long activeImages = fileAssetRepository.countByEntityTypeAndEntityIdAndStatus(
+            "RESERVATION_GOODS_ITEM", entityId, FileAssetStatus.ACTIVE
+        );
+        if (activeImages >= 10) {
+            throw ApiExceptions.validation("Each goods item can have at most 10 images", null);
         }
     }
 

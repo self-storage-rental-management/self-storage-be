@@ -62,6 +62,8 @@ public class CheckInHandoverService {
 
     @Autowired
     private AccessCredentialService accessCredentialService;
+    @Autowired
+    private ManualRentalPaymentService manualRentalPayments;
 
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
@@ -336,37 +338,12 @@ public class CheckInHandoverService {
         if (request.amount().compareTo(snapshot.getDueAtCheckIn()) != 0) {
             throw ApiExceptions.validation("Payment amount must match the remaining check-in amount", Map.of("expectedAmount", snapshot.getDueAtCheckIn()));
         }
-        String paymentMethod = request.paymentMethod().trim().toUpperCase(Locale.ROOT);
-        if (!paymentMethod.equals("CASH") && !paymentMethod.equals("BANK_TRANSFER")) {
-            throw ApiExceptions.validation("paymentMethod must be CASH or BANK_TRANSFER", Map.of("paymentMethod", request.paymentMethod()));
-        }
-        String reference = request.transactionReference().trim();
-        var existing = paymentRepository.findTopByReservation_IdAndPurposeAndGatewayTransactionNo(
-            reservation.getId(), PaymentType.RENTAL_BALANCE, reference
-        );
-        if (existing.isPresent()) {
-            return toPaymentResponse(existing.get());
-        }
-
         User operator = requireActor(actor);
         Instant now = Instant.now();
-        Payment payment = new Payment();
-        payment.setInitiatedBy(operator);
-        payment.setReservation(reservation);
-        payment.setAmount(request.amount());
-        payment.setCurrency("VND");
-        payment.setPurpose(PaymentType.RENTAL_BALANCE);
-        payment.setStatus(PaymentStatus.PAID);
-        payment.setIdempotencyKey("CHECKIN-BALANCE-" + checkInId + "-" + reference);
-        payment.setGatewayIntentId("MANUAL-CHECKIN-" + UUID.randomUUID());
-        payment.setGatewayProvider("MANUAL");
-        payment.setGatewayTransactionNo(reference);
-        payment.setGatewayBankCode(paymentMethod);
-        payment.setGatewayResponseCode("00");
-        payment.setGatewayTransactionStatus("PAID");
-        payment.setPaidAt(now);
-        payment.setProcessedAt(now);
-        Payment saved = paymentRepository.saveAndFlush(payment);
+        var recorded = manualRentalPayments.booking(reservation,checkInId,operator,snapshot.getDueAtCheckIn(),request.amount(),
+            request.paymentMethod(),request.transactionReference().trim(),now);
+        Payment saved=recorded.payment();
+        if(!recorded.created())return toPaymentResponse(saved);
         auditLogService.recordMutation(
             operator, "CHECKIN_REMAINING_PAYMENT_RECORDED", "Payment", saved.getId(),
             reservation.getFacility().getId(), null, toPaymentResponse(saved)

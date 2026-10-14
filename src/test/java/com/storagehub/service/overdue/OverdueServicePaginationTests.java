@@ -59,6 +59,14 @@ class OverdueServicePaginationTests {
         var r=service.list(actor,q(0,1,"PAYMENT_DUE","Customer 1","caseRef",false),"TEST");
         assertThat(r.data()).hasSize(1);assertThat(r.data().getFirst().rentalId()).isEqualTo(rentals.get(1).getId());assertThat(r.pagination().totalItems()).isEqualTo(1);
     }
+    @Test void knownPartialDebtIsVisibleWithoutCompleteCoverageAndCommandsStayGuarded(){
+        when(finance.read(any(),eq(NOW))).thenAnswer(i->{Rental r=i.getArgument(0);return Optional.of(new Finance(NOW,List.of(new Obligation(r.getId(),r.getId(),NOW.minusSeconds(1),new BigDecimal("5"),"VND")),"PARTIAL"));});
+        var result=service.list(actor,q(0,1,"PAYMENT_DUE","","caseRef",false),"TEST");
+        assertThat(result.data()).hasSize(1);assertThat(result.pagination().totalItems()).isEqualTo(3);
+        assertThat(result.completeness()).isEqualTo("PARTIAL");assertThat(result.missingSources()).contains("FINANCIAL_COVERAGE_PARTIAL");
+        when(em.find(eq(Rental.class),any())).thenReturn(rentals.getFirst());
+        assertThatThrownBy(()->service.detail(actor,"PAYMENT_DUE:"+rentals.getFirst().getId()+":"+rentals.getFirst().getId())).isInstanceOf(ApiException.class);
+    }
     @Test void missingSourcesFromLaterRentalsRemainVisibleEvenOnFirstPage(){
         when(terms.term(rentals.getLast(),NOW)).thenReturn(Optional.empty());
         var result=service.list(actor,q(0,1,"ALL","","priority",true),"TEST");

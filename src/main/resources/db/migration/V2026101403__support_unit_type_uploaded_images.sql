@@ -1,0 +1,1 @@
+ALTER TABLE unit_types MODIFY COLUMN image_url LONGTEXT NULL;

@@ -4,8 +4,11 @@ title StorageHub MySQL Runner
 echo =======================================================
 echo   ĐANG KHỞI ĐỘNG MYSQL (DOCKER)
 echo =======================================================
-cd /d "%~dp0"
-docker compose up -d
+docker start storagehub-mysql >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    cd /d "%~dp0"
+    docker compose up -d
+)
 echo.
 echo =======================================================
 echo  MySQL đang chạy nền tại: localhost:3306
