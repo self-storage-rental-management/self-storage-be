@@ -6,6 +6,7 @@ import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Notification;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.FacilityScopeLevel;
+import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.model.User;
@@ -139,6 +140,28 @@ public class NotificationService {
         recipientIds.forEach(recipientId -> createNotification(
             recipientId, type, title, content, relatedEntityId
         ));
+    }
+
+    @Transactional
+    public void notifyStaffOfCheckInAppointmentChange(Reservation reservation, Instant previousAppointmentAt) {
+        createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng đã cập nhật lịch nhận kho",
+            "Đơn " + reservation.getReservationCode() + " nhận kho lúc "
+                + reservation.getAppointmentAt() + ".",
+            reservation.getId()
+        );
+    }
+
+    @Transactional
+    public void notifyStaffOfReservationCancellation(Reservation reservation, boolean assignedUnitReleased) {
+        createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.RESERVATION,
+            "Đơn giữ kho đã được khách hàng hủy",
+            "Đơn " + reservation.getReservationCode() + " đã được hủy."
+                + (assignedUnitReleased ? " Kho đã được giải phóng." : ""),
+            reservation.getId()
+        );
     }
 
     private PageRequest pageable(int page, int size) {

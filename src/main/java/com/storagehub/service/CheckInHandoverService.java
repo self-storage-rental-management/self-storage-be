@@ -339,9 +339,13 @@ public class CheckInHandoverService {
             throw ApiExceptions.validation("Payment amount must match the remaining check-in amount", Map.of("expectedAmount", snapshot.getDueAtCheckIn()));
         }
         User operator = requireActor(actor);
+        validatePaymentEvidence(checkInId, request.paymentEvidenceFileId());
         Instant now = Instant.now();
+        String reference = request.transactionReference() == null || request.transactionReference().isBlank()
+            ? "EVIDENCE-" + request.paymentEvidenceFileId()
+            : request.transactionReference().trim();
         var recorded = manualRentalPayments.booking(reservation,checkInId,operator,snapshot.getDueAtCheckIn(),request.amount(),
-            request.paymentMethod(),request.transactionReference().trim(),now);
+            request.paymentMethod(),reference,request.paymentEvidenceFileId(),now);
         Payment saved=recorded.payment();
         if(!recorded.created())return toPaymentResponse(saved);
         auditLogService.recordMutation(
@@ -756,6 +760,21 @@ public class CheckInHandoverService {
         );
         if (!valid) {
             throw ApiExceptions.validation("Evidence must contain active files linked to this check-in", null);
+        }
+    }
+
+    private void validatePaymentEvidence(UUID checkInId, UUID evidenceFileId) {
+        FileAsset asset = fileAssetRepository.findById(evidenceFileId)
+            .orElseThrow(() -> ApiExceptions.validation("Payment evidence file was not found", null));
+        boolean supportedType = asset.getContentType() != null
+            && (asset.getContentType().startsWith("image/")
+                || "application/pdf".equalsIgnoreCase(asset.getContentType()));
+        if (!supportedType || asset.getStatus() != FileAssetStatus.ACTIVE
+            || !"CHECK_IN".equals(asset.getEntityType())
+            || !checkInId.equals(asset.getEntityId())) {
+            throw ApiExceptions.validation(
+                "Payment evidence must be an active image or PDF linked to this check-in", null
+            );
         }
     }
 
