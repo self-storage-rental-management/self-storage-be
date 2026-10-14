@@ -24,6 +24,8 @@ import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.model.UnitAssignmentStatus;
+import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
@@ -32,12 +34,16 @@ import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
+import com.storagehub.domain.repo.UnitAssignmentRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.service.ledger.LedgerStore;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -56,12 +62,43 @@ public class CustomerReservationService {
     private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
     private final StorageUnitRepository storageUnitRepository;
+    private final UnitAssignmentRepository assignmentRepository;
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
+    private final ObjectProvider<LedgerStore> ledgerStores;
 
     @Autowired
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        UnitAssignmentRepository assignmentRepository,
+        FileAssetRepository fileAssetRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService,
+        ObjectProvider<LedgerStore> ledgerStores
+    ) {
+        this.reservationRepository = reservationRepository;
+        this.paymentRepository = paymentRepository;
+        this.checkInRepository = checkInRepository;
+        this.rentalRepository = rentalRepository;
+        this.storageUnitRepository = storageUnitRepository;
+        this.assignmentRepository = assignmentRepository;
+        this.fileAssetRepository = fileAssetRepository;
+        this.snapshotRepository = snapshotRepository;
+        this.goodsItemRepository = goodsItemRepository;
+        this.auditLogService = auditLogService;
+        this.notificationService = notificationService;
+        this.ledgerStores = ledgerStores;
+    }
+
+    /** Compatibility constructor retained for existing service tests and integrations. */
     public CustomerReservationService(
         ReservationRepository reservationRepository,
         PaymentRepository paymentRepository,
@@ -74,16 +111,47 @@ public class CustomerReservationService {
         AuditLogService auditLogService,
         NotificationService notificationService
     ) {
-        this.reservationRepository = reservationRepository;
-        this.paymentRepository = paymentRepository;
-        this.checkInRepository = checkInRepository;
-        this.rentalRepository = rentalRepository;
-        this.storageUnitRepository = storageUnitRepository;
-        this.fileAssetRepository = fileAssetRepository;
-        this.snapshotRepository = snapshotRepository;
-        this.goodsItemRepository = goodsItemRepository;
-        this.auditLogService = auditLogService;
-        this.notificationService = notificationService;
+        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, null, fileAssetRepository, snapshotRepository, goodsItemRepository,
+            auditLogService, notificationService, null);
+    }
+
+    /** Compatibility constructor for callers that provide assignment support without a ledger store. */
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        UnitAssignmentRepository assignmentRepository,
+        FileAssetRepository fileAssetRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService
+    ) {
+        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, assignmentRepository, fileAssetRepository, snapshotRepository,
+            goodsItemRepository, auditLogService, notificationService, null);
+    }
+
+    /** Compatibility constructor for ledger-aware callers created before assignment support was added. */
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        FileAssetRepository fileAssetRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService,
+        ObjectProvider<LedgerStore> ledgerStores
+    ) {
+        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, null, fileAssetRepository, snapshotRepository,
+            goodsItemRepository, auditLogService, notificationService, ledgerStores);
     }
 
     /** Compatibility constructor retained for service unit tests and existing integrations. */
@@ -95,8 +163,8 @@ public class CustomerReservationService {
         AuditLogService auditLogService,
         NotificationService notificationService
     ) {
-        this(reservationRepository, paymentRepository, null, null, null, null,
-            snapshotRepository, goodsItemRepository, auditLogService, notificationService);
+        this(reservationRepository, paymentRepository, null, null, null, null, null, snapshotRepository,
+            goodsItemRepository, auditLogService, notificationService, null);
     }
 
     /** Compatibility constructor retained for the handover/receipt service tests. */
@@ -111,9 +179,9 @@ public class CustomerReservationService {
         AuditLogService auditLogService,
         NotificationService notificationService
     ) {
-        this(reservationRepository, paymentRepository, checkInRepository,
-            rentalRepository, storageUnitRepository, null, snapshotRepository,
-            goodsItemRepository, auditLogService, notificationService);
+        this(reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, null, null, snapshotRepository, goodsItemRepository,
+            auditLogService, notificationService, null);
     }
 
     @Transactional(readOnly = true)
@@ -142,6 +210,20 @@ public class CustomerReservationService {
     public ReservationDetailResponse getDetail(ActorPrincipal actor, UUID reservationId) {
         Reservation reservation = findOwnedReservation(actor, reservationId);
         return toDetailResponse(reservation);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<CustomerPaymentReceiptResponse> paymentHistory(
+        ActorPrincipal actor, int page, int size, String correlationId
+    ) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customers can read their payment history");
+        }
+        PageRequest pageable = createPageRequest(page, size).withSort(
+            Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id"))
+        );
+        return PageResponse.from(paymentRepository.findAllByReservation_Customer_Id(actor.userId(), pageable)
+            .map(payment -> toPaymentResponse(payment, payment.getReservation().getStatus())), correlationId);
     }
 
     @Transactional(readOnly = true)
@@ -181,6 +263,9 @@ public class CustomerReservationService {
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (ledgerStores != null && ledgerStores.getIfAvailable() != null) {
+            com.storagehub.service.ledger.FinancialContractSpecifications.validateInitial(snapshot);
+        }
         var existingRental = rentalRepository.findByReservation_Id(reservationId);
         Rental rental = existingRental.orElseGet(() -> {
             Rental created = new Rental();
@@ -194,6 +279,15 @@ public class CustomerReservationService {
             created.setMonthlyPrice(snapshot.getMonthlyPrice());
             return rentalRepository.saveAndFlush(created);
         });
+        // Open the subledger only for a Rental created by this confirmed receipt event.
+        // The ledger writer joins this method's transaction; existing/legacy Rentals are not backfilled.
+        if (existingRental.isEmpty() && ledgerStores != null) {
+            LedgerStore ledger = ledgerStores.getIfAvailable();
+            if (ledger != null) {
+                com.storagehub.service.ledger.FinancialContractSpecifications.initial(rental, snapshot);
+                ledger.open(rental.getId(), rental.getCustomer().getId(), rental.getFacility().getId());
+            }
+        }
 
         reservation.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
@@ -237,20 +331,41 @@ public class CustomerReservationService {
     ) {
         Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
-        if (reservation.getStatus() != ReservationStatus.UNIT_RESERVED
+        if (reservation.getStatus() != ReservationStatus.AWAITING_EMAIL
+            && reservation.getStatus() != ReservationStatus.AWAITING_REVIEW
+            && reservation.getStatus() != ReservationStatus.AWAITING_PAYMENT
+            && reservation.getStatus() != ReservationStatus.PAYMENT_GRACE
+            && reservation.getStatus() != ReservationStatus.PAYMENT_REVIEW
+            && reservation.getStatus() != ReservationStatus.CONFIRMED
+            && reservation.getStatus() != ReservationStatus.UNIT_RESERVED
             && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
-            throw ApiExceptions.conflict("Reservation is not ready to set a check-in appointment");
+            throw ApiExceptions.conflict("Reservation can no longer change its check-in appointment");
         }
+        ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
+            reservation.getCreatedAt(),
+            reservation.getGoodsReviewStatus() != com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED
+        );
+        if (!checkInWindow.contains(request.appointmentAt())) {
+            throw ApiExceptions.validation(
+                "Check-in appointment must be within the permitted seven-day window", null
+            );
+        }
+        Instant previousAppointmentAt = reservation.getAppointmentAt();
         reservation.setAppointmentAt(request.appointmentAt());
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
-        if (checkIn != null && checkIn.getStatus() == com.storagehub.domain.model.CheckInStatus.scheduled) {
+        if (checkIn != null && checkIn.getStatus() != CheckInStatus.scheduled) {
+            throw ApiExceptions.conflict("Check-in has already started or been closed");
+        }
+        if (checkIn != null) {
             checkIn.setScheduledAt(request.appointmentAt());
             checkInRepository.saveAndFlush(checkIn);
         }
         Reservation saved = reservationRepository.saveAndFlush(reservation);
+        Map<String, Object> before = new HashMap<>();
+        before.put("appointmentAt", previousAppointmentAt);
         auditLogService.recordMutation(
             saved.getCustomer(), "CUSTOMER_CHECKIN_APPOINTMENT_SET", "Reservation", saved.getId(),
-            saved.getFacility().getId(), null, Map.of("appointmentAt", saved.getAppointmentAt())
+            saved.getFacility().getId(), before, Map.of("appointmentAt", saved.getAppointmentAt())
         );
         notificationService.createFacilityOperationsNotifications(
             saved.getFacility().getId(), NotificationType.CHECKIN,
@@ -327,6 +442,7 @@ public class CustomerReservationService {
         reservation.setArchivedAt(cancelledAt);
         reservation.setCancelReason(request.getReason().trim());
         Reservation saved = reservationRepository.saveAndFlush(reservation);
+        boolean assignedUnitReleased = releaseAssignedUnitAfterCancellation(saved, cancelledAt);
         ReservationDetailResponse response = toDetailResponse(saved);
 
         auditLogService.recordMutation(
@@ -341,7 +457,53 @@ public class CustomerReservationService {
             "Đơn " + saved.getReservationCode() + " đã được hủy theo yêu cầu của bạn.",
             saved.getId()
         );
+        notificationService.notifyStaffOfReservationCancellation(saved, assignedUnitReleased);
         return response;
+    }
+
+    private boolean releaseAssignedUnitAfterCancellation(Reservation reservation, Instant cancelledAt) {
+        if (assignmentRepository == null || storageUnitRepository == null || checkInRepository == null
+            || rentalRepository == null || reservation.getAssignedUnit() == null) {
+            return false;
+        }
+        var assignment = assignmentRepository
+            .findByReservation_IdAndStatus(reservation.getId(), UnitAssignmentStatus.ACTIVE)
+            .orElse(null);
+        if (assignment == null) {
+            return false;
+        }
+        var unit = assignment.getStorageUnit();
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        if (checkIn != null && checkIn.getStatus() == CheckInStatus.completed) {
+            throw ApiExceptions.conflict("The assigned unit cannot be released because check-in is completed");
+        }
+        if (rentalRepository.existsActiveRental(reservation.getId(), unit.getId(), RentalStatus.active)) {
+            throw ApiExceptions.conflict("The assigned unit cannot be released because an active rental exists");
+        }
+        if (unit.getStatus() != StorageUnitStatus.reserved
+            && unit.getStatus() != StorageUnitStatus.assigned) {
+            throw ApiExceptions.conflict("Storage unit is not in a releasable state");
+        }
+
+        StorageUnitStatus previousStatus = unit.getStatus();
+        unit.setStatus(StorageUnitStatus.available);
+        unit.setAvailableFrom(cancelledAt);
+        unit.setLastReleasedAt(cancelledAt);
+        assignment.setStatus(UnitAssignmentStatus.CANCELLED);
+        assignment.setCancelledBy(reservation.getCustomer());
+        assignment.setCancelledAt(cancelledAt);
+        assignment.setCancelReason(reservation.getCancelReason());
+        assignment.setReleaseDisposition(UnitReleaseDisposition.AVAILABLE);
+        assignment.setPreviousStorageUnitStatus(previousStatus);
+        reservation.setAssignedUnit(null);
+        if (checkIn != null && checkIn.getStatus() == CheckInStatus.scheduled) {
+            checkIn.setStatus(CheckInStatus.cancelled);
+            checkInRepository.saveAndFlush(checkIn);
+        }
+        storageUnitRepository.saveAndFlush(unit);
+        assignmentRepository.saveAndFlush(assignment);
+        reservationRepository.saveAndFlush(reservation);
+        return true;
     }
 
     private Reservation findOwnedReservation(ActorPrincipal actor, UUID reservationId) {
@@ -354,6 +516,7 @@ public class CustomerReservationService {
             || status == ReservationStatus.AWAITING_REVIEW
             || status == ReservationStatus.AWAITING_PAYMENT
             || status == ReservationStatus.PAYMENT_GRACE
+            || status == ReservationStatus.PAYMENT_REVIEW
             || status == ReservationStatus.CONFIRMED
             || status == ReservationStatus.UNIT_RESERVED
             || status == ReservationStatus.READY_FOR_CHECKIN;
@@ -433,7 +596,7 @@ public class CustomerReservationService {
             payment.getGatewayPayDate(), payment.getGatewayBankCode(),
             payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
             payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
-            payment.getInitiatedBy().getFullName()
+            payment.getInitiatedBy().getFullName(), payment.getCreatedAt(), payment.getReservation().getReservationCode()
         );
     }
 

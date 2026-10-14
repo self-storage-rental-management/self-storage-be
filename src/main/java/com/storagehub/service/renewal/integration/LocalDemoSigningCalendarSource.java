@@ -5,18 +5,17 @@ import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.Renewal;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.service.renewal.operations.RenewalOperationSources;
+import com.storagehub.service.calendar.ServiceCalendarPolicy;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import java.nio.ByteBuffer;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalTime;
-import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -26,13 +25,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /** Local-demo signing calendar: Vietnam time, daily 08:00-17:00, 30-minute slots, one at a time per facility. */
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "storagehub.integration.local-demo-operational-sources.enabled", havingValue = "true")
+@ConditionalOnExpression("${storagehub.integration.local-demo-operational-sources.enabled:false} && !${storagehub.integration.renewal-signing-calendar.enabled:false}")
 @Transactional(propagation = Propagation.MANDATORY)
 public class LocalDemoSigningCalendarSource implements RenewalOperationSources.CalendarSource {
-    private static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final Duration SLOT_LENGTH = Duration.ofMinutes(30);
-    private static final LocalTime OPEN = LocalTime.of(8, 0);
-    private static final LocalTime LAST_START = LocalTime.of(16, 30);
     private final JdbcTemplate jdbc;
     private final EntityManager em;
 
@@ -82,6 +78,8 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
         Facility facility = em.find(Facility.class, facilityId, LockModeType.PESSIMISTIC_WRITE);
         if (facility == null) throw ApiExceptions.conflict("Signing facility is unavailable");
         em.refresh(facility, LockModeType.PESSIMISTIC_WRITE);
+        if (facility.getStatus() != com.storagehub.domain.model.FacilityStatus.active)
+            throw ApiExceptions.conflict("Signing facility is not active");
 
         if (!slot.start().isAfter(now) || !slot.end().equals(slot.start().plus(SLOT_LENGTH))
             || !isBusinessSlot(slot.start())
@@ -112,9 +110,7 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
         var busy = jdbc.query("select appointment_start,appointment_end from renewal_demo_signing_appointments where facility_id=? and status='RESERVED' and appointment_start<? and appointment_end>?",
             (rs, row) -> new Interval(rs.getTimestamp("appointment_start").toInstant(), rs.getTimestamp("appointment_end").toInstant()),
             bytes(facilityId), Timestamp.from(deadline), Timestamp.from(from));
-        long epoch = from.getEpochSecond();
-        long candidateSeconds = Math.floorDiv(epoch + 1799, 1800) * 1800;
-        Instant candidate = Instant.ofEpochSecond(candidateSeconds);
+        Instant candidate = ServiceCalendarPolicy.nextAppointmentAt(from);
         for (; candidate.plus(SLOT_LENGTH).compareTo(deadline) <= 0; candidate = candidate.plus(SLOT_LENGTH)) {
             Instant slotStart = candidate;
             Instant slotEnd = slotStart.plus(SLOT_LENGTH);
@@ -134,10 +130,7 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
     }
 
     private static boolean isBusinessSlot(Instant start) {
-        var local = start.atZone(ZONE);
-        return local.getSecond() == 0 && local.getNano() == 0
-            && (local.getMinute() == 0 || local.getMinute() == 30)
-            && !local.toLocalTime().isBefore(OPEN) && !local.toLocalTime().isAfter(LAST_START);
+        return ServiceCalendarPolicy.isAppointmentStart(start);
     }
 
     private static String reference(UUID facilityId, Instant start) {

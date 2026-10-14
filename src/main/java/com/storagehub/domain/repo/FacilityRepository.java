@@ -12,6 +12,8 @@ import org.springframework.data.repository.query.Param;
 
 public interface FacilityRepository extends JpaRepository<Facility, UUID> {
 
+    java.util.Optional<Facility> findByCodeIgnoreCase(String code);
+
     @Query("""
         select f from Facility f
         where (:status is null or f.status = :status)

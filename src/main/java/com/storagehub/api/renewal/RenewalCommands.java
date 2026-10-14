@@ -14,5 +14,9 @@ public final class RenewalCommands {
     public record Decision(@NotNull DecisionType decision,@Size(max=2000) String reason,@NotNull @PositiveOrZero Long expectedVersion) { @com.fasterxml.jackson.annotation.JsonAnySetter public void unknown(String key,Object value){reject(key);} }
     private static void reject(String field){throw new IllegalArgumentException("Unknown Renewal command field: "+field);}
     @Schema(description="Shared integration is deferred; never a synthetic option or quote")
-    public record Option(String pricingPackageCode,int rentalMonths) {}
+    public record Option(String pricingPackageCode,int rentalMonths,String pricingPackageName) {
+        public Option(String pricingPackageCode,int rentalMonths) {
+            this(pricingPackageCode,rentalMonths,null);
+        }
+    }
 }

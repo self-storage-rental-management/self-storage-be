@@ -63,6 +63,9 @@ public class OverdueService {
     public OverdueResponse.FollowUp recovery(ActorPrincipal actor,String id,OverdueCommands.Recovery body,String key) {
         var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
         Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_recovery",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
+        if(!em.createQuery("select f.id from OverdueFollowUp f where f.caseRef=:id and f.type='RECOVERY_HANDOFF'",UUID.class)
+            .setParameter("id",id).setMaxResults(1).getResultList().isEmpty())
+            throw ApiExceptions.conflict("Recovery handoff already recorded");
         var current=current(r,ref);if(!current.kind().equals("RENTAL_TERM")||!current.recoveryEligible())throw ApiExceptions.conflict("Only policy-eligible rental-term expiry may enter Recovery");
         var state=stream(id,body.expectedVersion());var source=recoveries.getIfAvailable();if(source==null||!source.atomic())throw deferred("Authorized Recovery receiving service unavailable");
         var handoff=source.receive(r,id,body.reason(),key,now());if(handoff==null||handoff.reference()==null||handoff.status()==null||!Set.of("RECEIVED","ALREADY_RECEIVED").contains(handoff.status()))throw deferred("Recovery receiver has not acknowledged");
@@ -92,6 +95,8 @@ public class OverdueService {
             var source=finances.getIfAvailable();var f=source==null?null:source.read(r,at).orElse(null);
             if(f==null)missing.add("AUTHORITATIVE_OBLIGATIONS_ALLOCATIONS");else {
                 if(f.checkedAt()==null||f.checkedAt().isAfter(at)||f.obligations()==null)throw ApiExceptions.conflict("Authoritative financial state incomplete");var ids=new HashSet<UUID>();
+                if(!Set.of("COMPLETE","PARTIAL").contains(f.completeness()))throw ApiExceptions.conflict("Financial coverage invalid");
+                if(f.completeness().equals("PARTIAL"))missing.add("FINANCIAL_COVERAGE_PARTIAL");
                 for(var o:f.obligations()){
                     if(o==null||o.id()==null||!r.getId().equals(o.rentalId())||!ids.add(o.id())||o.dueAt()==null||o.outstanding()==null||o.outstanding().signum()<0||!"VND".equals(o.currency()))throw ApiExceptions.conflict("Authoritative obligation inconsistent");
                     if(at.isAfter(o.dueAt())&&o.outstanding().signum()>0){String ref="PAYMENT_DUE:"+r.getId()+":"+o.id();long days=Math.max(0,ChronoUnit.DAYS.between(o.dueAt().atZone(ZONE).toLocalDate(),at.atZone(ZONE).toLocalDate()));result.add(row(r,ref,"PAYMENT_DUE",days,"PAYMENT_DUE",o.id(),o.dueAt(),o.outstanding(),o.currency(),null,null,null,false));}

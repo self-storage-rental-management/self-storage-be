@@ -224,6 +224,9 @@ public class PaymentComplaintService {
             payment.setStatus(PaymentStatus.PAID);
             payment.setPaidAt(now);
             payment.setProcessedAt(now);
+            ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
+                .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), now);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(now);
             reservation.setConfirmedAt(now);

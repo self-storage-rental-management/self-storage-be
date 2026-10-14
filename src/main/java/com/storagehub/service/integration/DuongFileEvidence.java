@@ -24,7 +24,7 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     private final RenewalAssignmentSource assignments;
     private final FileProperties properties;
     private final ObjectMapper mapper;
-    private static final Set<String> PURPOSES=Set.of("ARRIVAL","INCIDENT","SIGNED_CONTRACT","EXCEPTION","FAULT_REVIEW","REFUND");
+    private static final Set<String> PURPOSES=Set.of("ARRIVAL","INCIDENT","SIGNED_CONTRACT","CASH_RECEIPT","EXCEPTION","FAULT_REVIEW","REFUND");
     public static final String PUBLIC="DUONG_SUPPORT_PUBLIC",INTERNAL="DUONG_SUPPORT_INTERNAL",UPLOAD="DUONG_SUPPORT_UPLOAD";
     public static String renewalType(String purpose){if(!PURPOSES.contains(purpose))throw ApiExceptions.validation("Unsupported Renewal evidence purpose",null);return "DUONG_RENEWAL_"+purpose;}
     public static boolean handles(String type){return type!=null&&(PUBLIC.equals(type)||INTERNAL.equals(type)||UPLOAD.equals(type)||PURPOSES.stream().anyMatch(p->renewalType(p).equals(type)));}
@@ -36,8 +36,9 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     public void requireUpload(ActorPrincipal actor,String type,UUID resource) {
         if(type.startsWith("DUONG_RENEWAL_")) {
             var n=renewal(resource);renewalAccess(actor,n,type.substring("DUONG_RENEWAL_".length()),true);
-            if(Set.of(RenewalStatus.pending,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting new evidence");
+            if(Set.of(RenewalStatus.pending,RenewalStatus.accepted,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting operational evidence before payment/signing");
         }else {
+            if(actor!=null&&actor.hasRole(RoleCode.MANAGER))throw ApiExceptions.forbidden("Manager Support is read-only");
             if(UPLOAD.equals(type)){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);if(resource!=null&&!actor.userId().equals(resource))throw unavailable();return;}
             if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)&&PUBLIC.equals(type)&&resource==null){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);return;}
             supportAccess(actor,ticket(resource),INTERNAL.equals(type)?Visibility.INTERNAL:Visibility.PUBLIC,true);
@@ -101,16 +102,16 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
         if(actor!=null&&actor.hasRole(RoleCode.MANAGER)) {
             access.require(actor,RoleCode.MANAGER,n.getRental().getFacility().getId(),write?FacilityScopeLevel.MANAGE:FacilityScopeLevel.READ,SystemPermission.VIEW_RENTALS);
             if(write){if(!Set.of("EXCEPTION","FAULT_REVIEW","REFUND").contains(purpose))throw ApiExceptions.forbidden("Signing evidence is recorded by assigned Staff");assignments.require(actor,n,purpose.equals("REFUND")?RenewalOperationSources.Capability.REFUND:RenewalOperationSources.Capability.EXCEPTION);}
-        }else assignments.require(actor,n,write?(purpose.equals("INCIDENT")?RenewalOperationSources.Capability.INCIDENT:RenewalOperationSources.Capability.COMPLETE):RenewalOperationSources.Capability.READ);
+        }else assignments.require(actor,n,write?(purpose.equals("INCIDENT")?RenewalOperationSources.Capability.INCIDENT:purpose.equals("CASH_RECEIPT")?RenewalOperationSources.Capability.CASH:RenewalOperationSources.Capability.COMPLETE):RenewalOperationSources.Capability.READ);
     }
     private void supportAccess(ActorPrincipal actor,SupportTicket t,Visibility visibility,boolean write) {
         if(visibility==null)throw ApiExceptions.validation("Explicit evidence visibility required",null);
+        if(write&&actor!=null&&actor.hasRole(RoleCode.MANAGER))throw ApiExceptions.forbidden("Manager Support is read-only");
         if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)) {
             access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);
             if(visibility!=Visibility.PUBLIC||!Objects.equals(actor.userId(),t.getCustomer().getId()))throw unavailable();
         }else if(actor!=null&&actor.hasRole(RoleCode.MANAGER)) {
-            if(write)access.require(actor,RoleCode.MANAGER,t.getFacility().getId(),FacilityScopeLevel.MANAGE,SystemPermission.VIEW_SUPPORT,SystemPermission.MANAGE_SUPPORT);
-            else access.require(actor,RoleCode.MANAGER,t.getFacility().getId(),FacilityScopeLevel.READ,SystemPermission.VIEW_SUPPORT);
+            access.require(actor,RoleCode.MANAGER,t.getFacility().getId(),FacilityScopeLevel.READ,SystemPermission.VIEW_SUPPORT);
         }else {
             if(write)access.require(actor,RoleCode.STAFF,t.getFacility().getId(),FacilityScopeLevel.OPERATE,SystemPermission.VIEW_SUPPORT,SystemPermission.MANAGE_SUPPORT);
             else access.require(actor,RoleCode.STAFF,t.getFacility().getId(),FacilityScopeLevel.OPERATE,SystemPermission.VIEW_SUPPORT);

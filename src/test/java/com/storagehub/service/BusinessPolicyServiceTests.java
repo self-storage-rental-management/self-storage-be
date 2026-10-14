@@ -191,6 +191,44 @@ class BusinessPolicyServiceTests {
     }
 
     @Test
+    void createPackagePolicy_sameDurationAndOverlappingPeriod_throwsConflict() {
+        RentalPackagePolicy existing = packagePolicy(6, "0.10", LocalDate.of(2026, 1, 1), null);
+        RentalPackagePolicyRequest req = new RentalPackagePolicyRequest(
+            facilityId, "PKG-6M-NEW", "Gói 6 tháng giảm 15%", 6,
+            new BigDecimal("0.15"), "v2", true, LocalDate.of(2026, 6, 1), null
+        );
+        when(facilityRepository.findById(facilityId)).thenReturn(Optional.of(facility));
+        when(policyRepository.findByFacility_IdAndCode(facilityId, "PKG-6M-NEW")).thenReturn(Optional.empty());
+        when(policyRepository.findByFacility_IdAndRentalMonths(facilityId, 6)).thenReturn(List.of(existing));
+
+        assertThatThrownBy(() -> service.createPackagePolicy(businessActor, req))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("already has an active 6-month package");
+    }
+
+    @Test
+    void createPackagePolicy_sameDurationButNonOverlappingPeriod_isAllowed() {
+        RentalPackagePolicy existing = packagePolicy(
+            6, "0.10", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 6, 30)
+        );
+        RentalPackagePolicyRequest req = new RentalPackagePolicyRequest(
+            facilityId, "PKG-6M-JUL", "Gói 6 tháng từ tháng 7", 6,
+            new BigDecimal("0.15"), "v2", true, LocalDate.of(2026, 7, 1), null
+        );
+        when(facilityRepository.findById(facilityId)).thenReturn(Optional.of(facility));
+        when(policyRepository.findByFacility_IdAndCode(facilityId, "PKG-6M-JUL")).thenReturn(Optional.empty());
+        when(policyRepository.findByFacility_IdAndRentalMonths(facilityId, 6)).thenReturn(List.of(existing));
+        when(policyRepository.save(any(RentalPackagePolicy.class))).thenAnswer(inv -> {
+            RentalPackagePolicy saved = inv.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", UUID.randomUUID());
+            return saved;
+        });
+
+        assertThat(service.createPackagePolicy(businessActor, req).discountRate())
+            .isEqualByComparingTo("0.15");
+    }
+
+    @Test
     void updatePackagePolicy_success() {
         UUID policyId = UUID.randomUUID();
         RentalPackagePolicy policy = new RentalPackagePolicy();
@@ -241,5 +279,22 @@ class BusinessPolicyServiceTests {
 
         assertThat(policy.isActive()).isFalse();
         verify(policyRepository).save(policy);
+    }
+
+    private RentalPackagePolicy packagePolicy(
+        int months, String discount, LocalDate effectiveFrom, LocalDate effectiveTo
+    ) {
+        RentalPackagePolicy policy = new RentalPackagePolicy();
+        ReflectionTestUtils.setField(policy, "id", UUID.randomUUID());
+        policy.setFacility(facility);
+        policy.setCode("EXISTING-" + months);
+        policy.setName("Existing package");
+        policy.setRentalMonths(months);
+        policy.setDiscountRate(new BigDecimal(discount));
+        policy.setPolicyVersion("v1");
+        policy.setActive(true);
+        policy.setEffectiveFrom(effectiveFrom);
+        policy.setEffectiveTo(effectiveTo);
+        return policy;
     }
 }
