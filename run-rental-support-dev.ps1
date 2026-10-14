@@ -40,9 +40,12 @@ $rentalLocalConfiguration = @{
     'logging.level.root' = 'INFO'
     'logging.level.org.hibernate.SQL' = 'WARN'
 }
+if (-not $PSBoundParameters.ContainsKey('EnableStaffSigningCalendar')) {
+    $EnableStaffSigningCalendar = $true
+}
+$rentalLocalConfiguration['storagehub.integration.renewal-signing-calendar.enabled'] = [bool]$EnableStaffSigningCalendar
 if ($EnableStaffSigningCalendar) {
-    $rentalLocalConfiguration['spring.flyway.locations'] += 'classpath:db/renewal-calendar-migration'
-    $rentalLocalConfiguration['storagehub.integration.renewal-signing-calendar.enabled'] = $true
+    $rentalLocalConfiguration['spring.flyway.locations'] += 'classpath:db/renewalcalendarmigration'
 }
 if ($VnpayConfigPath) {
     $rentalGatewayPath = (Resolve-Path -LiteralPath $VnpayConfigPath -ErrorAction Stop).Path
