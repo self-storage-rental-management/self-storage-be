@@ -15,6 +15,18 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
+    @Query("""
+        select coalesce(sum(p.amount), 0) from Payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and p.status = com.storagehub.domain.model.PaymentStatus.PAID
+          and coalesce(p.paidAt, p.processedAt, p.createdAt) >= :start
+          and coalesce(p.paidAt, p.processedAt, p.createdAt) < :end
+        """)
+    java.math.BigDecimal sumMonthReceipts(@Param("facilityId") UUID facilityId,
+        @Param("start") java.time.Instant start, @Param("end") java.time.Instant end);
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
         "reservation", "reservation.customer", "reservation.assignedUnit",
         "renewal", "renewal.rental", "renewal.rental.customer", "renewal.rental.storageUnit"
