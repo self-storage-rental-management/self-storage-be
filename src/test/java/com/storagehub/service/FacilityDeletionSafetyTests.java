@@ -23,6 +23,9 @@ class FacilityDeletionSafetyTests {
     @Mock UserFacilityScopeRepository userFacilityScopes;
     @Mock ReservationRepository reservations;
     @Mock NotificationService notifications;
+    @Mock UnitTypeChangeRequestRepository changes;
+    @Mock UserRepository users;
+    @Spy com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
     @InjectMocks FacilityLifecycleService service;
 
     private final UUID id = UUID.randomUUID();
@@ -105,20 +108,110 @@ class FacilityDeletionSafetyTests {
         var request = technicalRequest(new java.math.BigDecimal("4.00"));
         service.updateUnitType(manager(), id, request);
         assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
-        assertThat(type.getImageUrl()).isEqualTo("/images/customer-units/kho-m.jpg");
-        verify(notifications).notifyBusinessOfUnitTypeChange(type, false);
+        assertThat(type.getImageUrl()).isNull();
+        verify(notifications).notifyBusinessOfUnitTypeReview(eq(type), any());
+        verify(unitTypes, never()).save(any());
         verify(reservations, never()).existsByUnitType_Id(any());
     }
 
     @Test void technicalEditRequiresReviewAndNotifiesBusiness() {
         UnitType type = editableType();
         service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("5")));
-        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.awaiting_pricing);
-        verify(notifications).notifyBusinessOfUnitTypeChange(type, true);
+        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
+        assertThat(type.getLengthM()).isEqualByComparingTo("4");
+        verify(notifications).notifyBusinessOfUnitTypeReview(eq(type), any());
+        verify(unitTypes, never()).save(any());
+    }
+
+    private UnitTypeChangeRequest submittedChange(UnitType type) {
+        service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("4")));
+        var captor = ArgumentCaptor.forClass(UnitTypeChangeRequest.class);
+        verify(changes).saveAndFlush(captor.capture());
+        UnitTypeChangeRequest request = captor.getValue();
+        when(changes.findLockedById(request.getId())).thenReturn(Optional.of(request));
+        return request;
+    }
+
+    @Test void approvalAppliesMetadataWithoutUnpublishing() {
+        UnitType type = editableType();
+        UnitTypeChangeRequest request = submittedChange(type);
+        service.reviewUnitTypeChange(actor, request.getId(), true, null);
+        assertThat(type.getName()).isEqualTo("Kho M");
+        assertThat(type.getDescription()).isEqualTo("Mô tả");
+        assertThat(type.getImageUrl()).isEqualTo("/images/customer-units/kho-m.jpg");
+        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
+        assertThat(request.getStatus()).isEqualTo("APPROVED");
+        verify(notifications).notifyUnitTypeReviewResult(request);
+        verify(unitTypes).save(type);
+    }
+
+    @Test void rejectionKeepsOriginalAndRecordsReason() {
+        UnitType type = editableType();
+        UnitTypeChangeRequest request = submittedChange(type);
+        service.reviewUnitTypeChange(actor, request.getId(), false, "Ảnh không phù hợp");
+        assertThat(type.getImageUrl()).isNull();
+        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
+        assertThat(request.getStatus()).isEqualTo("REJECTED");
+        assertThat(request.getRejectionReason()).isEqualTo("Ảnh không phù hợp");
+        verify(unitTypes, never()).save(any());
+    }
+
+    @Test void rejectionRequiresReason() {
+        UnitTypeChangeRequest request = submittedChange(editableType());
+        assertThatThrownBy(() -> service.reviewUnitTypeChange(actor, request.getId(), false, " "))
+            .hasMessageContaining("lý do");
+        assertThat(request.getStatus()).isEqualTo("PENDING");
+    }
+
+    @Test void reviewCannotBeRepeated() {
+        UnitTypeChangeRequest request = submittedChange(editableType());
+        request.setStatus("APPROVED");
+        assertThatThrownBy(() -> service.reviewUnitTypeChange(actor, request.getId(), true, null))
+            .hasMessageContaining("đã được xử lý");
+        verify(unitTypes, never()).save(any());
+    }
+
+    @Test void blocksSecondPendingRequest() {
+        editableType();
+        when(changes.existsByUnitTypeIdAndStatus(id, "PENDING")).thenReturn(true);
+        assertThatThrownBy(() -> service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("4"))))
+            .hasMessageContaining("chờ BO duyệt");
+        verify(changes, never()).saveAndFlush(any());
+    }
+
+    @Test void approvalRejectsStaleOriginalData() {
+        UnitType type = editableType();
+        UnitTypeChangeRequest request = submittedChange(type);
+        type.setDescription("Thông tin đã được thay đổi bởi luồng khác");
+        assertThatThrownBy(() -> service.reviewUnitTypeChange(actor, request.getId(), true, null))
+            .hasMessageContaining("Thông tin gốc");
+        assertThat(request.getStatus()).isEqualTo("PENDING");
+        verify(unitTypes, never()).save(any());
+    }
+
+    @Test void technicalApprovalRechecksNewBookingHistory() {
+        UnitType type = editableType();
+        service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("5")));
+        var captor = ArgumentCaptor.forClass(UnitTypeChangeRequest.class);
+        verify(changes).saveAndFlush(captor.capture());
+        UnitTypeChangeRequest request = captor.getValue();
+        when(changes.findLockedById(request.getId())).thenReturn(Optional.of(request));
+        when(reservations.existsByUnitType_Id(id)).thenReturn(true);
+        assertThatThrownBy(() -> service.reviewUnitTypeChange(actor, request.getId(), true, null))
+            .hasMessageContaining("hồ sơ đặt/thuê");
+        assertThat(type.getLengthM()).isEqualByComparingTo("4");
+        assertThat(request.getStatus()).isEqualTo("PENDING");
+    }
+
+    @Test void customerCannotReview() {
+        var customer = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
+        assertThatThrownBy(() -> service.reviewUnitTypeChange(customer, id, true, null)).hasMessageContaining("Only Business");
+        verifyNoInteractions(changes);
     }
 
     private UnitType editableType() {
         UnitType type = new UnitType();
+        org.springframework.test.util.ReflectionTestUtils.setField(type, "id", id);
         Facility facility = mock(Facility.class);
         when(facility.getId()).thenReturn(id);
         type.setFacility(facility); type.setCode("M"); type.setStatus(UnitTypeStatus.active);
@@ -127,7 +220,11 @@ class FacilityDeletionSafetyTests {
         type.setRackCount(4); type.setRackLengthM(four); type.setRackWidthM(four); type.setRackHeightM(four);
         type.setAisleWidthM(four); type.setTrolleyType("Xe đẩy"); type.setSmallBoxCapacity(10); type.setLargeBoxCapacity(5);
         when(unitTypes.findByIdForUpdate(id)).thenReturn(Optional.of(type));
-        when(unitTypes.save(type)).thenReturn(type);
+        lenient().when(changes.saveAndFlush(any())).thenAnswer(invocation -> {
+            UnitTypeChangeRequest request = invocation.getArgument(0);
+            org.springframework.test.util.ReflectionTestUtils.setField(request, "id", UUID.randomUUID());
+            return request;
+        });
         return type;
     }
 
