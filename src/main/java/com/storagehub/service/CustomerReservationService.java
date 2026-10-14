@@ -367,13 +367,7 @@ public class CustomerReservationService {
             saved.getCustomer(), "CUSTOMER_CHECKIN_APPOINTMENT_SET", "Reservation", saved.getId(),
             saved.getFacility().getId(), before, Map.of("appointmentAt", saved.getAppointmentAt())
         );
-        notificationService.createFacilityOperationsNotifications(
-            saved.getFacility().getId(), NotificationType.CHECKIN,
-            "Khách hàng đã đặt lịch nhận kho",
-            "Khách hàng đã đặt lịch nhận kho cho đơn " + saved.getReservationCode()
-                + " vào " + saved.getAppointmentAt() + ".",
-            saved.getId()
-        );
+        notificationService.notifyStaffOfCheckInAppointmentChange(saved, previousAppointmentAt);
         return toSummaryResponse(saved);
     }
 
