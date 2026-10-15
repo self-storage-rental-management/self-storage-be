@@ -121,6 +121,7 @@ public class ReservationCreationService {
                 "appointmentAt must be within the permitted seven-day check-in window", null
             );
         }
+        FacilityAppointmentHours.validate(request.getAppointmentAt(), quote.getFacility().getAccessHours());
         java.time.LocalDate rentalStartDate = checkInWindow.availableAt()
             .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         reservation.setStartDate(rentalStartDate);

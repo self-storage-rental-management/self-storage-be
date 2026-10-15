@@ -10,6 +10,7 @@ public record CustomerCreateReturnRequest(
     @JsonFormat(pattern = "yyyy-MM-dd")
     LocalDate scheduledDate,
 
-    @Size(max = 2000, message = "notes cannot exceed 2000 characters")
+    @jakarta.validation.constraints.NotBlank(message = "Vui lòng nhập lý do trả kho.")
+    @Size(max = 2000, message = "Lý do trả kho không được quá 2000 ký tự.")
     String notes
 ) {}

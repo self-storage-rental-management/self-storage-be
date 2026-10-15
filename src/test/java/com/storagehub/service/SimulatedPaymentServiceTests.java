@@ -46,6 +46,7 @@ class SimulatedPaymentServiceTests {
     @Mock private ReservationPricingSnapshotRepository snapshotRepository;
     @Mock private UserRepository userRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private NotificationService notificationService;
 
     private PaymentProperties properties;
     private SimulatedPaymentService service;
@@ -58,7 +59,7 @@ class SimulatedPaymentServiceTests {
         properties = new PaymentProperties();
         service = new SimulatedPaymentService(
             paymentRepository, reservationRepository, snapshotRepository, userRepository,
-            properties, auditLogService
+            properties, auditLogService, notificationService
         );
         customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
