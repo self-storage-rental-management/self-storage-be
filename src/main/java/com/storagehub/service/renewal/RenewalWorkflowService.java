@@ -22,6 +22,8 @@ public class RenewalWorkflowService {
     private final RentalRepository rentals;private final RenewalReadService reads;private final RenewalPersistence store;
     @org.springframework.beans.factory.annotation.Autowired
     private PaymentRepository paymentRecords;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.local-demo.renewal-anytime-enabled:false}")
+    private boolean localDemoRenewalAnytimeEnabled;
     private final EntityManager em;private final ObjectMapper mapper;private final AuditLogService audit;
     private final ObjectProvider<RenewalSources.PolicySource> policies;
     private final ObjectProvider<RenewalSources.PricingSource> pricing;
@@ -299,7 +301,7 @@ public class RenewalWorkflowService {
         if(e==null)throw deferred("Eligibility UNKNOWN");
         if(!e.datesVerified()||e.recoveryCutoff()==null)throw deferred("Unverified date provenance/cutoff");
         if(e.recoveryBlocked()||!e.feasible()||!now.isBefore(e.recoveryCutoff()))throw ApiExceptions.conflict("Recovery/cutoff conflict");
-        if(now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().isBefore(period.lastPermittedDate().minusDays(p.requestWindowDays())))throw ApiExceptions.conflict("Renewal window not open");return new Gate(p,e,period);
+        if(!localDemoRenewalAnytimeEnabled&&now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().isBefore(period.lastPermittedDate().minusDays(p.requestWindowDays())))throw ApiExceptions.conflict("Renewal window not open");return new Gate(p,e,period);
     }
     private List<RenewalSources.Price> prices(Rental r,PolicyPeriod g){
         var s=pricing.getIfAvailable();if(s==null)throw deferred("Authoritative renewal pricing/rounding source missing");
