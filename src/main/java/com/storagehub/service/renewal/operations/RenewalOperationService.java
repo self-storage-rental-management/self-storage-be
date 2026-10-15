@@ -325,7 +325,7 @@ public class RenewalOperationService {
     @Transactional(readOnly=true)
     public PageResponse<RenewalOperationResponse.Event> events(ActorPrincipal actor,UUID id,Audience audience,String category,int page,int size,String correlation) {
         var n=visible(actor,id,audience,false,Capability.READ);if(page<0||size<1||size>100)throw ApiExceptions.validation("Invalid page/size",null);
-        List<String> kinds=switch(category){case "payments"->List.of("DEPOSIT","FULL_RENT_PAYMENT","CASH");case "refunds"->List.of("REFUND","DEPOSIT_DISPOSITION","REFUND_EXECUTION");case "facility-incidents"->List.of("INCIDENT","EXCEPTION","FAULT_REVIEW");default->throw ApiExceptions.validation("Unknown event category",null);};
+        List<String> kinds=switch(category){case "payments"->List.of("DEPOSIT","FULL_RENT_PAYMENT","CASH");case "documents"->List.of("ARRIVAL","COMPLETION");case "refunds"->List.of("REFUND","DEPOSIT_DISPOSITION","REFUND_EXECUTION");case "facility-incidents"->List.of("INCIDENT","EXCEPTION","FAULT_REVIEW");default->throw ApiExceptions.validation("Unknown event category",null);};
         if(category.equals("facility-incidents")&&audience!=Audience.MANAGER)throw ApiExceptions.forbidden("Internal incident timeline");
         var q=em.createQuery("select e from RenewalOperationEvent e where e.renewal.id=:id and e.kind in :kinds order by e.occurredAt desc,e.id",RenewalOperationEvent.class).setParameter("id",n.getId()).setParameter("kinds",kinds);
         long count=em.createQuery("select count(e) from RenewalOperationEvent e where e.renewal.id=:id and e.kind in :kinds",Long.class).setParameter("id",id).setParameter("kinds",kinds).getSingleResult();
@@ -442,7 +442,7 @@ public class RenewalOperationService {
     private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
         if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
         if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND")){var raw=mapper.valueToTree(data);var safe=new LinkedHashMap<String,Object>();safe.put("status",raw.path("status").asText());if(raw.has("reservation"))safe.put("reservation",mapper.convertValue(raw.get("reservation"),Object.class));data=safe;}
-        if(audience==Audience.CUSTOMER&&e.getKind().equals("CASH")&&data instanceof Map<?,?> raw){var safe=new LinkedHashMap<>(raw);safe.remove("receiptFileId");data=safe;}
+        if(audience==Audience.CUSTOMER&&e.getKind().equals("COMPLETION")&&data instanceof Map<?,?> raw){var safe=new LinkedHashMap<>(raw);safe.remove("identityVerified");safe.remove("completionNote");data=safe;}
         if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND_EXECUTION")&&data instanceof Map<?,?> raw){var safe=new LinkedHashMap<>(raw);safe.remove("receiptFileId");safe.remove("transactionReference");data=safe;}
         return new RenewalOperationResponse.Event(e.getId(),e.getKind(),e.getOccurredAt(),audience==Audience.CUSTOMER?null:e.getActorId(),data);}
     private <T>T decode(String json,Class<T> type){try{return mapper.readValue(json,type);}catch(Exception e){throw ApiExceptions.conflict("Stored operation snapshot invalid");}}
