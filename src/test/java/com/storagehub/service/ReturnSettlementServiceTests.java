@@ -362,6 +362,23 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void linkedRecoverySettlementDoesNotReleaseUnitWhenCustomerConfirmsZeroBalance() {
+        ReturnCase rc=new ReturnCase();ReflectionTestUtils.setField(rc,"id",UUID.randomUUID());
+        rc.setRental(rental);rc.setFacility(facility);rc.setStorageUnit(unit);rc.setCustomer(customer);
+        rc.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);rental.setStatus(RentalStatus.return_inspection);
+        var guard=org.mockito.Mockito.mock(com.storagehub.service.overdue.RecoverySettlementGuard.class);
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("guard",guard);
+        ReflectionTestUtils.setField(service,"recoveryGuards",beans.getBeanProvider(com.storagehub.service.overdue.RecoverySettlementGuard.class));
+        when(guard.linked(rc)).thenReturn(true);
+        when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(),customer.getId())).thenReturn(Optional.of(rc));
+        when(returnCaseRepository.save(rc)).thenReturn(rc);
+        var response=service.customerConfirmSettlement(customerActor,rc.getId(),new CustomerConfirmSettlementRequest(CustomerDecision.accepted,"Accepted"));
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.completed);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_inspection);assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.occupied);
+        org.mockito.Mockito.verifyNoInteractions(rentalRepository,storageUnitRepository);
+    }
+
+    @Test
     void staffCompleteRefund_finalizesRentalAndStorageUnit() {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
