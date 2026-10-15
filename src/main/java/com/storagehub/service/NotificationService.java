@@ -109,6 +109,14 @@ public class NotificationService {
         return notificationRepository.save(notification);
     }
 
+    @Transactional
+    public void notifyCustomerRentalEventOnce(UUID customerId, UUID rentalId, String title, String content) {
+        if (!notificationRepository.existsByUser_IdAndRelatedEntityIdAndTypeAndTitleAndContent(
+            customerId, rentalId, NotificationType.OVERDUE, title, content)) {
+            createNotification(customerId, NotificationType.OVERDUE, title, content, rentalId);
+        }
+    }
+
     /**
      * Publishes an operational notification to every active Staff and Manager
      * who can work with or monitor the facility. The recipient set is built
@@ -122,6 +130,18 @@ public class NotificationService {
         String title,
         String content,
         UUID relatedEntityId
+    ) {
+        createFacilityOperationsNotificationsExcept(facilityId, type, title, content, relatedEntityId, null);
+    }
+
+    @Transactional
+    public void createFacilityOperationsNotificationsExcept(
+        UUID facilityId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        UUID excludedUserId
     ) {
         Set<UUID> recipientIds = new LinkedHashSet<>();
         recipientIds.addAll(userRepository.findEligibleStaff(
@@ -137,9 +157,9 @@ public class NotificationService {
             List.of(FacilityScopeLevel.READ, FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
         ).stream().map(User::getId).toList());
 
-        recipientIds.forEach(recipientId -> createNotification(
-            recipientId, type, title, content, relatedEntityId
-        ));
+        recipientIds.stream()
+            .filter(recipientId -> !Objects.equals(recipientId, excludedUserId))
+            .forEach(recipientId -> createNotification(recipientId, type, title, content, relatedEntityId));
     }
 
     @Transactional

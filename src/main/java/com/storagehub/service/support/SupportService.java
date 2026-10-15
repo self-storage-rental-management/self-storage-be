@@ -119,7 +119,7 @@ public class SupportService {
         ticket.setSubject(text(body.subject(),200));ticket.setDescription(text(body.description(),4000));em.persist(ticket);em.flush();
         var state=new SupportState(ticket,body.linkedRecord()==null?null:body.linkedRecord().type().name(),body.linkedRecord()==null?null:body.linkedRecord().id(),parent,now());em.persist(state);
         append(actor,ticket,state,"CUSTOMER",Visibility.PUBLIC,body.description(),body.evidenceFileIds());
-        event(actor,ticket,state,"CREATED","Created Support ticket");notifyManagers(ticket,"New Support ticket",ticket.getSubject());
+        event(actor,ticket,state,"CREATED","Created Support ticket");notifySupportStaff(ticket,"New Support ticket",ticket.getSubject());notifyManagers(ticket,"New Support ticket",ticket.getSubject());
         return finish(actor,operation,key,payload,ticket);
     }
     public SupportResponse followUp(ActorPrincipal actor,UUID parent,Create body,String key) {
@@ -177,6 +177,7 @@ public class SupportService {
         // A public reply to resolved is not an implicit reopen.
         var message=append(actor,ticket,state,"CUSTOMER",Visibility.PUBLIC,body.body(),body.evidenceFileIds());
         if(ticket.getAssignedTo()!=null)notify(ticket.getAssignedTo().getId(),ticket,"Customer replied to Support",ticket.getSubject());
+        notifyManagers(ticket,"Customer replied to Support",ticket.getSubject());
         return finishMessage(actor,"support_customer_message",key,payload,ticket,message);
     }
     public SupportResponse.Message staffMessage(ActorPrincipal actor,UUID id,StaffMessage body,String key) {
@@ -186,6 +187,7 @@ public class SupportService {
         if(body.visibility()==null)throw ApiExceptions.validation("Explicit visibility required",null);
         var message=append(actor,ticket,state,"STAFF",body.visibility(),body.body(),body.evidenceFileIds());
         if(body.visibility()==Visibility.PUBLIC)notify(ticket.getCustomer().getId(),ticket,"Staff replied to Support",ticket.getSubject());
+        notifyManagers(ticket,"Staff replied to Support",ticket.getSubject());
         return finishMessage(actor,"support_staff_message",key,payload,ticket,message);
     }
     public SupportResponse requestInformation(ActorPrincipal actor,UUID id,Information body,String key) {
@@ -193,7 +195,7 @@ public class SupportService {
         var replay=receipts.replay(actor.userId(),"support_request_info",key,payload,SupportResponse.class);if(replay.isPresent())return replay.get();
         var state=requiredState(ticket,body.expectedVersion());requireStatus(ticket,SupportTicketStatus.in_progress);requireAccepted(ticket,state);
         append(actor,ticket,state,"STAFF",Visibility.PUBLIC,body.message(),body.evidenceFileIds());ticket.setStatus(SupportTicketStatus.waiting_customer);
-        event(actor,ticket,state,"REQUEST_INFORMATION","Customer information requested");notify(ticket.getCustomer().getId(),ticket,"Support needs your information",ticket.getSubject());
+        event(actor,ticket,state,"REQUEST_INFORMATION","Customer information requested");notify(ticket.getCustomer().getId(),ticket,"Support needs your information",ticket.getSubject());notifyManagers(ticket,"Support needs customer information",ticket.getSubject());
         return finish(actor,"support_request_info",key,payload,ticket);
     }
     public SupportResponse resolve(ActorPrincipal actor,UUID id,Resolution body,String key) {
@@ -363,6 +365,11 @@ public class SupportService {
     private SupportResponse.Message finishMessage(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket,SupportMessage message){em.flush();var result=messageResponse(actor,ticket,message);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private void audit(ActorPrincipal actor,SupportTicket ticket,String operation){audit.recordMutation(em.getReference(User.class,actor.userId()),operation,"SupportTicket",ticket.getId(),ticket.getFacility().getId(),null,Map.of("status",ticket.getStatus().name()));}
     private void notify(UUID recipient,SupportTicket ticket,String title,String content){notifications.createNotification(recipient,NotificationType.SUPPORT,title,content,ticket.getId());}
+    private void notifySupportStaff(SupportTicket ticket,String title,String content){
+        var staff=em.createQuery("select distinct s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel=:level and s.user.status=:active",User.class)
+            .setParameter("facility",ticket.getFacility().getId()).setParameter("level",FacilityScopeLevel.OPERATE).setParameter("active",UserStatus.ACTIVE).getResultList();
+        for(var user:staff)if(eligible(user,ticket.getFacility().getId()))notify(user.getId(),ticket,title,content);
+    }
     private void notifyManagers(SupportTicket ticket,String title,String content){var managers=em.createQuery("select distinct s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel=:level and s.user.status=:active",User.class).setParameter("facility",ticket.getFacility().getId()).setParameter("level",FacilityScopeLevel.MANAGE).setParameter("active",UserStatus.ACTIVE).getResultList();for(var u:managers)if(hasRole(u,RoleCode.MANAGER)&&hasPermission(u,SystemPermission.VIEW_SUPPORT))notify(u.getId(),ticket,title,content);}
     private <T> PageResponse<T> page(List<T> rows,SupportQuery q,long total,String correlation){return new PageResponse<>(List.copyOf(rows),new PageResponse.Pagination(q.page(),q.size(),total,(int)((total+q.size()-1)/q.size()),q.sort()+","+(q.descending()?"desc":"asc")),correlation);}
     private Object payload(UUID id,Object body){return Arrays.asList(id,body);}

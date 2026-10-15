@@ -46,6 +46,8 @@ public class RenewalOperationService {
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.renewal.integration.RenewalAssignmentSource> assignmentSources;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.NotificationService notifications;
 
     @Transactional(readOnly=true)
     public RenewalOperationResponse detail(ActorPrincipal actor,UUID id,Audience audience) {
@@ -307,6 +309,10 @@ public class RenewalOperationService {
         calendar().release(n,now());
         var event=new RenewalOperationEvent(n,"EXPIRY",now(),null,store.canonical(Map.of("disposition","REVIEW_REQUIRED","paid",paid)));em.persist(event);
         em.lock(wf,LockModeType.PESSIMISTIC_FORCE_INCREMENT);em.flush();audit.recordMutation((User)null,"renewal_expiry","Renewal",id,rental.getFacility().getId(),null,Map.of("eventId",event.getId()));
+        if(notifications!=null)notifications.createNotification(rental.getCustomer().getId(),NotificationType.RENEWAL,
+            paid?"Hạn ký gia hạn đã hết":"Yêu cầu thanh toán gia hạn đã hết hạn",
+            paid?"Đã hết hạn ký hợp đồng gia hạn cho hồ sơ "+rental.getId()+". Vui lòng liên hệ cơ sở để được hỗ trợ."
+                :"Yêu cầu thanh toán gia hạn cho hồ sơ "+rental.getId()+" đã hết hạn và được đóng.",id);
         // No forfeiture, physical-unit release, recovery pause or slot release without reconciliation contract.
         return true;
     }
@@ -420,7 +426,14 @@ public class RenewalOperationService {
         // Source version is opaque: certification of revision/version atomicity remains the accounting owner's protocol.
     }
     private RenewalOperationEvent event(Context c,String kind,Object data){var e=new RenewalOperationEvent(c.renewal(),kind,now(),c.user().getId(),store.canonical(data));em.persist(e);em.flush();return e;}
-    private Result finish(Context c,String op,String key,Object body,RenewalOperationEvent e,int status){em.lock(c.workflow(),LockModeType.PESSIMISTIC_FORCE_INCREMENT);em.flush();var result=new Result(projection(c.renewal()),eventResponse(e,Audience.MANAGER));audit.recordMutation(c.user(),op,"Renewal",c.renewal().getId(),c.renewal().getRental().getFacility().getId(),null,Map.of("eventId",e.getId(),"state",result.state()));store.remember(c.user(),op,key,c.renewal().getId(),body,status,result);return result;}
+    private Result finish(Context c,String op,String key,Object body,RenewalOperationEvent e,int status){em.lock(c.workflow(),LockModeType.PESSIMISTIC_FORCE_INCREMENT);em.flush();var result=new Result(projection(c.renewal()),eventResponse(e,Audience.MANAGER));audit.recordMutation(c.user(),op,"Renewal",c.renewal().getId(),c.renewal().getRental().getFacility().getId(),null,Map.of("eventId",e.getId(),"state",result.state()));store.remember(c.user(),op,key,c.renewal().getId(),body,status,result);
+        if(notifications!=null){var renewal=c.renewal();var rental=renewal.getRental();var customerId=rental.getCustomer().getId();
+            String title=switch(e.getKind()){case "APPOINTMENT"->"Lịch ký gia hạn đã được cập nhật";case "ARRIVAL"->"Khách đã đến ký gia hạn";case "COMPLETION"->"Gia hạn đã hoàn tất";case "INCIDENT","FAULT_REVIEW"->"Gia hạn có sự cố cần theo dõi";case "REFUND","REFUND_EXECUTION","DEPOSIT_DISPOSITION"->"Gia hạn có cập nhật hoàn tiền";default->"Tiến trình gia hạn có cập nhật mới";};
+            String content="Hồ sơ thuê "+rental.getId()+" tại cơ sở "+rental.getFacility().getName()+" đã có cập nhật gia hạn ("+e.getKind()+").";
+            notifications.createFacilityOperationsNotificationsExcept(rental.getFacility().getId(),NotificationType.RENEWAL,title,content,renewal.getId(),c.user().getId());
+            if(!Objects.equals(customerId,c.user().getId()))notifications.createNotification(customerId,NotificationType.RENEWAL,title,content,renewal.getId());
+        }
+        return result;}
     private Optional<Result> replay(Context c,String op,String key,Object body){return store.replay(c.user(),op,key,c.renewal().getId(),body).map(r->decode(r.dataJson(),Result.class));}
     private RenewalOperationResponse projection(Renewal n) {
         var w=em.find(RenewalWorkflow.class,n.getId());var s=state(n);var missing=new ArrayList<String>();
