@@ -58,6 +58,8 @@ public class UnitType extends BaseEntity {
 
     @Column(columnDefinition = "LONGTEXT")
     private String imageUrl;
+    @Column(columnDefinition = "LONGTEXT")
+    private String detailImageUrl;
 
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal maxLoadKg;

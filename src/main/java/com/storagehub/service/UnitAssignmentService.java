@@ -177,6 +177,13 @@ public class UnitAssignmentService {
                 + unit.getCode() + ". Bạn có thể xem lịch nhận kho trên tài khoản.",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.RESERVATION,
+            "Đã phân gian kho cho đơn giữ kho",
+            "Đơn " + reservation.getReservationCode() + " đã được phân gian "
+                + unit.getCode() + " và chuyển sang trạng thái chờ nhận kho.",
+            reservation.getId()
+        );
         return toAssignmentResponse(saved);
     }
 

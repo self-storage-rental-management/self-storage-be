@@ -136,6 +136,22 @@ public class ReturnSettlementService {
         return toResponse(saved);
     }
 
+    @Transactional
+    public ReturnCaseResponse updateCustomerReturnRequest(ActorPrincipal actor, UUID returnId, CustomerCreateReturnRequest request) {
+        if (!actor.hasRole(com.storagehub.domain.model.RoleCode.CUSTOMER)) throw ApiExceptions.forbidden("Chỉ khách hàng được sửa yêu cầu trả kho.");
+        ReturnCase record = returnCaseRepository.findOwnedForUpdate(returnId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
+        if (record.getStatus() != ReturnCaseStatus.requested) throw ApiExceptions.conflict("Yêu cầu đã được nhân viên xử lý, không thể đổi ngày hoặc lý do.");
+        if (request.scheduledDate().isBefore(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")))) throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+        if (request.notes() == null || request.notes().isBlank()) throw ApiExceptions.validation("Vui lòng nhập lý do trả kho.", null);
+        var before = toResponse(record);
+        record.setScheduledDate(request.scheduledDate());
+        record.setCustomerNotes(request.notes().trim());
+        ReturnCase saved = returnCaseRepository.saveAndFlush(record);
+        auditLogService.recordMutation("CUSTOMER_RETURN_REQUEST_UPDATED", "return", saved.getId(), saved.getFacility().getId(), before, toResponse(saved));
+        return toResponse(saved);
+    }
+
     @Transactional(readOnly = true)
     public ReturnCaseResponse getReturnForCustomer(ActorPrincipal actor, UUID returnId) {
         ReturnCase returnCase = returnCaseRepository.findByIdAndCustomer_Id(returnId, actor.userId())
