@@ -18,6 +18,7 @@ import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.Renewal;
+import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.PaymentRepository;
@@ -471,6 +472,9 @@ public class VnpayService {
         String clientIp
     ) {
         requireConfigured();
+        if (actor == null || !actor.hasAnyRole(RoleCode.MANAGER, RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Manager role required for VNPAY refunds");
+        }
         authorizationService.require(actor, SystemPermission.MANAGE_PAYMENTS);
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));

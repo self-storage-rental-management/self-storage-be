@@ -186,7 +186,10 @@ public class RenewalOperationService {
         String method=body.paymentMethod()==null?"CASH":body.paymentMethod().trim().toUpperCase(java.util.Locale.ROOT);
         var receipt=finance.balance(c.renewal(),body.payableStatementRef(),body.receiptReference(),body.receiptFileId(),method,actor.userId(),key,now());
         if(receipt==null||receipt.reference()==null||!id.equals(receipt.renewalId())||!statement.reference().equals(receipt.statementRef())||receipt.amount()==null||receipt.amount().compareTo(statement.amount())!=0||!statement.currency().equals(receipt.currency())||receipt.receivedAt()==null||receipt.receivedAt().isAfter(now()))throw deferred("Shared CASH receipt is incomplete or inconsistent");
-        return finish(c,"d3_cash",key,body,event(c,"CASH",receipt),201);
+        var eventData=new LinkedHashMap<String,Object>(mapper.convertValue(receipt,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
+        eventData.put("transactionReference",body.receiptReference());
+        eventData.put("receiptFileId",body.receiptFileId());
+        return finish(c,"d3_cash",key,body,event(c,"CASH",eventData),201);
     }
     public Result complete(ActorPrincipal actor,UUID id,Completion body,String key) {
         var c=context(actor,id,Audience.STAFF,Capability.COMPLETE,key,"d3_complete",body,body.expectedVersion());var old=replay(c,"d3_complete",key,body);if(old.isPresent())return old.get();
@@ -439,6 +442,7 @@ public class RenewalOperationService {
     private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
         if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
         if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND")){var raw=mapper.valueToTree(data);var safe=new LinkedHashMap<String,Object>();safe.put("status",raw.path("status").asText());if(raw.has("reservation"))safe.put("reservation",mapper.convertValue(raw.get("reservation"),Object.class));data=safe;}
+        if(audience==Audience.CUSTOMER&&e.getKind().equals("CASH")&&data instanceof Map<?,?> raw){var safe=new LinkedHashMap<>(raw);safe.remove("receiptFileId");data=safe;}
         if(audience==Audience.CUSTOMER&&e.getKind().equals("REFUND_EXECUTION")&&data instanceof Map<?,?> raw){var safe=new LinkedHashMap<>(raw);safe.remove("receiptFileId");safe.remove("transactionReference");data=safe;}
         return new RenewalOperationResponse.Event(e.getId(),e.getKind(),e.getOccurredAt(),audience==Audience.CUSTOMER?null:e.getActorId(),data);}
     private <T>T decode(String json,Class<T> type){try{return mapper.readValue(json,type);}catch(Exception e){throw ApiExceptions.conflict("Stored operation snapshot invalid");}}

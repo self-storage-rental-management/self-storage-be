@@ -1,6 +1,6 @@
 # Staff Renewal signing calendar rollout
 
-The local runner enables the Staff calendar by default. For other deployments, append `classpath:db/renewalcalendarmigration` to the existing Flyway locations, then enable `storagehub.integration.renewal-signing-calendar.enabled=true`. The calendar schema is now installed by Java migration 2026101403; the original SQL 2026101301 is archived unchanged under `db/migration-history/legacy-calendar-1301` for migration history compatibility.
+The local runner enables the Staff calendar by default. For other deployments, append `classpath:db/renewalcalendarmigration` to the existing Flyway locations, then enable `storagehub.integration.renewal-signing-calendar.enabled=true`. The history router preserves already-applied Java migration 2026101403 and installs the calendar at 2026101410 on new databases; the original SQL 2026101301 is archived unchanged under `db/migration-history/legacy-calendar-1301` for migration history compatibility.
 
 The additive migration creates Staff mutexes and resource-bound Renewal reservations. Capacity is one signing customer per Staff, 30 minutes, across facilities. Calendar writes join an explicit READ_COMMITTED caller transaction; unsupported isolation fails closed. Hours come from the shared `ServiceCalendarPolicy`.
 
