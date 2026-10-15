@@ -41,7 +41,7 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
             var n=renewal(resource);renewalAccess(actor,n,type.substring("DUONG_RENEWAL_".length()),true);
             if(Set.of(RenewalStatus.pending,RenewalStatus.accepted,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting operational evidence before payment/signing");
         }else {
-            if(actor!=null&&actor.hasRole(RoleCode.MANAGER))throw ApiExceptions.forbidden("Manager Support is read-only");
+            if(actor!=null&&actor.hasRole(RoleCode.MANAGER)&&!INTERNAL.equals(type))throw ApiExceptions.forbidden("Manager may only upload internal Support evidence");
             if(UPLOAD.equals(type)){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);if(resource!=null&&!actor.userId().equals(resource))throw unavailable();return;}
             if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)&&PUBLIC.equals(type)&&resource==null){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);return;}
             supportAccess(actor,ticket(resource),INTERNAL.equals(type)?Visibility.INTERNAL:Visibility.PUBLIC,true);
@@ -114,12 +114,13 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     }
     private void supportAccess(ActorPrincipal actor,SupportTicket t,Visibility visibility,boolean write) {
         if(visibility==null)throw ApiExceptions.validation("Explicit evidence visibility required",null);
-        if(write&&actor!=null&&actor.hasRole(RoleCode.MANAGER))throw ApiExceptions.forbidden("Manager Support is read-only");
+        if(write&&actor!=null&&actor.hasRole(RoleCode.MANAGER)&&visibility!=Visibility.INTERNAL)throw ApiExceptions.forbidden("Manager may only attach internal Support evidence");
         if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)) {
             access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);
             if(visibility!=Visibility.PUBLIC||!Objects.equals(actor.userId(),t.getCustomer().getId()))throw unavailable();
         }else if(actor!=null&&actor.hasRole(RoleCode.MANAGER)) {
-            access.require(actor,RoleCode.MANAGER,t.getFacility().getId(),FacilityScopeLevel.READ,SystemPermission.VIEW_SUPPORT);
+            if(write)access.require(actor,RoleCode.MANAGER,t.getFacility().getId(),FacilityScopeLevel.MANAGE,SystemPermission.VIEW_SUPPORT,SystemPermission.MANAGE_SUPPORT);
+            else access.require(actor,RoleCode.MANAGER,t.getFacility().getId(),FacilityScopeLevel.READ,SystemPermission.VIEW_SUPPORT);
         }else {
             if(write)access.require(actor,RoleCode.STAFF,t.getFacility().getId(),FacilityScopeLevel.OPERATE,SystemPermission.VIEW_SUPPORT,SystemPermission.MANAGE_SUPPORT);
             else access.require(actor,RoleCode.STAFF,t.getFacility().getId(),FacilityScopeLevel.OPERATE,SystemPermission.VIEW_SUPPORT);

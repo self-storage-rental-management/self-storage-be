@@ -24,7 +24,7 @@ public final class SupportCommands {
                                @NotNull Visibility visibility) {}
     public record Information(@NotBlank @Size(max=4000) String message, @Size(max=10) List<@NotNull UUID> evidenceFileIds,
                               @NotNull @PositiveOrZero Long expectedVersion) {}
-    public record Resolution(@NotBlank @Size(max=4000) String summary, @Size(max=10) List<@NotNull UUID> evidenceFileIds,
+    public record Resolution(@Size(max=4000) String summary, @Size(max=10) List<@NotNull UUID> evidenceFileIds,
                              @NotNull @PositiveOrZero Long expectedVersion) {}
     public record Reopen(@NotBlank @Size(max=2000) String reason, @NotNull @PositiveOrZero Long expectedVersion) {}
     public record Close(@NotNull @PositiveOrZero Long expectedVersion, @Size(max=2000) String feedback) {}
