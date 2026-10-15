@@ -102,7 +102,7 @@ public class NotificationService {
         Notification notification = new Notification();
         notification.setUser(user);
         notification.setType(type);
-        notification.setTitle(title);
+        notification.setTitle(type==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(title):title);
         notification.setContent(content);
         notification.setRelatedEntityId(relatedEntityId);
         notification.setRead(false);
@@ -196,7 +196,7 @@ public class NotificationService {
             notification.getId(),
             notification.getUser().getId(),
             notification.getType(),
-            notification.getTitle(),
+            notification.getType()==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(notification.getTitle()):notification.getTitle(),
             notification.getContent(),
             notification.getRelatedEntityId(),
             notification.isRead(),
