@@ -384,23 +384,27 @@ public class BusinessPolicyService {
 
     private void validatePackagePeriod(RentalPackagePolicyRequest request, UUID facilityId, UUID excludedPolicyId) {
         if (request.effectiveTo() != null && request.effectiveTo().isBefore(request.effectiveFrom())) {
-            throw ApiExceptions.validation("effectiveTo must be on or after effectiveFrom", null);
+            throw ApiExceptions.validation("Ngày kết thúc hiệu lực không được trước ngày bắt đầu.", null);
         }
         if (Boolean.FALSE.equals(request.active())) return;
 
         int months = request.resolveRentalMonths();
-        boolean overlaps = policyRepository.findByFacility_IdAndRentalMonths(facilityId, months)
+        var conflictingPolicy = policyRepository.findByFacility_IdAndRentalMonths(facilityId, months)
             .stream()
             .filter(existing -> existing.isActive())
             .filter(existing -> excludedPolicyId == null || !excludedPolicyId.equals(existing.getId()))
-            .anyMatch(existing -> periodsOverlap(
+            .filter(existing -> periodsOverlap(
                 request.effectiveFrom(), request.effectiveTo(),
                 existing.getEffectiveFrom(), existing.getEffectiveTo()
-            ));
-        if (overlaps) {
+            )).findFirst();
+        if (conflictingPolicy.isPresent()) {
+            var existing = conflictingPolicy.get();
+            var facility = existing.getFacility();
             throw ApiExceptions.conflict(
-                "Facility already has an active " + months
-                    + "-month package in the selected effective period"
+                "Cơ sở " + facility.getName() + " (mã " + facility.getCode() + ") đã có gói "
+                    + months + " tháng giảm "
+                    + existing.getDiscountRate().multiply(java.math.BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()
+                    + "% đang áp dụng trong thời gian hiệu lực này. Không thể áp dụng thêm gói cùng kỳ hạn; vui lòng bỏ chọn cơ sở này hoặc điều chỉnh thời gian hiệu lực."
             );
         }
     }
