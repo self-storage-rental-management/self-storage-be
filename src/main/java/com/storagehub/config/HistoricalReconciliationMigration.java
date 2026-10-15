@@ -14,14 +14,19 @@ import org.flywaydb.core.internal.resolver.ResolvedMigrationImpl;
 final class HistoricalReconciliationMigration implements JavaMigration {
     private final int number;
 
-    HistoricalReconciliationMigration(int number) { this.number=number; }
+    HistoricalReconciliationMigration(int number) {
+        if(number!=1 && number!=2 && number!=5 && number!=6)
+            throw new IllegalArgumentException("Unsupported historical reconciliation version");
+        this.number=number;
+    }
+    private boolean packageCleanup() { return number==1 || number==5; }
 
     @Override public MigrationVersion getVersion() { return MigrationVersion.fromVersion("202610140"+number); }
     @Override public String getDescription() {
-        return number==1 ? "reconcile develop package cleanup" : "reconcile develop facility details";
+        return packageCleanup() ? "reconcile develop package cleanup" : "reconcile develop facility details";
     }
     @Override public Integer getChecksum() {
-        String resource=number==1
+        String resource=packageCleanup()
             ? "/db/migration-history/develop-1301/V2026101301__deactivate_duplicate_effective_rental_packages.sql"
             : "/db/migration-history/develop-1302/V2026101302__add_facility_operating_details.sql";
         try(var input=getClass().getResourceAsStream(resource)) {
@@ -39,7 +44,7 @@ final class HistoricalReconciliationMigration implements JavaMigration {
     @Override public ResolvedMigration getResolvedMigration(Configuration config, StatementInterceptor interceptor) {
         var base=JavaMigration.super.getResolvedMigration(config,interceptor);
         String script="db.migration.V202610140"+number+"__reconcile_develop_"
-            +(number==1?"package_cleanup":"facility_details");
+            +(packageCleanup()?"package_cleanup":"facility_details");
         return new ResolvedMigrationImpl(base.getVersion(),base.getDescription(),script,
             base.getChecksum(),null,base.getType(),base.getPhysicalLocation(),base.getExecutor());
     }
