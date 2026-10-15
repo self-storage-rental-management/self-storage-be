@@ -403,6 +403,9 @@ public class MaintenanceService {
         }
 
         Pageable pageable = pageable(page, pageSize);
+        if (scoped && allowedFacilityIds.isEmpty()) {
+            return PageResponse.from(Page.<MaintenanceTaskResponse>empty(pageable), correlationId);
+        }
         Page<MaintenanceTaskResponse> result = maintenanceTaskRepository.searchTasks(
             facilityId,
             storageUnitId,

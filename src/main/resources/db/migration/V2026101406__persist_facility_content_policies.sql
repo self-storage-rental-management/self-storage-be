@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS facility_policy_catalog (
+ id VARCHAR(255) NOT NULL PRIMARY KEY,
+ content_json LONGTEXT NOT NULL,
+ version BIGINT NOT NULL DEFAULT 0
+);
