@@ -159,7 +159,7 @@ class ReservationQuoteServiceTests {
 
     @Test
     void rejectsRentalPeriodThatIsNotCompleteMonths() {
-        ReservationQuoteRequest request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 9));
+        ReservationQuoteRequest request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 5));
         stubCompatible(request);
 
         assertThatThrownBy(() -> service.createQuote(actor, request))

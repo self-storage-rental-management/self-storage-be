@@ -42,4 +42,17 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
         where notification.user.id = :userId and notification.readFlag = false
         """)
     int markAllAsRead(@Param("userId") UUID userId);
+
+    @Query("""
+        select case when count(n) > 0 then true else false end
+        from Notification n
+        where n.user.id = :userId
+          and n.relatedEntityId = :relatedEntityId
+          and n.title = :title
+        """)
+    boolean existsMilestone(
+        @Param("userId") UUID userId,
+        @Param("relatedEntityId") UUID relatedEntityId,
+        @Param("title") String title
+    );
 }
