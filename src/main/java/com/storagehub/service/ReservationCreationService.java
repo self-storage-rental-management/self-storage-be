@@ -37,8 +37,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.storagehub.domain.repo.DiscountCodeRepository;
+
 @Service
-@RequiredArgsConstructor
 public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
@@ -51,6 +52,50 @@ public class ReservationCreationService {
     private final ReservationCompatibilityService compatibilityService;
     private final AuditLogService auditLogService;
     private final ReservationCapacityService capacityService;
+    private final DiscountCodeRepository discountCodeRepository;
+    private final DiscountCodeService discountCodeService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ReservationCreationService(
+        ReservationRepository reservationRepository,
+        ReservationQuoteRepository quoteRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        RentalPackagePolicyRepository policyRepository,
+        ReservationCompatibilityService compatibilityService,
+        AuditLogService auditLogService,
+        ReservationCapacityService capacityService,
+        DiscountCodeRepository discountCodeRepository,
+        DiscountCodeService discountCodeService
+    ) {
+        this.reservationRepository = reservationRepository;
+        this.quoteRepository = quoteRepository;
+        this.goodsItemRepository = goodsItemRepository;
+        this.snapshotRepository = snapshotRepository;
+        this.policyRepository = policyRepository;
+        this.compatibilityService = compatibilityService;
+        this.auditLogService = auditLogService;
+        this.capacityService = capacityService;
+        this.discountCodeRepository = discountCodeRepository;
+        this.discountCodeService = discountCodeService;
+    }
+
+    public ReservationCreationService(
+        ReservationRepository reservationRepository,
+        ReservationQuoteRepository quoteRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        RentalPackagePolicyRepository policyRepository,
+        ReservationCompatibilityService compatibilityService,
+        AuditLogService auditLogService,
+        ReservationCapacityService capacityService
+    ) {
+        this(
+            reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
+            policyRepository, compatibilityService, auditLogService, capacityService,
+            null, null
+        );
+    }
 
     @Transactional
     public ReservationResponse create(ActorPrincipal actor, CreateReservationRequest request,
@@ -142,6 +187,15 @@ public class ReservationCreationService {
         }
         goodsItemRepository.saveAll(goodsItems);
 
+        if (discountCodeService != null && quote.getVoucherCode() != null && !quote.getVoucherCode().isBlank()) {
+            if (discountCodeRepository != null) {
+                var discountOpt = discountCodeRepository.findByCodeIgnoreCase(quote.getVoucherCode());
+                if (discountOpt.isPresent()) {
+                    discountCodeService.redeemVoucher(discountOpt.get().getId());
+                }
+            }
+        }
+
         ReservationPricingSnapshot snapshot = toSnapshot(saved, quote);
         ReservationPricingSnapshot savedSnapshot = snapshotRepository.saveAndFlush(snapshot);
         ReservationResponse response = toResponse(saved, savedSnapshot);
@@ -162,7 +216,9 @@ public class ReservationCreationService {
         BigDecimal currentMonthlyPrice = money(quote.getUnitType().getMonthlyPrice());
         BigDecimal subtotal = money(currentMonthlyPrice.multiply(BigDecimal.valueOf(quote.getRentalMonths())));
         BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
-        BigDecimal totalAfterDiscount = money(subtotal.subtract(discountAmount));
+        BigDecimal baseEligible = money(subtotal.subtract(discountAmount));
+        BigDecimal voucherDiscountAmount = quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO;
+        BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
         BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
         BigDecimal securityDeposit = currentMonthlyPrice;
 
@@ -214,6 +270,14 @@ public class ReservationCreationService {
         snapshot.setGrossRentalAmount(quote.getSubtotal());
         snapshot.setDiscountRate(quote.getDiscountRate());
         snapshot.setDiscountAmount(quote.getDiscountAmount());
+        snapshot.setVoucherCode(quote.getVoucherCode());
+        if (discountCodeRepository != null && quote.getVoucherCode() != null && !quote.getVoucherCode().isBlank()) {
+            discountCodeRepository.findByCodeIgnoreCase(quote.getVoucherCode()).ifPresent(discount -> {
+                snapshot.setVoucherDiscountType(discount.getDiscountType());
+                snapshot.setVoucherDiscountValue(discount.getDiscountValue());
+            });
+        }
+        snapshot.setVoucherDiscountAmount(quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO);
         snapshot.setNetRentalAmount(quote.getTotalAfterDiscount());
         snapshot.setReservationDepositAmount(quote.getReservationDepositAmount());
         snapshot.setSecurityDepositAmount(quote.getSecurityDepositAmount());
