@@ -8,6 +8,7 @@ import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.NotificationRepository;
@@ -19,6 +20,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.EnumSet;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -105,63 +109,59 @@ public class NotificationService {
         return notificationRepository.save(notification);
     }
 
+    /**
+     * Publishes an operational notification to every active Staff and Manager
+     * who can work with or monitor the facility. The recipient set is built
+     * from the persisted facility scopes, so users assigned to another
+     * facility do not receive this reservation notification.
+     */
     @Transactional
-    public void notifyStaffOfCheckInAppointmentChange(
-        Reservation reservation,
-        Instant previousAppointmentAt
+    public void createFacilityOperationsNotifications(
+        UUID facilityId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId
     ) {
-        Instant appointmentAt = reservation.getAppointmentAt();
-        if (Objects.equals(previousAppointmentAt, appointmentAt)) {
-            return;
-        }
-
-        String previousTime = previousAppointmentAt == null
-            ? "Chưa đặt lịch"
-            : CHECK_IN_TIME_FORMATTER.format(previousAppointmentAt);
-        String newTime = CHECK_IN_TIME_FORMATTER.format(appointmentAt);
-        String content = reservation.getReservationCode() + " · " + previousTime + " → " + newTime;
-
-        var notifications = userRepository.findEligibleStaff(
+        Set<UUID> recipientIds = new LinkedHashSet<>();
+        recipientIds.addAll(userRepository.findEligibleStaff(
             UserStatus.ACTIVE,
             RoleCode.STAFF,
-            reservation.getFacility().getId(),
-            EnumSet.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
-        ).stream().map(staff -> {
-            Notification notification = new Notification();
-            notification.setUser(staff);
-            notification.setType(NotificationType.RESERVATION);
-            notification.setTitle("Khách hàng đã thay đổi lịch nhận kho");
-            notification.setContent(content);
-            notification.setRelatedEntityId(reservation.getId());
-            notification.setRead(false);
-            return notification;
-        }).toList();
+            facilityId,
+            List.of(FacilityScopeLevel.OPERATE)
+        ).stream().map(User::getId).toList());
+        recipientIds.addAll(userRepository.findEligibleStaff(
+            UserStatus.ACTIVE,
+            RoleCode.MANAGER,
+            facilityId,
+            List.of(FacilityScopeLevel.READ, FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
+        ).stream().map(User::getId).toList());
 
-        notificationRepository.saveAll(notifications);
+        recipientIds.forEach(recipientId -> createNotification(
+            recipientId, type, title, content, relatedEntityId
+        ));
     }
 
     @Transactional
-    public void notifyStaffOfReservationCancellation(Reservation reservation, boolean unitReleased) {
-        String content = "Đơn " + reservation.getReservationCode() + " đã được khách hàng hủy. "
-            + (unitReleased
-                ? "Gian kho đã được tự động giải phóng và chuyển về trạng thái sẵn sàng."
-                : "Suất giữ kho đã được giải phóng.");
-        var notifications = userRepository.findEligibleStaff(
-            UserStatus.ACTIVE,
-            RoleCode.STAFF,
-            reservation.getFacility().getId(),
-            EnumSet.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
-        ).stream().map(staff -> {
-            Notification notification = new Notification();
-            notification.setUser(staff);
-            notification.setType(NotificationType.RESERVATION);
-            notification.setTitle("Khách hàng đã hủy giữ kho");
-            notification.setContent(content);
-            notification.setRelatedEntityId(reservation.getId());
-            notification.setRead(false);
-            return notification;
-        }).toList();
-        notificationRepository.saveAll(notifications);
+    public void notifyStaffOfCheckInAppointmentChange(Reservation reservation, Instant previousAppointmentAt) {
+        createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng đã cập nhật lịch nhận kho",
+            "Đơn " + reservation.getReservationCode() + " nhận kho lúc "
+                + reservation.getAppointmentAt() + ".",
+            reservation.getId()
+        );
+    }
+
+    @Transactional
+    public void notifyStaffOfReservationCancellation(Reservation reservation, boolean assignedUnitReleased) {
+        createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.RESERVATION,
+            "Đơn giữ kho đã được khách hàng hủy",
+            "Đơn " + reservation.getReservationCode() + " đã được hủy."
+                + (assignedUnitReleased ? " Kho đã được giải phóng." : ""),
+            reservation.getId()
+        );
     }
 
     private PageRequest pageable(int page, int size) {

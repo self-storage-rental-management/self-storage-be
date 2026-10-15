@@ -161,6 +161,32 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void customerCanEditOnlyAnUnprocessedOwnedReturn() {
+        ReturnCase record = new ReturnCase();
+        ReflectionTestUtils.setField(record, "id", UUID.randomUUID());
+        record.setRental(rental); record.setFacility(facility); record.setStorageUnit(unit); record.setCustomer(customer);
+        record.setStatus(ReturnCaseStatus.requested);
+        record.setScheduledDate(LocalDate.now().plusDays(1));
+        when(returnCaseRepository.findOwnedForUpdate(record.getId(), customer.getId())).thenReturn(Optional.of(record));
+        when(returnCaseRepository.saveAndFlush(record)).thenReturn(record);
+        var result = service.updateCustomerReturnRequest(customerActor, record.getId(),
+            new CustomerCreateReturnRequest(LocalDate.now().plusDays(3), "Chuyển địa điểm"));
+        assertThat(result.scheduledDate()).isEqualTo(LocalDate.now().plusDays(3));
+        assertThat(record.getCustomerNotes()).isEqualTo("Chuyển địa điểm");
+        record.setStatus(ReturnCaseStatus.scheduled);
+        assertThatThrownBy(() -> service.updateCustomerReturnRequest(customerActor, record.getId(),
+            new CustomerCreateReturnRequest(LocalDate.now().plusDays(4), "Đổi ngày"))).hasMessageContaining("được nhân viên xử lý");
+    }
+
+    @Test
+    void returnEditCannotReadAnotherCustomersRequest() {
+        UUID id = UUID.randomUUID();
+        when(returnCaseRepository.findOwnedForUpdate(id, customer.getId())).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.updateCustomerReturnRequest(customerActor, id,
+            new CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "Trả kho"))).hasMessageContaining("của bạn");
+    }
+
+    @Test
     void performInspection_withNetRefund_calculatesCorrectly() {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
