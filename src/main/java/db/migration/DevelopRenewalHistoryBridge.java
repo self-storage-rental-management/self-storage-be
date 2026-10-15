@@ -6,13 +6,12 @@ import org.flywaydb.core.api.migration.*;
 
 /** Applies a develop script omitted only because its version already belongs to a legacy feature. */
 abstract class DevelopRenewalHistoryBridge extends BaseJavaMigration {
-    private final String version,script,resource,earlierVersion,earlierScript;
-    protected DevelopRenewalHistoryBridge(String version,String script,String resource) {
-        this(version,script,resource,null,null);
-    }
-    protected DevelopRenewalHistoryBridge(String version,String script,String resource,String earlierVersion,String earlierScript) {
+    private final String version,script,resource;
+    private final String[] earlierIdentities;
+    protected DevelopRenewalHistoryBridge(String version,String script,String resource,String... earlierIdentities) {
+        if(earlierIdentities.length%2!=0)throw new IllegalArgumentException("Historical version/script pairs required");
         this.version=version;this.script=script;this.resource=resource;
-        this.earlierVersion=earlierVersion;this.earlierScript=earlierScript;
+        this.earlierIdentities=earlierIdentities.clone();
     }
     private String sql() {
         try(var input=getClass().getResourceAsStream(resource)) {
@@ -27,11 +26,11 @@ abstract class DevelopRenewalHistoryBridge extends BaseJavaMigration {
         if(!table.matches("[A-Za-z0-9_]+"))throw new IllegalStateException("Unsupported Flyway history table");
         // Local databases already applied the exact same SQL through the earlier
         // Java bridge. Confirm its script and checksum before treating this as done.
-        if(earlierVersion!=null)try(var query=context.getConnection().prepareStatement(
+        for(int index=0;index<earlierIdentities.length;index+=2)try(var query=context.getConnection().prepareStatement(
                 "select script,checksum,success from `"+table+"` where version=?")) {
-            query.setString(1,earlierVersion);
+            query.setString(1,earlierIdentities[index]);
             try(var rows=query.executeQuery()) {
-                if(rows.next() && earlierScript.equals(rows.getString("script"))) {
+                if(rows.next() && earlierIdentities[index+1].equals(rows.getString("script"))) {
                     if(!rows.getBoolean("success")||rows.getInt("checksum")!=getChecksum())
                         throw new IllegalStateException("Earlier bridge history differs; no repair performed");
                     return;
