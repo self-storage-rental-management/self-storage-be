@@ -114,6 +114,9 @@ public class LocalRenewalAutoRecoveryService {
         notifications.createNotification(rental.getCustomer().getId(),NotificationType.OVERDUE,
             "Hồ sơ thuê đã chuyển sang xử lý thu hồi",
             "Hợp đồng đã quá hạn 7 ngày. Vui lòng liên hệ cơ sở để xử lý hợp đồng, tài sản và tiền cọc.",id);
+        notifications.createFacilityOperationsNotifications(rental.getFacility().getId(),NotificationType.OVERDUE,
+            "Hồ sơ quá hạn đã chuyển sang xử lý thu hồi",
+            "Hồ sơ thuê "+rental.getId()+" tại cơ sở "+rental.getFacility().getName()+" đã được chuyển sang xử lý thu hồi.",id);
         audit.recordMutation((User)null,"AUTO_RECOVERY_HANDOFF","Rental",id,rental.getFacility().getId(),null,
             Map.of("caseRef",ref,"receiverRef",handoff.reference(),"policyRef",t.policyRef(),"policyVersion",t.policyVersion(),
                 "renewalCancellationCount",renewals.size(),"depositDisposition","REVIEW_REQUIRED"));

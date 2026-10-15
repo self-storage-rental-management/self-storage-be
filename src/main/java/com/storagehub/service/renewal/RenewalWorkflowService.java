@@ -22,6 +22,8 @@ public class RenewalWorkflowService {
     private final RentalRepository rentals;private final RenewalReadService reads;private final RenewalPersistence store;
     @org.springframework.beans.factory.annotation.Autowired
     private PaymentRepository paymentRecords;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.NotificationService notifications;
     @org.springframework.beans.factory.annotation.Value("${storagehub.local-demo.renewal-anytime-enabled:false}")
     private boolean localDemoRenewalAnytimeEnabled;
     private final EntityManager em;private final ObjectMapper mapper;private final AuditLogService audit;
@@ -226,7 +228,14 @@ public class RenewalWorkflowService {
     }
     private RenewalResponse finish(User user,String operation,String key,UUID resource,Object payload,Renewal n,int status,Object before){
         em.flush();var result=project(n);audit.recordMutation(user,"renewal_"+operation,"Renewal",n.getId(),n.getRental().getFacility().getId(),before,Map.of("result",result,"command",payload));
-        store.remember(user,operation,key,resource,payload,status,result);return result;
+        store.remember(user,operation,key,resource,payload,status,result);
+        if(notifications!=null){
+            String title=switch(operation){case "submit"->"Yêu cầu gia hạn mới";case "edit"->"Yêu cầu gia hạn đã được cập nhật";case "cancel"->"Yêu cầu gia hạn đã bị hủy";default->"Hồ sơ gia hạn có cập nhật mới";};
+            var rental=n.getRental();
+            notifications.createFacilityOperationsNotifications(rental.getFacility().getId(),NotificationType.RENEWAL,title,
+                "Hồ sơ thuê "+rental.getId()+" của khách hàng "+rental.getCustomer().getFullName()+" đã được cập nhật.",n.getId());
+        }
+        return result;
     }
     @Transactional(readOnly=true)
     public RenewalResponse project(Renewal n){
