@@ -73,6 +73,8 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             selected.add("classpath:db/migration-history/develop-1302");
         }
         boolean enableGateway=locations.contains("classpath:db/sandboxpaymentmigration");
+        // Feature SQL must stay outside historical Java migration locations that are filtered below.
+        if(enableGateway&&!selected.contains("classpath:db/renewal-deposit-migration"))selected.add("classpath:db/renewal-deposit-migration");
         // Keep the exact old Java class identity only where it was actually applied.
         // Fresh or develop databases resolve the gateway at a unique new version.
         selected.remove("classpath:db/sandboxpaymentmigration");
