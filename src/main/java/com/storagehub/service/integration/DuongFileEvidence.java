@@ -24,16 +24,19 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     private final RenewalAssignmentSource assignments;
     private final FileProperties properties;
     private final ObjectMapper mapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.overdue.RecoveryFileEvidence> recoveryEvidence;
     private static final Set<String> PURPOSES=Set.of("ARRIVAL","INCIDENT","SIGNED_CONTRACT","CASH_RECEIPT","EXCEPTION","FAULT_REVIEW","REFUND");
     public static final String PUBLIC="DUONG_SUPPORT_PUBLIC",INTERNAL="DUONG_SUPPORT_INTERNAL",UPLOAD="DUONG_SUPPORT_UPLOAD";
     public static String renewalType(String purpose){if(!PURPOSES.contains(purpose))throw ApiExceptions.validation("Unsupported Renewal evidence purpose",null);return "DUONG_RENEWAL_"+purpose;}
-    public static boolean handles(String type){return type!=null&&(PUBLIC.equals(type)||INTERNAL.equals(type)||UPLOAD.equals(type)||PURPOSES.stream().anyMatch(p->renewalType(p).equals(type)));}
+    public static boolean handles(String type){return type!=null&&(com.storagehub.service.overdue.RecoveryFileEvidence.handles(type)||PUBLIC.equals(type)||INTERNAL.equals(type)||UPLOAD.equals(type)||PURPOSES.stream().anyMatch(p->renewalType(p).equals(type)));}
     public boolean atomic(){return true;} // All binding writes are local, locked and in the caller transaction.
     @Transactional(readOnly=true)
     public boolean supportsFiles(List<UUID> files) {
         return files!=null&&files.stream().allMatch(id->{var f=id==null?null:em.find(FileAsset.class,id);return f!=null&&(PUBLIC.equals(f.getEntityType())||INTERNAL.equals(f.getEntityType()));});
     }
     public void requireUpload(ActorPrincipal actor,String type,UUID resource) {
+        if(com.storagehub.service.overdue.RecoveryFileEvidence.handles(type)){recoveryFiles().upload(actor,type,resource);return;}
         if(type.startsWith("DUONG_RENEWAL_")) {
             var n=renewal(resource);renewalAccess(actor,n,type.substring("DUONG_RENEWAL_".length()),true);
             if(Set.of(RenewalStatus.pending,RenewalStatus.accepted,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting operational evidence before payment/signing");
@@ -46,6 +49,7 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     }
     @Transactional(readOnly=true)
     public void requireDownload(ActorPrincipal actor,FileAsset file) {
+        if(file!=null&&com.storagehub.service.overdue.RecoveryFileEvidence.handles(file.getEntityType())){recoveryFiles().download(actor,file);return;}
         available(file);
         if(file.getEntityType().startsWith("DUONG_RENEWAL_")) {
             var n=renewal(file.getEntityId());
@@ -144,4 +148,5 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
         return false;
     }
     private RuntimeException unavailable(){return ApiExceptions.notFound("Evidence file/resource not found");}
+    private com.storagehub.service.overdue.RecoveryFileEvidence recoveryFiles(){var source=recoveryEvidence==null?null:recoveryEvidence.getIfAvailable();if(source==null)throw ApiExceptions.conflict("Recovery evidence is not enabled");return source;}
 }

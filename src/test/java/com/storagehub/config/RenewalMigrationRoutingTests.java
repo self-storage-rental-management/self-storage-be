@@ -38,6 +38,10 @@ class RenewalMigrationRoutingTests {
     @Test void freshDatabaseResolvesDevelopAndNewFeatureVersionsWithoutCollision() throws Exception {
         var config=configure(null,null,null);uniqueVersions(config);
         assertThat(config.isOutOfOrder()).isFalse();
+        assertThat(Arrays.stream(config.getLocations()).map(Object::toString).toList())
+            .contains("classpath:db/renewal-deposit-migration").doesNotContain("classpath:db/sandboxpaymentmigration");
+        assertThat(Arrays.stream(config.dataSource("jdbc:h2:mem:deposit-routing"+UUID.randomUUID(),"sa","").load().info().all())
+            .filter(m->m.getVersion()!=null).map(m->m.getVersion().toString()).toList()).contains("2026101501");
     }
     @Test void appliedDevelopVersionsRemainImmutable() throws Exception {
         uniqueVersions(configure("V2026101301__deactivate_duplicate_effective_rental_packages.sql","V2026101302__add_facility_operating_details.sql","SQL"));
