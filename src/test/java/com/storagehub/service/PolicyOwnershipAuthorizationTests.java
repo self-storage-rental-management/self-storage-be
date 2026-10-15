@@ -75,6 +75,26 @@ class PolicyOwnershipAuthorizationTests {
         }
     }
 
+    @Test void adminCanGrantStaffRenewalPaymentCollectionWhilePolicyAndTaskEditsStayRestricted() {
+        var roles = mock(RoleRepository.class);
+        var permissions = mock(PermissionRepository.class);
+        when(permissions.findByCode(any())).thenAnswer(call -> {
+            var p = new Permission(); p.setCode(call.getArgument(0)); return Optional.of(p);
+        });
+        when(roles.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
+        var staff = new Role(); staff.setCode(RoleCode.STAFF);
+        when(roles.findByCode(RoleCode.STAFF)).thenReturn(Optional.of(staff));
+        var service = new AdminRoleService(roles, permissions, mock(UserRepository.class),
+            new AdminAuthorizationService(), mock(AuditLogService.class));
+        var grants = Set.of("rentals:read", "rentals:update", "payments:read", "payments:collect");
+        assertThat(service.updatePermissions(actor(RoleCode.ADMIN), RoleCode.STAFF,
+            new AdminUpdateRolePermissionsRequest(grants)).permissions())
+            .containsExactlyInAnyOrderElementsOf(grants);
+        var forbidden = new HashSet<>(grants); forbidden.add("policies:update");
+        assertConflict(() -> service.updatePermissions(actor(RoleCode.ADMIN), RoleCode.STAFF,
+            new AdminUpdateRolePermissionsRequest(forbidden)));
+    }
+
     private void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
         assertThatThrownBy(action).isInstanceOfSatisfying(ApiException.class,
             e -> assertThat(e.getStatus().value()).isEqualTo(403));

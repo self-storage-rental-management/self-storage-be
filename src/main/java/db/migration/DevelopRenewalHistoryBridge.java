@@ -6,9 +6,13 @@ import org.flywaydb.core.api.migration.*;
 
 /** Applies a develop script omitted only because its version already belongs to a legacy feature. */
 abstract class DevelopRenewalHistoryBridge extends BaseJavaMigration {
-    private final String version,script,resource;
+    private final String version,script,resource,earlierVersion,earlierScript;
     protected DevelopRenewalHistoryBridge(String version,String script,String resource) {
+        this(version,script,resource,null,null);
+    }
+    protected DevelopRenewalHistoryBridge(String version,String script,String resource,String earlierVersion,String earlierScript) {
         this.version=version;this.script=script;this.resource=resource;
+        this.earlierVersion=earlierVersion;this.earlierScript=earlierScript;
     }
     private String sql() {
         try(var input=getClass().getResourceAsStream(resource)) {
@@ -21,6 +25,19 @@ abstract class DevelopRenewalHistoryBridge extends BaseJavaMigration {
     @Override public void migrate(Context context)throws Exception {
         String table=context.getConfiguration().getTable();
         if(!table.matches("[A-Za-z0-9_]+"))throw new IllegalStateException("Unsupported Flyway history table");
+        // Local databases already applied the exact same SQL through the earlier
+        // Java bridge. Confirm its script and checksum before treating this as done.
+        if(earlierVersion!=null)try(var query=context.getConnection().prepareStatement(
+                "select script,checksum,success from `"+table+"` where version=?")) {
+            query.setString(1,earlierVersion);
+            try(var rows=query.executeQuery()) {
+                if(rows.next() && earlierScript.equals(rows.getString("script"))) {
+                    if(!rows.getBoolean("success")||rows.getInt("checksum")!=getChecksum())
+                        throw new IllegalStateException("Earlier bridge history differs; no repair performed");
+                    return;
+                }
+            }
+        }
         try(var query=context.getConnection().prepareStatement("select script,success from `"+table+"` where version=?")) {
             query.setString(1,version);
             try(var rows=query.executeQuery()) {
@@ -31,6 +48,8 @@ abstract class DevelopRenewalHistoryBridge extends BaseJavaMigration {
         execute(context.getConnection(),sql());
     }
     static void execute(Connection connection,String sql)throws Exception {
-        for(String statement:sql.split(";"))if(!statement.isBlank())try(var query=connection.createStatement()){query.execute(statement);}
+        org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
+            new org.springframework.core.io.support.EncodedResource(
+                new org.springframework.core.io.ByteArrayResource(sql.getBytes(StandardCharsets.UTF_8)),StandardCharsets.UTF_8));
     }
 }

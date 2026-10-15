@@ -2,6 +2,8 @@
 
 `DevelopMigrationHistoryLocations` inspects only the actual Flyway datasource/history, then selects one immutable resource for each conflicting version. New databases use develop's `0909` VNPay and `1001` check-in appointment. Already-applied legacy scripts keep their original names/content/checksums. Flyway validation remains enabled.
 
+The same routing applies to develop SQL versions `2026101401`–`2026101403`, which collided with already-applied local Java versions. Their SQL is stored unchanged in individual `develop-1401`–`develop-1403` folders. Applied local Java identities are resolved for validation; bridges `2026101407`–`2026101409` apply the develop SQL once on those databases. New calendar and payment migrations use `2026101410` and `2026101411`; applied Java `2026101403` and `2026101404` retain their original identities and checksums.
+
 Never add this root directory to Flyway locations: scanning all variants would duplicate versions. Spring Boot registers the customizer automatically. Standalone Java Flyway callers using `classpath:db/migration` must call `DevelopMigrationHistoryLocations.configure(configuration)` before `load()`.
 
 | Folder | Selected when |
