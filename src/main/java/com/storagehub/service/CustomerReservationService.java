@@ -355,6 +355,13 @@ public class CustomerReservationService {
             "Đơn " + saved.getReservationCode() + " đã được xác nhận nhận kho và tạo hồ sơ thuê.",
             saved.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            saved.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng đã xác nhận nhận kho",
+            "Khách hàng đã xác nhận nhận kho cho đơn " + saved.getReservationCode()
+                + ". Hồ sơ thuê đã được tạo.",
+            saved.getId()
+        );
         return toDetailResponse(saved);
     }
 
@@ -385,6 +392,7 @@ public class CustomerReservationService {
                 "Check-in appointment must be within the permitted seven-day window", null
             );
         }
+        FacilityAppointmentHours.validate(request.appointmentAt(), reservation.getFacility().getAccessHours());
         Instant previousAppointmentAt = reservation.getAppointmentAt();
         reservation.setAppointmentAt(request.appointmentAt());
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);

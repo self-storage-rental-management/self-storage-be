@@ -210,6 +210,12 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Lịch nhận kho đã được xác nhận",
+            "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
+            reservation.getId()
+        );
         return toResponse(reservation, saved, assignment);
     }
 
@@ -300,6 +306,13 @@ public class CheckInHandoverService {
                 + " đã được nhân viên bàn giao và đang chờ bạn xác nhận.",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Bàn giao đã hoàn tất, chờ khách xác nhận",
+            "Đơn " + reservation.getReservationCode()
+                + " đã bàn giao gian kho và đang chờ khách hàng xác nhận nhận kho.",
+            reservation.getId()
+        );
         return toResponse(reservation, saved, assignment);
     }
 
@@ -326,9 +339,13 @@ public class CheckInHandoverService {
             throw ApiExceptions.validation("Payment amount must match the remaining check-in amount", Map.of("expectedAmount", snapshot.getDueAtCheckIn()));
         }
         User operator = requireActor(actor);
+        validatePaymentEvidence(checkInId, request.paymentEvidenceFileId());
         Instant now = Instant.now();
+        String reference = request.transactionReference() == null || request.transactionReference().isBlank()
+            ? "EVIDENCE-" + request.paymentEvidenceFileId()
+            : request.transactionReference().trim();
         var recorded = manualRentalPayments.booking(reservation,checkInId,operator,snapshot.getDueAtCheckIn(),request.amount(),
-            request.paymentMethod(),request.transactionReference().trim(),now);
+            request.paymentMethod(),reference,request.paymentEvidenceFileId(),now);
         Payment saved=recorded.payment();
         if(!recorded.created())return toPaymentResponse(saved);
         auditLogService.recordMutation(
@@ -337,6 +354,12 @@ public class CheckInHandoverService {
         );
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Đã ghi nhận thanh toán khi nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.PAYMENT,
             "Đã ghi nhận thanh toán khi nhận kho",
             "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
             reservation.getId()
@@ -377,6 +400,12 @@ public class CheckInHandoverService {
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Ghi nhận không đến nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng không đến nhận kho",
             "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
             reservation.getId()
         );
@@ -468,6 +497,12 @@ public class CheckInHandoverService {
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Từ chối nhận kho",
+            "Đơn " + reservation.getReservationCode() + " chưa thể nhận kho: " + request.reason().trim(),
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Đã từ chối bàn giao kho",
             "Đơn " + reservation.getReservationCode() + " chưa thể nhận kho: " + request.reason().trim(),
             reservation.getId()
         );
@@ -725,6 +760,21 @@ public class CheckInHandoverService {
         );
         if (!valid) {
             throw ApiExceptions.validation("Evidence must contain active files linked to this check-in", null);
+        }
+    }
+
+    private void validatePaymentEvidence(UUID checkInId, UUID evidenceFileId) {
+        FileAsset asset = fileAssetRepository.findById(evidenceFileId)
+            .orElseThrow(() -> ApiExceptions.validation("Payment evidence file was not found", null));
+        boolean supportedType = asset.getContentType() != null
+            && (asset.getContentType().startsWith("image/")
+                || "application/pdf".equalsIgnoreCase(asset.getContentType()));
+        if (!supportedType || asset.getStatus() != FileAssetStatus.ACTIVE
+            || !"CHECK_IN".equals(asset.getEntityType())
+            || !checkInId.equals(asset.getEntityId())) {
+            throw ApiExceptions.validation(
+                "Payment evidence must be an active image or PDF linked to this check-in", null
+            );
         }
     }
 

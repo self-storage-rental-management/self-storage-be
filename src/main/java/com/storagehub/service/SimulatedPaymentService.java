@@ -7,6 +7,7 @@ import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentSimulationOutcome;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationStatus;
@@ -34,6 +35,7 @@ public class SimulatedPaymentService {
     private final UserRepository userRepository;
     private final PaymentProperties paymentProperties;
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
 
     @Value("${app.reservation.complaint-window-minutes:30}")
     private long complaintWindowMinutes = 30;
@@ -112,6 +114,14 @@ public class SimulatedPaymentService {
             reservation.setDepositPaidAt(now);
             reservation.setConfirmedAt(now);
             reservationRepository.saveAndFlush(reservation);
+            notificationService.createFacilityOperationsNotifications(
+                reservation.getFacility().getId(),
+                NotificationType.RESERVATION,
+                "Có đơn đã xác nhận chờ phân kho",
+                "Đơn " + reservation.getReservationCode()
+                    + " đã thanh toán cọc và đang chờ nhân viên phân gian kho.",
+                reservation.getId()
+            );
             message = "Payment was recorded successfully and the reservation is confirmed";
         } else if (outcome == PaymentSimulationOutcome.NOT_RECEIVED) {
             payment.setStatus(PaymentStatus.NOT_RECEIVED);
