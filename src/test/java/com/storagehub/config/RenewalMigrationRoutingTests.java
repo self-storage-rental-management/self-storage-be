@@ -28,7 +28,7 @@ class RenewalMigrationRoutingTests {
     private void uniqueVersions(FluentConfiguration config) {
         var flyway=config.dataSource("jdbc:h2:mem:routing"+UUID.randomUUID()+";MODE=MySQL","sa","").load();
         var versions=Arrays.stream(flyway.info().all()).filter(i->i.getVersion()!=null).map(i->i.getVersion().toString()).toList();
-        assertThat(versions).doesNotHaveDuplicates().contains("2026101301","2026101302","2026101401","2026101402","2026101403","2026101404");
+        assertThat(versions).doesNotHaveDuplicates().contains("2026101301","2026101302","2026101401","2026101402","2026101403","2026101410","2026101411");
     }
     @Test void freshDatabaseResolvesDevelopAndNewFeatureVersionsWithoutCollision() throws Exception {
         var config=configure(null,null,null);uniqueVersions(config);
