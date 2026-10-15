@@ -4,6 +4,8 @@
 
 The same routing applies to develop SQL versions `2026101401`–`2026101403`, which collided with already-applied local Java versions. Their SQL is stored unchanged in individual `develop-1401`–`develop-1403` folders. Applied local Java identities are resolved for validation; bridges `2026101407`–`2026101409` apply the develop SQL once on those databases. New calendar and payment migrations use `2026101410` and `2026101411`; applied Java `2026101403` and `2026101404` retain their original identities and checksums.
 
+Develop SQL `2026101404`–`2026101406` is also preserved unchanged under individual history folders. The router resolves each applied SQL or Java identity at its original version. Bridges `2026101412`–`2026101413` reconcile the older develop package/facility scripts, checking successful earlier Java bridges and their checksums before skipping work. Bridges `2026101414`–`2026101416` apply the new develop image-audit, detail-image and facility-policy SQL only where those versions belong to local Java history. Do not edit successful schema history or use repair to align these identities.
+
 Never add this root directory to Flyway locations: scanning all variants would duplicate versions. Spring Boot registers the customizer automatically. Standalone Java Flyway callers using `classpath:db/migration` must call `DevelopMigrationHistoryLocations.configure(configuration)` before `load()`.
 
 | Folder | Selected when |
