@@ -1,12 +1,16 @@
 # Renewal API contract
 
+## Cập nhật mất cọc và xử lý Recovery — 15/10/2026
+
+Quy tắc mới thay thế mô tả disposition theo hạn ký phía dưới: gia hạn không cần Manager duyệt. Chỉ ghi nhận mất cọc khi đến `recoveryStart` ngày quá hạn thứ 8 mà chưa hoàn tất gia hạn, dựa trên tiền cọc đã xác thực và phân bổ; không tự thu thêm tiền và không lấy tiền bảo đảm Rental. API xử lý nhiệm vụ, chứng từ quyết toán và giải phóng kho sau thu hồi được mô tả tại [RECOVERY_TASK_API_CONTRACT.md](RECOVERY_TASK_API_CONTRACT.md). Chưa sửa giao diện.
+
 ## Mốc quá hạn và cảnh báo đọc từ server — 13/10/2026
 
 ### Bàn giao Recovery ngày quá hạn thứ 8
 
 Khi bật `shared-payment-schema`, `storagehub.integration.recovery-tasks.enabled=true` và `storagehub.integration.renewal-auto-recovery.enabled=true`, worker đọc Rental còn active theo giờ server, xác minh kỳ thuê và policy, rồi bàn giao vào `RecoveryTaskSource` trong cùng transaction. Runner local bật hai cờ qua `-EnableRenewalPayments -EnableAutoRecovery` và nạp `db/recovery-migration`. Receiver tạo đúng một `recovery_tasks` trạng thái `OPEN` cho mỗi Rental; `RECOVERY_HANDOFF`, audit, thông báo Customer và hủy Renewal chưa hoàn tất cùng commit. Chạy lại không tạo thêm nhiệm vụ hoặc thông báo. Manager/Staff xem nhiệm vụ đã lưu qua `GET /api/{manager|staff}/recovery-tasks?facilityId=...&page=0&size=20` và `GET /api/{manager|staff}/recovery-tasks/{id}`, cần quyền xem Rental và scope cơ sở.
 
-Receiver kiểm tra lại thời điểm bắt đầu Recovery, trạng thái Rental/gian kho và ReturnCase trước khi nhận. Nếu Payment đang chờ đối soát, nguồn policy/hold/Recovery thiếu hoặc dữ liệu không nhất quán, worker hoãn và thử lại; không tạo ACK giả. Renewal đã hoàn tất ở các kỳ trước là lịch sử, không chặn thu hồi của kỳ hiện tại. Cọc gia hạn được ghi `depositDisposition=REVIEW_REQUIRED`; không tự quyết định mất/hoàn cọc. Handoff chỉ tạo việc thu hồi; Rental và gian vẫn giữ trạng thái vật lý hiện tại cho đến khi quy trình kiểm kê và xử lý tài sản hoàn tất. Bảng nội bộ không chứng minh không có Recovery ở hệ thống khác: khi chưa có task, API trạng thái trả `UNKNOWN`, không trả kết luận an toàn.
+Receiver kiểm tra lại thời điểm bắt đầu Recovery, trạng thái Rental/gian kho và ReturnCase trước khi nhận. Nếu Payment đang chờ đối soát, nguồn policy/hold/Recovery thiếu hoặc dữ liệu không nhất quán, worker hoãn và thử lại; không tạo ACK giả. Renewal đã hoàn tất ở các kỳ trước là lịch sử, không chặn thu hồi của kỳ hiện tại. Cọc đủ bằng chứng được đối soát `FORFEITED` theo quy tắc ngày thứ 8 trong cùng transaction; cọc đã duyệt/chi hoàn không bị đảo tự động. Handoff chỉ tạo việc thu hồi; Rental và gian vẫn giữ trạng thái vật lý hiện tại cho đến khi kiểm kê, quyết toán và xử lý tài sản hoàn tất. Bảng nội bộ không chứng minh không có Recovery ở hệ thống khác: khi chưa có task, API trạng thái trả `UNKNOWN`, không trả kết luận an toàn.
 ## Thanh toán cùng bộ xử lý Reservation — 13/10/2026
 
 - Cọc giữ nguyên `VnpayService`, cấu hình merchant, URL, HMAC Return/IPN và `LedgerStore.receiveSandbox` dùng chung. Mỗi Renewal vẫn ràng buộc accepted revision và số tiền cọc của snapshot, không gọi endpoint tạo cọc của Reservation.
@@ -563,14 +567,15 @@ GET `/api/{customer|manager|staff}/renewals/{id}/deposit-settlement`, envelope `
 | UNKNOWN / NOT_APPLICABLE | Thiếu bằng chứng cọc / luồng trả toàn bộ tiền thuê không có cọc |
 | HELD / APPLIED_TO_RENT | Đã ghi nhận cọc / đã hoàn tất gia hạn |
 | REVIEW_REQUIRED | Cần xác minh sự cố hoặc nguyên nhân; chưa kết luận mất cọc |
-| FORFEITED | Hết hạn ký do khách không hoàn tất, cọc không hoàn lại |
+| AWAITING_RECOVERY_DEADLINE | Hết hạn ký, chờ mốc ngày quá hạn thứ 8 để xử lý cọc |
+| FORFEITED | Đã đến mốc ngày quá hạn thứ 8 mà chưa hoàn tất gia hạn, cọc không hoàn lại |
 | REFUND_ELIGIBLE | Có kết luận sự cố cơ sở, cần quyết định hoàn |
 | REFUND_APPROVED | Đã duyệt và giữ khoản hoàn, chưa ghi nhận chuyển tiền |
 | REFUNDED | Đã ghi nhận kết quả hoàn bằng chứng từ |
 
 `environment` là `SANDBOX` hoặc `PRODUCTION` theo bằng chứng gốc, không suy từ nhãn UI. UNKNOWN/NOT_APPLICABLE trả số tiền, environment và refundId null.
 
-Worker mặc định kiểm tra mỗi 60 giây sau hạn ký. Chỉ xử lý cọc đã có Payment/receipt/ledger đối soát đúng; nguồn thiếu hoặc mơ hồ thì trì hoãn. Sự cố chưa có kết luận không tự ghi khách vi phạm. Hủy nghĩa vụ tiền thuê chưa thu bằng cancellation credit riêng; giữ nguyên khoản thu, allocation và điều khoản gốc. Không cập nhật hạn hợp đồng hoặc chuyển kho thành AVAILABLE.
+Worker mặc định kiểm tra mỗi 60 giây sau hạn ký, nhưng chỉ ghi mất cọc khi đến mốc ngày quá hạn thứ 8. Chỉ xử lý cọc đã có Payment/receipt/ledger đối soát đúng; nguồn thiếu hoặc mơ hồ thì trì hoãn. Khoản hoàn tiền đã được đặt quyền hoặc chi trả không tự đảo ngược. Hủy nghĩa vụ tiền thuê gia hạn chưa thu bằng cancellation credit riêng; giữ nguyên khoản thu, allocation và điều khoản gốc. Ghi mất cọc không cập nhật hạn hợp đồng hoặc chuyển kho thành AVAILABLE.
 
 #### Duyệt và ghi nhận hoàn cọc
 

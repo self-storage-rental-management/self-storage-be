@@ -62,5 +62,9 @@ public record ReturnCaseResponse(
     // Finalization
     String settlementPaymentId,
     Instant settlementPaidAt,
-    Instant completedAt
+    Instant completedAt,
+    String sourceType,
+    UUID recoveryTaskId,
+    String recoveryTaskStatus,
+    Instant recoveryCompletedAt
 ) {}
