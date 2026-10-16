@@ -1,6 +1,7 @@
 package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.Notification;
+import com.storagehub.domain.model.NotificationType;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -12,6 +13,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface NotificationRepository extends JpaRepository<Notification, UUID> {
+
+    boolean existsByUser_IdAndRelatedEntityIdAndTypeAndTitleAndContent(
+        UUID userId, UUID relatedEntityId, NotificationType type, String title, String content);
 
     @EntityGraph(attributePaths = "user")
     @Query("""

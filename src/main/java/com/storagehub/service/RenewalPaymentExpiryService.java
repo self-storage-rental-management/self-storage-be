@@ -32,6 +32,7 @@ public class RenewalPaymentExpiryService {
     private final RenewalPersistence renewals;
     private final ObjectMapper mapper;
     private final AuditLogService audit;
+    private final NotificationService notifications;
     private final ObjectProvider<RenewalOperationSources.SafetySource> safetySources;
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.renewal-simple-payment.enabled:false}")
     private boolean simplePayment;
@@ -92,6 +93,9 @@ public class RenewalPaymentExpiryService {
         catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw new IllegalStateException("Could not persist Renewal payment expiry event",invalid);}
         audit.recordMutation((User)null,"RENEWAL_PAYMENT_EXPIRED","Renewal",renewal.getId(),renewal.getRental().getFacility().getId(),
             Map.of("status",RenewalStatus.accepted),Map.of("status",RenewalStatus.payment_expired,"paymentId",payment.getId()));
+        notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
+            "Yêu cầu thanh toán gia hạn đã hết hạn",
+            "Yêu cầu thanh toán gia hạn cho hồ sơ "+renewal.getRental().getId()+" đã hết hạn và được đóng.",renewal.getId());
         return true;
     }
 }

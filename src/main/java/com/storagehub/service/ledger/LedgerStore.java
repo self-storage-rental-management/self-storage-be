@@ -32,6 +32,8 @@ public class LedgerStore {
     private final JdbcTemplate jdbc;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RenewalLedgerAdjustments> cancellationCredits;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RenewalDepositForfeitures> depositForfeitures;
     public LedgerStore(JdbcTemplate jdbc){this.jdbc=jdbc;}
 
     public void open(UUID rental,UUID customer,UUID facility) {
@@ -193,6 +195,8 @@ public class LedgerStore {
     private UUID reserveRefund(UUID rental,UUID receipt,UUID obligation,BigDecimal amount,String decisionRef,
         UUID actor,String key,long expectedRevision,boolean sandbox) {
         long revision=lock(rental);required(receipt);required(obligation);money(amount,false);text(decisionRef,200);
+        var dispositions=depositForfeitures==null?null:depositForfeitures.getIfAvailable();
+        if(dispositions!=null&&dispositions.containsReceipt(receipt))throw ApiExceptions.conflict("Forfeited Renewal deposit is not refundable");
         String fingerprint=hash(List.of(s(rental),s(receipt),s(obligation),amount.toPlainString(),decisionRef).toString());
         var replay=replay(rental,actor,"RESERVE_REFUND",key,fingerprint);if(replay.isPresent())return replay.get();version(revision,expectedRevision);
         var paid=jdbc.query("select a.amount from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where p.rental_id=? and p.id=? and a.obligation_id=? and p.method in "+(sandbox?"('VNPAY_SANDBOX')":"('CASH','VERIFIED_BANK')"),(r,i)->r.getBigDecimal(1),s(rental),s(receipt),s(obligation));
