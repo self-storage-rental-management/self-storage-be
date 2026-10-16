@@ -36,7 +36,7 @@ class SupportSwaggerTests {
         assertThat(paths.has("/api/manager/support-tickets/{id}/escalations/{escalationId}/decision")).isFalse();
         assertThat(paths.path("/api/staff/support-workflows/{id}/escalations").has("post")).isFalse();
         paths.fields().forEachRemaining(entry->{
-            if(entry.getKey().startsWith("/api/manager/support-tickets"))
+            if(entry.getKey().startsWith("/api/manager/support-tickets")&&!entry.getKey().equals("/api/manager/support-tickets/{id}/messages"))
                 assertThat(entry.getValue().fieldNames()).toIterable().noneMatch(method->java.util.Set.of("post","put","patch","delete").contains(method));
         });
         assertThat(paths.has("/api/manager/support-tickets/{id}/resolution")).isFalse();
@@ -66,6 +66,9 @@ class SupportSwaggerTests {
         assertHandler(RequestMethod.POST,workflowPath("staff")+"/{id}/accept",StaffSupportController.class);
         assertHandler(RequestMethod.GET,workflowPath("manager"),ManagerSupportController.class);
         assertHandler(RequestMethod.GET,workflowPath("manager")+"/summary",ManagerSupportController.class);
+        assertHandler(RequestMethod.POST,workflowPath("manager")+"/{id}/messages",ManagerSupportController.class);
+        assertHandler(RequestMethod.GET,workflowPath("manager")+"/{id}/internal-messages",ManagerSupportController.class);
+        assertHandler(RequestMethod.GET,workflowPath("staff")+"/{id}/internal-messages",StaffSupportController.class);
     }
 
     private void assertHandler(RequestMethod method,String path,Class<?> controller) {

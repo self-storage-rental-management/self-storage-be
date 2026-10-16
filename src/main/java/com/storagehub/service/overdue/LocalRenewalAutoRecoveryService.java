@@ -32,6 +32,8 @@ public class LocalRenewalAutoRecoveryService {
     private final ObjectProvider<Clock> clocks;
     private final NotificationService notifications;
     private final AuditLogService audit;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositSettlementService> depositSettlements;
 
     @Transactional(readOnly=true)
     public List<UUID> candidates() {
@@ -94,6 +96,15 @@ public class LocalRenewalAutoRecoveryService {
         if(handoff==null||handoff.reference()==null||!Set.of("RECEIVED","ALREADY_RECEIVED").contains(handoff.status()))
             throw ApiExceptions.conflict("Recovery receiver did not acknowledge");
         for(var renewal:renewals) {
+            if(renewal.getStatus()==RenewalStatus.completed)continue;
+            var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
+            if(state!=null&&state.getDepositPaidAt()!=null) {
+                var settlement=depositSettlements==null?null:depositSettlements.getIfAvailable();
+                if(settlement==null)throw ApiExceptions.conflict("Deposit forfeiture accounting unavailable");
+                settlement.reconcile(renewal.getId());
+            }
+        }
+        for(var renewal:renewals) {
             if(Set.of(RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.payment_expired,RenewalStatus.completed).contains(renewal.getStatus()))continue;
             var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
             var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
@@ -104,7 +115,7 @@ public class LocalRenewalAutoRecoveryService {
             if(workflow!=null)workflow.cancelled("AUTO_RECOVERY_DAY_8");
             var calendar=calendars.getIfAvailable();if(calendar!=null)calendar.release(renewal,now);
             em.persist(new RenewalOperationEvent(renewal,"RECOVERY_CANCELLATION",now,null,
-                "{\"reason\":\"AUTO_RECOVERY_DAY_8\",\"depositDisposition\":\"REVIEW_REQUIRED\"}"));
+                "{\"reason\":\"AUTO_RECOVERY_DAY_8\",\"depositDisposition\":\"SEE_DEPOSIT_SETTLEMENT\"}"));
         }
         var followUp=new OverdueFollowUp(ref,rental,"RECOVERY_HANDOFF","AUTO_OVERDUE_DAY_8",null,now,
             handoff.reference(),t.policyRef(),t.policyVersion());
@@ -114,9 +125,12 @@ public class LocalRenewalAutoRecoveryService {
         notifications.createNotification(rental.getCustomer().getId(),NotificationType.OVERDUE,
             "Hồ sơ thuê đã chuyển sang xử lý thu hồi",
             "Hợp đồng đã quá hạn 7 ngày. Vui lòng liên hệ cơ sở để xử lý hợp đồng, tài sản và tiền cọc.",id);
+        notifications.createFacilityOperationsNotifications(rental.getFacility().getId(),NotificationType.OVERDUE,
+            "Hồ sơ quá hạn đã chuyển sang xử lý thu hồi",
+            "Hồ sơ thuê "+rental.getId()+" tại cơ sở "+rental.getFacility().getName()+" đã được chuyển sang xử lý thu hồi.",id);
         audit.recordMutation((User)null,"AUTO_RECOVERY_HANDOFF","Rental",id,rental.getFacility().getId(),null,
             Map.of("caseRef",ref,"receiverRef",handoff.reference(),"policyRef",t.policyRef(),"policyVersion",t.policyVersion(),
-                "renewalCancellationCount",renewals.size(),"depositDisposition","REVIEW_REQUIRED"));
+                "renewalCancellationCount",renewals.size(),"depositDisposition","SEE_DEPOSIT_SETTLEMENT"));
         return true;
     }
 }
