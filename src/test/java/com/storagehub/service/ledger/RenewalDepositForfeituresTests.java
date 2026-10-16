@@ -26,7 +26,7 @@ class RenewalDepositForfeituresTests {
     LedgerStore.Snapshot account;
     @BeforeEach void schema()throws Exception {
         new ResourceDatabasePopulator(new ClassPathResource("rental-ledger-test-schema.sql")).execute(ds);
-        var sql=new String(new ClassPathResource("db/renewal-deposit-migration/V2026101501__record_renewal_deposit_forfeitures.sql").getInputStream().readAllBytes(),StandardCharsets.UTF_8).replace("ENGINE=InnoDB","");
+        var sql=new String(new ClassPathResource("db/migration-history/legacy-deposit-1501/V2026101501__record_renewal_deposit_forfeitures.sql").getInputStream().readAllBytes(),StandardCharsets.UTF_8).replace("ENGINE=InnoDB","");
         for(var statement:sql.split(";"))if(!statement.isBlank())jdbc.execute(statement);
         var beans=new StaticListableBeanFactory();beans.addBean("forfeitures",forfeitures);
         ReflectionTestUtils.setField(ledger,"depositForfeitures",beans.getBeanProvider(RenewalDepositForfeitures.class));
