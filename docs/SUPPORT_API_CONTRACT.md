@@ -1,6 +1,39 @@
 # D5 — Đặc tả API hỗ trợ
 
-Nghiệp vụ hiện hành cập nhật 13/10/2026: Customer trao đổi trực tiếp với Staff; Staff tự nhận yêu cầu. Manager chỉ xem và theo dõi trong phạm vi cơ sở. Tích hợp nguồn dùng chung và triển khai schema vẫn phải đáp ứng các điều kiện kiểm soát.
+Nghiệp vụ hiện hành cập nhật 15/10/2026: Customer trao đổi trực tiếp với Staff; Staff tự nhận yêu cầu. Manager theo dõi trong phạm vi cơ sở và trao đổi riêng với Staff qua tin nhắn INTERNAL.
+
+## Báo kết quả xử lý hỗ trợ
+
+Thông báo hỗ trợ dùng tiêu đề hệ thống tiếng Việt. API danh sách/đánh dấu đã đọc cũng dịch các tiêu đề tiếng Anh đã lưu từ phiên bản cũ, không sửa lịch sử DB. Nội dung do người dùng nhập được dùng làm tên yêu cầu tham chiếu.
+
+| Sự kiện | Người nhận thông báo |
+| --- | --- |
+| Tạo yêu cầu | Khách hàng, nhân viên đủ quyền tại cơ sở, quản lý cơ sở |
+| Nhận xử lý | Khách hàng và quản lý cơ sở |
+| Khách gửi tin nhắn | Nhân viên phụ trách còn đủ quyền và quản lý cơ sở |
+| Nhân viên trả lời khách | Khách hàng và quản lý cơ sở |
+| Nhân viên trao đổi riêng | Quản lý cơ sở |
+| Quản lý trao đổi riêng | Nhân viên đang phụ trách |
+| Báo xử lý xong | Khách hàng (qua thông báo xác nhận kết quả) và quản lý cơ sở |
+| Khách xác nhận đóng | Khách hàng, nhân viên phụ trách còn đủ quyền và quản lý cơ sở |
+| Khách yêu cầu xử lý lại | Khách hàng, quản lý và nhân viên phụ trách; nếu phân công cũ không còn hợp lệ thì báo nhân viên đủ quyền trong hàng chờ |
+| Tự đóng theo chính sách | Khách hàng, nhân viên phụ trách còn đủ quyền và quản lý cơ sở |
+
+Thông báo giữ ID yêu cầu liên quan và hiển thị tại trang hỗ trợ tương ứng của từng vai trò, không đưa nội dung trao đổi riêng vào thông báo của khách hàng. Thử lại cùng khóa không tạo thông báo trùng.
+
+Ràng buộc: phải có mô tả không chỉ gồm khoảng trắng hoặc ít nhất một tệp minh chứng PUBLIC hợp lệ đã lưu. `summary` tối đa 4000 ký tự; nếu chỉ gửi tệp, hệ thống thêm lời nhắn yêu cầu khách kiểm tra minh chứng và xác nhận. Không có cả hai trả 400, không đổi trạng thái hoặc gửi thông báo. File chưa lưu, file INTERNAL hoặc không thuộc hồ sơ/người tải bị từ chối theo kiểm tra minh chứng hiện có. Ghi tin nhắn PUBLIC, đính kèm, đổi trạng thái và tạo thông báo thuộc cùng transaction.
+
+`POST S/{id}/resolution` ghi nhận nội dung và minh chứng của Staff, chuyển yêu cầu từ `in_progress` sang `resolved` (đã xử lý, chờ khách xác nhận). Hồ sơ thuê/thanh toán liên kết cung cấp ngữ cảnh; không bắt buộc bộ xác minh kết quả module chỉ vì có liên kết. Thao tác này không xác nhận thu/hoàn tiền hoặc hoàn tất hồ sơ liên kết. Customer xác nhận đóng theo chính sách hoặc yêu cầu mở lại. Phạm vi, phân công, phiên bản, minh chứng và kết quả escalation lịch sử vẫn được kiểm tra. Quy tắc này áp dụng cả khi đóng thủ công hoặc tự đóng yêu cầu hỗ trợ.
+
+## Trao đổi Staff–Manager
+
+- Staff/Manager: GET `/{id}/public-messages` và `/{id}/internal-messages` dưới tiền tố D5 tương ứng. Chỉ nhận page/size; lọc PUBLIC/INTERNAL trước đếm và phân trang. GET `/messages` cũ vẫn giữ tương thích. Customer chỉ có tin PUBLIC.
+- Manager: POST `/api/manager/support-tickets/{id}/messages`, header `Idempotency-Key`, body `{"body":"Hướng dẫn xử lý","visibility":"INTERNAL","evidenceFileIds":[]}`. PUBLIC bị từ chối; không nhận expectedVersion, actor hoặc người nhận do client chọn.
+- Manager cần role đang hoạt động, VIEW_SUPPORT + MANAGE_SUPPORT và phạm vi MANAGE tại cơ sở (kiểm tra token và DB). Hồ sơ phải còn hiệu lực xử lý và có Staff đang nhận. Gửi tin không đổi trạng thái hoặc đồng hồ phản hồi Customer; chỉ thông báo Staff đang phụ trách. Retry cùng key không gửi trùng.
+- Staff gửi INTERNAL qua endpoint messages hiện có; thông báo Manager của cơ sở. Hai bên đính kèm `DUONG_SUPPORT_INTERNAL`; Customer không được đọc hoặc tải các tệp này. Manager chỉ upload/attach chứng từ INTERNAL.
+- FE bỏ tab lịch sử nội bộ, thay điều phối bằng trao đổi Staff–Manager; giữ giao diện và composer tương tự cuộc trao đổi với Customer. API lịch sử và escalation vẫn tồn tại để đọc dữ liệu cũ.
+
+Các mô tả Manager chỉ đọc bên dưới phản ánh quy tắc trước cập nhật này; ngoại lệ hiện hành duy nhất là gửi tin nhắn và đính kèm INTERNAL như trên. Manager vẫn không có quyền phân công, quyết định chuyển bộ phận hoặc đổi trạng thái hồ sơ.
 
 ## Trách nhiệm và ranh giới
 
@@ -90,7 +123,7 @@ Nhận việc: `{"expectedVersion":1}`. Tin nhắn Staff: `{"body":"Progress upd
 - Staff phải là người đã nhận hiện tại trước khi nhắn/xử lý/báo kết quả.
 - `request-information` tạo câu hỏi PUBLIC và chuyển `waiting_customer`; ghi chú INTERNAL không đổi trạng thái hoặc thông báo Customer. Phản hồi PUBLIC của Customer kèm phiên bản tiếp tục `in_progress`.
 - Phản hồi PUBLIC của Staff thông báo Customer và ghi thời điểm phản hồi công khai đầu/cuối. Ghi chú nội bộ không thực hiện hai việc này.
-- Báo kết quả cần Staff hiện tại đã nhận, trạng thái `in_progress`, nội dung kết quả, kết quả mục tiêu liên kết đã xác minh nếu có, và không còn escalation chưa giải quyết. Ticket hỏi thông tin chung không liên kết có thể được xử lý xong bằng giải thích của Staff.
+- Báo kết quả cần Staff hiện tại đã nhận, trạng thái `in_progress`, nội dung kết quả và không còn escalation chưa giải quyết. Hồ sơ liên kết là ngữ cảnh hỗ trợ; báo kết quả không thay đổi hoặc xác nhận hoàn tất nghiệp vụ của hồ sơ đó.
 - Trả lời ticket `resolved` không âm thầm mở lại. Chủ động mở lại trả cho Staff đủ điều kiện đã nhận (`in_progress`), hoặc xóa người xử lý không còn đủ điều kiện và trả về hàng đợi Staff để claim (`open`).
 - Ticket `closed` không thể được trả lời/mở lại/giao lại. Customer tạo yêu cầu tiếp nối liên kết cùng cơ sở; không sao chép nội dung hoặc file nội bộ.
 - Đóng ticket không xóa nợ, đánh dấu hoàn tiền đã chi, giải phóng gian kho, đóng hồ sơ Return hoặc hoàn thành nhiệm vụ của module khác.
@@ -105,12 +138,12 @@ Các giao diện mở rộng nằm trong `SupportSources`; **không cài đặt 
 | SlaSource | Priority/policy/phiên bản BO + hạn phản hồi đầu/cập nhật hằng ngày tiếp theo tính theo lịch. Thiếu: `slaCompleteness=UNKNOWN`, SLA null, lý do thiếu rõ ràng. Không suy số 0/đang đúng hạn hoặc cho Customer đặt priority. Tạm dừng xử lý chỉ được phản ánh `waiting_customer`. |
 | ClosePolicySource | Policy/phiên bản BO, quyền Customer đóng và hạn tự đóng có thẩm quyền. Thiếu: chặn đóng/tự đóng. Hạn không được trước thời điểm resolved + 7 ngày lịch. |
 | NotificationSource | Bằng chứng delivery của thông báo kết quả/thời gian xem xét, gắn đúng ticket, Customer, RESOLVED event hiện tại và policy/version. `consistentThroughClose()` mặc định false; chưa có authoritative adapter thì auto-close bị chặn. Không dùng notification queued/persisted làm delivery proof. |
-| ResolutionSource | Xác minh kết quả mục tiêu liên kết thực tế. Thiếu: chặn báo xử lý xong ticket liên kết và đóng cuối cùng; ghi chú/đang chờ hoàn tiền không được tính là kết quả. |
+| ResolutionSource | Điểm mở rộng cũ, không còn là điều kiện báo kết quả/đóng yêu cầu chỉ vì có hồ sơ liên kết. Kết quả Support được khách xem xét; kết quả nghiệp vụ liên kết vẫn thuộc module tương ứng. |
 | EscalationSource | Chỉ đọc/xác minh kết quả điều phối lịch sử. Thiếu nguồn thì kết quả cũ vẫn UNKNOWN và chặn resolve/close; không tạo chuyển tiếp mới. |
 
 Mục tiêu SLA đã duyệt: HIGH 1 / MEDIUM 4 / LOW 8 giờ làm việc để phản hồi đầu tiên; yêu cầu chưa giải quyết phải cập nhật mỗi ngày làm việc. `waiting_customer` tạm dừng xử lý chủ động, không xóa nghĩa vụ phản hồi đầu/cập nhật đã phát sinh. Chờ nội bộ không phải chờ Customer. Bộ kết nối phụ trách tính lịch và hạch toán lịch sử tạm dừng; cấm thay bằng cách tính thời gian thực trôi qua không xét lịch. Phần lõi lưu thời điểm phân công/phản hồi và lịch sử sự kiện để tích hợp. Chế độ thiếu nguồn **không** khẳng định giám sát/cảnh báo SLA đang hoạt động.
 
-`SupportService.autoClose(id)` chỉ dành cho hệ thống: khóa và kiểm tra lại trạng thái đã xử lý, hạn xem xét tối thiểu 7 ngày, kết quả liên kết/escalation đáng tin cậy và delivery proof từ `NotificationSource`, rồi ghi thông báo đóng + đóng + audit trong một giao dịch. Proof cần reference thật, đúng ticket/recipient/RESOLVED event của lần xử lý hiện tại và policy/version; deliveredAt phải từ lúc resolved tới serverNow. Không tìm được duy nhất event hiện tại hoặc thiếu nguồn/proof trả 409 DEFERRED_SOURCE; proof không khớp trả 409. Bằng chứng từ lần resolved trước không dùng lại sau reopen/resolve. Owner phải chứng minh consistency tới commit; không bật cờ bằng adapter giả. Không có endpoint nhận proof từ client.
+`SupportService.autoClose(id)` chỉ dành cho hệ thống: khóa và kiểm tra lại trạng thái đã xử lý, hạn xem xét tối thiểu 7 ngày, kết quả escalation lịch sử đáng tin cậy và delivery proof từ `NotificationSource`, rồi ghi thông báo đóng + đóng + audit trong một giao dịch. Proof cần reference thật, đúng ticket/recipient/RESOLVED event của lần xử lý hiện tại và policy/version; deliveredAt phải từ lúc resolved tới serverNow. Không tìm được duy nhất event hiện tại hoặc thiếu nguồn/proof trả 409 DEFERRED_SOURCE; proof không khớp trả 409. Bằng chứng từ lần resolved trước không dùng lại sau reopen/resolve. Owner phải chứng minh consistency tới commit; không bật cờ bằng adapter giả. Không có endpoint nhận proof từ client.
 
 Thông báo được tạo trong giao dịch resolve/auto-close vẫn dùng `NotificationService` hiện có; việc ghi bản ghi không chứng minh email/delivery thành công. Tác vụ không sửa service này, không gửi email thật và không tự bật job. Customer chủ động đóng theo policy là nhánh khác, không bị yêu cầu auto-close delivery proof. FE không suy ngày tự đóng từ resolvedAt hoặc SLA và không hứa tự đóng khi chưa có nguồn.
 
@@ -120,7 +153,7 @@ Thông báo được tạo trong giao dịch resolve/auto-close vẫn dùng `Not
 
 Nghiệp vụ mới chỉ có tương tác Customer/Staff. Đã gỡ POST Manager assignment, POST Manager escalation decision, GET Manager staff-options và POST Staff escalations. Manager chỉ có GET; các lệnh nội bộ cũ cũng từ chối trước khi đọc receipt/mutation, nên idempotency cũ không hồi sinh thao tác đã bị gỡ.
 
-GET messages/events/escalations vẫn giữ lịch sử có phạm vi. Manager được đọc file theo quyền nhưng không upload/attach bằng chứng Support. Không xóa sự kiện, người xử lý hoặc receiver reference cũ. Các escalation lịch sử chưa có kết quả thật tiếp tục chặn resolve/close; không tự đánh dấu REJECTED/COMPLETED để bỏ qua. Liên kết Payment/Return/Renewal vẫn cần xác minh kết quả thật của module trước khi báo giải quyết xong. Yêu cầu cũ đã có Staff nhận tiếp tục do người đó xử lý.
+GET messages/events/escalations vẫn giữ lịch sử có phạm vi. Manager được đọc file theo quyền và upload/attach bằng chứng INTERNAL theo quy tắc trao đổi mới. Không xóa sự kiện, người xử lý hoặc receiver reference cũ. Các escalation lịch sử chưa có kết quả thật tiếp tục chặn resolve/close; không tự đánh dấu REJECTED/COMPLETED để bỏ qua. Liên kết Payment/Return/Renewal chỉ cung cấp ngữ cảnh; yêu cầu hỗ trợ không tự thay đổi trạng thái hoặc kết quả của module liên kết. Yêu cầu cũ đã có Staff nhận tiếp tục do người đó xử lý.
 
 UI chưa được sửa trong tác vụ này. Client gọi API mutation đã gỡ cần được cập nhật ở một thay đổi giao diện riêng; contract BE không fallback sang thao tác Manager cũ.
 
