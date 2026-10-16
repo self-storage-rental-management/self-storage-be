@@ -40,12 +40,17 @@ public class StaffSupportController {
     public ApiResponse<SupportResponse.Message> message(@PathVariable UUID id,@Valid @RequestBody SupportCommands.StaffMessage body,@RequestHeader("Idempotency-Key") String key){return response(service.staffMessage(actors.required(),id,body,key));}
     @PostMapping("/{id}/request-information") @Operation(summary="Request Customer information",description="in_progress→waiting_customer. Public question, expectedVersion and accepted assignment required. waiting_customer is reserved for an actual Customer question.")
     public ApiResponse<SupportResponse> information(@PathVariable UUID id,@Valid @RequestBody SupportCommands.Information body,@RequestHeader("Idempotency-Key") String key){return response(service.requestInformation(actors.required(),id,body,key));}
-    @PostMapping("/{id}/resolution") @Operation(summary="Resolve with verified outcome",description="Only accepted in_progress Staff. Linked records need objective-result adapter; unresolved escalation blocks. Never changes Rental/Payment/Refund/Return records.")
+    @PostMapping("/{id}/resolution") @Operation(summary="Report Support outcome for Customer confirmation",description="Only accepted in_progress Staff with current expectedVersion. Records the summary/evidence and moves Support to resolved pending Customer confirmation. Linked records are context; unresolved historical escalation still blocks. Never changes Rental/Payment/Refund/Return records.")
     public ApiResponse<SupportResponse> resolve(@PathVariable UUID id,@Valid @RequestBody SupportCommands.Resolution body,@RequestHeader("Idempotency-Key") String key){return response(service.resolve(actors.required(),id,body,key));}
 
     @GetMapping("/{id}/escalations") @Operation(summary="Read historical escalation coordination/result")
     public PageResponse<SupportResponse.Escalation> escalations(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.escalations(actors.required(),STAFF,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current());}
     @GetMapping("/{id}/events") @Operation(summary="Read assigned workflow history")
     public PageResponse<SupportResponse.Event> events(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.events(actors.required(),STAFF,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current());}
+    @GetMapping("/{id}/public-messages") @Operation(summary="Read Customer conversation")
+    public PageResponse<SupportResponse.Message> publicMessages(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.messages(actors.required(),STAFF,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current(),SupportCommands.Visibility.PUBLIC);}
+    @GetMapping("/{id}/internal-messages") @Operation(summary="Read private Staff-Manager conversation")
+    public PageResponse<SupportResponse.Message> internalMessages(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.messages(actors.required(),STAFF,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current(),SupportCommands.Visibility.INTERNAL);}
+
     private <T> ApiResponse<T> response(T value){return new ApiResponse<>(value,CorrelationIdContext.current());}
 }

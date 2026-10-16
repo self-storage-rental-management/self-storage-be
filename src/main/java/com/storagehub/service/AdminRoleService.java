@@ -150,11 +150,10 @@ public class AdminRoleService {
         }
 
         if (roleCode == RoleCode.STAFF && intersects(permissions, Set.of(
-            SystemPermission.MANAGE_PAYMENTS.code(),
             SystemPermission.MANAGE_POLICIES.code(),
             SystemPermission.MANAGE_STAFF_TASKS.code()
         ))) {
-            throw ApiExceptions.conflict("Staff cannot manage fees, edit policies or coordinate staff tasks");
+            throw ApiExceptions.conflict("Staff cannot edit policies or coordinate staff tasks");
         }
 
         if (roleCode == RoleCode.BUSINESS && !permissions.containsAll(Set.of(

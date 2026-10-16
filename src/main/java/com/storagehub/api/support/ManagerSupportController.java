@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import static com.storagehub.service.support.SupportService.Audience.MANAGER;
 
 @RestController @RequestMapping("/api/manager/support-tickets") @RequiredArgsConstructor
-@Tag(name="D5 - Manager Support",description="Read-only facility monitoring. Manager cannot assign, reply, route, resolve or close Support.")
+@Tag(name="D5 - Manager Support",description="Facility monitoring and private Staff-Manager messaging. Workflow transitions remain Staff-owned.")
 @SecurityRequirement(name="bearerAuth")
 @io.swagger.v3.oas.annotations.responses.ApiResponses({
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403",description="Support permission/role/scope missing"),
@@ -36,6 +36,14 @@ public class ManagerSupportController {
     public PageResponse<SupportResponse.Event> events(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.events(actors.required(),MANAGER,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current());}
     @GetMapping("/{id}/escalations") @Operation(summary="Read internal coordination and verified receiver result")
     public PageResponse<SupportResponse.Escalation> escalations(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.escalations(actors.required(),MANAGER,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current());}
+
+    @GetMapping("/{id}/public-messages") @Operation(summary="Read Customer conversation")
+    public PageResponse<SupportResponse.Message> publicMessages(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.messages(actors.required(),MANAGER,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current(),SupportCommands.Visibility.PUBLIC);}
+    @GetMapping("/{id}/internal-messages") @Operation(summary="Read private Staff-Manager conversation")
+    public PageResponse<SupportResponse.Message> internalMessages(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.messages(actors.required(),MANAGER,id,SupportQuery.parse(q,false,true),CorrelationIdContext.current(),SupportCommands.Visibility.INTERNAL);}
+
+    @PostMapping("/{id}/messages") @ResponseStatus(org.springframework.http.HttpStatus.CREATED) @Operation(summary="Send internal message to assigned Staff")
+    public ApiResponse<SupportResponse.Message> message(@PathVariable UUID id,@jakarta.validation.Valid @RequestBody SupportCommands.StaffMessage body,@RequestHeader("Idempotency-Key") String key){return response(service.managerMessage(actors.required(),id,body,key));}
 
     private <T> ApiResponse<T> response(T value){return new ApiResponse<>(value,CorrelationIdContext.current());}
 }
