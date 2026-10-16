@@ -28,7 +28,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                 query.setString(1, history);
                 try (var result = query.executeQuery()) {
                     if (result.next() && result.getInt(1) > 0) {
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302')")) {
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406')")) {
                             while (rows.next()) {
                                 var value = new Applied(rows.getString("script"),rows.getString("type"),rows.getBoolean("success"));
                                 if (applied.put(rows.getString("version"), value) != null) throw new IllegalStateException("Duplicate version in applied migration history; no repair performed");
@@ -73,6 +73,8 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             selected.add("classpath:db/migration-history/develop-1302");
         }
         boolean enableGateway=locations.contains("classpath:db/sandboxpaymentmigration");
+        // Feature SQL must stay outside historical Java migration locations that are filtered below.
+        if(enableGateway&&!selected.contains("classpath:db/renewal-deposit-migration"))selected.add("classpath:db/renewal-deposit-migration");
         // Keep the exact old Java class identity only where it was actually applied.
         // Fresh or develop databases resolve the gateway at a unique new version.
         selected.remove("classpath:db/sandboxpaymentmigration");
@@ -80,7 +82,39 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         var javaMigrations=new ArrayList<JavaMigration>(Arrays.stream(configuration.getJavaMigrations())
             .filter(m->!(m instanceof db.sandboxpaymentmigration.V2026101302__ensure_gateway_ledger_evidence)).toList());
         if(legacyGateway) javaMigrations.add(new db.sandboxpaymentmigration.V2026101302__ensure_gateway_ledger_evidence());
-        if(enableGateway) javaMigrations.add(new db.renewalpaymentmigration.V2026101404__ensure_gateway_ledger_evidence());
+        // Select the immutable SQL or historical Java identity actually applied
+        // at each version shared by develop and existing local databases.
+        for (int number=1; number<=6; number++) {
+            String version="202610140"+number;
+            String sqlScript=switch(number) {
+                case 1 -> "V2026101401__repair_orphan_demo_occupancy.sql";
+                case 2 -> "V2026101402__add_unit_type_change_requests.sql";
+                case 3 -> "V2026101403__support_unit_type_uploaded_images.sql";
+                case 4 -> "V2026101404__support_image_change_audit_snapshots.sql";
+                case 5 -> "V2026101405__separate_unit_type_detail_image.sql";
+                default -> "V2026101406__persist_facility_content_policies.sql";
+            };
+            var old=applied.get(version);
+            if(old==null || sqlScript.equals(old.script())) {
+                if(old!=null)require(old,sqlScript);
+                selected.add("classpath:db/migration-history/develop-140"+number);
+            } else if((number<=2 || number>=5) && old.success() && "JDBC".equals(old.type())
+                && ("db.migration.V202610140"+number+"__reconcile_develop_"
+                    +(number==1 || number==5?"package_cleanup":"facility_details")).equals(old.script())) {
+                javaMigrations.add(new HistoricalReconciliationMigration(number));
+            } else if(number==3 && old.success() && "JDBC".equals(old.type())
+                && "db.renewalcalendarmigration.V2026101403__ensure_staff_signing_calendar".equals(old.script())) {
+                javaMigrations.add(new db.renewalcalendarmigration.V2026101403__ensure_staff_signing_calendar());
+            } else if(number==4 && old.success() && "JDBC".equals(old.type())
+                && "db.renewalpaymentmigration.V2026101404__ensure_gateway_ledger_evidence".equals(old.script())) {
+                javaMigrations.add(new db.renewalpaymentmigration.V2026101404__ensure_gateway_ledger_evidence());
+            } else throw new IllegalStateException("Unrecognized 202610140"+number+" migration history; no repair performed");
+        }
+        selected.remove("classpath:db/renewal-calendar-migration");
+        selected.remove("classpath:db/renewalcalendarmigration");
+        selected.remove("classpath:db/renewalpaymentmigration");
+        javaMigrations.add(new db.renewalcalendarmigration.V2026101410__ensure_staff_signing_calendar());
+        if(enableGateway) javaMigrations.add(new db.renewalpaymentmigration.V2026101411__ensure_gateway_ledger_evidence());
         configuration.javaMigrations(javaMigrations.toArray(JavaMigration[]::new));
         if(legacyBinding||legacyGateway||applied.containsKey("2026101301")&&"V2026101301__create_staff_renewal_signing_calendar.sql".equals(applied.get("2026101301").script()))
             configuration.outOfOrder(true); // Apply new develop migrations older than the already installed feature migrations.

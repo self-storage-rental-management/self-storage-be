@@ -27,6 +27,7 @@ public class RoleDataInitializer {
     private static final int STAFF_TRAM_WORKFLOW_VERSION = 6;
     private static final int BUSINESS_RETURNS_VERSION = 7;
     private static final int STAFF_RENEWAL_OPERATIONS_VERSION = 8;
+    private static final int STAFF_RENEWAL_PAYMENTS_VERSION = 9;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -129,6 +130,17 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(STAFF_RENEWAL_OPERATIONS_VERSION);
                 }
+                // Staff records the remaining Renewal payment against an authoritative
+                // statement and receipt before completing the signing workflow.
+                if (role.getPermissionsPolicyVersion() < STAFF_RENEWAL_PAYMENTS_VERSION) {
+                    if (code == RoleCode.STAFF) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.VIEW_PAYMENTS));
+                        updated.add(permissions.get(SystemPermission.MANAGE_PAYMENTS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(STAFF_RENEWAL_PAYMENTS_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -169,6 +181,8 @@ public class RoleDataInitializer {
                 SystemPermission.PERFORM_CHECKIN,
                 SystemPermission.VIEW_RENTALS,
                 SystemPermission.MANAGE_RENTALS,
+                SystemPermission.VIEW_PAYMENTS,
+                SystemPermission.MANAGE_PAYMENTS,
                 SystemPermission.VIEW_RETURNS,
                 SystemPermission.PROCESS_RETURNS,
                 SystemPermission.VIEW_SUPPORT,
