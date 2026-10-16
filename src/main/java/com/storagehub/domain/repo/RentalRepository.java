@@ -49,5 +49,7 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     long countByFacility_IdAndStatus(UUID facilityId, RentalStatus status);
 
+    java.util.List<Rental> findByStatus(RentalStatus status);
+
     long countByStatus(RentalStatus status);
 }

@@ -53,9 +53,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CustomerReservationService {
 
-    @Autowired
-    private AccessCredentialService accessCredentialService;
-
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
     private final CheckInRepository checkInRepository;
@@ -68,6 +65,8 @@ public class CustomerReservationService {
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
     private final ObjectProvider<LedgerStore> ledgerStores;
+    private final AccessCredentialService accessCredentialService;
+    private final com.storagehub.domain.repo.ContractRepository contractRepository;
 
     @Autowired
     public CustomerReservationService(
@@ -82,7 +81,9 @@ public class CustomerReservationService {
         ReservationGoodsItemRepository goodsItemRepository,
         AuditLogService auditLogService,
         NotificationService notificationService,
-        ObjectProvider<LedgerStore> ledgerStores
+        ObjectProvider<LedgerStore> ledgerStores,
+        @Autowired(required = false) AccessCredentialService accessCredentialService,
+        @Autowired(required = false) com.storagehub.domain.repo.ContractRepository contractRepository
     ) {
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
@@ -96,6 +97,30 @@ public class CustomerReservationService {
         this.auditLogService = auditLogService;
         this.notificationService = notificationService;
         this.ledgerStores = ledgerStores;
+        this.accessCredentialService = accessCredentialService;
+        this.contractRepository = contractRepository;
+    }
+
+    public CustomerReservationService(
+        ReservationRepository reservationRepository,
+        PaymentRepository paymentRepository,
+        CheckInRepository checkInRepository,
+        RentalRepository rentalRepository,
+        StorageUnitRepository storageUnitRepository,
+        UnitAssignmentRepository assignmentRepository,
+        FileAssetRepository fileAssetRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        AuditLogService auditLogService,
+        NotificationService notificationService,
+        ObjectProvider<LedgerStore> ledgerStores
+    ) {
+        this(
+            reservationRepository, paymentRepository, checkInRepository, rentalRepository,
+            storageUnitRepository, assignmentRepository, fileAssetRepository, snapshotRepository,
+            goodsItemRepository, auditLogService, notificationService, ledgerStores,
+            null, null
+        );
     }
 
     /** Compatibility constructor retained for existing service tests and integrations. */
@@ -279,6 +304,23 @@ public class CustomerReservationService {
             created.setMonthlyPrice(snapshot.getMonthlyPrice());
             return rentalRepository.saveAndFlush(created);
         });
+        if (existingRental.isEmpty() && contractRepository != null) {
+            Instant contractNow = Instant.now();
+            String unitCode = rental.getStorageUnit() != null ? rental.getStorageUnit().getCode() : "UNIT";
+            String contractNo = "HD-" + unitCode + "-" + rental.getId().toString().substring(0, 8).toUpperCase();
+            com.storagehub.domain.model.Contract contract = new com.storagehub.domain.model.Contract();
+            contract.setRental(rental);
+            contract.setStatus(com.storagehub.domain.model.ContractStatus.SIGNED);
+            contract.setContractNumber(contractNo);
+            contract.setSentAt(contractNow);
+            contract.setSignedAt(contractNow);
+            contract.setSignedBy(reservation.getCustomer() != null ? reservation.getCustomer().getFullName() : "Customer");
+            if (rental.getContractEndDate() != null) {
+                contract.setExpiresAt(rental.getContractEndDate().atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant());
+            }
+            contractRepository.save(contract);
+        }
+
         // Open the subledger only for a Rental created by this confirmed receipt event.
         // The ledger writer joins this method's transaction; existing/legacy Rentals are not backfilled.
         if (existingRental.isEmpty() && ledgerStores != null) {
