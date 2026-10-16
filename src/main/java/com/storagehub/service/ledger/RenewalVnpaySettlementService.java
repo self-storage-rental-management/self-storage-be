@@ -36,6 +36,7 @@ public class RenewalVnpaySettlementService {
     private final ObjectProvider<com.storagehub.service.renewal.RenewalSources.FinancialSource> financialSources;
     private final ObjectProvider<Clock> clocks;
     private final com.storagehub.service.PaymentProvenance provenance;
+    private final com.storagehub.service.NotificationService notifications;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.renewal.RenewalSources.ExtensionHoldSource> extensionHolds;
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.renewal-simple-payment.enabled:false}")
@@ -207,6 +208,10 @@ public class RenewalVnpaySettlementService {
         em.flush();
         payment.setRenewalSigningPreparedAt(now);
         payment.setFailureCode(null);payment.setFailureReason(null);payment.setRenewalNextRetryAt(null);
+        notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
+            deposit?"Đã nhận thanh toán cọc gia hạn":"Đã nhận thanh toán gia hạn",
+            "Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" cho hồ sơ thuê "+renewal.getRental().getId()
+                +" đã được xác nhận. Tiếp tục theo dõi lịch ký gia hạn trong hồ sơ.",renewal.getId());
         return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
     }
 
