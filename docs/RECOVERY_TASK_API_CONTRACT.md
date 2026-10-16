@@ -112,11 +112,11 @@ Task phải IN_PROGRESS để upload. Đính kèm kiểm tra file ACTIVE, đúng
 
 Migration bổ sung:
 
-- `db/renewal-deposit-migration/V2026101501__record_renewal_deposit_forfeitures.sql`
-- `db/recovery-migration/V2026101502__recovery_task_operations.sql`
+- `db/migration-history/legacy-deposit-1501/V2026101501__record_renewal_deposit_forfeitures.sql`
+- `db/migration-history/legacy-recovery-1502/V2026101502__recovery_task_operations.sql`
 
 Cần các cấu hình rollout hiện có: profile `shared-payment-schema`, các flag `ledger.enabled`, `renewal-simple-payment.enabled`, `recovery-tasks.enabled`, `renewal-auto-recovery.enabled` dưới tiền tố `storagehub.integration`.
 
-Runner `run-rental-support-dev.ps1 -EnableRenewalPayments -EnableAutoRecovery` tải `db/recovery-migration`; bộ định tuyến Flyway bổ sung `db/renewal-deposit-migration` khi bật rollout Payment để không bị bộ lọc migration Java lịch sử loại bỏ. Áp dụng migration theo quy trình database của nhóm khi triển khai; không repair/reset database.
+Runner `run-rental-support-dev.ps1 -EnableRenewalPayments -EnableAutoRecovery` tải `db/recovery-migration`; bộ định tuyến Flyway chọn SQL nguyên bản theo lịch sử đã áp dụng ở phiên bản 2026101501/2026101502. Các migration cầu nối 2026101601–2026101604 bổ sung phần chính sách, mã giảm giá, mất cọc và xử lý thu hồi còn thiếu mà không sửa lịch sử hoặc chạy lại SQL đã áp dụng. Áp dụng migration theo quy trình database của nhóm khi triển khai; không repair/reset database.
 
 FE tích hợp trên các màn hình hiện có: nhiệm vụ Staff/Manager, trả kho Staff, hồ sơ thuê Customer/Manager và ký gia hạn Staff. Trạng thái cọc `AWAITING_RECOVERY_DEADLINE` hiển thị chờ mốc xử lý ngày thứ 8; `FORFEITED` hiển thị đã ghi nhận mất cọc gia hạn. `renewal-risk` tiếp tục trả trạng thái quá hạn/thu hồi chiếu từ timeline/task; không mở rộng enum RentalStatus dùng chung. Giao diện dùng lại các kiểu input/button hiện có; cập nhật này không thêm migration.
