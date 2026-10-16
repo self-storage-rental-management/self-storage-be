@@ -7,7 +7,6 @@ import com.storagehub.security.ActorContext;
 import com.storagehub.service.AdminRoleService;
 import jakarta.validation.Valid;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -17,11 +16,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/admin/roles")
-@RequiredArgsConstructor
 public class AdminRoleController {
 
     private final ActorContext actorContext;
     private final AdminRoleService adminRoleService;
+
+    public AdminRoleController(ActorContext actorContext, AdminRoleService adminRoleService) {
+        this.actorContext = actorContext;
+        this.adminRoleService = adminRoleService;
+    }
 
     @GetMapping
     public ApiResponse<List<AdminRoleResponse>> list() {
