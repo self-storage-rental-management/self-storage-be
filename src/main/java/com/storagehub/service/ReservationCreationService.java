@@ -221,7 +221,11 @@ public class ReservationCreationService {
         BigDecimal voucherDiscountAmount = quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO;
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
         BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
-        BigDecimal securityDeposit = currentMonthlyPrice;
+        BigDecimal securityDeposit = money(
+            (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
+                ? currentMonthlyPrice
+                : quote.getUnitType().getSecurityDepositAmount()
+        );
 
         boolean policyInvalid = !policy.isActive()
             || !policy.getPolicyVersion().equals(quote.getPolicyVersion())

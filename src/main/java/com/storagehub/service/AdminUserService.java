@@ -33,7 +33,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -42,7 +41,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class AdminUserService {
 
     private final UserRepository userRepository;
@@ -54,6 +52,31 @@ public class AdminUserService {
     private final AdminAuthorizationService authorizationService;
     private final AuditLogService auditLogService;
     private final com.storagehub.service.email.EmailService emailService;
+    private final jakarta.persistence.EntityManager entityManager;
+
+    public AdminUserService(
+        UserRepository userRepository,
+        RoleRepository roleRepository,
+        FacilityRepository facilityRepository,
+        UserFacilityScopeRepository scopeRepository,
+        SessionRepository sessionRepository,
+        PasswordEncoder passwordEncoder,
+        AdminAuthorizationService authorizationService,
+        AuditLogService auditLogService,
+        com.storagehub.service.email.EmailService emailService,
+        jakarta.persistence.EntityManager entityManager
+    ) {
+        this.userRepository = userRepository;
+        this.roleRepository = roleRepository;
+        this.facilityRepository = facilityRepository;
+        this.scopeRepository = scopeRepository;
+        this.sessionRepository = sessionRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.authorizationService = authorizationService;
+        this.auditLogService = auditLogService;
+        this.emailService = emailService;
+        this.entityManager = entityManager;
+    }
 
     private static final String TEMP_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
     private static final String TEMP_LOWER = "abcdefghjkmnpqrstuvwxyz";
@@ -501,5 +524,91 @@ public class AdminUserService {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    @Transactional
+    public void delete(ActorPrincipal actor, UUID id) {
+        authorizationService.require(actor, SystemPermission.MANAGE_USERS);
+        User user = requiredUser(id);
+        if (actor.userId().equals(user.getId())) {
+            throw ApiExceptions.validation("Không thể tự xóa tài khoản của chính mình", null);
+        }
+        assertEditableTarget(user);
+
+        // Kiểm tra hợp đồng lưu kho đang hoạt động
+        long activeRentals = (long) entityManager.createQuery(
+            "select count(r) from Rental r where r.customer = :user and r.status in (:activeStatuses)"
+        )
+        .setParameter("user", user)
+        .setParameter("activeStatuses", List.of(
+            com.storagehub.domain.model.RentalStatus.active,
+            com.storagehub.domain.model.RentalStatus.return_requested,
+            com.storagehub.domain.model.RentalStatus.return_inspection,
+            com.storagehub.domain.model.RentalStatus.closing
+        ))
+        .getSingleResult();
+        if (activeRentals > 0) {
+            throw ApiExceptions.conflict("Không thể xóa tài khoản người dùng đang có hợp đồng lưu kho đang hoạt động");
+        }
+
+        // Đóng các phiên làm việc đang mở
+        revokeSessions(user);
+
+        // Xóa phân quyền cơ sở và vai trò
+        scopeRepository.deleteByUserId(user.getId());
+        user.getRoles().clear();
+        userRepository.saveAndFlush(user);
+
+        // Xóa các dữ liệu phụ thuộc
+        entityManager.createQuery("delete from LoginHistory h where h.user = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from Session s where s.user = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from AuthChallenge a where a.user = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from Notification n where n.user = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from ActivityLog l where l.actor = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+
+        entityManager.createQuery("delete from AccessCredential ac where ac.customer = :user or ac.issuedBy = :user or ac.revokedBy = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from SupportTicketMessage m where m.author = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from SupportTicket st where st.customer = :user or st.assignedTo = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from ReservationGoodsItem gi where gi.reservation.customer = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from Reservation res where res.customer = :user or res.goodsReviewedBy = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from ReservationQuote rq where rq.customer = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+        entityManager.createQuery("delete from Rental ren where ren.customer = :user")
+            .setParameter("user", user)
+            .executeUpdate();
+
+        userRepository.delete(user);
+        userRepository.flush();
+
+        auditLogService.recordMutation(
+            userRepository.getReferenceById(actor.userId()),
+            "USER_DELETED",
+            "USER",
+            user.getId(),
+            null,
+            user.getEmail(),
+            null
+        );
     }
 }
