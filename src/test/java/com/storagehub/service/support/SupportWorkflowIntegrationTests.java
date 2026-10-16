@@ -34,6 +34,7 @@ class SupportWorkflowIntegrationTests {
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
         @Bean AuditLogService audit(){return mock(AuditLogService.class);}
         @Bean NotificationService notifications(){return mock(NotificationService.class);}
+        @Bean EvidenceSource evidence(){return mock(EvidenceSource.class);}
         @Bean TestClock clock(){return new TestClock();}
         @Bean TestClose closePolicy(){return new TestClose();}
         @Bean TestReceiver receiver(){return new TestReceiver();}
@@ -80,6 +81,7 @@ class SupportWorkflowIntegrationTests {
     @Autowired SupportService service;
     @Autowired SupportPersistence receipts;
     @Autowired NotificationService notifications;
+    @Autowired EvidenceSource evidence;
     @Autowired TestClock clock;
     @Autowired TestClose close;
     @Autowired TestReceiver receiver;
@@ -95,7 +97,7 @@ class SupportWorkflowIntegrationTests {
         if(!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()){
             new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(tx->fixture());return;
         }
-        reset(notifications);clock.time=NOW;close.available=false;close.days=7;receiver.enabled=false;receiver.forged=false;receiver.status=null;receiver.routes=0;
+        reset(notifications,evidence);clock.time=NOW;close.available=false;close.days=7;receiver.enabled=false;receiver.forged=false;receiver.status=null;receiver.routes=0;
         notice.available=false;notice.mode="";notice.supplied=null;notice.reads=0;
         var view=permission(SystemPermission.VIEW_SUPPORT);var manage=permission(SystemPermission.MANAGE_SUPPORT);
         var cr=role(RoleCode.CUSTOMER,Set.of());var mr=role(RoleCode.MANAGER,Set.of(view,manage));var sr=role(RoleCode.STAFF,Set.of(view,manage));
@@ -130,6 +132,27 @@ class SupportWorkflowIntegrationTests {
             sql.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(created.id().getMostSignificantBits()).putLong(created.id().getLeastSignificantBits()).array());
             try(var rows=sql.executeQuery()){assertThat(rows.next()).isTrue();assertThat(rows.getString(1)).isEqualTo("Assigned Staff Readback");}
         }
+    }
+    @Test void managerConversationIsPrivateAndIdempotent(){
+        var t=service.create(c,new Create("Private conversation","Customer question",facility.getId(),null,List.of()),"chat-create");
+        service.claim(s,t.id(),new SupportCommands.Version(t.version()),"chat-claim");
+        clearInvocations(notifications);
+        var body=new StaffMessage("Internal guidance",List.of(),Visibility.INTERNAL);
+        var message=service.managerMessage(m,t.id(),body,"manager-chat");
+        assertThat(message.authorRole()).isEqualTo("MANAGER");
+        assertThat(service.managerMessage(m,t.id(),body,"manager-chat").id()).isEqualTo(message.id());
+        assertThat(service.messages(c,CUSTOMER,t.id(),query,"test").data()).noneMatch(row->row.id().equals(message.id()));
+        assertThat(service.messages(s,STAFF,t.id(),query,"test",Visibility.INTERNAL).data()).extracting(SupportResponse.Message::id).containsExactly(message.id());
+        assertThat(service.messages(s,STAFF,t.id(),query,"test",Visibility.PUBLIC).data()).noneMatch(row->row.id().equals(message.id()));
+        assertThat(service.detail(m,MANAGER,t.id()).status()).isEqualTo(SupportTicketStatus.in_progress);
+        verify(notifications).createNotification(eq(staff.getId()),eq(NotificationType.SUPPORT),eq("Quản lý đã gửi tin nhắn hỗ trợ"),any(),eq(t.id()));
+        verifyNoMoreInteractions(notifications);
+    }
+    @Test void managerCannotSendPublicSupportMessages(){
+        var t=service.create(c,new Create("Private conversation","Customer question",facility.getId(),null,List.of()),"chat-create");
+        service.claim(s,t.id(),new SupportCommands.Version(t.version()),"chat-claim");
+        assertThatThrownBy(()->service.managerMessage(m,t.id(),new StaffMessage("Public reply",List.of(),Visibility.PUBLIC),"manager-public"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("internal");
     }
     @Test void createDerivesHonestUnknownSlaAndIdempotentResult(){
         var body=new Create("Access question","Please help",facility.getId(),null,List.of());
@@ -328,7 +351,8 @@ class SupportWorkflowIntegrationTests {
         assertThat(publicMessages.pagination().totalItems()).isEqualTo(1);
         assertThat(publicMessages.data()).extracting(SupportResponse.Message::body).doesNotContain("Private coordination");
         assertThat(service.messages(m,MANAGER,t.id(),query,"test").pagination().totalItems()).isEqualTo(2);
-        verifyNoInteractions(notifications);
+        verify(notifications).createNotification(eq(manager.getId()),eq(NotificationType.SUPPORT),eq("Tin nhắn mới từ nhân viên về yêu cầu hỗ trợ"),any(),eq(t.id()));
+        verifyNoMoreInteractions(notifications);
         assertThatThrownBy(()->service.events(c,CUSTOMER,t.id(),query,"test")).isInstanceOf(ApiException.class);
         assertThatThrownBy(()->service.escalations(c,CUSTOMER,t.id(),query,"test")).isInstanceOf(ApiException.class);
     }
@@ -375,6 +399,9 @@ class SupportWorkflowIntegrationTests {
         var t=resolved();close.available=true;notice.available=true;
         clock.time=NOW.plus(Duration.ofDays(7)).minusSeconds(1);assertThat(service.autoClose(t.id())).isFalse();
         clock.time=NOW.plus(Duration.ofDays(7));assertThat(service.autoClose(t.id())).isTrue();assertThat(service.autoClose(t.id())).isFalse();
+        verify(notifications).createNotification(eq(customer.getId()),eq(NotificationType.SUPPORT),eq("Yêu cầu hỗ trợ đã tự động đóng sau thời gian xác nhận"),any(),eq(t.id()));
+        verify(notifications).createNotification(eq(staff.getId()),eq(NotificationType.SUPPORT),eq("Yêu cầu hỗ trợ đã tự động đóng"),any(),eq(t.id()));
+        verify(notifications).createNotification(eq(manager.getId()),eq(NotificationType.SUPPORT),eq("Yêu cầu hỗ trợ đã tự động đóng"),any(),eq(t.id()));
         var another=active();var waiting=service.requestInformation(s,another.id(),new Information("Need details",List.of(),another.version()),"ask");
         clock.time=clock.time.plus(Duration.ofDays(30));assertThat(service.autoClose(waiting.id())).isFalse();
     }
@@ -444,12 +471,83 @@ class SupportWorkflowIntegrationTests {
         assertThat(t.facilityId()).isEqualTo(facility.getId());
         assertThatThrownBy(()->service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Foreign unit","Issue",facility.getId(),new Link(LinkType.STORAGE_UNIT,rental.getStorageUnit().getId()),List.of()),"foreign-unit")).isInstanceOf(ApiException.class);
     }
-    @Test void linkedTicketCannotResolveUsingNarrativeInsteadOfActualModuleOutcome(){
+    @Test void creationNotifiesCustomerAndScopedStaffAndManagerOnce(){
+        var body=new Create("Cần hỗ trợ","Nội dung yêu cầu",facility.getId(),null,List.of());
+        var t=service.create(c,body,"create-notices");service.create(c,body,"create-notices");
+        verify(notifications).createNotification(eq(customer.getId()),eq(NotificationType.SUPPORT),eq("Đã ghi nhận yêu cầu hỗ trợ của bạn"),eq("Yêu cầu hỗ trợ: Cần hỗ trợ"),eq(t.id()));
+        for(var user:List.of(staff,otherStaff,manager))verify(notifications).createNotification(eq(user.getId()),eq(NotificationType.SUPPORT),eq("Có yêu cầu hỗ trợ mới"),any(),eq(t.id()));
+        verify(notifications,never()).createNotification(eq(foreignStaff.getId()),any(),any(),any(),any());
+        verifyNoMoreInteractions(notifications);
+    }
+    @Test void customerConfirmationNotifiesAssignedStaffAndManagerAndCustomerOnce(){
+        var t=resolved();close.available=true;reset(notifications);
+        var body=new Close(t.version(),"Đã nhận kết quả");
+        service.close(c,t.id(),body,"close-notices");service.close(c,t.id(),body,"close-notices");
+        for(var user:List.of(staff,manager))verify(notifications).createNotification(eq(user.getId()),eq(NotificationType.SUPPORT),eq("Khách hàng đã xác nhận kết quả hỗ trợ"),any(),eq(t.id()));
+        verify(notifications).createNotification(eq(customer.getId()),eq(NotificationType.SUPPORT),eq("Yêu cầu hỗ trợ của bạn đã được đóng"),any(),eq(t.id()));
+        verifyNoMoreInteractions(notifications);
+    }
+    @Test void reopenedUnassignedTicketNotifiesEligibleQueueWithoutLeakingToOldOrForeignStaff(){
+        var t=resolved();staff.setStatus(UserStatus.INACTIVE);em.flush();reset(notifications);
+        service.reopen(c,t.id(),new Reopen("Cần hỗ trợ thêm",t.version()),"reopen-notices");
+        verify(notifications).createNotification(eq(otherStaff.getId()),eq(NotificationType.SUPPORT),eq("Có yêu cầu hỗ trợ cần tiếp nhận lại"),any(),eq(t.id()));
+        verify(notifications).createNotification(eq(manager.getId()),eq(NotificationType.SUPPORT),eq("Khách hàng yêu cầu xử lý lại hỗ trợ"),any(),eq(t.id()));
+        verify(notifications).createNotification(eq(customer.getId()),eq(NotificationType.SUPPORT),eq("Đã ghi nhận yêu cầu xử lý lại của bạn"),any(),eq(t.id()));
+        verifyNoMoreInteractions(notifications);
+    }
+    @Test void resolutionRejectsEmptyDescriptionWithoutEvidence(){
+        var t=active();reset(notifications);
+        var messages=count("SupportMessage");
+        assertThatThrownBy(()->service.resolve(s,t.id(),new Resolution("   ",List.of(),t.version()),"empty-resolution"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("minh chứng");
+        assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.in_progress);
+        assertThat(count("SupportMessage")).isEqualTo(messages);
+        verifyNoInteractions(notifications);
+    }
+    @Test void resolutionWithEvidenceOnlyPublishesProofForCustomerReview(){
+        var t=active();var proof=List.of(UUID.randomUUID());
+        when(evidence.atomic()).thenReturn(true);when(evidence.supportsFiles(proof)).thenReturn(true);
+        var body=new Resolution("",proof,t.version());
+        var resolved=service.resolve(s,t.id(),body,"evidence-resolution");
+        assertThat(resolved.status()).isEqualTo(SupportTicketStatus.resolved);
+        assertThat(service.messages(c,CUSTOMER,t.id(),query,"test").data()).anySatisfy(message->{
+            assertThat(message.visibility()).isEqualTo("PUBLIC");
+            assertThat(message.body()).contains("minh chứng xử lý");
+            assertThat(message.evidenceFileIds()).isEqualTo(proof);
+        });
+        service.resolve(s,t.id(),body,"evidence-resolution");
+        verify(evidence,times(1)).requireAttach(eq(s),any(),eq(Visibility.PUBLIC),eq(proof));
+    }
+    @Test void resolutionCannotUseUnreadableOrInternalEvidence(){
+        var t=active();var proof=List.of(UUID.randomUUID());
+        when(evidence.atomic()).thenReturn(true);
+        doThrow(com.storagehub.common.api.ApiExceptions.notFound("Evidence not available for Customer"))
+            .when(evidence).requireAttach(eq(s),any(),eq(Visibility.PUBLIC),eq(proof));
+        assertThatThrownBy(()->service.resolve(s,t.id(),new Resolution("",proof,t.version()),"invalid-proof"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("Evidence");
+        assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.in_progress);
+    }
+    @Test void linkedTicketResolutionUpdatesSupportForCustomerReviewWithoutChangingRental(){
         var rental=rentalFixture();var originalStatus=rental.getStatus();var originalEnd=rental.getContractEndDate();
         var t=service.create(c,new Create("Rental issue","Please check",null,new Link(LinkType.RENTAL,rental.getId()),List.of()),"linked");
         var accepted=service.claim(s,t.id(),new SupportCommands.Version(t.version()),"claim-linked");
-        assertThatThrownBy(()->service.resolve(s,accepted.id(),new Resolution("Refund pending",List.of(),accepted.version()),"pretend-done")).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
-        assertThat(service.detail(c,CUSTOMER,t.id()).status()).isEqualTo(SupportTicketStatus.in_progress);
+        var body=new Resolution("Rental question answered",List.of(),accepted.version());
+        var resolved=service.resolve(s,accepted.id(),body,"support-done");
+        assertThat(resolved.status()).isEqualTo(SupportTicketStatus.resolved);
+        assertThat(resolved.version()).isGreaterThan(accepted.version());
+        assertThat(resolved.resolvedBy()).isEqualTo(staff.getId());
+        for(var audience:List.of(CUSTOMER,STAFF,MANAGER)){
+            var actor=audience==CUSTOMER?c:audience==STAFF?s:m;
+            assertThat(service.detail(actor,audience,t.id()).status()).isEqualTo(SupportTicketStatus.resolved);
+            assertThat(service.list(actor,audience,query,"test").data()).anyMatch(row->row.id().equals(t.id())&&row.status()==SupportTicketStatus.resolved);
+        }
+        assertThat(service.messages(c,CUSTOMER,t.id(),query,"test").data()).anyMatch(row->row.body().equals(body.summary()));
+        var messageCount=count("SupportMessage");
+        assertThat(service.resolve(s,accepted.id(),body,"support-done").version()).isEqualTo(resolved.version());
+        assertThat(count("SupportMessage")).isEqualTo(messageCount);
+        close.available=true;
+        var closed=service.close(c,t.id(),new Close(resolved.version(),"Confirmed"),"confirm-linked");
+        assertThat(closed.status()).isEqualTo(SupportTicketStatus.closed);
         assertThat(rental.getStatus()).isEqualTo(originalStatus);assertThat(rental.getContractEndDate()).isEqualTo(originalEnd);
     }
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
