@@ -71,46 +71,7 @@ public class LocalDemoDataInitializer {
     }
 
     private Map<String, Facility> seedFacilities() {
-        Map<String, Facility> result = new HashMap<>();
-        for (FacilityDefinition definition : List.of(
-            new FacilityDefinition(
-                "HCM-Q1-F01",
-                "Kho Việt – Cơ sở Quận 1",
-                "125 Nguyễn Bỉnh Khiêm, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh",
-                "TP. Hồ Chí Minh", "1900 6868", "06:00 - 22:00 hàng ngày",
-                "https://images.unsplash.com/photo-1553413077-190dd305871c?w=1200&auto=format&fit=crop&q=85",
-                true, "Camera giám sát 24/7, mã PIN cá nhân và hệ thống PCCC tự động"
-            ),
-            new FacilityDefinition(
-                "BD-F01",
-                "Kho Việt – Cơ sở Bình Dương",
-                "468 Đại lộ Bình Dương, Phường Lái Thiêu, TP. Thuận An, Bình Dương",
-                "Bình Dương", "1900 6868", "06:00 - 22:00 hàng ngày",
-                "https://images.unsplash.com/photo-1586864387967-d02ef85d93e8?w=1200&auto=format&fit=crop&q=85",
-                true, "Camera giám sát 24/7, mã PIN cá nhân và hệ thống PCCC tự động"
-            )
-        )) {
-            Facility facility = facilityRepository.findAll().stream()
-                .filter(item -> definition.code().equals(item.getCode()))
-                .findFirst()
-                .orElseGet(() -> {
-                    Facility created = new Facility();
-                    created.setCode(definition.code());
-                    created.setName(definition.name());
-                    created.setAddress(definition.address());
-                    created.setCity(definition.city());
-                    created.setStatus(FacilityStatus.active);
-                    return facilityRepository.saveAndFlush(created);
-                });
-            if (facility.getPhone() == null) facility.setPhone(definition.phone());
-            if (facility.getAccessHours() == null) facility.setAccessHours(definition.accessHours());
-            if (facility.getImageUrl() == null) facility.setImageUrl(definition.imageUrl());
-            if (facility.getSecurityDescription() == null) facility.setSecurityDescription(definition.securityDescription());
-            if (!facility.isClimateControlled() && definition.climateControlled()) facility.setClimateControlled(true);
-            facility = facilityRepository.saveAndFlush(facility);
-            result.put(facility.getCode(), facility);
-        }
-        return result;
+        return new HashMap<>();
     }
 
     private Map<String, UnitType> seedUnitTypes(Map<String, Facility> facilities) {
@@ -215,13 +176,7 @@ public class LocalDemoDataInitializer {
             new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "HCM-Q1-F01", FacilityScopeLevel.OPERATE),
             new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "HCM-Q1-F01", FacilityScopeLevel.MANAGE),
             new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", null, null),
-            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", null, null),
-            new DemoUserDefinition("thanhthao725218@gmail.com", "Thanh Thao", "+84 900 000 002", RoleCode.CUSTOMER, "Customer@1234!", null, null),
-            new DemoUserDefinition("staff.bd@storagehub.demo", "Staff Binh Duong", "+84 900 000 003", RoleCode.STAFF, "Staff@1234!", "BD-F01", FacilityScopeLevel.OPERATE),
-            new DemoUserDefinition("staff.q1@storagehub.demo", "Staff Quan 1", "+84 900 000 004", RoleCode.STAFF, "Staff@1234!", "HCM-Q1-F01", FacilityScopeLevel.OPERATE),
-            new DemoUserDefinition("manager.bd@storagehub.demo", "Manager Binh Duong", "+84 900 000 005", RoleCode.MANAGER, "Manager@1234!", "BD-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("manager.q1@storagehub.demo", "Manager Quan 1", "+84 900 000 006", RoleCode.MANAGER, "Manager@1234!", "HCM-Q1-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("bo@storagehub.demo", "Business Owner", "+84 900 000 007", RoleCode.BUSINESS, "Business@1234!", null, null)
+            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", null, null)
         )) {
             Role role = roleRepository.findByCode(definition.role())
                 .orElseThrow(() -> new IllegalStateException("Role has not been initialized: " + definition.role()));
@@ -241,13 +196,15 @@ public class LocalDemoDataInitializer {
 
             if (definition.facilityCode() != null) {
                 Facility facility = facilities.get(definition.facilityCode());
-                UserFacilityScope scope = userFacilityScopeRepository
-                    .findByUser_IdAndFacility_Id(saved.getId(), facility.getId())
-                    .orElseGet(UserFacilityScope::new);
-                scope.setUser(saved);
-                scope.setFacility(facility);
-                scope.setScopeLevel(definition.scopeLevel());
-                userFacilityScopeRepository.saveAndFlush(scope);
+                if (facility != null) {
+                    UserFacilityScope scope = userFacilityScopeRepository
+                        .findByUser_IdAndFacility_Id(saved.getId(), facility.getId())
+                        .orElseGet(UserFacilityScope::new);
+                    scope.setUser(saved);
+                    scope.setFacility(facility);
+                    scope.setScopeLevel(definition.scopeLevel());
+                    userFacilityScopeRepository.saveAndFlush(scope);
+                }
             }
         }
         return seededCount;

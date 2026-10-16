@@ -42,6 +42,16 @@ public class RentalPackagePolicy extends BaseEntity {
     @Column(nullable = false, precision = 5, scale = 4)
     private BigDecimal discountRate = BigDecimal.ZERO;
 
+    @Column(length = 500)
+    private String description;
+
+    @Column
+    private Integer rentalYears;
+
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @Column(name = "publication_status", nullable = false, length = 20)
+    private PublicationStatus publicationStatus = PublicationStatus.INACTIVE;
+
     @Column(nullable = false, length = 50)
     private String policyVersion;
 
