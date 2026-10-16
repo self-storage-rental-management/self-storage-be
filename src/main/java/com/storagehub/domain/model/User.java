@@ -14,15 +14,17 @@ import jakarta.persistence.Table;
 import java.util.HashSet;
 import java.util.Set;
 import lombok.Getter;
-import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
 @Table(name = "users")
 @Getter
 @Setter
-@NoArgsConstructor
 public class User extends BaseEntity {
+
+    public User() {
+        super();
+    }
 
     @Column(nullable = false, unique = true, length = 320)
     private String email;

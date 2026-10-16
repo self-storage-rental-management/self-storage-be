@@ -12,7 +12,6 @@ import com.storagehub.domain.repo.SessionRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -20,13 +19,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class AdminSecurityService {
 
     private final LoginHistoryRepository loginHistoryRepository;
     private final SessionRepository sessionRepository;
     private final AdminAuthorizationService authorizationService;
     private final AuditLogService auditLogService;
+
+    public AdminSecurityService(
+        LoginHistoryRepository loginHistoryRepository,
+        SessionRepository sessionRepository,
+        AdminAuthorizationService authorizationService,
+        AuditLogService auditLogService
+    ) {
+        this.loginHistoryRepository = loginHistoryRepository;
+        this.sessionRepository = sessionRepository;
+        this.authorizationService = authorizationService;
+        this.auditLogService = auditLogService;
+    }
 
     @Transactional(readOnly = true)
     public PageResponse<AdminLoginHistoryResponse> loginHistory(

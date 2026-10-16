@@ -7,7 +7,6 @@ import com.storagehub.service.BusinessPolicyService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,11 +19,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/business")
-@RequiredArgsConstructor
 public class BusinessPolicyController {
 
     private final ActorContext actorContext;
     private final BusinessPolicyService businessPolicyService;
+
+    public BusinessPolicyController(ActorContext actorContext, BusinessPolicyService businessPolicyService) {
+        this.actorContext = actorContext;
+        this.businessPolicyService = businessPolicyService;
+    }
 
     @GetMapping("/config")
     public ApiResponse<BusinessConfigResponse> getBusinessConfig() {
@@ -80,6 +83,22 @@ public class BusinessPolicyController {
     ) {
         return new ApiResponse<>(
             businessPolicyService.updatePackagePolicy(actorContext.required(), id, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/policies/packages/{id}/publish")
+    public ApiResponse<RentalPackagePolicyResponse> publishPackagePolicy(@PathVariable UUID id) {
+        return new ApiResponse<>(
+            businessPolicyService.publishPackagePolicy(actorContext.required(), id),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/policies/packages/{id}/inactive")
+    public ApiResponse<RentalPackagePolicyResponse> inactivePackagePolicy(@PathVariable UUID id) {
+        return new ApiResponse<>(
+            businessPolicyService.inactivePackagePolicy(actorContext.required(), id),
             CorrelationIdContext.current()
         );
     }
