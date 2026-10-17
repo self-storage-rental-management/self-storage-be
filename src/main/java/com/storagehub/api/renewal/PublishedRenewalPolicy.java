@@ -11,11 +11,29 @@ import java.util.*;
 public record PublishedRenewalPolicy(String schema,UUID facilityId,long revision,String version,UUID publishedBy,
     Instant publishedAt,LocalDate effectiveFrom,LocalDate effectiveTo,int quoteTtlMinutes,int paymentWindowHours,
     int requestWindowDays,BigDecimal depositRate,Set<UUID> eligiblePackageIds,Signing signing,Term term) {
+    public int quoteTtlHours() {
+        return Math.max(1, (int) Math.round(quoteTtlMinutes / 60.0));
+    }
     public record Input(@NotNull @PositiveOrZero Long expectedRevision,@NotNull LocalDate effectiveFrom,LocalDate effectiveTo,
-        @NotNull @Positive Integer quoteTtlMinutes,@NotNull @Positive Integer paymentWindowHours,
+        Integer quoteTtlMinutes,Integer quoteTtlHours,@NotNull @Positive Integer paymentWindowHours,
         @NotNull @PositiveOrZero Integer requestWindowDays,@NotNull @DecimalMin("0") @DecimalMax("1") BigDecimal depositRate,
         @NotNull @Size(max=20) Set<@NotNull UUID> eligiblePackageIds,@Valid Signing signing,@Valid Term term) {
+        public Input(Long expectedRevision, LocalDate effectiveFrom, LocalDate effectiveTo,
+            Integer quoteTtlMinutes, Integer paymentWindowHours,
+            Integer requestWindowDays, BigDecimal depositRate,
+            Set<UUID> eligiblePackageIds, Signing signing, Term term) {
+            this(expectedRevision, effectiveFrom, effectiveTo, quoteTtlMinutes, null, paymentWindowHours, requestWindowDays, depositRate, eligiblePackageIds, signing, term);
+        }
         @JsonAnySetter public void unknown(String k,Object v){throw new IllegalArgumentException("Unknown policy field: "+k);}
+        public Integer effectiveQuoteTtlMinutes() {
+            if (quoteTtlHours != null && quoteTtlHours > 0) return quoteTtlHours * 60;
+            return quoteTtlMinutes;
+        }
+        public Integer effectiveQuoteTtlHours() {
+            if (quoteTtlHours != null && quoteTtlHours > 0) return quoteTtlHours;
+            if (quoteTtlMinutes != null && quoteTtlMinutes > 0) return Math.max(1, (int) Math.round(quoteTtlMinutes / 60.0));
+            return null;
+        }
     }
     public record Signing(@NotNull @Positive Integer signingWindowMinutes,@NotNull @Positive Integer exceptionExtensionLimitMinutes) {
         @JsonAnySetter public void unknown(String k,Object v){throw new IllegalArgumentException("Unknown signing field: "+k);}

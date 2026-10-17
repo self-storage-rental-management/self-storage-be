@@ -44,6 +44,15 @@ public class FacilityLifecycleService {
     private final com.storagehub.domain.repo.UnitTypeChangeRequestRepository changes;
     private final com.storagehub.domain.repo.UserRepository users;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    private static byte[] bytes(UUID id) {
+        if (id == null) return null;
+        return java.nio.ByteBuffer.allocate(16)
+            .putLong(id.getMostSignificantBits())
+            .putLong(id.getLeastSignificantBits())
+            .array();
+    }
 
     @Transactional
     public void deleteFacility(ActorPrincipal actor, UUID facilityId) {
@@ -52,11 +61,23 @@ public class FacilityLifecycleService {
         if (reservations.existsByFacility_Id(facilityId)) {
             throw ApiExceptions.conflict("Cơ sở đã có hồ sơ đặt hoặc thuê kho. Vui lòng chuyển sang Ngừng hoạt động để giữ lịch sử.");
         }
-        if (units.countByFacility_Id(facilityId) > 0 || !unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).isEmpty()
-            || !userFacilityScopes.findByFacility_Id(facilityId).isEmpty()
-            || !packages.findByFacility_IdOrderByRentalMonthsAsc(facilityId).isEmpty()) {
-            throw ApiExceptions.conflict("Cơ sở đã có kho hoặc phân công nhân sự. Vui lòng chuyển sang Ngừng hoạt động để giữ lịch sử.");
-        }
+
+        byte[] facBytes = bytes(facilityId);
+        jdbc.update("UPDATE activity_logs SET facility_id = NULL WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM support_ticket_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE facility_id = ?)", facBytes);
+        jdbc.update("DELETE FROM support_tickets WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM damage_incidents WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM maintenance_tasks WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM access_credentials WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM unit_assignments WHERE storage_unit_id IN (SELECT id FROM storage_units WHERE facility_id = ?)", facBytes);
+        jdbc.update("DELETE FROM storage_units WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM reservation_quotes WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM unit_type_change_requests WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM unit_types WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM discount_codes WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM rental_package_policies WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM user_facility_scopes WHERE facility_id = ?", facBytes);
+
         facilities.delete(facility);
         facilities.flush();
     }

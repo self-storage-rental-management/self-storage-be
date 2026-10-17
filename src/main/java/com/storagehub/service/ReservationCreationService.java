@@ -43,7 +43,7 @@ import com.storagehub.domain.repo.DiscountCodeRepository;
 public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
-    private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
+    private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
