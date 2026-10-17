@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class RenewalWorkflowService {
+    private static final Duration RENEWAL_PAYMENT_WINDOW = Duration.ofMinutes(15);
     private final RentalRepository rentals;private final RenewalReadService reads;private final RenewalPersistence store;
     @org.springframework.beans.factory.annotation.Autowired
     private PaymentRepository paymentRecords;
@@ -130,7 +131,7 @@ public class RenewalWorkflowService {
         if(simple!=null) {
             simple.requireRental(rental);simple.requireKnownFinance(rental,id,now);
             Instant deadline=workflow.getPaymentDeadline();
-            if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(gate.policy().paymentWindow()),gate.eligibility().recoveryCutoff())).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),gate.eligibility().recoveryCutoff())).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
             if(!deadline.isAfter(now)||deadline.isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Renewal payment deadline has expired");
             workflow.paymentReady(deadline);
             var ledger=ledgers.getIfAvailable();if(ledger==null)throw deferred("Renewal accounting unavailable");
@@ -165,7 +166,7 @@ public class RenewalWorkflowService {
         if(lifecycle==null||!lifecycle.ready(rental))throw deferred("Payment expiry lifecycle unavailable");
         Instant cutoff=gate.eligibility().recoveryCutoff();
         Instant deadline=workflow.getPaymentDeadline();
-        if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(gate.policy().paymentWindow()),cutoff))
+        if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),cutoff))
             .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         if(!deadline.isAfter(now)||deadline.isAfter(cutoff))throw ApiExceptions.conflict("Renewal payment deadline has expired or exceeds Recovery cutoff");
 
@@ -219,7 +220,7 @@ public class RenewalWorkflowService {
             if(state.unresolvedDispute()||!state.dueObligations().isEmpty())throw ApiExceptions.conflict("Due obligations or dispute block approval");
             var h=holds.getIfAvailable();if(h==null||!h.participatesInTransaction())throw deferred("Atomic shared extension hold unavailable");
             var lifecycle=lifecycles.getIfAvailable();if(lifecycle==null||!lifecycle.ready(r))throw deferred("Approval expiry/payment/hold lifecycle unavailable");
-            Instant deadline=min(now.plus(g.policy.paymentWindow()),g.eligibility.recoveryCutoff());
+            Instant deadline=min(now.plus(RENEWAL_PAYMENT_WINDOW),g.eligibility.recoveryCutoff());
             UUID hold=h.acquire(r,id,accepted.extensionStartDate(),accepted.extensionEndExclusive(),deadline);
             if(hold==null)throw deferred("Shared hold returned no authoritative reference");
             n.setStatus(RenewalStatus.approved);wf.reviewed(user,now,body.reason(),deadline,hold);
