@@ -147,6 +147,7 @@ public class ReservationCreationService {
         reservation.setReservationCode(generateReservationCode());
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
+        reservation.setIdentityDocumentNumber(clean(request.getIdentityDocumentNumber()));
         reservation.setIdempotencyKey(normalizedKey);
         reservation.setRequestFingerprint(requestFingerprint);
         reservation.setFacility(quote.getFacility());
@@ -295,7 +296,7 @@ public class ReservationCreationService {
     }
 
     private ReservationResponse toResponse(Reservation reservation, ReservationPricingSnapshot snapshot) {
-        return new ReservationResponse(
+        ReservationResponse response = new ReservationResponse(
             reservation.getId(), reservation.getReservationCode(), reservation.getSourceQuote().getId(),
             reservation.getFacility().getId(), reservation.getUnitType().getId(), reservation.getStatus(),
             reservation.getGoodsReviewStatus(), reservation.getCompatibilityResult(),
@@ -307,6 +308,8 @@ public class ReservationCreationService {
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
+        response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
+        return response;
     }
 
     private String normalizeIdempotencyKey(String value) {
@@ -332,6 +335,7 @@ public class ReservationCreationService {
     static String requestFingerprint(CreateReservationRequest request) {
         StringBuilder canonical = new StringBuilder();
         append(canonical, request.getQuoteId());
+        append(canonical, cleanValue(request.getIdentityDocumentNumber()));
         append(canonical, cleanValue(request.getGoodsCondition()));
         append(canonical, cleanValue(request.getNotes()));
         if (request.getAppointmentAt() != null) {
@@ -361,6 +365,7 @@ public class ReservationCreationService {
     private static String requestFingerprint(Reservation reservation, List<ReservationGoodsItem> items) {
         StringBuilder canonical = new StringBuilder();
         append(canonical, reservation.getSourceQuote().getId());
+        append(canonical, cleanValue(reservation.getIdentityDocumentNumber()));
         append(canonical, cleanValue(reservation.getGoodsCondition()));
         append(canonical, cleanValue(reservation.getNotes()));
         if (reservation.getAppointmentAt() != null) {
