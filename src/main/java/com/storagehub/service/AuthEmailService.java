@@ -142,6 +142,12 @@ public class AuthEmailService {
             if (!exposeDevelopmentCode) {
                 throw ApiExceptions.conflict("The email delivery service is not configured");
             }
+            log.info(
+                "[DEV EMAIL] Mail sending disabled. Template: {}, recipient: {}, variables: {}",
+                templateName,
+                recipient,
+                variables
+            );
             return;
         }
 
