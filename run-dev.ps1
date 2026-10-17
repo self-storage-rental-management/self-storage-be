@@ -1,8 +1,8 @@
 $env:STORAGEHUB_DB_URL = "jdbc:mysql://localhost:3306/storagehub_local?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
 $env:STORAGEHUB_DB_USERNAME = "root"
-$env:STORAGEHUB_DB_PASSWORD = "root"
+$env:STORAGEHUB_DB_PASSWORD = if ($env:STORAGEHUB_DB_PASSWORD) { $env:STORAGEHUB_DB_PASSWORD } else { "1234" }
 $env:STORAGEHUB_ALLOWED_ORIGIN = "http://localhost:5173,http://localhost:8443,http://localhost:8444"
-$env:STORAGEHUB_JWT_SECRET = "dGhpcy1pcy1hLXNlY3VyZS0yNTYtYml0LWtleS1mb3Itand0LXN0b3JhZ2VodWI="
+$env:STORAGEHUB_JWT_SECRET = "vzFQm99eQEzIAvLPiTNKCJIn1v8iLDOFdZtXS1JTDrU="
 $env:STORAGEHUB_MAIL_ENABLED = "false"
 $env:STORAGEHUB_EXPOSE_DEVELOPMENT_CODE = "true"
 $env:STORAGEHUB_FILE_STORAGE_PATH = "./uploads"
