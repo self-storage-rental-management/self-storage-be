@@ -119,6 +119,7 @@ class CheckInHandoverServiceTests {
         reservation = entityWithId(new Reservation());
         reservation.setReservationCode("RSV-001");
         reservation.setCustomer(customer);
+        reservation.setIdentityDocumentNumber("079203009988");
         reservation.setFacility(facility);
         reservation.setUnitType(unitType);
         reservation.setAssignedUnit(unit);
@@ -166,6 +167,7 @@ class CheckInHandoverServiceTests {
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(response.identityDocumentNumber()).isEqualTo("079203009988");
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
         verify(reservationRepository).saveAndFlush(reservation);
     }
