@@ -127,6 +127,7 @@ class ReservationCreationServiceTests {
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
             Reservation reservation = invocation.getArgument(0);
             assertThat(reservation.getRequestFingerprint()).hasSize(64);
+            assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("079203009988");
             ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
             ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
             return reservation;
@@ -245,7 +246,11 @@ class ReservationCreationServiceTests {
             new BigDecimal("100"), new BigDecimal("60"), new BigDecimal("15"),
             new BigDecimal("18"), false
         );
-        return new CreateReservationRequest(quote.getId(), "Packed", "Handle with care", List.of(item));
+        CreateReservationRequest request = new CreateReservationRequest(
+            quote.getId(), "Packed", "Handle with care", List.of(item)
+        );
+        request.setIdentityDocumentNumber("079203009988");
+        return request;
     }
 
     private CompatibilityCheckResponse compatibleResponse() {

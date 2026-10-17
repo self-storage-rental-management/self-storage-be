@@ -548,6 +548,7 @@ public class CustomerReservationService {
         response.setCustomerName(reservation.getCustomer().getFullName());
         response.setCustomerEmail(reservation.getCustomer().getEmail());
         response.setCustomerPhone(reservation.getCustomer().getPhone());
+        response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         if (reservation.getAssignedUnit() != null) {
             response.setAssignedUnitId(reservation.getAssignedUnit().getId());
             response.setAssignedUnitCode(reservation.getAssignedUnit().getCode());
