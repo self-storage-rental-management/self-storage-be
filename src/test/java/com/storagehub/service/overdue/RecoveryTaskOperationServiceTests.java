@@ -47,7 +47,7 @@ class RecoveryTaskOperationServiceTests {
         jdbc.execute("create table storage_units(id binary(16) primary key,code varchar(100))");
         jdbc.execute("create table rentals(id binary(16) primary key,customer_id binary(16),storage_unit_id binary(16))");
         jdbc.execute("create table return_cases(id binary(16) primary key)");jdbc.execute("create table file_assets(id binary(16) primary key)");
-        for(var script:List.of("db/recovery-migration/V2026101311__create_recovery_tasks.sql","db/recovery-migration/V2026101502__recovery_task_operations.sql")) {
+        for(var script:List.of("db/recovery-migration/V2026101311__create_recovery_tasks.sql","db/migration-history/legacy-recovery-1502/V2026101502__recovery_task_operations.sql")) {
             String sql=new String(new ClassPathResource(script).getInputStream().readAllBytes(),StandardCharsets.UTF_8)
                 .replace("CHARACTER SET ascii COLLATE ascii_bin","").replace("ENGINE=InnoDB","");
             for(var statement:sql.split(";"))if(!statement.isBlank())jdbc.execute(statement);
