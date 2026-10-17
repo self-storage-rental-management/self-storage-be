@@ -28,7 +28,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                 query.setString(1, history);
                 try (var result = query.executeQuery()) {
                     if (result.next() && result.getInt(1) > 0) {
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406')")) {
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502')")) {
                             while (rows.next()) {
                                 var value = new Applied(rows.getString("script"),rows.getString("type"),rows.getBoolean("success"));
                                 if (applied.put(rows.getString("version"), value) != null) throw new IllegalStateException("Duplicate version in applied migration history; no repair performed");
@@ -73,8 +73,14 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             selected.add("classpath:db/migration-history/develop-1302");
         }
         boolean enableGateway=locations.contains("classpath:db/sandboxpaymentmigration");
-        // Feature SQL must stay outside historical Java migration locations that are filtered below.
-        if(enableGateway&&!selected.contains("classpath:db/renewal-deposit-migration"))selected.add("classpath:db/renewal-deposit-migration");
+        boolean enableRecovery=locations.contains("classpath:db/recovery-migration");
+        selected.remove("classpath:db/renewal-deposit-migration");
+        // Keep the SQL identity already recorded at each colliding version. Unique
+        // bridge versions install the other module without rewriting applied history.
+        selected.add(select(applied,"2026101501","V2026101501__extend_rental_package_policy_lifecycle.sql","develop-1501",
+            "V2026101501__record_renewal_deposit_forfeitures.sql","legacy-deposit-1501"));
+        selected.add(select(applied,"2026101502","V2026101502__create_discount_codes_schema.sql","develop-1502",
+            "V2026101502__recovery_task_operations.sql","legacy-recovery-1502"));
         // Keep the exact old Java class identity only where it was actually applied.
         // Fresh or develop databases resolve the gateway at a unique new version.
         selected.remove("classpath:db/sandboxpaymentmigration");
@@ -115,6 +121,8 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         selected.remove("classpath:db/renewalpaymentmigration");
         javaMigrations.add(new db.renewalcalendarmigration.V2026101410__ensure_staff_signing_calendar());
         if(enableGateway) javaMigrations.add(new db.renewalpaymentmigration.V2026101411__ensure_gateway_ledger_evidence());
+        if(enableGateway) javaMigrations.add(new db.renewalrecoverymigration.V2026101603__ensure_renewal_deposit_forfeitures());
+        if(enableRecovery) javaMigrations.add(new db.renewalrecoverymigration.V2026101604__ensure_recovery_task_operations());
         configuration.javaMigrations(javaMigrations.toArray(JavaMigration[]::new));
         if(legacyBinding||legacyGateway||applied.containsKey("2026101301")&&"V2026101301__create_staff_renewal_signing_calendar.sql".equals(applied.get("2026101301").script()))
             configuration.outOfOrder(true); // Apply new develop migrations older than the already installed feature migrations.

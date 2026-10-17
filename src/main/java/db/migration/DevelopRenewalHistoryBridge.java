@@ -5,7 +5,7 @@ import java.sql.Connection;
 import org.flywaydb.core.api.migration.*;
 
 /** Applies a develop script omitted only because its version already belongs to a legacy feature. */
-abstract class DevelopRenewalHistoryBridge extends BaseJavaMigration {
+public abstract class DevelopRenewalHistoryBridge extends BaseJavaMigration {
     private final String version,script,resource;
     private final String[] earlierIdentities;
     protected DevelopRenewalHistoryBridge(String version,String script,String resource,String... earlierIdentities) {
