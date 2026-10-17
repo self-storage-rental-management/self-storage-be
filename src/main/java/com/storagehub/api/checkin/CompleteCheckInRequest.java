@@ -10,6 +10,7 @@ import java.util.List;
 
 public record CompleteCheckInRequest(
     @NotNull @Valid CheckInChecklist checklist,
+    @NotBlank @Size(max = 30) String identityDocumentNumber,
     @NotNull @Valid CheckInMeasurements actualMeasurements,
     @Size(max = 1000) String varianceReason,
     @NotBlank @Size(max = 1000) String initialUnitCondition,
