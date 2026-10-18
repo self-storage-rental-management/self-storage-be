@@ -35,7 +35,7 @@ class ReservationCheckInPolicyTests {
         );
 
         assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-13T03:30:00Z"));
-        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-20T03:30:00Z"));
+        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-22T03:30:00Z"));
     }
 
     @Test
@@ -82,5 +82,15 @@ class ReservationCheckInPolicyTests {
         assertThat(ReservationCheckInPolicy.staffReviewDueAt(
             Instant.parse("2026-10-12T10:30:00Z")
         )).isEqualTo(Instant.parse("2026-10-13T10:00:00Z"));
+    }
+
+    @Test
+    void sevenDayCheckInWindowSkipsWeekendDays() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-12T03:00:00Z"), false
+        );
+
+        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-22T03:30:00Z"));
+        assertThat(window.contains(Instant.parse("2026-10-17T03:00:00Z"))).isFalse();
     }
 }
