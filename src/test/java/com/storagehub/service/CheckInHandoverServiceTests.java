@@ -119,6 +119,7 @@ class CheckInHandoverServiceTests {
         reservation = entityWithId(new Reservation());
         reservation.setReservationCode("RSV-001");
         reservation.setCustomer(customer);
+        reservation.setIdentityDocumentNumber("079203009988");
         reservation.setFacility(facility);
         reservation.setUnitType(unitType);
         reservation.setAssignedUnit(unit);
@@ -166,6 +167,7 @@ class CheckInHandoverServiceTests {
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(response.identityDocumentNumber()).isEqualTo("079203009988");
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
         verify(reservationRepository).saveAndFlush(reservation);
     }
@@ -192,6 +194,7 @@ class CheckInHandoverServiceTests {
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest oversized = new CompleteCheckInRequest(
             base.checklist(),
+            base.identityDocumentNumber(),
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("1001"), BigDecimal.ONE, false
@@ -235,6 +238,7 @@ class CheckInHandoverServiceTests {
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
             base.checklist(),
+            base.identityDocumentNumber(),
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("120"), new BigDecimal("1.2"), false
@@ -258,7 +262,7 @@ class CheckInHandoverServiceTests {
             .thenReturn(List.of(declaredItem));
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
-            base.checklist(), new CheckInMeasurements(
+            base.checklist(), base.identityDocumentNumber(), new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, false
             ), null, base.initialUnitCondition(),
@@ -284,7 +288,7 @@ class CheckInHandoverServiceTests {
             .thenReturn(List.of(declaredItem));
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
-            base.checklist(), new CheckInMeasurements(
+            base.checklist(), base.identityDocumentNumber(), new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, false
             ), null, base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
@@ -353,6 +357,7 @@ class CheckInHandoverServiceTests {
     private CompleteCheckInRequest validCompletionRequest() {
         return new CompleteCheckInRequest(
             new CheckInChecklist(true, true, true, true, true, true, true, true),
+            "079203009988",
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, true
