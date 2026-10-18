@@ -27,6 +27,7 @@ public record CheckInResponse(
     UUID customerId,
     String customerName,
     String customerEmail,
+    String identityDocumentNumber,
     String customerPhone,
     UUID facilityId,
     String facilityName,

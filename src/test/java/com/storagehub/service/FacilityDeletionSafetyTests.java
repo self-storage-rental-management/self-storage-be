@@ -25,6 +25,7 @@ class FacilityDeletionSafetyTests {
     @Mock NotificationService notifications;
     @Mock UnitTypeChangeRequestRepository changes;
     @Mock UserRepository users;
+    @Mock org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Spy com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
     @InjectMocks FacilityLifecycleService service;
 
@@ -39,11 +40,13 @@ class FacilityDeletionSafetyTests {
         verify(facilities, never()).delete(any());
     }
 
-    @Test void preservesFacilityWithPhysicalUnits() {
-        when(facilities.findById(id)).thenReturn(Optional.of(new Facility()));
-        when(units.countByFacility_Id(id)).thenReturn(1L);
-        assertThatThrownBy(() -> service.deleteFacility(actor, id)).hasMessageContaining("Ngừng hoạt động");
-        verify(facilities, never()).delete(any());
+    @Test void allowsDeletingFacilityWithPhysicalUnitsWhenNoReservations() {
+        Facility facility = new Facility();
+        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        when(reservations.existsByFacility_Id(id)).thenReturn(false);
+        service.deleteFacility(actor, id);
+        verify(facilities).delete(facility);
+        verify(facilities).flush();
     }
 
     @Test void allowsDeletingEmptyFacility() {
