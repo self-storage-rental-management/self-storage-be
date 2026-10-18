@@ -15,6 +15,28 @@ import org.springframework.transaction.annotation.Transactional;
 @ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled"},havingValue="true")
 public class RenewalDepositObligationWriter {
     private final LedgerStore ledger;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RenewalLedgerAdjustments> cancellationCredits;
+
+    /** Cancel only unpaid charges belonging to the closing accepted revision. */
+    @Transactional(propagation=Propagation.MANDATORY)
+    public void cancelUnpaid(RenewalWorkflow workflow) {
+        var renewal=workflow.getRenewal();
+        var account=ledger.read(renewal.getRental().getId()).orElse(null);
+        if(account==null)return;
+        for(var obligation:account.obligations()) {
+            if(!java.util.Objects.equals(obligation.renewalId(),renewal.getId())||obligation.outstanding().signum()==0)continue;
+            if(workflow.getAcceptedRevision()==null||!obligation.sourceRef().startsWith("renewal-accepted:"+workflow.getAcceptedRevision().getId()+":"))
+                throw ApiExceptions.conflict("Unpaid Renewal charge has an unexpected revision binding");
+            if(obligation.outstanding().compareTo(obligation.amount())!=0)
+                throw ApiExceptions.conflict("Partially settled Renewal charge requires reconciliation");
+            var credits=cancellationCredits.getIfAvailable();
+            if(credits==null)throw ApiExceptions.conflict("Cancellation accounting source unavailable");
+            credits.cancelOutstanding(account,obligation,obligation.outstanding(),
+                "void-unpaid:"+renewal.getId()+":"+obligation.id(),"UNPAID_RENEWAL_CLOSED");
+            account=ledger.read(renewal.getRental().getId()).orElseThrow();
+        }
+    }
 
     /** Posts the accepted rental obligations when the authenticated Sandbox intent is made available. */
     @Transactional(propagation=Propagation.MANDATORY)
