@@ -22,6 +22,8 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
     private final ObjectProvider<Clock> clocks;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<LedgerCoverageInventory> inventories;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<RenewalInstallmentService> installmentSources;
     private record Verified(LedgerStore.Snapshot snapshot,LedgerCoverageSource.Coverage proof) {}
     private Optional<Verified> verified(Rental rental,Instant now) {
         var source=coverage.getIfAvailable();if(source==null)return Optional.empty();
@@ -36,8 +38,9 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
             BigDecimal total=debts.stream().map(LedgerStore.Obligation::outstanding).reduce(BigDecimal.ZERO,BigDecimal::add);
             BigDecimal overdue=debts.stream().filter(o->o.dueAt().isBefore(now)).map(LedgerStore.Obligation::outstanding).reduce(BigDecimal.ZERO,BigDecimal::add);
             BigDecimal deposit=v.proof().securityDepositCovered()?v.snapshot().obligations().stream().filter(o->o.kind()==LedgerStore.Kind.SECURITY_DEPOSIT).map(o->o.allocated().subtract(o.refunded())).reduce(BigDecimal.ZERO,BigDecimal::add):null;
-            LocalDate next=v.proof().billingMode()==RentalReadSources.BillingMode.PREPAID_FULL_PERIOD?null:debts.stream().filter(o->o.outstanding().signum()>0&&!o.dueAt().isBefore(now)).map(o->o.dueAt().atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate()).min(LocalDate::compareTo).orElse(null);
-            return new RentalReadSources.Financial(rental.getId(),now,"VND",total,overdue,deposit,next,v.proof().billingMode());
+            var mode=debts.stream().anyMatch(o->o.sourceRef().contains(":MONTH:"))?RentalReadSources.BillingMode.OTHER:v.proof().billingMode();
+            LocalDate next=mode==RentalReadSources.BillingMode.PREPAID_FULL_PERIOD?null:debts.stream().filter(o->o.outstanding().signum()>0&&!o.dueAt().isBefore(now)).map(o->o.dueAt().atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate()).min(LocalDate::compareTo).orElse(null);
+            return new RentalReadSources.Financial(rental.getId(),now,"VND",total,overdue,deposit,next,mode);
         });
     }
     /** Different signature via a dedicated delegating bean below avoids conflicting read(Rental) return types. */
@@ -52,21 +55,23 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
         var stored=store.read(rental.getId());if(stored.isEmpty())return Optional.empty();var snapshot=stored.get();
         if(rental.getCustomer()==null||rental.getFacility()==null||!rental.getId().equals(snapshot.rentalId())
             ||!rental.getCustomer().getId().equals(snapshot.customerId())||!rental.getFacility().getId().equals(snapshot.facilityId())
-            ||!snapshot.refunds().isEmpty()
-            ||snapshot.receipts().stream().anyMatch(p->p.method()!=LedgerStore.Method.VNPAY_SANDBOX))return Optional.empty();
+            ||!snapshot.refunds().isEmpty())return Optional.empty();
         var evidence=inventory.inspect(rental,stored);
         if(!rental.getId().equals(evidence.rentalId())||!Objects.equals(snapshot.revision(),evidence.ledgerRevision())
             ||!"PARTIAL".equals(evidence.completeness())
             ||evidence.gaps().stream().anyMatch(Set.of("RENEWAL_TERMINAL_ACCOUNTING_UNRECONCILED",
                 "SANDBOX_RECEIPT_BINDING_INVALID","SANDBOX_PAYMENT_NOT_RECONCILED","PAYMENT_NOT_PROJECT_SANDBOX",
                 "PAYMENT_BINDING_INVALID","PAYMENT_DISPUTED","PAYMENT_REFUND_EXECUTION_UNRECONCILED",
-                "LEDGER_REFUND_INCOMPLETE","LEDGER_BINDING_INVALID")::contains))return Optional.empty();
+                "LEDGER_REFUND_INCOMPLETE","LEDGER_BINDING_INVALID","RECEIPT_WRITER_PROVENANCE_UNCERTIFIED")::contains))return Optional.empty();
         // Inventory verifies every Sandbox receipt against the Payment, callback proof and allocation.
         // Other receipt methods still cannot reduce a partial overdue projection.
         var matched=evidence.renewalDeposits().stream().filter(d->"MATCHED".equals(d.status())).map(LedgerCoverageInventory.RenewalDepositEvidence::obligationId).collect(java.util.stream.Collectors.toSet());
-        return Optional.of(new OverdueSources.Finance(now,snapshot.obligations().stream().filter(o->matched.contains(o.id())&&o.kind()==LedgerStore.Kind.RENEWAL_DEPOSIT
+        var obligations=new ArrayList<>(snapshot.obligations().stream().filter(o->matched.contains(o.id())&&o.kind()==LedgerStore.Kind.RENEWAL_DEPOSIT
                 &&o.allocated().signum()==0&&o.refunded().signum()==0)
-            .map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList(),"PARTIAL"));
+            .map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList());
+        var installmentSource=installmentSources==null?null:installmentSources.getIfAvailable();
+        if(installmentSource!=null)obligations.addAll(installmentSource.verifiedMonthlyObligations(rental,snapshot));
+        return Optional.of(new OverdueSources.Finance(now,obligations.stream().collect(java.util.stream.Collectors.toMap(OverdueSources.Obligation::id,o->o,(a,b)->a)).values().stream().toList(),"PARTIAL"));
     }
     private Instant now(){var clock=clocks.getIfAvailable();return (clock==null?Clock.systemUTC():clock).instant();}
 }
