@@ -219,10 +219,13 @@ public class RenewalDepositSettlementService implements RefundSource {
             throw ApiExceptions.conflict("Renewal payments require reconciliation before deposit settlement");
     }
     private void cancelRemainder(Renewal n,Proof p) {
+        final boolean monthly;
+        try{monthly="MONTHLY".equals(mapper.readTree(p.workflow().getAcceptedRevision().getQuote().getTermsJson()).path("paymentPlan").asText());}
+        catch(Exception invalid){throw ApiExceptions.conflict("Điều khoản thanh toán đã lưu không hợp lệ.");}
         var account=ledger.read(n.getRental().getId()).orElseThrow();
         for(var o:account.obligations())if(Objects.equals(o.renewalId(),n.getId())&&o.kind()==LedgerStore.Kind.RENEWAL_REMAINDER
             &&o.sourceRef().startsWith("renewal-accepted:"+p.workflow().getAcceptedRevision().getId()+":")&&o.outstanding().signum()>0) {
-            credits().cancelOutstanding(account,o,o.outstanding(),"void-remainder:"+n.getId(),"SIGNING_FAILURE_UNEARNED_RENT");
+            credits().cancelOutstanding(account,o,o.outstanding(),"void-remainder:"+n.getId()+(monthly?":"+o.id():""),"SIGNING_FAILURE_UNEARNED_RENT");
             account=ledger.read(n.getRental().getId()).orElseThrow();
         }
     }

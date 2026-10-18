@@ -91,7 +91,7 @@ public class PaymentProvenance {
         if(p.getRenewal()==null||p.getRenewal().getRental()==null||p.getRenewal().getRental().getCustomer()==null
             ||p.getRenewalRevision()==null||p.getPaymentDeadline()==null||p.getStatus()!=PaymentStatus.PAID
             ||(p.getFailureCode()!=null&&!"RENEWAL_PAYMENT_RECONCILIATION_REQUIRED".equals(p.getFailureCode()))
-            ||!"VNPAY".equals(p.getGatewayProvider())||p.getPurpose()!=PaymentType.RENEWAL
+            ||!"VNPAY".equals(p.getGatewayProvider())||!Set.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(p.getPurpose())
             ||!"VND".equals(p.getCurrency())||p.getPaidAt()==null||p.getGatewayTransactionNo()==null
             ||p.getGatewayTransactionNo().isBlank()||!"00".equals(p.getGatewayResponseCode())
             ||!"00".equals(p.getGatewayTransactionStatus())||p.getPaidAt().isAfter(p.getPaymentDeadline()))

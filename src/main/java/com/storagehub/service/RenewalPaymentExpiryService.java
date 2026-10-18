@@ -50,16 +50,17 @@ public class RenewalPaymentExpiryService {
         candidates.addAll(payments.findByStatus(PaymentStatus.CANCELLED));
         int completed=0;
         for(Payment candidate:candidates) {
-            if(candidate.getRenewal()==null||candidate.getPurpose()!=PaymentType.RENEWAL
+            if(candidate.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(candidate.getPurpose())
                 ||candidate.getPaymentDeadline()==null||candidate.getPaymentDeadline().isAfter(now))continue;
             Payment payment=payments.findByIdForUpdate(candidate.getId()).orElse(null);
-            if(payment==null||payment.getRenewal()==null||payment.getPurpose()!=PaymentType.RENEWAL
+            if(payment==null||payment.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(payment.getPurpose())
                 ||payment.getPaymentDeadline()==null||payment.getPaymentDeadline().isAfter(now))continue;
             if(UNRESOLVED.contains(payment.getStatus())) {
                 VnpayService.ReconciliationOutcome outcome=vnpay.reconcileAtPaymentDeadline(payment);
                 payments.saveAndFlush(payment);
                 if(outcome!=VnpayService.ReconciliationOutcome.FINAL_FAILURE)continue;
             } else if(payment.getStatus()!=PaymentStatus.FAILED&&payment.getStatus()!=PaymentStatus.CANCELLED)continue;
+            if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT)continue; // A failed later period never expires the signed Renewal.
             if(expireIfSafe(payment.getRenewal(),payment))completed++;
         }
         return completed;

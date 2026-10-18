@@ -61,6 +61,7 @@ public class RenewalDepositObligationWriter {
     }
 
     static String paymentKey(FinancialContractSpecifications.Specification spec,java.util.UUID revision) {
+        if(spec.dueDate()!=null)return "renewal-month:"+revision+":"+spec.dueDate();
         return (spec.kind()==LedgerStore.Kind.RENEWAL_DEPOSIT?"renewal-prepayment:":
             spec.sourceReference().endsWith(":FULL_RENT")?"renewal-full-rent:":"renewal-remainder:")+revision;
     }
