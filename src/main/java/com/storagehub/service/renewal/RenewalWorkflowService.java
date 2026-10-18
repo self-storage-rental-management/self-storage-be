@@ -87,9 +87,23 @@ public class RenewalWorkflowService {
     public RenewalResponse cancel(ActorPrincipal a,UUID id,RenewalCommands.Cancel body,String key){
         var n=reads.find(a,id,false);var user=lockActor(a);var r=store.lockRental(n.getRental().getId());em.refresh(r);checkOwner(a,r);
         var replay=store.replay(user,"cancel",key,id,body);if(replay.isPresent())return decode(replay.get().dataJson(),RenewalResponse.class);
-        em.refresh(n);requirePrePayment(n);var wf=store.lockWorkflow(id,body.expectedVersion());var before=Map.of("status",n.getStatus());
+        em.refresh(n);requireCancelable(n);var wf=store.lockWorkflow(id,body.expectedVersion());var before=Map.of("status",n.getStatus());
         var selectedState=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,id);
+        if(selectedState!=null&&selectedState.hasVerifiedPayment())
+            throw ApiExceptions.conflict("Đã xác minh tiền gia hạn; cần xử lý theo quy trình đối soát và hoàn tiền.");
+        if(selectedState!=null&&selectedState.getAppointmentRef()!=null) {
+            var calendar=calendars.getIfAvailable();
+            if(calendar==null||!calendar.atomic())throw deferred("Signing calendar release unavailable");
+            calendar.release(n,now());
+        }
+        if(wf.getExtensionHoldRef()!=null) {
+            var safety=renewalSafety.getIfAvailable();
+            if(safety==null||!safety.atomic())throw deferred("Extension hold release unavailable");
+            safety.release(n,wf.getExtensionHoldRef());
+        }
         if(selectedState!=null&&!selectedState.hasVerifiedPayment())em.remove(selectedState);
+        var cancellationWriter=depositWriters.getIfAvailable();
+        if(cancellationWriter!=null)cancellationWriter.cancelUnpaid(wf);
         n.setStatus(RenewalStatus.cancelled);wf.cancelled(body.reason());store.releaseSlot(wf);
         return finish(user,"cancel",key,id,body,n,200,before);
     }
@@ -342,6 +356,17 @@ public class RenewalWorkflowService {
         com.storagehub.service.rental.period.RenewalPeriodCompatibility.require(periods.require(r),t);
     }
     private static boolean isPrePayment(Renewal n){return n.getStatus()==RenewalStatus.pending||n.getStatus()==RenewalStatus.accepted;}
+    private void requireCancelable(Renewal n){
+        if(!isPrePayment(n))throw ApiExceptions.conflict("Chỉ có thể hủy yêu cầu gia hạn chưa hoàn tất thanh toán.");
+        if(paymentRecords==null)return;
+        for(var payment:paymentRecords.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId())) {
+            if(payment.getStatus()==PaymentStatus.PAID||payment.getPaidAt()!=null||payment.getRenewalEvidenceRef()!=null
+                ||payment.getRenewalLedgerReceiptRef()!=null)
+                throw ApiExceptions.conflict("Đã ghi nhận tiền gia hạn; cần xử lý theo quy trình đối soát và hoàn tiền.");
+            if(payment.getStatus()!=PaymentStatus.FAILED&&payment.getStatus()!=PaymentStatus.CANCELLED)
+                throw ApiExceptions.conflict("Giao dịch VNPay chưa có kết quả cuối cùng. Hệ thống đang đối soát; chỉ có thể hủy sau khi xác nhận giao dịch chưa thu tiền.");
+        }
+    }
     private void requirePrePayment(Renewal n){
         if(!isPrePayment(n))throw ApiExceptions.conflict("Only an unstarted Renewal may use this D2 command");
         if(paymentRecords!=null&&!paymentRecords.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId()).isEmpty())
