@@ -86,6 +86,11 @@ public class LedgerStore {
         return renewalChargeCommandMatches(obligation,spec,customer,"renewal-full-rent:");
     }
     boolean renewalPaymentCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID customer) {
+        if(spec.dueDate()!=null) {
+            String fingerprint=hash(List.of(s(spec.rentalId()),s(spec.renewalId()),spec.kind().name(),spec.amount().toPlainString(),obligation.dueAt().toEpochMilli(),spec.sourceReference()).toString());
+            var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from rental_ledger_commands where actor_id=? and operation='CHARGE' and key_hash=?",s(customer),hash(RenewalDepositObligationWriter.paymentKey(spec,UUID.fromString(spec.sourceReference().split(":")[1]))));
+            return rows.size()==1&&s(spec.rentalId()).equals(value(rows.getFirst(),"rental_id"))&&s(obligation.id()).equals(value(rows.getFirst(),"result_id"))&&fingerprint.equals(value(rows.getFirst(),"payload_hash"));
+        }
         String prefix=spec.kind()==Kind.RENEWAL_DEPOSIT?"renewal-prepayment:":
             spec.sourceReference().endsWith(":FULL_RENT")?"renewal-full-rent:":"renewal-remainder:";
         return renewalChargeCommandMatches(obligation,spec,customer,prefix);

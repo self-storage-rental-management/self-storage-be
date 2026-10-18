@@ -12,8 +12,10 @@ import java.util.*;
 public final class FinancialContractSpecifications {
     private FinancialContractSpecifications() {}
     public record Specification(UUID rentalId, UUID renewalId, LedgerStore.Kind kind,
-        BigDecimal amount, String sourceReference) {
+        BigDecimal amount, String sourceReference, java.time.LocalDate dueDate) {
+        public Specification(UUID rentalId,UUID renewalId,LedgerStore.Kind kind,BigDecimal amount,String sourceReference){this(rentalId,renewalId,kind,amount,sourceReference,null);}
         public Instant requireDue(Instant authoritativeDue) {
+            if(dueDate!=null)return dueDate.atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
             if (authoritativeDue == null) throw ApiExceptions.conflict("FIN-02: authoritative effective event and due date required");
             return authoritativeDue;
         }
@@ -51,6 +53,11 @@ public final class FinancialContractSpecifications {
         equal(t.subtotal().multiply(t.discountRate()).setScale(2,RoundingMode.HALF_UP),t.discountAmount());
         equal(t.subtotal().subtract(t.discountAmount()),t.totalAfterDiscount());
         equal(t.renewalDepositAmount().add(t.remainingRentalAmount()),t.totalAfterDiscount());
+        if(t.paymentPlan()!=null) {
+            equal(t.discountRate(),BigDecimal.ZERO);equal(t.discountAmount(),BigDecimal.ZERO);
+            equal(t.renewalDepositAmount(),(t.monthly()?t.monthlyPrice():t.totalAfterDiscount()).multiply(new BigDecimal("0.20")).setScale(0,RoundingMode.HALF_UP));
+            if(t.monthlyPrice().stripTrailingZeros().scale()>0)fail("Giá thuê tháng phải là số nguyên VND");
+        }
     }
     public static List<Specification> accepted(RenewalAcceptedRevision revision, RenewalQuoteResponse.Terms t) {
         validateRenewal(t);
@@ -69,6 +76,14 @@ public final class FinancialContractSpecifications {
             || !Objects.equals(r.getStorageUnit().getId(),t.storageUnitId()) || !Objects.equals(n.getNewEndDate(),t.newEndDate()))fail("Accepted revision identity mismatch");
         equal(n.getAmount(),t.totalAfterDiscount());
         String ref="renewal-accepted:"+revision.getId()+":quote:"+q.getId();
+        if(t.monthly()) {
+            var specs=new ArrayList<Specification>();
+            specs.add(new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_DEPOSIT,t.renewalDepositAmount(),ref+":DEPOSIT"));
+            specs.add(new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_REMAINDER,t.dueAtSigning(),ref+":REMAINDER"));
+            for(int i=1;i<t.rentalMonths();i++)specs.add(new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_REMAINDER,
+                t.monthlyPrice(),ref+":MONTH:"+(i+1),t.extensionStartDate().plusMonths(i)));
+            return List.copyOf(specs);
+        }
         if (t.renewalDepositAmount().signum() == 0) {
             // Previously accepted no-deposit terms are represented by one full-period payable
             // obligation. Keep the legacy kind to avoid a schema/API enum change.
@@ -79,6 +94,7 @@ public final class FinancialContractSpecifications {
         return List.of(new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_DEPOSIT,t.renewalDepositAmount(),ref+":DEPOSIT"),
             new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_REMAINDER,t.remainingRentalAmount(),ref+":REMAINDER"));
     }
+    public static List<Specification> signing(List<Specification> specs){return specs.stream().filter(s->s.dueDate()==null).toList();}
     private static boolean same(BaseEntity a,BaseEntity b){return a!=null&&b!=null&&a.getId()!=null&&a.getId().equals(b.getId());}
     private static void rate(BigDecimal v){if(v==null||v.signum()<0||v.compareTo(BigDecimal.ONE)>0)fail("Invalid discount rate");}
     private static void money(BigDecimal v){if(v==null||v.signum()<0)fail("Missing or negative contractual amount");try{if(v.setScale(2,RoundingMode.UNNECESSARY).precision()>14)fail("Amount precision unsupported");}catch(ArithmeticException e){fail("Amount rounding unsupported");}}

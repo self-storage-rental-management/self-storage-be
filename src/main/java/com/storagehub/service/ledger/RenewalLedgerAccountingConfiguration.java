@@ -54,7 +54,7 @@ public class RenewalLedgerAccountingConfiguration {
             if(workflow==null||workflow.getAcceptedRevision()==null||state==null||!state.hasVerifiedPayment()
                 ||state.getEffectiveSigningDeadline()==null||!state.getEffectiveSigningDeadline().isAfter(now))
                 throw deferred("Current paid Renewal signing state required");
-            var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
+            var specs=FinancialContractSpecifications.signing(FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms));
             var snapshot=account(renewal);
             if(specs.size()>1) {
                 var initial=obligation(snapshot,workflow,specs.getFirst());
@@ -124,7 +124,7 @@ public class RenewalLedgerAccountingConfiguration {
             var workflow=em.find(RenewalWorkflow.class,renewal.getId(),jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
             if(workflow==null||workflow.getAcceptedRevision()==null||workflow.getPaymentDeadline()==null)
                 throw deferred("Accepted Renewal revision and payment deadline are unavailable");
-            var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
+            var specs=FinancialContractSpecifications.signing(FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms));
             var snapshot=account(renewal);
             for(var required:specs) {
                 var o=obligation(snapshot,workflow,required);

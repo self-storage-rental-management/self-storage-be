@@ -18,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Component @RequiredArgsConstructor @Transactional(readOnly=true)
 @ConditionalOnProperty(name="storagehub.integration.ledger.enabled",havingValue="true")
 public class LedgerCoverageInventory {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RenewalInstallmentService> installmentSources;
     public record PaymentEvidence(UUID paymentId,String provenance,boolean linkedReceipt,boolean refundUnreconciled,boolean eligibleForReconciliation) {}
     public record RenewalDepositEvidence(UUID renewalId,UUID acceptedRevisionId,String status,UUID obligationId) {}
     public record Inventory(UUID rentalId,Long ledgerRevision,String completeness,List<String> gaps,
@@ -103,7 +105,14 @@ public class LedgerCoverageInventory {
                         gaps.add("RENEWAL_FULL_RENT_OBLIGATION_UNPOSTED_OR_INVALID");
                     else {
                         acceptedSpecifications.add(spec);
-                        var all=FinancialContractSpecifications.accepted(revision,terms);
+                        var all=FinancialContractSpecifications.signing(FinancialContractSpecifications.accepted(revision,terms));
+                        for(var future:FinancialContractSpecifications.accepted(revision,terms))if(future.dueDate()!=null){
+                            var futureMatches=snapshot.obligations().stream().filter(o->o.kind()==future.kind()&&Objects.equals(o.renewalId(),future.renewalId())
+                                &&o.sourceRef().equals(future.sourceReference())&&o.amount().compareTo(future.amount())==0
+                                &&o.dueAt().toEpochMilli()==future.requireDue(workflow.getPaymentDeadline()).toEpochMilli()
+                                &&ledger.renewalPaymentCommandMatches(o,future,rental.getCustomer().getId())).toList();
+                            if(futureMatches.size()==1)acceptedSpecifications.add(future);else gaps.add("RENEWAL_MONTH_OBLIGATION_UNPOSTED_OR_INVALID");
+                        }
                         if(all.size()>1) {
                             var remainder=all.getLast();
                             var remainderMatches=snapshot.obligations().stream().filter(o->o.kind()==remainder.kind()
@@ -126,6 +135,11 @@ public class LedgerCoverageInventory {
                         }
                         for(var payment:payments.findAllByRenewal_IdOrderByCreatedAtAsc(spec.renewalId())) {
                             if(payment.getRenewalRevision()==null||!revision.getId().equals(payment.getRenewalRevision().getId()))continue;
+                            var installmentSource=installmentSources==null?null:installmentSources.getIfAvailable();
+                            var boundReceipt=snapshot.receipts().stream().filter(r->r.id().equals(payment.getRenewalLedgerReceiptRef())).findFirst().orElse(null);
+                            if(boundReceipt!=null&&(validatedReceipts.contains(boundReceipt.id())||installmentSource!=null&&installmentSource.receiptMatches(payment,boundReceipt))){
+                                validatedReceipts.add(boundReceipt.id());evidence.add(new PaymentEvidence(payment.getId(),provenance.classify(payment).name(),true,false,true));continue;
+                            }
                             boolean eligible=sandboxPolicy.evaluate(payment,provenance.classify(payment)).eligibleForReconciliation();
                             var candidates=snapshot.receipts().stream().filter(p->("payment:"+payment.getId()).equals(p.evidenceRef())).toList();
                             boolean linked=eligible&&payment.getRenewalEvidenceRef()!=null&&candidates.size()==1
