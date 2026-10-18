@@ -47,8 +47,8 @@ public class ReservationGoodsReviewService {
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
 
-    @Value("${app.reservation.payment-window-minutes:360}")
-    private long paymentWindowMinutes = 360;
+    @Value("${app.reservation.payment-window-minutes:15}")
+    private long paymentWindowMinutes = 15;
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationReviewResponse> listPending(

@@ -10,6 +10,7 @@ import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.AuditLogService;
 import com.storagehub.service.renewal.persistence.*;
 import jakarta.persistence.*;
+import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class RenewalWorkflowService {
+    private static final Duration RENEWAL_PAYMENT_WINDOW = Duration.ofMinutes(15);
     private final RentalRepository rentals;private final RenewalReadService reads;private final RenewalPersistence store;
     @org.springframework.beans.factory.annotation.Autowired
     private PaymentRepository paymentRecords;
@@ -143,7 +145,7 @@ public class RenewalWorkflowService {
         if(simple!=null) {
             simple.requireRental(rental);simple.requireKnownFinance(rental,id,now);
             Instant deadline=workflow.getPaymentDeadline();
-            if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(gate.policy().paymentWindow()),gate.eligibility().recoveryCutoff())).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),gate.eligibility().recoveryCutoff())).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
             if(!deadline.isAfter(now)||deadline.isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Renewal payment deadline has expired");
             workflow.paymentReady(deadline);
             var ledger=ledgers.getIfAvailable();if(ledger==null)throw deferred("Renewal accounting unavailable");
@@ -178,7 +180,7 @@ public class RenewalWorkflowService {
         if(lifecycle==null||!lifecycle.ready(rental))throw deferred("Payment expiry lifecycle unavailable");
         Instant cutoff=gate.eligibility().recoveryCutoff();
         Instant deadline=workflow.getPaymentDeadline();
-        if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(gate.policy().paymentWindow()),cutoff))
+        if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),cutoff))
             .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         if(!deadline.isAfter(now)||deadline.isAfter(cutoff))throw ApiExceptions.conflict("Renewal payment deadline has expired or exceeds Recovery cutoff");
 
@@ -232,7 +234,7 @@ public class RenewalWorkflowService {
             if(state.unresolvedDispute()||!state.dueObligations().isEmpty())throw ApiExceptions.conflict("Due obligations or dispute block approval");
             var h=holds.getIfAvailable();if(h==null||!h.participatesInTransaction())throw deferred("Atomic shared extension hold unavailable");
             var lifecycle=lifecycles.getIfAvailable();if(lifecycle==null||!lifecycle.ready(r))throw deferred("Approval expiry/payment/hold lifecycle unavailable");
-            Instant deadline=min(now.plus(g.policy.paymentWindow()),g.eligibility.recoveryCutoff());
+            Instant deadline=min(now.plus(RENEWAL_PAYMENT_WINDOW),g.eligibility.recoveryCutoff());
             UUID hold=h.acquire(r,id,accepted.extensionStartDate(),accepted.extensionEndExclusive(),deadline);
             if(hold==null)throw deferred("Shared hold returned no authoritative reference");
             n.setStatus(RenewalStatus.approved);wf.reviewed(user,now,body.reason(),deadline,hold);
@@ -333,12 +335,12 @@ public class RenewalWorkflowService {
         var codes=new HashSet<String>();var result=new ArrayList<RenewalSources.Price>();
         for(var p:data){if(p==null||p.packageId()==null)throw deferred("Incomplete pricing");if(!g.policy.eligiblePackageIds().contains(p.packageId()))continue;
             if(p.packageCode()==null||p.packageCode().isBlank()||p.packageCode().length()>30||p.packageVersion()==null||p.packageVersion().isBlank()||!Objects.equals(p.unitTypeId(),r.getStorageUnit().getUnitType().getId())||!"VND".equals(p.currency())||p.moneyScale()!=2||!codes.add(p.packageCode()))throw deferred("Pricing mapping/rounding incomplete or ambiguous");
-            RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),p.discountRate(),com.storagehub.service.RentalDepositPolicy.RATE);result.add(p);}
+            RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),p.discountRate(),BigDecimal.ZERO);result.add(p);}
         result.sort(Comparator.comparingInt(RenewalSources.Price::months).thenComparing(RenewalSources.Price::packageCode));return result;
     }
     private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code){
         var p=prices(r,new PolicyPeriod(g.policy(),g.period())).stream().filter(x->x.packageCode().equals(code)).findFirst().orElseThrow(()->ApiExceptions.conflict("Package not eligible for Renewal"));
-        var t=RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),p.discountRate(),com.storagehub.service.RentalDepositPolicy.RATE);
+        var t=RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),p.discountRate(),BigDecimal.ZERO);
         if(t.netRent().precision()>14)throw ApiExceptions.conflict("Shared renewal amount exceeds supported precision");
         return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),p.discountRate(),t.subtotal(),t.discountAmount(),t.netRent(),t.depositAmount(),t.remainder(),p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate());
     }
