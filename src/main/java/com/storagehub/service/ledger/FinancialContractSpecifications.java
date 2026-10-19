@@ -19,6 +19,13 @@ public final class FinancialContractSpecifications {
             if (authoritativeDue == null) throw ApiExceptions.conflict("FIN-02: authoritative effective event and due date required");
             return authoritativeDue;
         }
+        public Instant requireDue(Instant prepaymentDue,Instant signingBalanceDue) {
+            if(dueDate==null&&sourceReference.endsWith(":REMAINDER")) {
+                if(signingBalanceDue==null)throw ApiExceptions.conflict("Hạn thu tiền khi ký chưa được xác định.");
+                return signingBalanceDue;
+            }
+            return requireDue(prepaymentDue);
+        }
     }
     public static List<Specification> initial(Rental rental, ReservationPricingSnapshot s) {
         if (rental == null || rental.getReservation() == null || s == null || s.getReservation() == null
@@ -69,7 +76,7 @@ public final class FinancialContractSpecifications {
             var decoded=jsonMapper.readValue(q.getTermsJson(),RenewalQuoteResponse.Terms.class);
             String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(q.getTermsJson().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             if(!jsonMapper.valueToTree(decoded).equals(jsonMapper.valueToTree(t))||!hash.equals(q.getTermsHash()))fail("Accepted quote content/hash mismatch");
-            if(revision.getAcceptedAt().isBefore(q.getQuotedAt())||!revision.getAcceptedAt().isBefore(q.getExpiresAt()))fail("Quote was not accepted within its lifetime");
+            if(revision.getAcceptedAt().isBefore(q.getQuotedAt()))fail("Quote was accepted before it was issued");
         } catch(com.storagehub.common.api.ApiException e){throw e;}catch(Exception e){fail("Accepted quote content/hash invalid");}
         if(n.getId()==null || r==null || r.getId()==null || !same(r,q.getRental()) || !same(r.getCustomer(),q.getCustomer())
             || !same(r.getCustomer(),n.getRequestedBy()) || !Objects.equals(r.getFacility().getId(),t.facilityId())

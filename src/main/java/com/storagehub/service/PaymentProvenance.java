@@ -64,6 +64,13 @@ public class PaymentProvenance {
         try{return proof.size()==1&&fileId.toString().equals(mapper.readTree(proof.getFirst().getAfterStateJson()).path("receiptFileId").asText());}
         catch(Exception invalid){return false;}
     }
+    public UUID manualReceiptFileId(Payment payment) {
+        if(payment==null||classify(payment)!=Classification.VERIFIED)return null;
+        var proof=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",payment.getId(),ManualRentalPaymentService.AUDIT_ACTION);
+        if(proof.size()!=1)return null;
+        try{return UUID.fromString(mapper.readTree(proof.getFirst().getAfterStateJson()).path("receiptFileId").asText());}
+        catch(Exception invalid){return null;}
+    }
     private Classification classifyManualBalance(Payment p) {
         if(p.getStatus()!=PaymentStatus.PAID||p.getAmount()==null||p.getAmount().signum()<=0||!"VND".equals(p.getCurrency())
             ||p.getPaidAt()==null||p.getInitiatedBy()==null||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0

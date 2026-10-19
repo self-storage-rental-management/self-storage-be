@@ -109,7 +109,7 @@ public class LedgerCoverageInventory {
                         for(var future:FinancialContractSpecifications.accepted(revision,terms))if(future.dueDate()!=null){
                             var futureMatches=snapshot.obligations().stream().filter(o->o.kind()==future.kind()&&Objects.equals(o.renewalId(),future.renewalId())
                                 &&o.sourceRef().equals(future.sourceReference())&&o.amount().compareTo(future.amount())==0
-                                &&o.dueAt().toEpochMilli()==future.requireDue(workflow.getPaymentDeadline()).toEpochMilli()
+                                &&o.dueAt().toEpochMilli()==future.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt()).toEpochMilli()
                                 &&ledger.renewalPaymentCommandMatches(o,future,rental.getCustomer().getId())).toList();
                             if(futureMatches.size()==1)acceptedSpecifications.add(future);else gaps.add("RENEWAL_MONTH_OBLIGATION_UNPOSTED_OR_INVALID");
                         }
@@ -117,7 +117,7 @@ public class LedgerCoverageInventory {
                             var remainder=all.getLast();
                             var remainderMatches=snapshot.obligations().stream().filter(o->o.kind()==remainder.kind()
                                 &&Objects.equals(o.renewalId(),remainder.renewalId())&&o.sourceRef().equals(remainder.sourceReference())
-                                &&o.amount().compareTo(remainder.amount())==0&&o.dueAt().toEpochMilli()==workflow.getPaymentDeadline().toEpochMilli()
+                                &&o.amount().compareTo(remainder.amount())==0&&o.dueAt().toEpochMilli()==remainder.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt()).toEpochMilli()
                                 &&ledger.renewalPaymentCommandMatches(o,remainder,rental.getCustomer().getId())).toList();
                             if(remainderMatches.size()!=1)gaps.add("RENEWAL_REMAINDER_OBLIGATION_UNPOSTED_OR_INVALID");
                             else {

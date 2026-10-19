@@ -37,7 +37,7 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
             var debts=v.snapshot().obligations();
             BigDecimal total=debts.stream().map(LedgerStore.Obligation::outstanding).reduce(BigDecimal.ZERO,BigDecimal::add);
             BigDecimal overdue=debts.stream().filter(o->o.dueAt().isBefore(now)).map(LedgerStore.Obligation::outstanding).reduce(BigDecimal.ZERO,BigDecimal::add);
-            BigDecimal deposit=v.proof().securityDepositCovered()?v.snapshot().obligations().stream().filter(o->o.kind()==LedgerStore.Kind.SECURITY_DEPOSIT).map(o->o.allocated().subtract(o.refunded())).reduce(BigDecimal.ZERO,BigDecimal::add):null;
+            BigDecimal deposit=v.proof().securityDepositCovered()?v.snapshot().obligations().stream().filter(o->o.kind()==LedgerStore.Kind.SECURITY_DEPOSIT).map(o->o.allocated().subtract(o.refunded())).reduce(BigDecimal.ZERO,BigDecimal::add).subtract(store.releasedSecurityDeposit(rental.getId())).max(BigDecimal.ZERO):null;
             var mode=debts.stream().anyMatch(o->o.sourceRef().contains(":MONTH:"))?RentalReadSources.BillingMode.OTHER:v.proof().billingMode();
             LocalDate next=mode==RentalReadSources.BillingMode.PREPAID_FULL_PERIOD?null:debts.stream().filter(o->o.outstanding().signum()>0&&!o.dueAt().isBefore(now)).map(o->o.dueAt().atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate()).min(LocalDate::compareTo).orElse(null);
             return new RentalReadSources.Financial(rental.getId(),now,"VND",total,overdue,deposit,next,mode);

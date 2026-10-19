@@ -33,6 +33,8 @@ public class RenewalDepositSettlementService implements RefundSource {
     private final RenewalPersistence store;
     private final AuditLogService audit;
     private final NotificationService notifications;
+    @org.springframework.beans.factory.annotation.Autowired
+    private RenewalDepositFaultGuard faultGuard;
     private final ObjectProvider<Clock> clocks;
     private final ObjectProvider<PolicySource> policies;
     private final ObjectProvider<CalendarSource> calendars;
@@ -63,7 +65,11 @@ public class RenewalDepositSettlementService implements RefundSource {
         else {
             var events=events(n,"DEPOSIT_DISPOSITION");
             if(!events.isEmpty())status=json(events.getFirst()).path("status").asText();
-            else if(now.isAfter(s.getEffectiveSigningDeadline()))status="AWAITING_RECOVERY_DEADLINE";
+            else {
+                var held=faultGuard.holdReason(n,s);
+                if(held!=null)status=held;
+                else if(now.isAfter(s.getEffectiveSigningDeadline()))status="AWAITING_RECOVERY_DEADLINE";
+            }
         }
         return new View(id,p.workflow().getVersion(),status,p.payment().getAmount(),p.payment().getRefundedAmount(),"VND",p.environment(),refund==null?null:refund.getId(),s.getEffectiveSigningDeadline(),now);
     }
@@ -81,6 +87,15 @@ public class RenewalDepositSettlementService implements RefundSource {
         if(term==null||term.recoveryFromDay()!=8||term.recoveryStart()==null||term.recoveryCutoff()==null
             ||!term.recoveryStart().isAfter(term.recoveryCutoff()))throw ApiExceptions.conflict("Verified day-eight forfeiture deadline required");
         if(now().isBefore(term.recoveryStart()))return false;
+        var holdReason=faultGuard.holdReason(n,s);
+        if(holdReason!=null) {
+            if(events(n,"DEPOSIT_REVIEW_REQUIRED").isEmpty()) {
+                em.persist(new RenewalOperationEvent(n,"DEPOSIT_REVIEW_REQUIRED",now(),null,store.canonical(Map.of("status",holdReason))));
+                notifications.createFacilityOperationsNotifications(n.getRental().getFacility().getId(),NotificationType.RENEWAL,
+                    "Cọc gia hạn cần được đối soát trách nhiệm","Có sự cố từ cơ sở hoặc trách nhiệm chưa được xác minh; chưa ghi nhận mất cọc.",id);
+            }
+            return false;
+        }
         var p=proof(n,true);requireReconciled(n);
         if(refundRows(p.payment()).stream().anyMatch(r->Set.of(RefundStatus.PENDING,RefundStatus.PROCESSING,RefundStatus.COMPLETED).contains(r.getStatus())))return false;
         if(p.payment().getRefundedAmount().signum()!=0)throw ApiExceptions.conflict("Refunded deposit requires reconciliation before forfeiture");
