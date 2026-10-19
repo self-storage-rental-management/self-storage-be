@@ -17,10 +17,10 @@ public class RenewalQuote extends BaseEntity {
     @Lob @Column(columnDefinition="LONGTEXT",nullable=false,updatable=false) private String termsJson;
     @Column(nullable=false,updatable=false,length=64) private String termsHash;
     @Column(nullable=false,updatable=false) private Instant quotedAt;
-    @Column(nullable=false,updatable=false) private Instant expiresAt;
+    @Column(updatable=false) private Instant expiresAt;
     public RenewalQuote(Rental rental,User customer,String termsJson,String termsHash,Instant quotedAt,Instant expiresAt) {
-        if(rental==null||customer==null||termsJson==null||termsHash==null||quotedAt==null||expiresAt==null||!quotedAt.isBefore(expiresAt))
-            throw new IllegalArgumentException("Complete authoritative quote and positive lifetime required");
+        if(rental==null||customer==null||termsJson==null||termsHash==null||quotedAt==null||expiresAt!=null&&!quotedAt.isBefore(expiresAt))
+            throw new IllegalArgumentException("Complete authoritative quote required");
         this.rental=rental;this.customer=customer;this.termsJson=termsJson;this.termsHash=termsHash;
         this.quotedAt=quotedAt;this.expiresAt=expiresAt;
     }

@@ -12,11 +12,11 @@ public record PublishedRenewalPolicy(String schema,UUID facilityId,long revision
     Instant publishedAt,LocalDate effectiveFrom,LocalDate effectiveTo,int quoteTtlMinutes,int paymentWindowHours,
     int requestWindowDays,BigDecimal depositRate,Set<UUID> eligiblePackageIds,Signing signing,Term term) {
     public int quoteTtlHours() {
-        return Math.max(1, (int) Math.round(quoteTtlMinutes / 60.0));
+        return 0; // Compatibility field: renewal quotes no longer expire.
     }
     public record Input(@NotNull @PositiveOrZero Long expectedRevision,@NotNull LocalDate effectiveFrom,LocalDate effectiveTo,
         Integer quoteTtlMinutes,Integer quoteTtlHours,@NotNull @Positive Integer paymentWindowHours,
-        @NotNull @PositiveOrZero Integer requestWindowDays,@NotNull @DecimalMin("0") @DecimalMax("1") BigDecimal depositRate,
+        Integer requestWindowDays,@NotNull @DecimalMin("0") @DecimalMax("1") BigDecimal depositRate,
         @NotNull @Size(max=20) Set<@NotNull UUID> eligiblePackageIds,@Valid Signing signing,@Valid Term term) {
         public Input(Long expectedRevision, LocalDate effectiveFrom, LocalDate effectiveTo,
             Integer quoteTtlMinutes, Integer paymentWindowHours,
@@ -26,13 +26,10 @@ public record PublishedRenewalPolicy(String schema,UUID facilityId,long revision
         }
         @JsonAnySetter public void unknown(String k,Object v){throw new IllegalArgumentException("Unknown policy field: "+k);}
         public Integer effectiveQuoteTtlMinutes() {
-            if (quoteTtlHours != null && quoteTtlHours > 0) return quoteTtlHours * 60;
-            return quoteTtlMinutes;
+            return 0;
         }
         public Integer effectiveQuoteTtlHours() {
-            if (quoteTtlHours != null && quoteTtlHours > 0) return quoteTtlHours;
-            if (quoteTtlMinutes != null && quoteTtlMinutes > 0) return Math.max(1, (int) Math.round(quoteTtlMinutes / 60.0));
-            return null;
+            return 0;
         }
     }
     public record Signing(@NotNull @Positive Integer signingWindowMinutes,@NotNull @Positive Integer exceptionExtensionLimitMinutes) {

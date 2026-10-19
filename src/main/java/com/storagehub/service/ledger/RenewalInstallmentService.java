@@ -68,7 +68,7 @@ public class RenewalInstallmentService {
         for(var spec:FinancialContractSpecifications.accepted(c.workflow().getAcceptedRevision(),c.terms())){
             int sequence=spec.dueDate()==null?1:Integer.parseInt(spec.sourceReference().substring(spec.sourceReference().lastIndexOf(':')+1));
             var matches=a.obligations().stream().filter(o->Objects.equals(o.renewalId(),c.renewal().getId())&&o.sourceRef().equals(spec.sourceReference())
-                &&o.amount().compareTo(spec.amount())==0&&o.kind()==spec.kind()&&o.dueAt().toEpochMilli()==spec.requireDue(c.workflow().getPaymentDeadline()).toEpochMilli()).toList();
+                &&o.amount().compareTo(spec.amount())==0&&o.kind()==spec.kind()&&o.dueAt().toEpochMilli()==spec.requireDue(c.workflow().getPaymentDeadline(),c.workflow().getSigningBalanceDueAt()).toEpochMilli()).toList();
             if(matches.size()!=1||!ledger.renewalPaymentCommandMatches(matches.getFirst(),spec,a.customerId()))
                 throw ApiExceptions.conflict("Lịch thanh toán chưa có đủ khoản phải thu đã xác thực.");
             result.computeIfAbsent(sequence,ignored->new ArrayList<>()).add(matches.getFirst());

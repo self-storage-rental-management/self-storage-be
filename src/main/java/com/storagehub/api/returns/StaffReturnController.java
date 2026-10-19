@@ -68,4 +68,9 @@ public class StaffReturnController {
             CorrelationIdContext.current()
         );
     }
+    @PostMapping("/{returnId}/settlement-receipts")
+    public ApiResponse<ReturnCaseResponse> recordSettlement(@PathVariable UUID returnId,
+        @Valid @RequestBody StaffReturnSettlementRequest request) {
+        return new ApiResponse<>(returnSettlementService.recordSettlement(actorContext.required(),returnId,request),CorrelationIdContext.current());
+    }
 }

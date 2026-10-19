@@ -32,7 +32,6 @@ public class RenewalPersistence {
         RenewalQuote quote=em.find(RenewalQuote.class,id);
         if(quote==null||!quote.getRental().getId().equals(rental.getId())||!quote.getCustomer().getId().equals(actor.getId()))
             throw ApiExceptions.notFound("Renewal quote was not found");
-        if(!now.isBefore(quote.getExpiresAt()))throw ApiExceptions.conflict("Renewal quote has expired");
         if(em.createQuery("select count(x) from RenewalAcceptedRevision x where x.quote.id=:id",Long.class).setParameter("id",id).getSingleResult()>0)
             throw ApiExceptions.conflict("Renewal quote is already accepted");
         return quote;
@@ -44,7 +43,6 @@ public class RenewalPersistence {
         if(!rental.getId().equals(renewal.getRental().getId()))throw ApiExceptions.conflict("Open slot rental does not match renewal");
         if(em.find(RenewalOpenSlot.class,rental.getId())!=null)throw ApiExceptions.conflict("Rental already has an open renewal");
         requireBinding(renewal,quote);
-        if(!now.isBefore(quote.getExpiresAt()))throw ApiExceptions.conflict("Renewal quote has expired");
         var revision=new RenewalAcceptedRevision(renewal,quote,1,now,note);em.persist(revision);
         var workflow=new RenewalWorkflow(renewal,revision);em.persist(workflow);
         em.persist(new RenewalOpenSlot(rental,renewal));em.flush();return workflow;
@@ -57,7 +55,6 @@ public class RenewalPersistence {
     }
     public void acceptRevision(RenewalWorkflow workflow,RenewalQuote quote,Instant now,String note) {
         requireBinding(workflow.getRenewal(),quote);
-        if(!now.isBefore(quote.getExpiresAt()))throw ApiExceptions.conflict("Renewal quote has expired");
         if(workflow.getAcceptedRevision().getQuote().getId().equals(quote.getId()))throw ApiExceptions.conflict("Quote is already accepted");
         if(note!=null&&note.length()>2000)throw ApiExceptions.validation("Note exceeds 2000 characters",null);
         var revision=new RenewalAcceptedRevision(workflow.getRenewal(),quote,workflow.getAcceptedRevision().getRevisionNumber()+1,now,note);
