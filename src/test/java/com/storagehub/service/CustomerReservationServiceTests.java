@@ -222,9 +222,12 @@ class CustomerReservationServiceTests {
     void preservesHistoricalDiscountSnapshotDetailsWhenRetrievingReservation() {
         snapshot.setRentalMonths(6);
         snapshot.setPricingPackageCode("PKG-6M");
+        snapshot.setMonthlyPrice(new BigDecimal("2000000.00"));
         snapshot.setGrossRentalAmount(new BigDecimal("12000000.00"));
         snapshot.setDiscountRate(new BigDecimal("0.0800"));
         snapshot.setDiscountAmount(new BigDecimal("960000.00"));
+        snapshot.setVoucherCode("HELLO2026");
+        snapshot.setVoucherDiscountAmount(new BigDecimal("100000.00"));
         snapshot.setNetRentalAmount(new BigDecimal("11040000.00"));
 
         when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
@@ -238,9 +241,12 @@ class CustomerReservationServiceTests {
         var item = response.data().get(0);
         assertThat(item.getPricingPackageCode()).isEqualTo("PKG-6M");
         assertThat(item.getRentalMonths()).isEqualTo(6);
+        assertThat(item.getMonthlyPrice()).isEqualByComparingTo("2000000.00");
         assertThat(item.getGrossRentalAmount()).isEqualByComparingTo("12000000.00");
         assertThat(item.getDiscountRate()).isEqualByComparingTo("0.0800");
         assertThat(item.getDiscountAmount()).isEqualByComparingTo("960000.00");
+        assertThat(item.getVoucherCode()).isEqualTo("HELLO2026");
+        assertThat(item.getVoucherDiscountAmount()).isEqualByComparingTo("100000.00");
     }
 
     @Test
