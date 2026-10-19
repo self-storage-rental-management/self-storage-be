@@ -51,6 +51,13 @@ public class Reservation extends BaseEntity {
     @Column(name = "identity_document_number", length = 30)
     private String identityDocumentNumber;
 
+    /** Contact details declared for this reservation; keep them stable if the profile changes later. */
+    @Column(name = "customer_phone", length = 40)
+    private String customerPhone;
+
+    @Column(name = "customer_address", length = 500)
+    private String customerAddress;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "facility_id", nullable = false)
     private Facility facility;
