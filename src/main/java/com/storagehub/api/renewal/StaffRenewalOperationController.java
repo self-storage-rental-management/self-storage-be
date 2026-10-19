@@ -33,5 +33,7 @@ public class StaffRenewalOperationController {
     public ApiResponse<RenewalOperationService.Result> complete(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.Completion body,@RequestHeader("Idempotency-Key") String key){return response(service.complete(actors.required(),id,body,key));}
     @GetMapping("/payments") @Operation(summary="Read assigned Renewal payment events")
     public PageResponse<RenewalOperationResponse.Event> payments(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){var q=RenewalOperationQuery.parse(query);return service.events(actors.required(),id,STAFF,"payments",q.page(),q.size(),CorrelationIdContext.current());}
+    @GetMapping("/documents") @Operation(summary="Read assigned Renewal arrival and signed-contract evidence events")
+    public PageResponse<RenewalOperationResponse.Event> documents(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){var q=RenewalOperationQuery.parse(query);return service.events(actors.required(),id,STAFF,"documents",q.page(),q.size(),CorrelationIdContext.current());}
     private ApiResponse<RenewalOperationService.Result> response(RenewalOperationService.Result result){return new ApiResponse<>(result,CorrelationIdContext.current());}
 }

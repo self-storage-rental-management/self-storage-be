@@ -59,6 +59,14 @@ class OverdueServicePaginationTests {
         var r=service.list(actor,q(0,1,"PAYMENT_DUE","Customer 1","caseRef",false),"TEST");
         assertThat(r.data()).hasSize(1);assertThat(r.data().getFirst().rentalId()).isEqualTo(rentals.get(1).getId());assertThat(r.pagination().totalItems()).isEqualTo(1);
     }
+    @Test void knownPartialDebtIsVisibleWithoutCompleteCoverageAndCommandsStayGuarded(){
+        when(finance.read(any(),eq(NOW))).thenAnswer(i->{Rental r=i.getArgument(0);return Optional.of(new Finance(NOW,List.of(new Obligation(r.getId(),r.getId(),NOW.minusSeconds(1),new BigDecimal("5"),"VND")),"PARTIAL"));});
+        var result=service.list(actor,q(0,1,"PAYMENT_DUE","","caseRef",false),"TEST");
+        assertThat(result.data()).hasSize(1);assertThat(result.pagination().totalItems()).isEqualTo(3);
+        assertThat(result.completeness()).isEqualTo("PARTIAL");assertThat(result.missingSources()).contains("FINANCIAL_COVERAGE_PARTIAL");
+        when(em.find(eq(Rental.class),any())).thenReturn(rentals.getFirst());
+        assertThatThrownBy(()->service.detail(actor,"PAYMENT_DUE:"+rentals.getFirst().getId()+":"+rentals.getFirst().getId())).isInstanceOf(ApiException.class);
+    }
     @Test void missingSourcesFromLaterRentalsRemainVisibleEvenOnFirstPage(){
         when(terms.term(rentals.getLast(),NOW)).thenReturn(Optional.empty());
         var result=service.list(actor,q(0,1,"ALL","","priority",true),"TEST");
@@ -96,5 +104,17 @@ class OverdueServicePaginationTests {
             var result=service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST");
             assertThat(result.data()).hasSize(3).allSatisfy(r -> {assertThat(r.overdueDays()).isEqualTo(days);assertThat(r.priority()).isEqualTo(days==1?"WARNING":days==7?"URGENT":"RECOVERY");});
         }
+    }
+    @Test void inclusiveExpiryIsNotOverdueUntilFollowingDayAndPolicyMustMatchIt(){
+        var today=NOW.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
+        rentals.forEach(r->r.setContractEndDate(today));
+        assertThat(service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST").data()).isEmpty();
+        rentals.forEach(r->r.setContractEndDate(today.minusDays(1)));
+        assertThat(service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST").data())
+            .hasSize(3).allSatisfy(row->assertThat(row.overdueDays()).isEqualTo(1));
+        when(terms.term(any(),eq(NOW))).thenAnswer(a->{Rental r=a.getArgument(0);return Optional.of(new Term(
+            "TEST","v1",r.getContractEndDate().minusDays(1),3,6,7,8,NOW.plusSeconds(86400),NOW.plusSeconds(172800)));});
+        assertThatThrownBy(()->service.list(actor,q(0,100,"RENTAL_TERM","","caseRef",false),"TEST"))
+            .hasMessageContaining("policy/date mapping inconsistent");
     }
 }

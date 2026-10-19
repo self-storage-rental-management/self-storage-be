@@ -17,12 +17,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class AdminRoleService {
 
     private final RoleRepository roleRepository;
@@ -30,6 +28,20 @@ public class AdminRoleService {
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
     private final AuditLogService auditLogService;
+
+    public AdminRoleService(
+        RoleRepository roleRepository,
+        PermissionRepository permissionRepository,
+        UserRepository userRepository,
+        AdminAuthorizationService authorizationService,
+        AuditLogService auditLogService
+    ) {
+        this.roleRepository = roleRepository;
+        this.permissionRepository = permissionRepository;
+        this.userRepository = userRepository;
+        this.authorizationService = authorizationService;
+        this.auditLogService = auditLogService;
+    }
 
     @Transactional(readOnly = true)
     public List<AdminRoleResponse> list(ActorPrincipal actor) {
@@ -138,12 +150,10 @@ public class AdminRoleService {
         }
 
         if (roleCode == RoleCode.STAFF && intersects(permissions, Set.of(
-            SystemPermission.APPROVE_RESERVATIONS.code(),
-            SystemPermission.MANAGE_PAYMENTS.code(),
             SystemPermission.MANAGE_POLICIES.code(),
             SystemPermission.MANAGE_STAFF_TASKS.code()
         ))) {
-            throw ApiExceptions.conflict("Staff cannot approve requests, manage fees, collect payments or coordinate staff tasks");
+            throw ApiExceptions.conflict("Staff cannot edit policies or coordinate staff tasks");
         }
 
         if (roleCode == RoleCode.BUSINESS && !permissions.containsAll(Set.of(

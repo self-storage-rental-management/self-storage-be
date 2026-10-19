@@ -23,8 +23,6 @@ public class CustomerRenewalOperationController {
     public ApiResponse<RenewalOperationResponse> detail(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){RenewalOperationQuery.none(query);return new ApiResponse<>(service.detail(actors.required(),id,CUSTOMER),CorrelationIdContext.current());}
     @GetMapping("/exception-proposal") @Operation(summary="Read my current proposed signing appointment and deadline",description="Customer-safe projection only, never the internal incident timeline. Missing sources disable confirmation; the command rechecks ownership, version, proposal, policy, calendar and cutoff.")
     public ApiResponse<RenewalExceptionProposalResponse> exceptionProposal(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){RenewalOperationQuery.none(query);return new ApiResponse<>(service.exceptionProposal(actors.required(),id),CorrelationIdContext.current());}
-    @PostMapping("/simulated-payment") @Operation(summary="Pay approved Renewal DEPOSIT only",description="Amount/outcome determined by shared engine. Does not extend Rental. No Customer BALANCE/CASH.")
-    public ApiResponse<RenewalOperationService.Result> deposit(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.Version body,@RequestHeader("Idempotency-Key") String key){return response(service.deposit(actors.required(),id,body,key));}
     @PostMapping("/appointment") @Operation(summary="Book a signing slot within verified deadlines")
     public ApiResponse<RenewalOperationService.Result> appointment(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.Appointment body,@RequestHeader("Idempotency-Key") String key){return response(service.appointment(actors.required(),id,body,key,false));}
     @PatchMapping("/appointment") @Operation(summary="Reschedule signing without resetting deadline")
@@ -35,6 +33,8 @@ public class CustomerRenewalOperationController {
     public ApiResponse<RenewalOperationService.Result> confirm(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.Confirmation body,@RequestHeader("Idempotency-Key") String key){return response(service.confirm(actors.required(),id,body,key));}
     @GetMapping("/payments") @Operation(summary="Read persisted Renewal payment/receipt events")
     public PageResponse<RenewalOperationResponse.Event> payments(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"payments");}
+    @GetMapping("/documents") @Operation(summary="Read customer-visible arrival and signed-contract evidence events")
+    public PageResponse<RenewalOperationResponse.Event> documents(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"documents");}
     @GetMapping("/refunds") @Operation(summary="Read refund review reservations, not proof of payout")
     public PageResponse<RenewalOperationResponse.Event> refunds(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"refunds");}
     private PageResponse<RenewalOperationResponse.Event> timeline(UUID id,MultiValueMap<String,String> query,String kind){var q=RenewalOperationQuery.parse(query);return service.events(actors.required(),id,CUSTOMER,kind,q.page(),q.size(),CorrelationIdContext.current());}

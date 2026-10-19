@@ -1,0 +1,74 @@
+-- Isolated TEST schema for the rental subledger. Not a runtime initializer.
+CREATE TABLE rental_ledger_accounts (
+ rental_id VARCHAR(36) PRIMARY KEY,
+ customer_id VARCHAR(36) NOT NULL,
+ facility_id VARCHAR(36) NOT NULL,
+ revision BIGINT NOT NULL CHECK (revision >= 0)
+);
+CREATE TABLE rental_ledger_obligations (
+ id VARCHAR(36) PRIMARY KEY,
+ rental_id VARCHAR(36) NOT NULL,
+ renewal_id VARCHAR(36),
+ kind VARCHAR(32) NOT NULL CHECK (kind='RENT' OR kind='SECURITY_DEPOSIT' OR kind='RENEWAL_DEPOSIT' OR kind='RENEWAL_REMAINDER'),
+ amount DECIMAL(19,0) NOT NULL CHECK (amount >= 0),
+ due_at_ms BIGINT NOT NULL,
+ source_ref VARCHAR(200) NOT NULL,
+ UNIQUE (rental_id,source_ref,kind),
+ UNIQUE (id,rental_id),
+ FOREIGN KEY (rental_id) REFERENCES rental_ledger_accounts(rental_id)
+);
+CREATE INDEX idx_rental_ledger_due ON rental_ledger_obligations(rental_id,due_at_ms);
+CREATE TABLE renewal_ledger_cancellation_credits (
+ id VARCHAR(36) PRIMARY KEY,rental_id VARCHAR(36) NOT NULL,obligation_id VARCHAR(36) NOT NULL,
+ amount DECIMAL(19,0) NOT NULL CHECK(amount>0),source_ref VARCHAR(200) NOT NULL,reason VARCHAR(200) NOT NULL,
+ UNIQUE(rental_id,source_ref),FOREIGN KEY(obligation_id,rental_id) REFERENCES rental_ledger_obligations(id,rental_id)
+);
+CREATE TABLE rental_ledger_receipts (
+ id VARCHAR(36) PRIMARY KEY,
+ rental_id VARCHAR(36) NOT NULL,
+ method VARCHAR(32) NOT NULL CHECK (method='CASH' OR method='VERIFIED_BANK' OR method='SIMULATED' OR method='VNPAY_SANDBOX'),
+ amount DECIMAL(19,0) NOT NULL CHECK (amount > 0),
+ evidence_ref VARCHAR(200) NOT NULL UNIQUE,
+ evidence_file_id VARCHAR(36),
+ actor_id VARCHAR(36) NOT NULL,
+ received_at_ms BIGINT NOT NULL,
+ UNIQUE (id,rental_id),
+ FOREIGN KEY (rental_id) REFERENCES rental_ledger_accounts(rental_id)
+);
+CREATE INDEX idx_rental_ledger_receipt ON rental_ledger_receipts(rental_id,received_at_ms);
+CREATE TABLE rental_ledger_allocations (
+ receipt_id VARCHAR(36) NOT NULL,
+ obligation_id VARCHAR(36) NOT NULL,
+ rental_id VARCHAR(36) NOT NULL,
+ amount DECIMAL(19,0) NOT NULL CHECK (amount > 0),
+ PRIMARY KEY (receipt_id,obligation_id),
+ FOREIGN KEY (receipt_id,rental_id) REFERENCES rental_ledger_receipts(id,rental_id),
+ FOREIGN KEY (obligation_id,rental_id) REFERENCES rental_ledger_obligations(id,rental_id)
+);
+CREATE INDEX idx_rental_ledger_allocation ON rental_ledger_allocations(obligation_id);
+CREATE TABLE rental_ledger_refunds (
+ id VARCHAR(36) PRIMARY KEY,
+ rental_id VARCHAR(36) NOT NULL,
+ receipt_id VARCHAR(36) NOT NULL,
+ obligation_id VARCHAR(36) NOT NULL,
+ amount DECIMAL(19,0) NOT NULL CHECK (amount > 0),
+ status VARCHAR(16) NOT NULL CHECK (status='RESERVED' OR status='EXECUTED'),
+ decision_ref VARCHAR(200) NOT NULL UNIQUE,
+ payout_ref VARCHAR(200) UNIQUE,
+ FOREIGN KEY (receipt_id,rental_id) REFERENCES rental_ledger_receipts(id,rental_id),
+ FOREIGN KEY (obligation_id,rental_id) REFERENCES rental_ledger_obligations(id,rental_id),
+ FOREIGN KEY (receipt_id,obligation_id) REFERENCES rental_ledger_allocations(receipt_id,obligation_id)
+);
+CREATE INDEX idx_rental_ledger_refund ON rental_ledger_refunds(receipt_id,obligation_id,status);
+CREATE TABLE rental_ledger_commands (
+ actor_id VARCHAR(36) NOT NULL,
+ operation VARCHAR(32) NOT NULL,
+ key_hash VARCHAR(64) NOT NULL,
+ rental_id VARCHAR(36) NOT NULL,
+ payload_hash VARCHAR(64) NOT NULL,
+ result_id VARCHAR(36) NOT NULL,
+ PRIMARY KEY (actor_id,operation,key_hash),
+ FOREIGN KEY (rental_id) REFERENCES rental_ledger_accounts(rental_id)
+);
+
+CREATE TABLE rental_ledger_gateway_evidence (receipt_id VARCHAR(36) PRIMARY KEY,payment_id VARCHAR(36) NOT NULL UNIQUE,proof_log_id VARCHAR(36) NOT NULL UNIQUE,environment VARCHAR(16) NOT NULL CHECK(environment='SANDBOX'),transaction_no VARCHAR(128) NOT NULL UNIQUE,FOREIGN KEY(receipt_id) REFERENCES rental_ledger_receipts(id));

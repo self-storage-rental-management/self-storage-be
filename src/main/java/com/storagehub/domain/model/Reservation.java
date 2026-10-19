@@ -47,6 +47,17 @@ public class Reservation extends BaseEntity {
     @Column(name = "request_fingerprint", length = 64)
     private String requestFingerprint;
 
+    /** Identity document declared by the customer for this reservation. */
+    @Column(name = "identity_document_number", length = 30)
+    private String identityDocumentNumber;
+
+    /** Contact details declared for this reservation; keep them stable if the profile changes later. */
+    @Column(name = "customer_phone", length = 40)
+    private String customerPhone;
+
+    @Column(name = "customer_address", length = 500)
+    private String customerAddress;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "facility_id", nullable = false)
     private Facility facility;

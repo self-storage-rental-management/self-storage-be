@@ -35,11 +35,12 @@ public class VnpayPublicController {
 
     java.net.URI frontendLocation(VnpayService.CallbackResult result) {
         Map<String, String> target = new LinkedHashMap<>();
-        target.put("page", "reservations");
+        target.put("page", result.renewalId()!=null?"rental-records":"reservations");
         target.put("vnpayReturn", "true");
-        target.put("status", result.success() ? "success" : "failed");
+        target.put("status", result.requiresReconciliation()?"review":result.success()?"success":"failed");
         target.put("code", result.rspCode());
         if (result.reservationId() != null) target.put("reservationId", result.reservationId().toString());
+        if (result.renewalId() != null) target.put("renewalId", result.renewalId().toString());
         String separator = properties.getFrontendReturnUrl().contains("?") ? "&" : "?";
         String params = target.entrySet().stream()
             .map(entry -> URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8) + "="

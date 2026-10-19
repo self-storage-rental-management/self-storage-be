@@ -4,8 +4,10 @@ import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import java.util.UUID;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -26,6 +28,10 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     Optional<Rental> findByReservation_Id(UUID reservationId);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from Rental r where r.id = :id")
+    Optional<Rental> findByIdForUpdate(@Param("id") UUID id);
+
     org.springframework.data.domain.Page<Rental> findByCustomer_Id(UUID customerId, org.springframework.data.domain.Pageable pageable);
 
     org.springframework.data.domain.Page<Rental> findByCustomer_IdAndStatus(
@@ -38,7 +44,12 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     java.util.List<Rental> findByFacility_IdAndStatus(UUID facilityId, RentalStatus status);
 
+    @Query("select r.id from Rental r where r.status = :status and r.actualReturnedAt is null")
+    java.util.List<UUID> findActiveUnreturnedIds(@Param("status") RentalStatus status);
+
     long countByFacility_IdAndStatus(UUID facilityId, RentalStatus status);
+
+    java.util.List<Rental> findByStatus(RentalStatus status);
 
     long countByStatus(RentalStatus status);
 }

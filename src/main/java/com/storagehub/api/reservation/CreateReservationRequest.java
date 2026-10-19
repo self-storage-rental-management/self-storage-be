@@ -1,8 +1,10 @@
 package com.storagehub.api.reservation;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
@@ -12,6 +14,17 @@ public class CreateReservationRequest {
 
     @NotNull
     private UUID quoteId;
+
+    @NotBlank
+    @Size(min = 9, max = 30)
+    @Pattern(regexp = "^[0-9A-Za-z][0-9A-Za-z .-]{8,29}$", message = "identityDocumentNumber contains unsupported characters")
+    private String identityDocumentNumber;
+
+    @Size(max = 40)
+    private String customerPhone;
+
+    @Size(max = 500)
+    private String customerAddress;
 
     @Size(max = 500)
     private String goodsCondition;
@@ -44,6 +57,12 @@ public class CreateReservationRequest {
 
     public UUID getQuoteId() { return quoteId; }
     public void setQuoteId(UUID quoteId) { this.quoteId = quoteId; }
+    public String getIdentityDocumentNumber() { return identityDocumentNumber; }
+    public void setIdentityDocumentNumber(String identityDocumentNumber) { this.identityDocumentNumber = identityDocumentNumber; }
+    public String getCustomerPhone() { return customerPhone; }
+    public void setCustomerPhone(String customerPhone) { this.customerPhone = customerPhone; }
+    public String getCustomerAddress() { return customerAddress; }
+    public void setCustomerAddress(String customerAddress) { this.customerAddress = customerAddress; }
     public String getGoodsCondition() { return goodsCondition; }
     public void setGoodsCondition(String goodsCondition) { this.goodsCondition = goodsCondition; }
     public String getNotes() { return notes; }

@@ -1,0 +1,113 @@
+package com.storagehub.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.Instant;
+import java.time.LocalDateTime;
+import com.storagehub.service.calendar.ServiceCalendarPolicy;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class ReservationCheckInPolicyTests {
+
+    @ParameterizedTest
+    @CsvSource({
+        "2026-10-12T02:00,2026-10-14T08:00",
+        "2026-10-12T08:00,2026-10-14T08:00",
+        "2026-10-12T09:00,2026-10-14T09:30",
+        "2026-10-12T10:00,2026-10-14T10:30",
+        "2026-10-12T12:00,2026-10-14T12:30",
+        "2026-10-12T16:30,2026-10-15T08:00",
+        "2026-10-12T17:38,2026-10-15T08:00"
+    })
+    void otherGoodsFollowTheSevenTeamPolicyExamples(String submitted, String expected) {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            LocalDateTime.parse(submitted).atZone(ServiceCalendarPolicy.ZONE).toInstant(), true);
+        assertThat(window.availableAt()).isEqualTo(
+            LocalDateTime.parse(expected).atZone(ServiceCalendarPolicy.ZONE).toInstant());
+    }
+
+    @Test
+    void normalGoodsIncludeFifteenMinutesForPaymentAndOneWorkingDayForAssignment() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-12T03:00:00Z"), false
+        );
+
+        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-13T03:30:00Z"));
+        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-19T09:30:00Z"));
+    }
+
+    @Test
+    void otherGoodsAddOneWorkingDayForStaffReview() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-12T03:00:00Z"), true
+        );
+
+        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-14T03:30:00Z"));
+    }
+
+    @Test
+    void earlyMorningAvailabilityMovesToEightInTheMorning() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-11T19:00:00Z"), false
+        );
+
+        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-13T01:00:00Z"));
+    }
+
+    @Test
+    void afterHoursAvailabilityMovesToEightTheNextMorningAndRejectsNightAppointments() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-12T10:30:00Z"), true
+        );
+
+        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-15T01:00:00Z"));
+        assertThat(window.contains(Instant.parse("2026-10-15T16:30:00Z"))).isFalse();
+        assertThat(window.contains(Instant.parse("2026-10-15T03:00:00Z"))).isTrue();
+    }
+
+    @Test
+    void lastCheckInSlotIsFourThirtyAndFiveOClockIsRejected() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-12T03:00:00Z"), false
+        );
+
+        assertThat(window.contains(Instant.parse("2026-10-13T09:30:00Z"))).isTrue();
+        assertThat(window.contains(Instant.parse("2026-10-13T10:00:00Z"))).isFalse();
+    }
+
+    @Test
+    void staffReviewDueAtCountsOnlyWorkingHours() {
+        assertThat(ReservationCheckInPolicy.staffReviewDueAt(
+            Instant.parse("2026-10-12T10:30:00Z")
+        )).isEqualTo(Instant.parse("2026-10-13T10:00:00Z"));
+    }
+
+    @Test
+    void availabilityDateIsDayOneAndWeekendAppointmentsRemainAvailable() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-12T03:00:00Z"), false
+        );
+
+        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-19T09:30:00Z"));
+        assertThat(window.contains(Instant.parse("2026-10-17T03:00:00Z"))).isTrue();
+        assertThat(window.contains(Instant.parse("2026-10-19T09:30:00Z"))).isTrue();
+        assertThat(window.contains(Instant.parse("2026-10-20T01:00:00Z"))).isFalse();
+    }
+
+    @Test
+    void calculatesRepresentativeWindowsFromNineteenthOctober2026() {
+        var normalGoods = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-19T03:00:00Z"), false
+        );
+        assertThat(normalGoods.availableAt()).isEqualTo(Instant.parse("2026-10-20T03:30:00Z"));
+        assertThat(normalGoods.deadlineAt()).isEqualTo(Instant.parse("2026-10-26T09:30:00Z"));
+
+        var otherGoods = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-19T03:00:00Z"), true
+        );
+        assertThat(otherGoods.availableAt()).isEqualTo(Instant.parse("2026-10-21T03:30:00Z"));
+        assertThat(otherGoods.deadlineAt()).isEqualTo(Instant.parse("2026-10-27T09:30:00Z"));
+    }
+}

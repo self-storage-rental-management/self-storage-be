@@ -21,6 +21,12 @@ import org.springframework.web.multipart.support.MissingServletRequestPartExcept
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler({org.springframework.web.servlet.resource.NoResourceFoundException.class,
+        org.springframework.web.servlet.NoHandlerFoundException.class})
+    public ResponseEntity<ApiErrorResponse> handleMissingEndpoint(Exception exception) {
+        return error(HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "Requested endpoint was not found", null);
+    }
+
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiErrorResponse> handleApiException(ApiException exception) {
         return error(exception.getStatus(), exception.getCode(), exception.getMessage(), exception.getDetails());

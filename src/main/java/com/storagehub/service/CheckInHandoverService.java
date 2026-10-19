@@ -3,6 +3,8 @@ package com.storagehub.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.checkin.CheckInResponse;
+import com.storagehub.api.checkin.CheckInPaymentRequest;
+import com.storagehub.api.checkin.CheckInPaymentResponse;
 import com.storagehub.api.checkin.CompleteCheckInRequest;
 import com.storagehub.api.checkin.MarkNoShowRequest;
 import com.storagehub.api.checkin.RejectCheckInRequest;
@@ -14,6 +16,9 @@ import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.FileAsset;
 import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.model.Payment;
+import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationStatus;
@@ -28,6 +33,9 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.RentalRepository;
+import com.storagehub.domain.repo.PaymentRepository;
+import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
@@ -37,6 +45,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -44,11 +53,17 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
 public class CheckInHandoverService {
+
+    @Autowired
+    private AccessCredentialService accessCredentialService;
+    @Autowired
+    private ManualRentalPaymentService manualRentalPayments;
 
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
@@ -56,6 +71,9 @@ public class CheckInHandoverService {
     private final CheckInRepository checkInRepository;
     private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
+    private final PaymentRepository paymentRepository;
+    private final ReservationGoodsItemRepository goodsItemRepository;
+    private final ReservationPricingSnapshotRepository pricingSnapshotRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
@@ -192,6 +210,12 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Lịch nhận kho đã được xác nhận",
+            "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
+            reservation.getId()
+        );
         return toResponse(reservation, saved, assignment);
     }
 
@@ -218,6 +242,10 @@ public class CheckInHandoverService {
         if (reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
+        if (!request.checklist().identityVerified()) {
+            throw ApiExceptions.conflict("Customer identity verification is required");
+        }
+        assertIdentityMatchesReservation(reservation, request.identityDocumentNumber());
         UnitAssignment assignment = activeAssignment(reservation.getId());
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
@@ -239,6 +267,11 @@ public class CheckInHandoverService {
         }
         validateVariance(reservation, request);
         validateEvidence(checkInId, request.evidenceReferences());
+        requireRemainingPayment(reservation);
+        if (accessCredentialService != null
+            && !accessCredentialService.hasActiveForReservation(reservation.getId())) {
+            throw ApiExceptions.conflict("At least one active access credential must be issued before handover");
+        }
 
         User operator = requireActor(actor);
         Instant now = Instant.now();
@@ -277,7 +310,65 @@ public class CheckInHandoverService {
                 + " đã được nhân viên bàn giao và đang chờ bạn xác nhận.",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Bàn giao đã hoàn tất, chờ khách xác nhận",
+            "Đơn " + reservation.getReservationCode()
+                + " đã bàn giao gian kho và đang chờ khách hàng xác nhận nhận kho.",
+            reservation.getId()
+        );
         return toResponse(reservation, saved, assignment);
+    }
+
+    @Transactional
+    public CheckInPaymentResponse recordRemainingPayment(
+        ActorPrincipal actor,
+        UUID checkInId,
+        CheckInPaymentRequest request
+    ) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getStatus() != CheckInStatus.scheduled
+            || reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+            throw ApiExceptions.conflict("Check-in is not ready to record the remaining payment");
+        }
+        var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (request.amount().compareTo(snapshot.getDueAtCheckIn()) != 0) {
+            throw ApiExceptions.validation("Payment amount must match the remaining check-in amount", Map.of("expectedAmount", snapshot.getDueAtCheckIn()));
+        }
+        User operator = requireActor(actor);
+        validatePaymentEvidence(checkInId, request.paymentEvidenceFileId());
+        Instant now = Instant.now();
+        String reference = request.transactionReference() == null || request.transactionReference().isBlank()
+            ? "EVIDENCE-" + request.paymentEvidenceFileId()
+            : request.transactionReference().trim();
+        var recorded = manualRentalPayments.booking(reservation,checkInId,operator,snapshot.getDueAtCheckIn(),request.amount(),
+            request.paymentMethod(),reference,request.paymentEvidenceFileId(),now);
+        Payment saved=recorded.payment();
+        if(!recorded.created())return toPaymentResponse(saved);
+        auditLogService.recordMutation(
+            operator, "CHECKIN_REMAINING_PAYMENT_RECORDED", "Payment", saved.getId(),
+            reservation.getFacility().getId(), null, toPaymentResponse(saved)
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.PAYMENT,
+            "Đã ghi nhận thanh toán khi nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.PAYMENT,
+            "Đã ghi nhận thanh toán khi nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
+            reservation.getId()
+        );
+        return toPaymentResponse(saved);
     }
 
     @Transactional
@@ -313,6 +404,12 @@ public class CheckInHandoverService {
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Ghi nhận không đến nhận kho",
+            "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách hàng không đến nhận kho",
             "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
             reservation.getId()
         );
@@ -407,6 +504,12 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " chưa thể nhận kho: " + request.reason().trim(),
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Đã từ chối bàn giao kho",
+            "Đơn " + reservation.getReservationCode() + " chưa thể nhận kho: " + request.reason().trim(),
+            reservation.getId()
+        );
         return toResponse(reservation, saved, assignment);
     }
 
@@ -435,6 +538,21 @@ public class CheckInHandoverService {
         }
     }
 
+    private void assertIdentityMatchesReservation(Reservation reservation, String providedIdentity) {
+        String expected = normalizeIdentity(reservation.getIdentityDocumentNumber());
+        String actual = normalizeIdentity(providedIdentity);
+        if (expected == null || actual == null || !expected.equals(actual)) {
+            throw ApiExceptions.conflict("Customer identity does not match the reservation");
+        }
+    }
+
+    private String normalizeIdentity(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().replaceAll("[\\s.-]", "").toUpperCase(Locale.ROOT);
+    }
+
     private UnitAssignment activeAssignment(UUID reservationId) {
         return assignmentRepository.findByReservation_IdAndStatus(
             reservationId, UnitAssignmentStatus.ACTIVE
@@ -457,6 +575,7 @@ public class CheckInHandoverService {
         UnitAssignment assignment
     ) {
         StorageUnit unit = assignment.getStorageUnit();
+        BigDecimal[] declaredDimensions = declaredGoodsDimensions(reservation.getId());
         return new CheckInResponse(
             checkIn == null ? null : checkIn.getId(),
             checkIn == null ? null : checkIn.getStatus(),
@@ -470,12 +589,82 @@ public class CheckInHandoverService {
             checkIn == null ? null : checkIn.getPerformedBy().getFullName(),
             reservation.getId(), reservation.getReservationCode(), reservation.getStatus(),
             reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
-            reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
+            reservation.getCustomer().getEmail(), reservation.getIdentityDocumentNumber(),
+            reservation.getCustomer().getPhone(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), unit.getId(), unit.getCode(), unit.getStatus(),
             assignment.getId(), assignment.getStatus(), reservation.getStartDate(),
-            reservation.getEndDate(), reservation.getTotalGoodsWeightKg(),
-            reservation.getTotalGoodsVolumeM3(), readHandover(checkIn)
+            reservation.getEndDate(), declaredPackageCount(reservation.getId()),
+            reservation.getTotalGoodsWeightKg(),
+            reservation.getTotalGoodsVolumeM3(), declaredDimensions[0], declaredDimensions[1],
+            declaredDimensions[2], dueAtCheckIn(reservation.getId()), readHandover(checkIn)
         );
+    }
+
+    private BigDecimal dueAtCheckIn(UUID reservationId) {
+        if (pricingSnapshotRepository == null) {
+            return null;
+        }
+        return pricingSnapshotRepository.findByReservation_Id(reservationId)
+            .map(snapshot -> snapshot.getDueAtCheckIn())
+            .orElse(null);
+    }
+
+    private void requireRemainingPayment(Reservation reservation) {
+        if (pricingSnapshotRepository == null || paymentRepository == null) {
+            return;
+        }
+        var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        if (snapshot == null || snapshot.getDueAtCheckIn() == null
+            || snapshot.getDueAtCheckIn().signum() <= 0) {
+            return;
+        }
+        var payment = paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(
+            reservation.getId(), PaymentType.RENTAL_BALANCE
+        ).orElse(null);
+        if (payment == null || payment.getStatus() != PaymentStatus.PAID
+            || payment.getAmount() == null
+            || payment.getAmount().compareTo(snapshot.getDueAtCheckIn()) != 0) {
+            throw ApiExceptions.conflict("Remaining check-in payment must be recorded before handover");
+        }
+    }
+
+    private CheckInPaymentResponse toPaymentResponse(Payment payment) {
+        return new CheckInPaymentResponse(
+            payment.getId(), payment.getReservation().getId(), payment.getAmount(), payment.getCurrency(),
+            payment.getPurpose(), payment.getStatus(), payment.getGatewayTransactionNo(),
+            payment.getGatewayBankCode(), payment.getPaidAt(), payment.getProcessedAt(),
+            payment.getInitiatedBy().getFullName()
+        );
+    }
+
+    private Integer declaredPackageCount(UUID reservationId) {
+        var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId);
+        if (goodsItems.isEmpty()) {
+            return null;
+        }
+        return goodsItems.stream().mapToInt(item -> item.getQuantity()).sum();
+    }
+
+    /**
+     * Returns the largest declared package dimensions, orientation-normalized.
+     * These values are shown to the operator and are also used to prevent a
+     * handover from silently accepting a materially different package size.
+     */
+    private BigDecimal[] declaredGoodsDimensions(UUID reservationId) {
+        BigDecimal[] largest = {null, null, null};
+        for (var item : goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId)) {
+            if (item.getLengthCm() == null || item.getWidthCm() == null || item.getHeightCm() == null) {
+                continue;
+            }
+            BigDecimal[] dimensions = {item.getLengthCm(), item.getWidthCm(), item.getHeightCm()};
+            Arrays.sort(dimensions);
+            for (int index = 0; index < dimensions.length; index++) {
+                if (largest[index] == null || dimensions[index].compareTo(largest[index]) > 0) {
+                    largest[index] = dimensions[index];
+                }
+            }
+        }
+        return largest;
     }
 
     private String writeHandover(CompleteCheckInRequest request) {
@@ -529,17 +718,36 @@ public class CheckInHandoverService {
     }
 
     private void validateVariance(Reservation reservation, CompleteCheckInRequest request) {
+        Integer declaredPackageCount = declaredPackageCount(reservation.getId());
+        boolean packageCountVaries = declaredPackageCount != null
+            && request.packageCount() != declaredPackageCount;
         boolean weightVaries = exceedsTolerance(
             request.actualMeasurements().weightKg(), reservation.getTotalGoodsWeightKg(), new BigDecimal("0.10")
         );
         boolean volumeVaries = exceedsTolerance(
             request.actualMeasurements().actualVolumeM3(), reservation.getTotalGoodsVolumeM3(), new BigDecimal("0.000100")
         );
-        if (!weightVaries && !volumeVaries) {
+        BigDecimal[] declaredDimensions = declaredGoodsDimensions(reservation.getId());
+        boolean dimensionsVaries = false;
+        if (declaredDimensions[0] != null) {
+            BigDecimal[] actualDimensions = {
+                request.actualMeasurements().lengthCm(),
+                request.actualMeasurements().widthCm(),
+                request.actualMeasurements().heightCm()
+            };
+            Arrays.sort(actualDimensions);
+            for (int index = 0; index < actualDimensions.length; index++) {
+                if (exceedsTolerance(actualDimensions[index], declaredDimensions[index], new BigDecimal("0.5"))) {
+                    dimensionsVaries = true;
+                    break;
+                }
+            }
+        }
+        if (!packageCountVaries && !weightVaries && !volumeVaries && !dimensionsVaries) {
             return;
         }
         if (!request.actualMeasurements().varianceAccepted()) {
-            throw ApiExceptions.conflict("Actual goods differ from the reservation and the variance is not accepted");
+            throw ApiExceptions.conflict("Actual goods dimensions or measurements differ from the reservation and the variance is not accepted");
         }
         if (request.varianceReason() == null || request.varianceReason().isBlank()) {
             throw ApiExceptions.validation("varianceReason is required when actual goods differ", null);
@@ -572,6 +780,21 @@ public class CheckInHandoverService {
         );
         if (!valid) {
             throw ApiExceptions.validation("Evidence must contain active files linked to this check-in", null);
+        }
+    }
+
+    private void validatePaymentEvidence(UUID checkInId, UUID evidenceFileId) {
+        FileAsset asset = fileAssetRepository.findById(evidenceFileId)
+            .orElseThrow(() -> ApiExceptions.validation("Payment evidence file was not found", null));
+        boolean supportedType = asset.getContentType() != null
+            && (asset.getContentType().startsWith("image/")
+                || "application/pdf".equalsIgnoreCase(asset.getContentType()));
+        if (!supportedType || asset.getStatus() != FileAssetStatus.ACTIVE
+            || !"CHECK_IN".equals(asset.getEntityType())
+            || !checkInId.equals(asset.getEntityId())) {
+            throw ApiExceptions.validation(
+                "Payment evidence must be an active image or PDF linked to this check-in", null
+            );
         }
     }
 

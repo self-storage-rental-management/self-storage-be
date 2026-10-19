@@ -12,7 +12,8 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
     BigDecimal amount, String currency, Instant createdAt, Long version, UUID requestedBy,
     UUID acceptedQuoteId, Integer acceptedRevision, UUID reviewerId, Instant reviewedAt,
     String reviewReason, Instant approvedPaymentDeadline, UUID extensionHoldRef,
-    FinancialCheck financialCheck, List<String> allowedActions, List<String> disabledReasons,
+    FinancialCheck financialCheck, SystemVerification systemVerification,
+    List<String> allowedActions, List<String> disabledReasons,
     @Schema(description="Immutable customer-accepted quote terms; null for legacy records. Not current catalog prices.")
     RenewalQuoteResponse.Terms acceptedTerms,
     @Schema(description="Persisted cancellation reason only; no inferred actor/time.") String cancellationReason) {
@@ -21,4 +22,7 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
     public record Unit(UUID id, String code) {}
     public record FinancialCheck(String completeness, Instant checkedAt,
         List<UUID> blockingObligationRefs, Boolean hasUnresolvedDispute) {}
+    @Schema(description="Automatic verification from currently integrated Rental, policy, eligibility and pricing sources. It does not imply payment readiness.")
+    public record SystemVerification(String status, Instant checkedAt, List<String> verifiedChecks,
+        List<String> blockingReasons) {}
 }

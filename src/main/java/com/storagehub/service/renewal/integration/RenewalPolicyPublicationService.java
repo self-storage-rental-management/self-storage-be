@@ -32,8 +32,12 @@ public class RenewalPolicyPublicationService {
         if(rows.isEmpty())return Optional.empty();
         if(rows.size()!=1)throw ApiExceptions.conflict("Renewal policy source is ambiguous");
         var p=decode(rows.getFirst(),facility);
-        if(applicableDate!=null&&(applicableDate.isBefore(p.effectiveFrom())||p.effectiveTo()!=null&&applicableDate.isAfter(p.effectiveTo())))return Optional.empty();
+        if(!appliesOn(p,applicableDate))return Optional.empty();
         return Optional.of(new Stored("system-setting:"+rows.getFirst().getId(),p));
+    }
+    /** Existing inclusive effectiveFrom/effectiveTo semantics, shared by readers and regression tests. */
+    static boolean appliesOn(PublishedRenewalPolicy policy,LocalDate date) {
+        return date==null||!date.isBefore(policy.effectiveFrom())&&(policy.effectiveTo()==null||!date.isAfter(policy.effectiveTo()));
     }
     @Transactional(readOnly=true)
     public PublishedRenewalPolicy get(ActorPrincipal actor,UUID facility) {
@@ -55,7 +59,7 @@ public class RenewalPolicyPublicationService {
         long revision=before==null?0:before.revision();
         if(input.expectedRevision()!=revision)throw ApiExceptions.conflict("Renewal policy revision changed; reload required");
         var p=new PublishedRenewalPolicy("RENEWAL_POLICY_V1",facility,Math.addExact(revision,1),UUID.randomUUID().toString(),user.getId(),Instant.now(),
-            input.effectiveFrom(),input.effectiveTo(),input.quoteTtlMinutes(),input.paymentWindowHours(),input.requestWindowDays(),input.depositRate(),
+            input.effectiveFrom(),input.effectiveTo(),input.effectiveQuoteTtlMinutes(),input.paymentWindowHours(),input.requestWindowDays(),input.depositRate(),
             Set.copyOf(input.eligiblePackageIds()),input.signing(),input.term());
         var json=encode(p);if(json.length()>2000)throw ApiExceptions.validation("Policy exceeds existing settings storage limit",null);
         if(setting==null){setting=new SystemSetting();setting.setSettingKey(key(facility));setting.setGroupName("Chính sách gia hạn");setting.setLabel("Chính sách gia hạn theo cơ sở");setting.setSettingType("text");setting.setValue(json);em.persist(setting);}
@@ -75,8 +79,9 @@ public class RenewalPolicyPublicationService {
     }
     private String encode(Object value){try{return mapper.writeValueAsString(value);}catch(JsonProcessingException e){throw new IllegalStateException("Policy serialization failed",e);}}
     public static void validate(PublishedRenewalPolicy.Input p) {
+        Integer ttl = p == null ? null : p.effectiveQuoteTtlMinutes();
         if(p==null||p.expectedRevision()==null||p.expectedRevision()<0||p.effectiveFrom()==null||p.effectiveTo()!=null&&p.effectiveTo().isBefore(p.effectiveFrom())
-            ||p.quoteTtlMinutes()==null||p.quoteTtlMinutes()<1||p.paymentWindowHours()==null||p.paymentWindowHours()<1||p.requestWindowDays()==null||p.requestWindowDays()<0
+            ||ttl==null||ttl<1||p.paymentWindowHours()==null||p.paymentWindowHours()<1||p.requestWindowDays()==null||p.requestWindowDays()<0
             ||p.depositRate()==null||p.depositRate().signum()<0||p.depositRate().compareTo(java.math.BigDecimal.ONE)>0||p.eligiblePackageIds()==null||p.eligiblePackageIds().size()>20||p.eligiblePackageIds().stream().anyMatch(Objects::isNull))
             throw ApiExceptions.validation("Incomplete or invalid renewal policy",null);
         var s=p.signing();if(s!=null&&(s.signingWindowMinutes()==null||s.signingWindowMinutes()<1||s.exceptionExtensionLimitMinutes()==null||s.exceptionExtensionLimitMinutes()<1))throw ApiExceptions.validation("Invalid signing policy",null);

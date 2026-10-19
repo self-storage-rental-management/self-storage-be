@@ -20,10 +20,12 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
     private final LedgerStore store;
     private final ObjectProvider<LedgerCoverageSource> coverage;
     private final ObjectProvider<Clock> clocks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<LedgerCoverageInventory> inventories;
     private record Verified(LedgerStore.Snapshot snapshot,LedgerCoverageSource.Coverage proof) {}
     private Optional<Verified> verified(Rental rental,Instant now) {
         var source=coverage.getIfAvailable();if(source==null)return Optional.empty();
-        return store.read(rental.getId()).filter(snapshot->rental.getCustomer()!=null&&rental.getFacility()!=null
+        return store.read(rental.getId()).filter(snapshot->Objects.equals(snapshot.rentalId(),rental.getId())&&snapshot.revision()>=0&&rental.getCustomer()!=null&&rental.getFacility()!=null
             &&Objects.equals(snapshot.customerId(),rental.getCustomer().getId())&&Objects.equals(snapshot.facilityId(),rental.getFacility().getId())).flatMap(snapshot->source.verify(rental,snapshot,now).filter(p->
             Objects.equals(p.rentalId(),rental.getId())&&p.ledgerRevision()==snapshot.revision()&&p.sourceRef()!=null&&!p.sourceRef().isBlank()
             &&p.verifiedAt()!=null&&!p.verifiedAt().isAfter(now)&&p.billingMode()!=null).map(p->new Verified(snapshot,p)));
@@ -44,7 +46,27 @@ public class LedgerFinancialAdapters implements RentalReadSources.FinancialSourc
     }
     public boolean consistentThroughApproval(){var source=coverage.getIfAvailable();return source!=null&&source.consistentThroughApproval();}
     public Optional<OverdueSources.Finance> read(Rental rental,Instant now) {
-        return verified(rental,now).map(v->new OverdueSources.Finance(now,v.snapshot().obligations().stream().map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList()));
+        var complete=verified(rental,now).map(v->new OverdueSources.Finance(now,v.snapshot().obligations().stream().map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList()));
+        if(complete.isPresent())return complete;
+        var inventory=inventories==null?null:inventories.getIfAvailable();if(inventory==null)return Optional.empty();
+        var stored=store.read(rental.getId());if(stored.isEmpty())return Optional.empty();var snapshot=stored.get();
+        if(rental.getCustomer()==null||rental.getFacility()==null||!rental.getId().equals(snapshot.rentalId())
+            ||!rental.getCustomer().getId().equals(snapshot.customerId())||!rental.getFacility().getId().equals(snapshot.facilityId())
+            ||!snapshot.refunds().isEmpty()
+            ||snapshot.receipts().stream().anyMatch(p->p.method()!=LedgerStore.Method.VNPAY_SANDBOX))return Optional.empty();
+        var evidence=inventory.inspect(rental,stored);
+        if(!rental.getId().equals(evidence.rentalId())||!Objects.equals(snapshot.revision(),evidence.ledgerRevision())
+            ||!"PARTIAL".equals(evidence.completeness())
+            ||evidence.gaps().stream().anyMatch(Set.of("RENEWAL_TERMINAL_ACCOUNTING_UNRECONCILED",
+                "SANDBOX_RECEIPT_BINDING_INVALID","SANDBOX_PAYMENT_NOT_RECONCILED","PAYMENT_NOT_PROJECT_SANDBOX",
+                "PAYMENT_BINDING_INVALID","PAYMENT_DISPUTED","PAYMENT_REFUND_EXECUTION_UNRECONCILED",
+                "LEDGER_REFUND_INCOMPLETE","LEDGER_BINDING_INVALID")::contains))return Optional.empty();
+        // Inventory verifies every Sandbox receipt against the Payment, callback proof and allocation.
+        // Other receipt methods still cannot reduce a partial overdue projection.
+        var matched=evidence.renewalDeposits().stream().filter(d->"MATCHED".equals(d.status())).map(LedgerCoverageInventory.RenewalDepositEvidence::obligationId).collect(java.util.stream.Collectors.toSet());
+        return Optional.of(new OverdueSources.Finance(now,snapshot.obligations().stream().filter(o->matched.contains(o.id())&&o.kind()==LedgerStore.Kind.RENEWAL_DEPOSIT
+                &&o.allocated().signum()==0&&o.refunded().signum()==0)
+            .map(o->new OverdueSources.Obligation(o.id(),rental.getId(),o.dueAt(),o.outstanding(),"VND")).toList(),"PARTIAL"));
     }
     private Instant now(){var clock=clocks.getIfAvailable();return (clock==null?Clock.systemUTC():clock).instant();}
 }

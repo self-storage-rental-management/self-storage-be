@@ -71,36 +71,7 @@ public class LocalDemoDataInitializer {
     }
 
     private Map<String, Facility> seedFacilities() {
-        Map<String, Facility> result = new HashMap<>();
-        for (FacilityDefinition definition : List.of(
-            new FacilityDefinition(
-                "HCM-Q1-F01",
-                "Kho Việt – Cơ sở Quận 1",
-                "125 Nguyễn Bỉnh Khiêm, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh",
-                "TP. Hồ Chí Minh"
-            ),
-            new FacilityDefinition(
-                "BD-F01",
-                "Kho Việt – Cơ sở Bình Dương",
-                "468 Đại lộ Bình Dương, Phường Lái Thiêu, TP. Thuận An, Bình Dương",
-                "Bình Dương"
-            )
-        )) {
-            Facility facility = facilityRepository.findAll().stream()
-                .filter(item -> definition.code().equals(item.getCode()))
-                .findFirst()
-                .orElseGet(() -> {
-                    Facility created = new Facility();
-                    created.setCode(definition.code());
-                    created.setName(definition.name());
-                    created.setAddress(definition.address());
-                    created.setCity(definition.city());
-                    created.setStatus(FacilityStatus.active);
-                    return facilityRepository.saveAndFlush(created);
-                });
-            result.put(facility.getCode(), facility);
-        }
-        return result;
+        return new HashMap<>();
     }
 
     private Map<String, UnitType> seedUnitTypes(Map<String, Facility> facilities) {
@@ -116,19 +87,26 @@ public class LocalDemoDataInitializer {
                     unitType = new UnitType();
                     unitType.setFacility(facility);
                     unitType.setCode(definition.code());
-                    unitType.setName(definition.name());
-                    unitType.setLengthM(decimal(definition.lengthM()));
-                    unitType.setWidthM(decimal(definition.widthM()));
-                    unitType.setHeightM(decimal(definition.heightM()));
-                    unitType.setMonthlyPrice(decimal(definition.monthlyPrice()));
-                    unitType.setMaxLoadKg(decimal(definition.maxLoadKg()));
-                    unitType.setRackCount(definition.rackCount());
-                    unitType.setRackLengthM(decimal(4.0));
-                    unitType.setRackWidthM(decimal(2.0));
-                    unitType.setRackHeightM(decimal(4.5));
-                    unitType.setStatus(UnitTypeStatus.active);
-                    unitType = unitTypeRepository.saveAndFlush(unitType);
                 }
+                unitType.setName(definition.name());
+                unitType.setDescription(definition.description());
+                unitType.setLengthM(decimal(definition.lengthM()));
+                unitType.setWidthM(decimal(definition.widthM()));
+                unitType.setHeightM(decimal(definition.heightM()));
+                if (unitType.getMonthlyPrice() == null || unitType.getMonthlyPrice().signum() <= 0) unitType.setMonthlyPrice(decimal(definition.monthlyPrice()));
+                if (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().signum() <= 0) unitType.setSecurityDepositAmount(decimal(definition.monthlyPrice()));
+                unitType.setMaxLoadKg(decimal(definition.maxLoadKg()));
+                unitType.setRackCount(definition.rackCount());
+                unitType.setRackLengthM(decimal(4.0));
+                unitType.setRackWidthM(decimal(2.0));
+                unitType.setRackHeightM(decimal(4.5));
+                unitType.setAisleWidthM(decimal(definition.aisleWidthM()));
+                unitType.setTrolleyType(definition.trolleyType());
+                unitType.setSmallBoxCapacity(definition.smallBoxCapacity());
+                unitType.setLargeBoxCapacity(definition.largeBoxCapacity());
+                unitType.setImageUrl(definition.imageUrl());
+                unitType.setStatus(UnitTypeStatus.active);
+                unitType = unitTypeRepository.saveAndFlush(unitType);
                 result.put(key, unitType);
             }
         }
@@ -156,9 +134,7 @@ public class LocalDemoDataInitializer {
                     unit.setCode(code);
                     unit.setFloor(String.valueOf(definition.floor()));
                     unit.setZone(definition.zone());
-                    unit.setStatus(isOccupied(facilityCode, definition.code(), number)
-                        ? StorageUnitStatus.occupied
-                        : StorageUnitStatus.available);
+                    unit.setStatus(StorageUnitStatus.available);
                     StorageUnit saved = storageUnitRepository.saveAndFlush(unit);
                     existing.put(saved.getCode(), saved);
                     createdCount++;
@@ -200,13 +176,7 @@ public class LocalDemoDataInitializer {
             new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "HCM-Q1-F01", FacilityScopeLevel.OPERATE),
             new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "HCM-Q1-F01", FacilityScopeLevel.MANAGE),
             new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", null, null),
-            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", null, null),
-            new DemoUserDefinition("thanhthao725218@gmail.com", "Thanh Thao", "+84 900 000 002", RoleCode.CUSTOMER, "Customer@1234!", null, null),
-            new DemoUserDefinition("staff.bd@storagehub.demo", "Staff Binh Duong", "+84 900 000 003", RoleCode.STAFF, "Staff@1234!", "BD-F01", FacilityScopeLevel.OPERATE),
-            new DemoUserDefinition("staff.q1@storagehub.demo", "Staff Quan 1", "+84 900 000 004", RoleCode.STAFF, "Staff@1234!", "HCM-Q1-F01", FacilityScopeLevel.OPERATE),
-            new DemoUserDefinition("manager.bd@storagehub.demo", "Manager Binh Duong", "+84 900 000 005", RoleCode.MANAGER, "Manager@1234!", "BD-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("manager.q1@storagehub.demo", "Manager Quan 1", "+84 900 000 006", RoleCode.MANAGER, "Manager@1234!", "HCM-Q1-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("bo@storagehub.demo", "Business Owner", "+84 900 000 007", RoleCode.BUSINESS, "Business@1234!", null, null)
+            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", null, null)
         )) {
             Role role = roleRepository.findByCode(definition.role())
                 .orElseThrow(() -> new IllegalStateException("Role has not been initialized: " + definition.role()));
@@ -226,13 +196,15 @@ public class LocalDemoDataInitializer {
 
             if (definition.facilityCode() != null) {
                 Facility facility = facilities.get(definition.facilityCode());
-                UserFacilityScope scope = userFacilityScopeRepository
-                    .findByUser_IdAndFacility_Id(saved.getId(), facility.getId())
-                    .orElseGet(UserFacilityScope::new);
-                scope.setUser(saved);
-                scope.setFacility(facility);
-                scope.setScopeLevel(definition.scopeLevel());
-                userFacilityScopeRepository.saveAndFlush(scope);
+                if (facility != null) {
+                    UserFacilityScope scope = userFacilityScopeRepository
+                        .findByUser_IdAndFacility_Id(saved.getId(), facility.getId())
+                        .orElseGet(UserFacilityScope::new);
+                    scope.setUser(saved);
+                    scope.setFacility(facility);
+                    scope.setScopeLevel(definition.scopeLevel());
+                    userFacilityScopeRepository.saveAndFlush(scope);
+                }
             }
         }
         return seededCount;
@@ -240,10 +212,10 @@ public class LocalDemoDataInitializer {
 
     private List<UnitTypeDefinition> unitTypeDefinitions() {
         return List.of(
-            new UnitTypeDefinition("S", "Kho Nhỏ (S)", 8.0, 10.0, 5.0, 5_500_000, 600, 4, 1, "Khu A"),
-            new UnitTypeDefinition("M", "Kho Trung (M)", 12.6, 10.4, 5.0, 9_500_000, 1_200, 6, 2, "Khu B"),
-            new UnitTypeDefinition("L", "Kho Lớn (L)", 18.3, 10.8, 5.0, 15_000_000, 2_400, 8, 3, "Khu C"),
-            new UnitTypeDefinition("XL", "Kho Rất Lớn (XL)", 25.0, 11.2, 5.0, 22_500_000, 3_600, 10, 4, "Khu D")
+            new UnitTypeDefinition("S", "Kho Nhỏ (S)", "Phù hợp đồ gia dụng nhẹ và thùng carton", 8.0, 10.0, 5.0, 5_500_000, 600, 4, 1.8, "Xe đẩy tay / xe sàn nhỏ", 336, 200, "/images/customer-units/kho-s.jpg", 1, "Khu A"),
+            new UnitTypeDefinition("M", "Kho Trung (M)", "Phù hợp thiết bị văn phòng và nội thất vừa", 12.6, 10.4, 5.0, 9_500_000, 1_200, 6, 2.2, "Xe đẩy sàn phẳng", 504, 300, "/images/customer-units/kho-m.jpg", 2, "Khu B"),
+            new UnitTypeDefinition("L", "Kho Lớn (L)", "Phù hợp pallet hàng và tồn kho kinh doanh", 18.3, 10.8, 5.0, 15_000_000, 2_400, 8, 2.6, "Xe nâng tay pallet", 672, 400, "/images/customer-units/kho-l.jpg", 3, "Khu C"),
+            new UnitTypeDefinition("XL", "Kho Rất Lớn (XL)", "Phù hợp máy móc, hàng nặng và pallet công nghiệp", 25.0, 11.2, 5.0, 22_500_000, 3_600, 10, 3.0, "Xe nâng điện dắt bộ", 840, 500, "/images/customer-units/kho-xl.jpg", 4, "Khu D")
         );
     }
 
@@ -256,13 +228,6 @@ public class LocalDemoDataInitializer {
         );
     }
 
-    private boolean isOccupied(String facilityCode, String unitTypeCode, int number) {
-        if ("BD-F01".equals(facilityCode) && "XL".equals(unitTypeCode)) {
-            return number <= 2;
-        }
-        return number == 1 && !"XL".equals(unitTypeCode);
-    }
-
     private String unitTypeKey(String facilityCode, String unitTypeCode) {
         return facilityCode + ":" + unitTypeCode;
     }
@@ -271,7 +236,9 @@ public class LocalDemoDataInitializer {
         return BigDecimal.valueOf(value);
     }
 
-    private record FacilityDefinition(String code, String name, String address, String city) {}
+    private record FacilityDefinition(String code, String name, String address, String city, String phone,
+                                      String accessHours, String imageUrl, boolean climateControlled,
+                                      String securityDescription) {}
 
     private record RentalPackageDefinition(
         String code,
@@ -283,12 +250,18 @@ public class LocalDemoDataInitializer {
     private record UnitTypeDefinition(
         String code,
         String name,
+        String description,
         double lengthM,
         double widthM,
         double heightM,
         double monthlyPrice,
         double maxLoadKg,
         int rackCount,
+        double aisleWidthM,
+        String trolleyType,
+        int smallBoxCapacity,
+        int largeBoxCapacity,
+        String imageUrl,
         int floor,
         String zone
     ) {}

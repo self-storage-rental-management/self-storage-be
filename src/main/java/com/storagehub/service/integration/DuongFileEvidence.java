@@ -24,20 +24,24 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     private final RenewalAssignmentSource assignments;
     private final FileProperties properties;
     private final ObjectMapper mapper;
-    private static final Set<String> PURPOSES=Set.of("ARRIVAL","INCIDENT","SIGNED_CONTRACT","EXCEPTION","FAULT_REVIEW","REFUND");
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.overdue.RecoveryFileEvidence> recoveryEvidence;
+    private static final Set<String> PURPOSES=Set.of("ARRIVAL","INCIDENT","SIGNED_CONTRACT","CASH_RECEIPT","EXCEPTION","FAULT_REVIEW","REFUND");
     public static final String PUBLIC="DUONG_SUPPORT_PUBLIC",INTERNAL="DUONG_SUPPORT_INTERNAL",UPLOAD="DUONG_SUPPORT_UPLOAD";
     public static String renewalType(String purpose){if(!PURPOSES.contains(purpose))throw ApiExceptions.validation("Unsupported Renewal evidence purpose",null);return "DUONG_RENEWAL_"+purpose;}
-    public static boolean handles(String type){return type!=null&&(PUBLIC.equals(type)||INTERNAL.equals(type)||UPLOAD.equals(type)||PURPOSES.stream().anyMatch(p->renewalType(p).equals(type)));}
+    public static boolean handles(String type){return type!=null&&(com.storagehub.service.overdue.RecoveryFileEvidence.handles(type)||PUBLIC.equals(type)||INTERNAL.equals(type)||UPLOAD.equals(type)||PURPOSES.stream().anyMatch(p->renewalType(p).equals(type)));}
     public boolean atomic(){return true;} // All binding writes are local, locked and in the caller transaction.
     @Transactional(readOnly=true)
     public boolean supportsFiles(List<UUID> files) {
         return files!=null&&files.stream().allMatch(id->{var f=id==null?null:em.find(FileAsset.class,id);return f!=null&&(PUBLIC.equals(f.getEntityType())||INTERNAL.equals(f.getEntityType()));});
     }
     public void requireUpload(ActorPrincipal actor,String type,UUID resource) {
+        if(com.storagehub.service.overdue.RecoveryFileEvidence.handles(type)){recoveryFiles().upload(actor,type,resource);return;}
         if(type.startsWith("DUONG_RENEWAL_")) {
             var n=renewal(resource);renewalAccess(actor,n,type.substring("DUONG_RENEWAL_".length()),true);
-            if(Set.of(RenewalStatus.pending,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting new evidence");
+            if(Set.of(RenewalStatus.pending,RenewalStatus.accepted,RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))throw ApiExceptions.conflict("Renewal is not accepting operational evidence before payment/signing");
         }else {
+            if(actor!=null&&actor.hasRole(RoleCode.MANAGER)&&!INTERNAL.equals(type))throw ApiExceptions.forbidden("Manager may only upload internal Support evidence");
             if(UPLOAD.equals(type)){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);if(resource!=null&&!actor.userId().equals(resource))throw unavailable();return;}
             if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)&&PUBLIC.equals(type)&&resource==null){access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);return;}
             supportAccess(actor,ticket(resource),INTERNAL.equals(type)?Visibility.INTERNAL:Visibility.PUBLIC,true);
@@ -45,15 +49,20 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
     }
     @Transactional(readOnly=true)
     public void requireDownload(ActorPrincipal actor,FileAsset file) {
+        if(file!=null&&com.storagehub.service.overdue.RecoveryFileEvidence.handles(file.getEntityType())){recoveryFiles().download(actor,file);return;}
         available(file);
         if(file.getEntityType().startsWith("DUONG_RENEWAL_")) {
             var n=renewal(file.getEntityId());
             if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)) {
                 access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);
-                if(!Objects.equals(n.getRental().getCustomer().getId(),actor.userId())||!renewalType("SIGNED_CONTRACT").equals(file.getEntityType())||n.getStatus()!=RenewalStatus.completed)throw unavailable();
-                var events=em.createQuery("select e from RenewalOperationEvent e where e.renewal.id=:id and e.kind='COMPLETION'",RenewalOperationEvent.class).setParameter("id",n.getId()).getResultList();
-                boolean bound=false;
-                for(var e:events)try {bound|=file.getId().toString().equals(mapper.readTree(e.getPayloadJson()).path("signedDocumentFileId").asText());}catch(com.fasterxml.jackson.core.JsonProcessingException ex){throw ApiExceptions.conflict("Completion evidence is invalid");}
+                if(!Objects.equals(n.getRental().getCustomer().getId(),actor.userId()))throw unavailable();
+                String purpose=file.getEntityType().substring("DUONG_RENEWAL_".length());
+                boolean bound=switch(purpose) {
+                    case "SIGNED_CONTRACT" -> n.getStatus()==RenewalStatus.completed && boundToEvent(n.getId(),"COMPLETION","signedDocumentFileId",file.getId());
+                    case "ARRIVAL" -> boundToEvent(n.getId(),"ARRIVAL","evidenceFileIds",file.getId());
+                    case "CASH_RECEIPT" -> boundToEvent(n.getId(),"CASH","receiptFileId",file.getId());
+                    default -> false;
+                };
                 if(!bound)throw unavailable();
             }else renewalAccess(actor,n,file.getEntityType().substring("DUONG_RENEWAL_".length()),false);
         }else {
@@ -101,10 +110,11 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
         if(actor!=null&&actor.hasRole(RoleCode.MANAGER)) {
             access.require(actor,RoleCode.MANAGER,n.getRental().getFacility().getId(),write?FacilityScopeLevel.MANAGE:FacilityScopeLevel.READ,SystemPermission.VIEW_RENTALS);
             if(write){if(!Set.of("EXCEPTION","FAULT_REVIEW","REFUND").contains(purpose))throw ApiExceptions.forbidden("Signing evidence is recorded by assigned Staff");assignments.require(actor,n,purpose.equals("REFUND")?RenewalOperationSources.Capability.REFUND:RenewalOperationSources.Capability.EXCEPTION);}
-        }else assignments.require(actor,n,write?(purpose.equals("INCIDENT")?RenewalOperationSources.Capability.INCIDENT:RenewalOperationSources.Capability.COMPLETE):RenewalOperationSources.Capability.READ);
+        }else assignments.require(actor,n,write?(purpose.equals("INCIDENT")?RenewalOperationSources.Capability.INCIDENT:purpose.equals("CASH_RECEIPT")?RenewalOperationSources.Capability.CASH:RenewalOperationSources.Capability.COMPLETE):RenewalOperationSources.Capability.READ);
     }
     private void supportAccess(ActorPrincipal actor,SupportTicket t,Visibility visibility,boolean write) {
         if(visibility==null)throw ApiExceptions.validation("Explicit evidence visibility required",null);
+        if(write&&actor!=null&&actor.hasRole(RoleCode.MANAGER)&&visibility!=Visibility.INTERNAL)throw ApiExceptions.forbidden("Manager may only attach internal Support evidence");
         if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)) {
             access.require(actor,RoleCode.CUSTOMER,null,FacilityScopeLevel.READ);
             if(visibility!=Visibility.PUBLIC||!Objects.equals(actor.userId(),t.getCustomer().getId()))throw unavailable();
@@ -128,5 +138,16 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
             if(!java.util.HexFormat.of().formatHex(digest.digest()).equals(f.getChecksumSha256()))throw ApiExceptions.conflict("Evidence file has changed");
         }catch(java.io.IOException e){throw unavailable();}catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}
     }
+    private boolean boundToEvent(UUID renewalId,String kind,String key,UUID fileId) {
+        var events=em.createQuery("select e from RenewalOperationEvent e where e.renewal.id=:id and e.kind=:kind",RenewalOperationEvent.class)
+            .setParameter("id",renewalId).setParameter("kind",kind).getResultList();
+        for(var event:events)try {
+            var node=mapper.readTree(event.getPayloadJson()).path(key);
+            if(node.isTextual()&&fileId.toString().equals(node.asText()))return true;
+            if(node.isArray())for(var item:node)if(item.isTextual()&&fileId.toString().equals(item.asText()))return true;
+        }catch(com.fasterxml.jackson.core.JsonProcessingException e){throw ApiExceptions.conflict("Renewal evidence binding is invalid");}
+        return false;
+    }
     private RuntimeException unavailable(){return ApiExceptions.notFound("Evidence file/resource not found");}
+    private com.storagehub.service.overdue.RecoveryFileEvidence recoveryFiles(){var source=recoveryEvidence==null?null:recoveryEvidence.getIfAvailable();if(source==null)throw ApiExceptions.conflict("Recovery evidence is not enabled");return source;}
 }

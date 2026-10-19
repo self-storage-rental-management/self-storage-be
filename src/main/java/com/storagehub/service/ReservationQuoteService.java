@@ -7,6 +7,7 @@ import com.storagehub.api.reservation.ReservationQuoteResponse;
 import com.storagehub.api.reservation.ReservationRentalPackageResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.CompatibilityResult;
+import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.ReservationQuote;
@@ -23,15 +24,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
+import java.util.LinkedHashMap;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class ReservationQuoteService {
 
-    private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
+    private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private static final long QUOTE_VALID_MINUTES = 15;
 
     private final ReservationCompatibilityService compatibilityService;
@@ -39,6 +39,34 @@ public class ReservationQuoteService {
     private final ReservationQuoteRepository quoteRepository;
     private final UnitTypeRepository unitTypeRepository;
     private final UserRepository userRepository;
+    private final DiscountCodeService discountCodeService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ReservationQuoteService(
+        ReservationCompatibilityService compatibilityService,
+        RentalPackagePolicyRepository policyRepository,
+        ReservationQuoteRepository quoteRepository,
+        UnitTypeRepository unitTypeRepository,
+        UserRepository userRepository,
+        DiscountCodeService discountCodeService
+    ) {
+        this.compatibilityService = compatibilityService;
+        this.policyRepository = policyRepository;
+        this.quoteRepository = quoteRepository;
+        this.unitTypeRepository = unitTypeRepository;
+        this.userRepository = userRepository;
+        this.discountCodeService = discountCodeService;
+    }
+
+    public ReservationQuoteService(
+        ReservationCompatibilityService compatibilityService,
+        RentalPackagePolicyRepository policyRepository,
+        ReservationQuoteRepository quoteRepository,
+        UnitTypeRepository unitTypeRepository,
+        UserRepository userRepository
+    ) {
+        this(compatibilityService, policyRepository, quoteRepository, unitTypeRepository, userRepository, null);
+    }
 
     @Transactional(readOnly = true)
     public List<ReservationRentalPackageResponse> listAvailablePackages(
@@ -50,7 +78,7 @@ public class ReservationQuoteService {
             throw ApiExceptions.forbidden("Only customers can read reservation rental packages");
         }
         LocalDate effectiveDate = startDate == null ? LocalDate.now() : startDate;
-        return policyRepository
+        List<RentalPackagePolicy> effective = policyRepository
             .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(
                 facilityId,
                 effectiveDate
@@ -58,6 +86,18 @@ public class ReservationQuoteService {
             .stream()
             .filter(policy -> policy.getEffectiveTo() == null
                 || !policy.getEffectiveTo().isBefore(effectiveDate))
+            .toList();
+
+        // Defensive cleanup for legacy rows created before the uniqueness rule.
+        // Prefer the policy with the newest effective start for each duration so
+        // Customer can never receive two choices for the same number of months.
+        var uniqueByMonths = new LinkedHashMap<Integer, RentalPackagePolicy>();
+        effective.stream()
+            .sorted(java.util.Comparator.comparing(RentalPackagePolicy::getEffectiveFrom).reversed()
+                .thenComparing(RentalPackagePolicy::getUpdatedAt, java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+            .forEach(policy -> uniqueByMonths.putIfAbsent(policy.getRentalMonths(), policy));
+        return uniqueByMonths.values().stream()
+            .sorted(java.util.Comparator.comparingInt(RentalPackagePolicy::getRentalMonths))
             .map(policy -> new ReservationRentalPackageResponse(
                 policy.getCode(),
                 policy.getName(),
@@ -80,25 +120,47 @@ public class ReservationQuoteService {
         }
 
         int rentalMonths = calculateRentalMonths(request.getStartDate(), request.getEndDate());
-        RentalPackagePolicy policy = policyRepository
-            .findByFacility_IdAndCode(request.getFacilityId(), request.getPricingPackageCode().trim())
-            .or(() -> policyRepository.findByFacility_IdOrderByRentalMonthsAsc(request.getFacilityId()).stream()
-                .filter(p -> p.getRentalMonths() == rentalMonths && p.isActive())
-                .findFirst())
-            .orElseThrow(() -> ApiExceptions.notFound("Rental package was not found"));
-        validatePolicy(policy, request.getStartDate(), rentalMonths);
 
         UnitType unitType = unitTypeRepository.findById(request.getUnitTypeId())
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         User customer = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
 
+        RentalPackagePolicy policy = policyRepository
+            .findByFacility_IdAndCode(request.getFacilityId(), request.getPricingPackageCode().trim())
+            .or(() -> policyRepository.findByFacility_IdOrderByRentalMonthsAsc(request.getFacilityId()).stream()
+                .filter(p -> p.getRentalMonths() == rentalMonths && p.isActive())
+                .findFirst())
+            .orElseGet(() -> createCustomFallbackPolicy(unitType.getFacility(), rentalMonths));
+        validatePolicy(policy, request.getStartDate(), rentalMonths);
+
         BigDecimal monthlyPrice = money(unitType.getMonthlyPrice());
         BigDecimal subtotal = money(monthlyPrice.multiply(BigDecimal.valueOf(rentalMonths)));
         BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
-        BigDecimal totalAfterDiscount = money(subtotal.subtract(discountAmount));
+        BigDecimal baseEligibleAmount = money(subtotal.subtract(discountAmount));
+
+        BigDecimal voucherDiscountAmount = BigDecimal.ZERO;
+        String appliedVoucherCode = null;
+        if (discountCodeService != null && request.getVoucherCode() != null && !request.getVoucherCode().isBlank()) {
+            var voucherResult = discountCodeService.calculateVoucherDiscount(
+                request.getVoucherCode(),
+                policy.getFacility().getId(),
+                policy.getId(),
+                baseEligibleAmount
+            );
+            if (voucherResult != null) {
+                voucherDiscountAmount = money(voucherResult.discountAmount());
+                appliedVoucherCode = voucherResult.voucherCode();
+            }
+        }
+
+        BigDecimal totalAfterDiscount = money(baseEligibleAmount.subtract(voucherDiscountAmount));
         BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
-        BigDecimal securityDepositAmount = monthlyPrice;
+        BigDecimal securityDepositAmount = money(
+            (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
+                ? monthlyPrice
+                : unitType.getSecurityDepositAmount()
+        );
         BigDecimal remainingRentalAmount = money(totalAfterDiscount.subtract(reservationDepositAmount));
         BigDecimal dueAtCheckIn = money(remainingRentalAmount.add(securityDepositAmount));
         BigDecimal totalInitialObligation = money(totalAfterDiscount.add(securityDepositAmount));
@@ -117,6 +179,8 @@ public class ReservationQuoteService {
         quote.setSubtotal(subtotal);
         quote.setDiscountRate(policy.getDiscountRate());
         quote.setDiscountAmount(discountAmount);
+        quote.setVoucherCode(appliedVoucherCode);
+        quote.setVoucherDiscountAmount(voucherDiscountAmount);
         quote.setTotalAfterDiscount(totalAfterDiscount);
         quote.setReservationDepositAmount(reservationDepositAmount);
         quote.setSecurityDepositAmount(securityDepositAmount);
@@ -130,12 +194,39 @@ public class ReservationQuoteService {
         return toResponse(saved);
     }
 
-    private int calculateRentalMonths(LocalDate startDate, LocalDate endDate) {
-        long months = ChronoUnit.MONTHS.between(startDate, endDate);
-        if (months < 1 || months > 120 || !startDate.plusMonths(months).equals(endDate)) {
+    public static int calculateRentalMonths(LocalDate startDate, LocalDate endDate) {
+        if (startDate == null || endDate == null) {
+            throw ApiExceptions.validation("startDate and endDate are required", null);
+        }
+        if (!endDate.isAfter(startDate)) {
             throw ApiExceptions.validation("Rental period must use complete months", null);
         }
-        return Math.toIntExact(months);
+        for (int m = 1; m <= 120; m++) {
+            LocalDate targetExclusive = startDate.plusMonths(m);
+            LocalDate targetInclusive = targetExclusive.minusDays(1);
+            if (targetInclusive.equals(endDate) || targetExclusive.equals(endDate)) {
+                return m;
+            }
+            if (startDate.getDayOfMonth() == startDate.lengthOfMonth()
+                && endDate.getDayOfMonth() == endDate.lengthOfMonth()
+                && ChronoUnit.MONTHS.between(startDate, endDate) == m) {
+                return m;
+            }
+        }
+        throw ApiExceptions.validation("Rental period must use complete months", null);
+    }
+
+    private RentalPackagePolicy createCustomFallbackPolicy(Facility facility, int rentalMonths) {
+        RentalPackagePolicy policy = new RentalPackagePolicy();
+        policy.setFacility(facility);
+        policy.setCode("CUSTOM-" + rentalMonths + "M");
+        policy.setName("Gói " + rentalMonths + " tháng tiêu chuẩn");
+        policy.setRentalMonths(rentalMonths);
+        policy.setDiscountRate(BigDecimal.ZERO);
+        policy.setPolicyVersion("STANDARD-1.0");
+        policy.setActive(true);
+        policy.setEffectiveFrom(LocalDate.of(2020, 1, 1));
+        return policy;
     }
 
     private void validatePolicy(RentalPackagePolicy policy, LocalDate startDate, int rentalMonths) {
@@ -158,7 +249,9 @@ public class ReservationQuoteService {
             quote.getId(), quote.getFacility().getId(), quote.getUnitType().getId(),
             quote.getStartDate(), quote.getEndDate(), quote.getRentalMonths(),
             quote.getMonthlyPrice(), quote.getSubtotal(), quote.getPricingPackageCode(),
-            quote.getDiscountRate(), quote.getDiscountAmount(), quote.getTotalAfterDiscount(),
+            quote.getDiscountRate(), quote.getDiscountAmount(),
+            quote.getVoucherCode(), quote.getVoucherDiscountAmount(),
+            quote.getTotalAfterDiscount(),
             quote.getReservationDepositAmount(), quote.getSecurityDepositAmount(),
             quote.getRemainingRentalAmount(), quote.getDueAtCheckIn(),
             quote.getTotalInitialObligation(),

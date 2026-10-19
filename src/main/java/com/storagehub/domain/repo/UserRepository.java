@@ -14,6 +14,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
+    List<User> findDistinctByRoles_CodeAndStatus(RoleCode role, UserStatus status);
     Optional<User> findByEmailIgnoreCase(String email);
     boolean existsByEmailIgnoreCase(String email);
     long countByRoles_Code(RoleCode code);
@@ -38,6 +39,27 @@ public interface UserRepository extends JpaRepository<User, UUID> {
         @Param("facilityId") UUID facilityId,
         @Param("scopeLevels") java.util.Collection<FacilityScopeLevel> scopeLevels
     );
+
+    @Query("""
+        select distinct u from User u
+        where u.status = :status
+          and exists (
+              select scope from UserFacilityScope scope
+              where scope.user.id = u.id
+                and scope.facility.id = :facilityId
+                and scope.scopeLevel in :scopeLevels
+          )
+        order by u.fullName asc
+        """)
+    List<User> findByFacilityScope(
+        @Param("facilityId") UUID facilityId,
+        @Param("scopeLevels") java.util.Collection<FacilityScopeLevel> scopeLevels,
+        @Param("status") UserStatus status
+    );
+
+    default List<User> findByFacilityScope(UUID facilityId, java.util.Collection<FacilityScopeLevel> scopeLevels) {
+        return findByFacilityScope(facilityId, scopeLevels, UserStatus.ACTIVE);
+    }
 
     @Query("""
         select assignedRole.code as roleCode, count(distinct u.id) as total

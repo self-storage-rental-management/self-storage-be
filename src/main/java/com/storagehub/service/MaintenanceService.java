@@ -59,7 +59,7 @@ public class MaintenanceService {
     @Transactional
     public MaintenanceTaskResponse createTask(ActorPrincipal actor, CreateMaintenanceTaskRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_INVENTORY);
-        StorageUnit unit = storageUnitRepository.findById(request.storageUnitId())
+        StorageUnit unit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
 
         facilityScopeService.assertCanManage(actor, unit.getFacility().getId());
@@ -328,11 +328,9 @@ public class MaintenanceService {
         MaintenanceTask saved = maintenanceTaskRepository.save(task);
 
         boolean makeAvailable = request.makeUnitAvailable() == null || request.makeUnitAvailable();
-        if (makeAvailable) {
-            StorageUnit unit = saved.getStorageUnit();
-            unit.setStatus(StorageUnitStatus.available);
-            storageUnitRepository.save(unit);
-        }
+        StorageUnit unit = saved.getStorageUnit();
+        unit.setStatus(makeAvailable ? StorageUnitStatus.available : StorageUnitStatus.maintenance);
+        storageUnitRepository.save(unit);
 
         auditLogService.recordMutation(
             "MAINTENANCE_TASK_COMPLETED",
@@ -390,23 +388,31 @@ public class MaintenanceService {
         int pageSize,
         String correlationId
     ) {
-        authorizationService.require(actor, SystemPermission.VIEW_UNITS);
+        if (!actor.hasPermission(SystemPermission.VIEW_UNITS)
+            && !actor.hasPermission(SystemPermission.MANAGE_STAFF_TASKS)) {
+            authorizationService.require(actor, SystemPermission.VIEW_UNITS);
+        }
 
-        Collection<UUID> allowedFacilityIds = null;
-        if (facilityScopeService.isFacilityScoped(actor)) {
-            allowedFacilityIds = actor.facilityScopes().keySet();
+        boolean scoped = facilityScopeService.isFacilityScoped(actor);
+        Collection<UUID> allowedFacilityIds = List.of(new UUID(0, 0));
+        if (scoped) {
+            if (!actor.facilityScopes().isEmpty()) allowedFacilityIds = actor.facilityScopes().keySet();
             if (facilityId != null) {
                 facilityScopeService.assertCanRead(actor, facilityId);
             }
         }
 
         Pageable pageable = pageable(page, pageSize);
+        if (scoped && allowedFacilityIds.isEmpty()) {
+            return PageResponse.from(Page.<MaintenanceTaskResponse>empty(pageable), correlationId);
+        }
         Page<MaintenanceTaskResponse> result = maintenanceTaskRepository.searchTasks(
             facilityId,
             storageUnitId,
             status,
             priority,
             assignedStaffId,
+            scoped,
             allowedFacilityIds,
             q != null ? q.trim() : null,
             pageable

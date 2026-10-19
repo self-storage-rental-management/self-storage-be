@@ -22,6 +22,12 @@ public record CreateFacilityRequest(
     @Size(max = 100, message = "city must not exceed 100 characters")
     String city,
 
+    @Size(max = 32) String phone,
+    @Size(max = 120) String accessHours,
+    String imageUrl,
+    Boolean climateControlled,
+    @Size(max = 255) String securityDescription,
+
     FacilityStatus status,
 
     List<UnitSpecRequest> unitSpecs

@@ -27,6 +27,8 @@ public class OverdueService {
     private final ObjectProvider<TermSource> terms;private final ObjectProvider<ReminderSource> reminders;private final ObjectProvider<RecoverySource> recoveries;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.NotificationService notifications;
     private record Ref(String value,UUID rentalId,String kind,UUID obligationId) {}
     @Transactional(readOnly=true)
     public OverdueResponse.ListResult list(ActorPrincipal actor,OverdueQuery q,String correlation) {
@@ -63,6 +65,9 @@ public class OverdueService {
     public OverdueResponse.FollowUp recovery(ActorPrincipal actor,String id,OverdueCommands.Recovery body,String key) {
         var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
         Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_recovery",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
+        if(!em.createQuery("select f.id from OverdueFollowUp f where f.caseRef=:id and f.type='RECOVERY_HANDOFF'",UUID.class)
+            .setParameter("id",id).setMaxResults(1).getResultList().isEmpty())
+            throw ApiExceptions.conflict("Recovery handoff already recorded");
         var current=current(r,ref);if(!current.kind().equals("RENTAL_TERM")||!current.recoveryEligible())throw ApiExceptions.conflict("Only policy-eligible rental-term expiry may enter Recovery");
         var state=stream(id,body.expectedVersion());var source=recoveries.getIfAvailable();if(source==null||!source.atomic())throw deferred("Authorized Recovery receiving service unavailable");
         var handoff=source.receive(r,id,body.reason(),key,now());if(handoff==null||handoff.reference()==null||handoff.status()==null||!Set.of("RECEIVED","ALREADY_RECEIVED").contains(handoff.status()))throw deferred("Recovery receiver has not acknowledged");
@@ -92,6 +97,8 @@ public class OverdueService {
             var source=finances.getIfAvailable();var f=source==null?null:source.read(r,at).orElse(null);
             if(f==null)missing.add("AUTHORITATIVE_OBLIGATIONS_ALLOCATIONS");else {
                 if(f.checkedAt()==null||f.checkedAt().isAfter(at)||f.obligations()==null)throw ApiExceptions.conflict("Authoritative financial state incomplete");var ids=new HashSet<UUID>();
+                if(!Set.of("COMPLETE","PARTIAL").contains(f.completeness()))throw ApiExceptions.conflict("Financial coverage invalid");
+                if(f.completeness().equals("PARTIAL"))missing.add("FINANCIAL_COVERAGE_PARTIAL");
                 for(var o:f.obligations()){
                     if(o==null||o.id()==null||!r.getId().equals(o.rentalId())||!ids.add(o.id())||o.dueAt()==null||o.outstanding()==null||o.outstanding().signum()<0||!"VND".equals(o.currency()))throw ApiExceptions.conflict("Authoritative obligation inconsistent");
                     if(at.isAfter(o.dueAt())&&o.outstanding().signum()>0){String ref="PAYMENT_DUE:"+r.getId()+":"+o.id();long days=Math.max(0,ChronoUnit.DAYS.between(o.dueAt().atZone(ZONE).toLocalDate(),at.atZone(ZONE).toLocalDate()));result.add(row(r,ref,"PAYMENT_DUE",days,"PAYMENT_DUE",o.id(),o.dueAt(),o.outstanding(),o.currency(),null,null,null,false));}
@@ -105,7 +112,11 @@ public class OverdueService {
     private Rental visible(ActorPrincipal actor,Ref ref,boolean write){RenewalReadService.authorize(actor,true,write);var r=em.find(Rental.class,ref.rentalId());if(r==null)throw ApiExceptions.notFound("Overdue case not found");var scope=actor.facilityScopes().get(r.getFacility().getId());if(scope==null||!scope.includes(write?FacilityScopeLevel.MANAGE:FacilityScopeLevel.READ))throw ApiExceptions.notFound("Overdue case not found");return r;}
     private OverdueFollowUpState stream(String ref,Long version){if(version==null||version<0)throw ApiExceptions.validation("expectedVersion required",null);var s=em.find(OverdueFollowUpState.class,ref,LockModeType.PESSIMISTIC_WRITE);if(s==null){if(version!=0)throw ApiExceptions.conflict("Follow-up revision stale");s=new OverdueFollowUpState(ref);em.persist(s);}else if(s.getRevision()!=version)throw ApiExceptions.conflict("Follow-up revision stale");return s;}
     private long revision(String ref){var state=em.find(OverdueFollowUpState.class,ref);return state==null?0:state.getRevision();}
-    private OverdueResponse.FollowUp finish(User user,Rental r,OverdueFollowUpState state,OverdueFollowUp event,String op,String key,Object payload){state.appended();em.persist(event);em.flush();var response=response(event,state.getRevision());audit.recordMutation(user,op,"Rental",r.getId(),r.getFacility().getId(),null,response);store.remember(user,op,key,r.getId(),payload,201,response);return response;}
+    private OverdueResponse.FollowUp finish(User user,Rental r,OverdueFollowUpState state,OverdueFollowUp event,String op,String key,Object payload){state.appended();em.persist(event);em.flush();var response=response(event,state.getRevision());audit.recordMutation(user,op,"Rental",r.getId(),r.getFacility().getId(),null,response);store.remember(user,op,key,r.getId(),payload,201,response);
+        if(notifications!=null&&Set.of("REMINDER","RECOVERY_HANDOFF").contains(event.getType()))notifications.createFacilityOperationsNotificationsExcept(
+            r.getFacility().getId(),NotificationType.OVERDUE,"Hồ sơ quá hạn có cập nhật mới",
+            "Hồ sơ thuê "+r.getId()+" tại cơ sở "+r.getFacility().getName()+" có cập nhật xử lý quá hạn.",r.getId(),user.getId());
+        return response;}
     private OverdueResponse.FollowUp response(OverdueFollowUp f,long revision){return new OverdueResponse.FollowUp(f.getId(),f.getCaseRef(),f.getType(),f.getContent(),f.getActorId(),f.getRecordedAt(),f.getExternalRef(),f.getPolicyRef(),f.getPolicyVersion(),revision);}
     private User lockActor(ActorPrincipal a){var u=em.find(User.class,a.userId(),LockModeType.PESSIMISTIC_WRITE);if(u==null)throw ApiExceptions.unauthorized("Actor not found");return u;}
     private OverdueResponse.FollowUp decode(String json){try{return mapper.readValue(json,OverdueResponse.FollowUp.class);}catch(Exception e){throw ApiExceptions.conflict("Stored follow-up result invalid");}}

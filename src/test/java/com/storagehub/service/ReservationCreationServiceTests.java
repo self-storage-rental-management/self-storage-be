@@ -127,6 +127,7 @@ class ReservationCreationServiceTests {
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
             Reservation reservation = invocation.getArgument(0);
             assertThat(reservation.getRequestFingerprint()).hasSize(64);
+            assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("079203009988");
             ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
             ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
             return reservation;
@@ -141,6 +142,45 @@ class ReservationCreationServiceTests {
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("9603000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("15103000.00");
         assertThat(response.getReservationCode()).startsWith("RSV-");
+    }
+
+    @Test
+    void createsReservationWhenSecurityDepositDiffersFromMonthlyPrice() {
+        // Cỡ kho có tiền cọc đảm bảo 200.000 khác đơn giá tháng 2.000.000
+        quote.getUnitType().setMonthlyPrice(new BigDecimal("2000000.00"));
+        quote.getUnitType().setSecurityDepositAmount(new BigDecimal("200000.00"));
+        quote.setMonthlyPrice(new BigDecimal("2000000.00"));
+        quote.setSubtotal(new BigDecimal("6000000.00"));
+        quote.setDiscountRate(new BigDecimal("0.0300"));
+        quote.setDiscountAmount(new BigDecimal("180000.00"));
+        quote.setTotalAfterDiscount(new BigDecimal("5820000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("2328000.00"));
+        quote.setSecurityDepositAmount(new BigDecimal("200000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("3492000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("3692000.00"));
+        quote.setTotalInitialObligation(new BigDecimal("6020000.00"));
+
+        CreateReservationRequest request = request();
+        when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-diff-deposit"))
+            .thenReturn(Optional.empty());
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
+            .thenReturn(Optional.of(quote));
+        when(compatibilityService.check(any(), any())).thenReturn(compatibleResponse());
+        when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), "THREE_MONTHS"))
+            .thenReturn(Optional.of(policy));
+        when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
+            Reservation reservation = invocation.getArgument(0);
+            ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
+            ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
+            return reservation;
+        });
+        when(snapshotRepository.saveAndFlush(any(ReservationPricingSnapshot.class)))
+            .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.create(actor, request, "create-diff-deposit");
+
+        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
+        assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("200000.00");
     }
 
     @Test
@@ -245,7 +285,11 @@ class ReservationCreationServiceTests {
             new BigDecimal("100"), new BigDecimal("60"), new BigDecimal("15"),
             new BigDecimal("18"), false
         );
-        return new CreateReservationRequest(quote.getId(), "Packed", "Handle with care", List.of(item));
+        CreateReservationRequest request = new CreateReservationRequest(
+            quote.getId(), "Packed", "Handle with care", List.of(item)
+        );
+        request.setIdentityDocumentNumber("079203009988");
+        return request;
     }
 
     private CompatibilityCheckResponse compatibleResponse() {

@@ -8,6 +8,7 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
@@ -42,6 +43,7 @@ public class UnitAssignmentService {
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
 
     @Transactional(readOnly = true)
     public PageResponse<UnitAssignmentCandidateResponse> listCandidates(
@@ -167,6 +169,20 @@ public class UnitAssignmentService {
                 "storageUnitStatus", StorageUnitStatus.reserved,
                 "storageUnitId", unit.getId()
             )
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.RESERVATION,
+            "Đã phân gian kho cho đơn giữ kho",
+            "Đơn " + reservation.getReservationCode() + " đã được phân gian "
+                + unit.getCode() + ". Bạn có thể xem lịch nhận kho trên tài khoản.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.RESERVATION,
+            "Đã phân gian kho cho đơn giữ kho",
+            "Đơn " + reservation.getReservationCode() + " đã được phân gian "
+                + unit.getCode() + " và chuyển sang trạng thái chờ nhận kho.",
+            reservation.getId()
         );
         return toAssignmentResponse(saved);
     }

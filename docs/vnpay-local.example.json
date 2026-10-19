@@ -1,0 +1,9 @@
+{
+  "app.vnpay.enabled": true,
+  "app.vnpay.tmn-code": "YOUR_EXISTING_PAYMENT_SANDBOX_TMN_CODE",
+  "app.vnpay.hash-secret": "YOUR_EXISTING_PAYMENT_SANDBOX_HASH_SECRET",
+  "app.vnpay.pay-url": "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html",
+  "app.vnpay.api-url": "https://sandbox.vnpayment.vn/merchant_webapi/api/transaction",
+  "app.vnpay.return-url": "http://localhost:8080/api/public/payments/vnpay/return",
+  "app.vnpay.frontend-return-url": "http://localhost:8443/"
+}

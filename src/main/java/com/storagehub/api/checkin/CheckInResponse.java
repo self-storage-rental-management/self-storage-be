@@ -27,6 +27,8 @@ public record CheckInResponse(
     UUID customerId,
     String customerName,
     String customerEmail,
+    String identityDocumentNumber,
+    String customerPhone,
     UUID facilityId,
     String facilityName,
     UUID storageUnitId,
@@ -36,8 +38,13 @@ public record CheckInResponse(
     UnitAssignmentStatus assignmentStatus,
     LocalDate startDate,
     LocalDate endDate,
+    Integer declaredPackageCount,
     BigDecimal declaredGoodsWeightKg,
     BigDecimal declaredGoodsVolumeM3,
+    BigDecimal declaredGoodsLengthCm,
+    BigDecimal declaredGoodsWidthCm,
+    BigDecimal declaredGoodsHeightCm,
+    BigDecimal dueAtCheckIn,
     CompleteCheckInRequest handover
 ) {
 }

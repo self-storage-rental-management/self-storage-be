@@ -24,6 +24,10 @@ public class RoleDataInitializer {
     private static final int INTERNAL_POLICY_VERSION = 3;
     private static final int POLICY_OWNERSHIP_VERSION = 4;
     private static final int STAFF_RESERVATION_REVIEW_VERSION = 5;
+    private static final int STAFF_TRAM_WORKFLOW_VERSION = 6;
+    private static final int BUSINESS_RETURNS_VERSION = 7;
+    private static final int STAFF_RENEWAL_OPERATIONS_VERSION = 8;
+    private static final int STAFF_RENEWAL_PAYMENTS_VERSION = 9;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -94,6 +98,49 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(STAFF_RESERVATION_REVIEW_VERSION);
                 }
+                // The confirmed-reservation to handover workflow is operated
+                // from the Staff portal. Preserve custom grants while adding
+                // physical unit assignment to existing Staff roles.
+                if (role.getPermissionsPolicyVersion() < STAFF_TRAM_WORKFLOW_VERSION) {
+                    if (code == RoleCode.STAFF) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.APPROVE_RESERVATIONS));
+                        updated.add(permissions.get(SystemPermission.ASSIGN_UNITS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(STAFF_TRAM_WORKFLOW_VERSION);
+                }
+                // Allow Business Operations role to oversee warehouse returns across all facilities.
+                if (role.getPermissionsPolicyVersion() < BUSINESS_RETURNS_VERSION) {
+                    if (code == RoleCode.BUSINESS) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.VIEW_RETURNS));
+                        updated.add(permissions.get(SystemPermission.MANAGE_RENTALS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(BUSINESS_RETURNS_VERSION);
+                }
+                // Staff operates Renewal assignments and signing appointments.
+                // Add the existing capability to persisted Staff roles without replacing custom grants.
+                if (role.getPermissionsPolicyVersion() < STAFF_RENEWAL_OPERATIONS_VERSION) {
+                    if (code == RoleCode.STAFF) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.MANAGE_RENTALS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(STAFF_RENEWAL_OPERATIONS_VERSION);
+                }
+                // Staff records the remaining Renewal payment against an authoritative
+                // statement and receipt before completing the signing workflow.
+                if (role.getPermissionsPolicyVersion() < STAFF_RENEWAL_PAYMENTS_VERSION) {
+                    if (code == RoleCode.STAFF) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.VIEW_PAYMENTS));
+                        updated.add(permissions.get(SystemPermission.MANAGE_PAYMENTS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(STAFF_RENEWAL_PAYMENTS_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -128,10 +175,14 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_UNITS,
                 SystemPermission.VIEW_RESERVATIONS,
                 SystemPermission.APPROVE_RESERVATIONS,
+                SystemPermission.ASSIGN_UNITS,
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_CHECKINS,
                 SystemPermission.PERFORM_CHECKIN,
                 SystemPermission.VIEW_RENTALS,
+                SystemPermission.MANAGE_RENTALS,
+                SystemPermission.VIEW_PAYMENTS,
+                SystemPermission.MANAGE_PAYMENTS,
                 SystemPermission.VIEW_RETURNS,
                 SystemPermission.PROCESS_RETURNS,
                 SystemPermission.VIEW_SUPPORT,
@@ -145,6 +196,8 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_RESERVATIONS,
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_RENTALS,
+                SystemPermission.VIEW_RETURNS,
+                SystemPermission.MANAGE_RENTALS,
                 SystemPermission.VIEW_PAYMENTS,
                 SystemPermission.VIEW_POLICIES,
                 SystemPermission.VIEW_SUPPORT,

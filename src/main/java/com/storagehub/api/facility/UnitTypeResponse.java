@@ -10,6 +10,7 @@ public record UnitTypeResponse(
     UUID facilityId,
     String code,
     String name,
+    String description,
     BigDecimal lengthM,
     BigDecimal widthM,
     BigDecimal heightM,
@@ -23,9 +24,16 @@ public record UnitTypeResponse(
     BigDecimal rackLengthM,
     BigDecimal rackWidthM,
     BigDecimal rackHeightM,
+    BigDecimal aisleWidthM,
+    String trolleyType,
+    Integer smallBoxCapacity,
+    Integer largeBoxCapacity,
     UnitTypeStatus status,
+    long totalCount,
     long availableCount,
+    long occupiedCount,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    String detailImageUrl
 ) {
 }

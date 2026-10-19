@@ -8,7 +8,9 @@ import java.util.*;
 public final class OverdueSources {
     private OverdueSources() {}
     public record Obligation(UUID id,UUID rentalId,Instant dueAt,BigDecimal outstanding,String currency) {}
-    public record Finance(Instant checkedAt,List<Obligation> obligations) {}
+    public record Finance(Instant checkedAt,List<Obligation> obligations,String completeness) {
+        public Finance(Instant checkedAt,List<Obligation> obligations){this(checkedAt,obligations,"COMPLETE");}
+    }
     public interface FinancialSource { Optional<Finance> read(Rental rental,Instant now); }
     public record Term(String policyRef,String policyVersion,LocalDate lastPermittedDate,
         int warningThroughDay,int seriousThroughDay,int urgentThroughDay,int recoveryFromDay,
@@ -22,8 +24,11 @@ public final class OverdueSources {
         UUID enqueue(Rental rental,String caseRef,String content,String key,Instant now);
     }
     public record Handoff(UUID reference,String status) {}
+    public record RecoveryState(UUID rentalId,UUID facilityId,Instant checkedAt,boolean recoveryBlocked) {}
     public interface RecoverySource {
         default boolean atomic() {return false;}
+        /** Complete receiver-owned state, including externally initiated Recovery; absent is UNKNOWN. */
+        default Optional<RecoveryState> state(Rental rental,Instant now) { return Optional.empty(); }
         /** Authorized receiver rechecks policy/assets/Return state, deduplicates and persists actual receipt. */
         Handoff receive(Rental rental,String caseRef,String reason,String key,Instant now);
     }

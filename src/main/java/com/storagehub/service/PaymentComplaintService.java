@@ -224,11 +224,21 @@ public class PaymentComplaintService {
             payment.setStatus(PaymentStatus.PAID);
             payment.setPaidAt(now);
             payment.setProcessedAt(now);
+            ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
+                .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), now);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(now);
             reservation.setConfirmedAt(now);
             notifyDecision(reservation, "Khiếu nại đã được chấp nhận",
                 "Thanh toán của đơn " + reservation.getReservationCode() + " đã được ghi nhận.");
+            notificationService.createFacilityOperationsNotifications(
+                reservation.getFacility().getId(), NotificationType.RESERVATION,
+                "Có đơn đã xác nhận chờ phân kho",
+                "Đơn " + reservation.getReservationCode()
+                    + " đã được xác nhận sau khi duyệt khiếu nại thanh toán và đang chờ phân kho.",
+                reservation.getId()
+            );
         } else {
             complaint.setStatus(PaymentComplaintStatus.REJECTED);
             payment.setStatus(PaymentStatus.NOT_RECEIVED);
