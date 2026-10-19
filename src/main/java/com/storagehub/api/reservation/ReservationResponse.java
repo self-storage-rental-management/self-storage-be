@@ -42,9 +42,12 @@ public class ReservationResponse {
     // Snapshot discount fields (bảo toàn lịch sử mã giảm giá trên hóa đơn / đơn đặt)
     private String pricingPackageCode;
     private int rentalMonths;
+    private BigDecimal monthlyPrice;
     private BigDecimal grossRentalAmount;
     private BigDecimal discountRate;
     private BigDecimal discountAmount;
+    private String voucherCode;
+    private BigDecimal voucherDiscountAmount;
 
     public ReservationResponse() {
     }
@@ -160,7 +163,13 @@ public class ReservationResponse {
 
     public String getPricingPackageCode() { return pricingPackageCode; }
     public int getRentalMonths() { return rentalMonths; }
+    public BigDecimal getMonthlyPrice() { return monthlyPrice; }
+    public void setMonthlyPrice(BigDecimal monthlyPrice) { this.monthlyPrice = monthlyPrice; }
     public BigDecimal getGrossRentalAmount() { return grossRentalAmount; }
     public BigDecimal getDiscountRate() { return discountRate; }
     public BigDecimal getDiscountAmount() { return discountAmount; }
+    public String getVoucherCode() { return voucherCode; }
+    public void setVoucherCode(String voucherCode) { this.voucherCode = voucherCode; }
+    public BigDecimal getVoucherDiscountAmount() { return voucherDiscountAmount; }
+    public void setVoucherDiscountAmount(BigDecimal voucherDiscountAmount) { this.voucherDiscountAmount = voucherDiscountAmount; }
 }

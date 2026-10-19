@@ -588,6 +588,9 @@ public class CustomerReservationService {
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
+        response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setVoucherCode(snapshot.getVoucherCode());
+        response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setCustomerName(reservation.getCustomer().getFullName());
         response.setCustomerEmail(reservation.getCustomer().getEmail());
         response.setCustomerPhone(reservation.getCustomer().getPhone());
@@ -656,6 +659,18 @@ public class CustomerReservationService {
         response.setRequiresStaffReview(item.isRequiresStaffReview());
         response.setReviewStatus(item.getReviewStatus());
         response.setReviewNote(item.getReviewNote());
+        if (fileAssetRepository != null) {
+            response.setImages(fileAssetRepository
+                .findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("RESERVATION_GOODS_ITEM", item.getId())
+                .stream()
+                .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
+                .map(asset -> new FileAssetResponse(
+                    asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
+                    asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(),
+                    asset.getStatus(), asset.getCreatedAt()
+                ))
+                .toList());
+        }
         return response;
     }
 }
