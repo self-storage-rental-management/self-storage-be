@@ -22,7 +22,8 @@ final class ReservationCheckInPolicy {
         candidate = candidate.plus(Duration.ofMinutes(PAYMENT_WINDOW_MINUTES));
         candidate = ServiceCalendarPolicy.addWorkingHours(candidate, MANAGER_ASSIGNMENT_WORKING_HOURS);
         Instant availableAt = ServiceCalendarPolicy.nextAppointmentAt(candidate);
-        return new Window(availableAt, availableAt.plus(Duration.ofDays(CHECK_IN_WINDOW_DAYS)));
+        Instant seventhWorkingDay = ServiceCalendarPolicy.addWorkingDays(availableAt, CHECK_IN_WINDOW_DAYS - 1);
+        return new Window(availableAt, ServiceCalendarPolicy.endOfWorkingDay(seventhWorkingDay));
     }
 
     static Instant staffReviewDueAt(Instant submittedAt) {

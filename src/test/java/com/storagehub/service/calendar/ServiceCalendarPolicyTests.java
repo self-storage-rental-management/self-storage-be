@@ -35,6 +35,9 @@ class ServiceCalendarPolicyTests {
     void weekendDaysRemainWorkingDays() {
         assertThat(ServiceCalendarPolicy.addWorkingHours(at("2026-10-17T16:00"), 2))
             .isEqualTo(at("2026-10-18T09:00"));
+        assertThat(ServiceCalendarPolicy.nextAppointmentAt(at("2026-10-18T10:00")))
+            .isEqualTo(at("2026-10-18T10:00"));
+        assertThat(ServiceCalendarPolicy.isAppointmentStart(at("2026-10-18T10:00"))).isTrue();
     }
 
     @Test
