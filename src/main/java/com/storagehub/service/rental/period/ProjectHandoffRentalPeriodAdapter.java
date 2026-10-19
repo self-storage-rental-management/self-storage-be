@@ -8,6 +8,7 @@ import com.storagehub.domain.model.*;
 import com.storagehub.service.RentalReadSources;
 import com.storagehub.service.renewal.operations.*;
 import com.storagehub.service.renewal.persistence.RenewalWorkflow;
+import com.storagehub.service.renewal.persistence.RenewalIdempotency;
 import jakarta.persistence.EntityManager;
 import java.time.*;
 import java.util.*;
@@ -85,7 +86,7 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
         var wf = em.find(RenewalWorkflow.class, n.getId());
         if (event.getId() == null || n.getStatus() != RenewalStatus.completed || !same(r.getId(), n.getRental())
             || state == null || state.getPhase() != RenewalOperationState.Phase.COMPLETED || wf == null
-            || !Objects.equals(state.getCompletedAt(), event.getOccurredAt())
+            || !completionTimeLinked(n, state, event)
             || !Objects.equals(state.getCompletedBy(), event.getActorId()) || !same(r.getCustomer().getId(), n.getRequestedBy())) return Optional.empty();
         var d = json(event.getPayloadJson()).path("rentalPeriodEvidence");
         var rev = wf.getAcceptedRevision();
@@ -121,6 +122,36 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
             return RentalPeriod.verified(r.getId(), date(d, "startDate"), date(d, "storedEndDate"),
                 RentalPeriod.Convention.valueOf(d.path("convention").asText()), ref).filter(p -> p.matches(r));
         } catch (IllegalArgumentException e) { return Optional.empty(); }
+    }
+
+    /** Older commands sampled the clock twice. Bind both timestamps through their saved command result. */
+    private boolean completionTimeLinked(Renewal renewal, RenewalOperationState state, RenewalOperationEvent event) {
+        if (state.getCompletedAt() == null || event.getOccurredAt() == null || state.getCompletedBy() == null) return false;
+        if (Objects.equals(state.getCompletedAt(), event.getOccurredAt())) return true;
+        if (event.getOccurredAt().isBefore(state.getCompletedAt())) return false;
+        var commands = em.createQuery("select i from RenewalIdempotency i where i.resourceId=:id and i.operation='d3_complete' and i.actor.id=:actor", RenewalIdempotency.class)
+            .setParameter("id", renewal.getId()).setParameter("actor", state.getCompletedBy()).getResultList();
+        int matches = 0;
+        for (var command : commands) {
+            if (command.getHttpStatus() != 200) continue;
+            var result = json(command.getResultJson());
+            var savedState = result.path("state");
+            var savedEvent = result.path("event");
+            if (id(savedState,"renewalId",renewal.getId()) && "COMPLETED".equals(savedState.path("phase").asText())
+                && id(savedState,"completedBy",state.getCompletedBy()) && id(savedState,"arrivalRef",state.getArrivalRef())
+                && id(savedEvent,"id",event.getId()) && "COMPLETION".equals(savedEvent.path("kind").asText())
+                && id(savedEvent,"actorId",event.getActorId())
+                && persistedInstant(savedState.path("completedAt")).filter(state.getCompletedAt()::equals).isPresent()
+                && persistedInstant(savedEvent.path("occurredAt")).filter(event.getOccurredAt()::equals).isPresent()) matches++;
+        }
+        return matches == 1;
+    }
+
+    private Optional<Instant> persistedInstant(JsonNode value) {
+        try {
+            // MySQL TIMESTAMP(6) rounds sub-microsecond values persisted by older Java commands.
+            return Optional.of(Instant.parse(value.asText()).plusNanos(500).truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        } catch (DateTimeException | ArithmeticException e) { return Optional.empty(); }
     }
     private boolean linked(Rental r) {
         if (r == null || r.getId() == null || r.getStartDate() == null || r.getContractEndDate() == null

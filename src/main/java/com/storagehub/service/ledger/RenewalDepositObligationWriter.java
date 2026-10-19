@@ -54,8 +54,16 @@ public class RenewalDepositObligationWriter {
             throw ApiExceptions.conflict("Ledger source binding changed");
         for(var spec:specs) {
             var current=ledger.read(rental.getId()).orElseThrow();
+            var existing=current.obligations().stream().filter(o->spec.sourceReference().equals(o.sourceRef())).toList();
+            if(!existing.isEmpty()) {
+                if(existing.size()!=1 || !renewal.getId().equals(existing.getFirst().renewalId())
+                    || existing.getFirst().kind()!=spec.kind() || existing.getFirst().amount().compareTo(spec.amount())!=0
+                    || !existing.getFirst().dueAt().equals(spec.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt())))
+                    throw ApiExceptions.conflict("Khoản thanh toán gia hạn đã thay đổi. Cần đối soát lại trước khi tiếp tục.");
+                continue;
+            }
             ledger.charge(rental.getId(),renewal.getId(),spec.kind(),spec.amount(),
-                spec.requireDue(workflow.getPaymentDeadline()),spec.sourceReference(),customerId,
+                spec.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt()),spec.sourceReference(),customerId,
                 paymentKey(spec,workflow.getAcceptedRevision().getId()),current.revision());
         }
     }
@@ -81,7 +89,7 @@ public class RenewalDepositObligationWriter {
         var account=ledger.read(rental.getId()).orElseThrow(()->ApiExceptions.conflict("Ledger account missing for Renewal obligation"));
         if(!account.customerId().equals(rental.getCustomer().getId())||!account.facilityId().equals(rental.getFacility().getId()))
             throw ApiExceptions.conflict("Ledger source binding changed");
-        ledger.charge(rental.getId(),workflow.getRenewal().getId(),spec.kind(),spec.amount(),spec.requireDue(workflow.getPaymentDeadline()),
+        ledger.charge(rental.getId(),workflow.getRenewal().getId(),spec.kind(),spec.amount(),spec.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt()),
             spec.sourceReference(),workflow.getReviewer().getId(),"renewal-deposit:"+workflow.getAcceptedRevision().getId(),account.revision());
     }
 }

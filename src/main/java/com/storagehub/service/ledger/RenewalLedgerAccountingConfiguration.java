@@ -115,7 +115,7 @@ public class RenewalLedgerAccountingConfiguration {
         private LedgerStore.Obligation obligation(LedgerStore.Snapshot snapshot,RenewalWorkflow workflow,FinancialContractSpecifications.Specification spec) {
             var matches=snapshot.obligations().stream().filter(o->Objects.equals(o.renewalId(),spec.renewalId())&&o.kind()==spec.kind()
                 &&o.sourceRef().equals(spec.sourceReference())&&o.amount().compareTo(spec.amount())==0
-                &&o.dueAt().toEpochMilli()==workflow.getPaymentDeadline().toEpochMilli()).toList();
+                &&o.dueAt().toEpochMilli()==spec.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt()).toEpochMilli()).toList();
             if(matches.size()!=1||!ledger.renewalPaymentCommandMatches(matches.getFirst(),spec,snapshot.customerId()))
                 throw deferred("Accepted Renewal obligation or writer evidence is missing");
             return matches.getFirst();

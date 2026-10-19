@@ -26,8 +26,6 @@ public class RenewalWorkflowService {
     private PaymentRepository paymentRecords;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.NotificationService notifications;
-    @org.springframework.beans.factory.annotation.Value("${storagehub.local-demo.renewal-anytime-enabled:false}")
-    private boolean localDemoRenewalAnytimeEnabled;
     private final EntityManager em;private final ObjectMapper mapper;private final AuditLogService audit;
     private final ObjectProvider<RenewalSources.PolicySource> policies;
     private final ObjectProvider<RenewalSources.PricingSource> pricing;
@@ -57,8 +55,8 @@ public class RenewalWorkflowService {
     }
     public RenewalQuoteResponse quote(ActorPrincipal a,UUID rentalId,RenewalCommands.Quote body){
         owned(a,rentalId);var r=store.lockRental(rentalId);em.refresh(r);checkOwner(a,r);Instant now=now();var g=gate(r,now);
-        var terms=terms(r,g,body.pricingPackageCode(),body.paymentPlan()==null?RenewalPaymentPlan.FULL_TERM:body.paymentPlan());var expires=min(now.plus(g.policy.quoteTtl()),g.eligibility.recoveryCutoff());
-        var q=store.storeQuote(r,r.getCustomer(),terms,now,expires);em.flush();return new RenewalQuoteResponse(q.getId(),r.getId(),a.userId(),terms,now,expires);
+        var terms=terms(r,g,body.pricingPackageCode(),body.paymentPlan()==null?RenewalPaymentPlan.FULL_TERM:body.paymentPlan());
+        var q=store.storeQuote(r,r.getCustomer(),terms,now,null);em.flush();return new RenewalQuoteResponse(q.getId(),r.getId(),a.userId(),terms,now,null);
     }
     public RenewalResponse submit(ActorPrincipal a,UUID rentalId,RenewalCommands.Submit body,String key){
         owned(a,rentalId);var user=lockActor(a);var r=store.lockRental(rentalId);em.refresh(r);checkOwner(a,r);
@@ -137,6 +135,7 @@ public class RenewalWorkflowService {
         var selectedSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart()).orElseThrow(()->ApiExceptions.conflict("Selected signing slot is no longer available"));
         if(!selectedSlot.end().equals(selection.getAppointmentEnd()))throw ApiExceptions.conflict("Selected signing duration changed");
         selectedCalendar.reserve(renewal,selectedSlot,now);
+        workflow.signingBalanceDue(selection.getAppointmentEnd());
         var specifications=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(revision,accepted);
         if(accepted.totalAfterDiscount().signum()<=0||specifications.isEmpty()||specifications.getFirst().amount().signum()<=0)
             throw ApiExceptions.conflict("Renewal initial payment must be positive");
@@ -314,7 +313,7 @@ public class RenewalWorkflowService {
         if(r.getStatus()!=RentalStatus.active||r.getContractEndDate()==null)throw ApiExceptions.conflict("Move-out/non-active or incomplete rental blocks renewal");
         var period=periods==null?null:periods.require(r);if(period==null)throw deferred("Rental date provenance unknown");
         var source=policies.getIfAvailable();if(source==null)throw deferred("BO renewal policy missing");var p=source.read(r,period.endExclusive()).orElseThrow(()->deferred("BO renewal policy missing"));
-        if(p.reference()==null||p.reference().isBlank()||p.version()==null||p.version().isBlank()||p.eligiblePackageIds()==null||p.quoteTtl()==null||p.quoteTtl().isNegative()||p.quoteTtl().isZero()||p.paymentWindow()==null||p.paymentWindow().isNegative()||p.paymentWindow().isZero()||p.depositRate()==null||p.requestWindowDays()<0)throw deferred("Incomplete BO policy");
+        if(p.reference()==null||p.reference().isBlank()||p.version()==null||p.version().isBlank()||p.eligiblePackageIds()==null||p.paymentWindow()==null||p.paymentWindow().isNegative()||p.paymentWindow().isZero()||p.depositRate()==null)throw deferred("Incomplete BO policy");
         return new PolicyPeriod(p,period);
     }
     private Gate gate(Rental r,Instant now){
@@ -326,7 +325,7 @@ public class RenewalWorkflowService {
         if(e==null)throw deferred("Eligibility UNKNOWN");
         if(!e.datesVerified()||e.recoveryCutoff()==null)throw deferred("Unverified date provenance/cutoff");
         if(e.recoveryBlocked()||!e.feasible()||!now.isBefore(e.recoveryCutoff()))throw ApiExceptions.conflict("Recovery/cutoff conflict");
-        if(!localDemoRenewalAnytimeEnabled&&now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().isBefore(period.lastPermittedDate().minusDays(p.requestWindowDays())))throw ApiExceptions.conflict("Renewal window not open");return new Gate(p,e,period);
+        return new Gate(p,e,period);
     }
     private List<RenewalSources.Price> prices(Rental r,PolicyPeriod g){
         var s=pricing.getIfAvailable();if(s==null)throw deferred("Authoritative renewal pricing/rounding source missing");
