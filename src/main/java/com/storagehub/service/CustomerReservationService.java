@@ -593,7 +593,10 @@ public class CustomerReservationService {
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setCustomerName(reservation.getCustomer().getFullName());
         response.setCustomerEmail(reservation.getCustomer().getEmail());
-        response.setCustomerPhone(reservation.getCustomer().getPhone());
+        response.setCustomerPhone(reservation.getCustomerPhone() != null
+            ? reservation.getCustomerPhone() : reservation.getCustomer().getPhone());
+        response.setCustomerAddress(reservation.getCustomerAddress() != null
+            ? reservation.getCustomerAddress() : reservation.getCustomer().getPermanentAddress());
         response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         if (reservation.getAssignedUnit() != null) {
             response.setAssignedUnitId(reservation.getAssignedUnit().getId());
