@@ -308,6 +308,9 @@ public class ReservationCreationService {
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
+        response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setVoucherCode(snapshot.getVoucherCode());
+        response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         return response;
     }
