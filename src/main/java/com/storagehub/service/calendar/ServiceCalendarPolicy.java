@@ -16,13 +16,7 @@ public final class ServiceCalendarPolicy {
     public static final LocalTime CLOSE = LocalTime.of(17, 0);
     public static final LocalTime LAST_APPOINTMENT_START = LocalTime.of(16, 30);
     public static final int SLOT_STEP_MINUTES = 30;
-    public static final List<DayOfWeek> WORKING_DAYS = List.of(
-        DayOfWeek.MONDAY,
-        DayOfWeek.TUESDAY,
-        DayOfWeek.WEDNESDAY,
-        DayOfWeek.THURSDAY,
-        DayOfWeek.FRIDAY
-    );
+    public static final List<DayOfWeek> WORKING_DAYS = List.of(DayOfWeek.values());
 
     private ServiceCalendarPolicy() {}
 
@@ -56,6 +50,11 @@ public final class ServiceCalendarPolicy {
             if (WORKING_DAYS.contains(result.getDayOfWeek())) remaining--;
         }
         return result.toInstant();
+    }
+
+    public static Instant endOfWorkingDay(Instant value) {
+        Objects.requireNonNull(value, "value");
+        return value.atZone(ZONE).with(LAST_APPOINTMENT_START).withSecond(0).withNano(0).toInstant();
     }
 
     public static Instant nextAppointmentAt(Instant value) {
