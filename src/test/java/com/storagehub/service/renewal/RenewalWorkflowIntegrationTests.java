@@ -24,8 +24,10 @@ import org.springframework.context.annotation.*;
 import org.springframework.test.context.ActiveProfiles;
 
 @DataJpaTest @ActiveProfiles("test")
-@Import({RenewalWorkflowService.class,RenewalPersistence.class,RenewalReadService.class,AuditLogService.class,RenewalWorkflowIntegrationTests.Sources.class})
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RenewalWorkflowService.class,RenewalPersistence.class,RenewalReadService.class,AuditLogService.class,RenewalWorkflowIntegrationTests.Sources.class})
 class RenewalWorkflowIntegrationTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
     static final Instant NOW=Instant.parse("2026-10-06T00:00:00Z");
     static final UUID PACKAGE=UUID.fromString("00000000-0000-0000-0000-000000000001");
     @TestConfiguration static class Sources {

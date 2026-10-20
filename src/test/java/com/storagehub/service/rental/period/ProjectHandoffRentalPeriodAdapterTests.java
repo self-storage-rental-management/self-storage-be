@@ -49,8 +49,35 @@ class ProjectHandoffRentalPeriodAdapterTests {
         receipt.setAfterStateJson(mapper.writeValueAsString(Map.of("status","COMPLETED","rentalId",rental.getId(),
             "rentalPeriodEvidence",RentalPeriodEvidence.receipt(rental,created))));
     }
+    @Test void currentDatesAreReadableWithoutHistoricalReceiptOrHandover() {
+        rental.getReservation().setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        handover.setStatus(CheckInStatus.scheduled);
+        receipt.setAfterStateJson("broken");
+        clearInvocations(em);
+        var dates=adapter.read(rental).orElseThrow();
+        assertThat(dates.inclusiveEndDate()).isEqualTo(LocalDate.of(2026,10,31));
+        assertThat(dates.reference()).isEqualTo("rental-record:"+rental.getId());
+        verifyNoInteractions(em);
+    }
+    @Test void currentDatesReflectUpdatedEndWithoutReconstructingHistoricalEvidence() {
+        rental.setContractEndDate(LocalDate.of(2026,12,1));
+        var dates=adapter.read(rental).orElseThrow();
+        assertThat(dates.storedEndDate()).isEqualTo(LocalDate.of(2026,12,1));
+        assertThat(dates.inclusiveEndDate()).isEqualTo(LocalDate.of(2026,11,30));
+        verifyNoInteractions(em);
+    }
+    @Test void currentInclusiveConventionPreservesStoredEndDate() {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        assertThat(adapter.read(rental).orElseThrow().inclusiveEndDate()).isEqualTo(rental.getContractEndDate());
+        verifyNoInteractions(em);
+    }
+    @Test void invalidCurrentDatesRemainUnknown() {
+        assertThat(adapter.read(null)).isEmpty();
+        rental.setContractEndDate(null);assertThat(adapter.read(rental)).isEmpty();
+        rental.setContractEndDate(rental.getStartDate().minusDays(1));assertThat(adapter.read(rental)).isEmpty();
+    }
     @Test void genuineNewReceiptReadsExclusiveDatesAndNeverWrites() {
-        var d=adapter.read(rental).orElseThrow();
+        var d=adapter.readHistorical(rental).orElseThrow();
         assertThat(d.storedEndDate()).isEqualTo(LocalDate.of(2026,11,1));
         assertThat(d.inclusiveEndDate()).isEqualTo(LocalDate.of(2026,10,31));
         assertThat(d.convention()).isEqualTo(RentalPeriod.Convention.EXCLUSIVE);
@@ -62,7 +89,7 @@ class ProjectHandoffRentalPeriodAdapterTests {
     }
     @Test void approvedInclusiveRuleAppliesToOldExclusiveProofWithoutChangingStoredDate() {
         ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
-        var d=adapter.read(rental).orElseThrow();
+        var d=adapter.readHistorical(rental).orElseThrow();
         var p=RentalPeriodResolver.normalize(rental,d).orElseThrow();
         assertThat(p.lastPermittedDate()).isEqualTo(LocalDate.of(2026,11,1));
         assertThat(p.endExclusive()).isEqualTo(LocalDate.of(2026,11,2));
@@ -74,65 +101,65 @@ class ProjectHandoffRentalPeriodAdapterTests {
     @Test void approvedLegacyReceiptUsesCurrentRuleNotInventedHistoricalProof() throws Exception {
         ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
         receipt.setAfterStateJson(mapper.writeValueAsString(Map.of("status","COMPLETED","rentalId",rental.getId())));
-        assertThat(adapter.read(rental).orElseThrow().inclusiveEndDate()).isEqualTo(rental.getContractEndDate());
-        receipt.setActor(id(new User()));assertThat(adapter.read(rental)).isEmpty();
+        assertThat(adapter.readHistorical(rental).orElseThrow().inclusiveEndDate()).isEqualTo(rental.getContractEndDate());
+        receipt.setActor(id(new User()));assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void inclusiveRuleDoesNotHideMalformedEvidenceOrIncompleteHandover() {
         ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
-        receipt.setAfterStateJson("{}");assertThat(adapter.read(rental)).isEmpty();
-        handover.setStatus(CheckInStatus.scheduled);assertThat(adapter.read(rental)).isEmpty();
+        receipt.setAfterStateJson("{}");assertThat(adapter.readHistorical(rental)).isEmpty();
+        handover.setStatus(CheckInStatus.scheduled);assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void beforeCustomerReceiptNoRentalIsCreatedOrQueried() {
         rental.getReservation().setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         clearInvocations(em);
-        assertThat(adapter.read(rental)).isEmpty();verifyNoInteractions(em);
+        assertThat(adapter.readHistorical(rental)).isEmpty();verifyNoInteractions(em);
     }
     @Test void reusedRentalKeepsUnknownEvenWhenAllDatesMatch() throws Exception {
-        proof(false);assertThat(adapter.read(rental)).isEmpty();
+        proof(false);assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void oldAuditWithNoCreatedFlagDoesNotBecomeProof() throws Exception {
         receipt.setAfterStateJson(mapper.writeValueAsString(Map.of("status","COMPLETED","rentalId",rental.getId())));
-        assertThat(adapter.read(rental)).isEmpty();
+        assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void malformedOrNullAuditFailsClosed() {
         for(var json:List.of("broken","null","{}","[]")) {
-            receipt.setAfterStateJson(json);assertThat(adapter.read(rental)).isEmpty();
+            receipt.setAfterStateJson(json);assertThat(adapter.readHistorical(rental)).isEmpty();
         }
     }
     @Test void duplicateReceiptIsAmbiguous() {
-        when(logs.getResultList()).thenReturn(List.of(receipt,receipt));assertThat(adapter.read(rental)).isEmpty();
+        when(logs.getResultList()).thenReturn(List.of(receipt,receipt));assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void wrongActorFacilityOrAuditResourceIsNotProof() {
-        receipt.setActor(id(new User()));assertThat(adapter.read(rental)).isEmpty();receipt.setActor(rental.getCustomer());
-        receipt.setFacility(id(new Facility()));assertThat(adapter.read(rental)).isEmpty();receipt.setFacility(rental.getFacility());
-        receipt.setEntityId(UUID.randomUUID());assertThat(adapter.read(rental)).isEmpty();
+        receipt.setActor(id(new User()));assertThat(adapter.readHistorical(rental)).isEmpty();receipt.setActor(rental.getCustomer());
+        receipt.setFacility(id(new Facility()));assertThat(adapter.readHistorical(rental)).isEmpty();receipt.setFacility(rental.getFacility());
+        receipt.setEntityId(UUID.randomUUID());assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void differentCheckInRentalOrReservationAndIncompleteHandoverAreUnknown() {
-        handover.setRental(id(new Rental()));assertThat(adapter.read(rental)).isEmpty();handover.setRental(rental);
-        handover.setReservation(id(new Reservation()));assertThat(adapter.read(rental)).isEmpty();handover.setReservation(rental.getReservation());
-        handover.setStatus(CheckInStatus.scheduled);assertThat(adapter.read(rental)).isEmpty();
+        handover.setRental(id(new Rental()));assertThat(adapter.readHistorical(rental)).isEmpty();handover.setRental(rental);
+        handover.setReservation(id(new Reservation()));assertThat(adapter.readHistorical(rental)).isEmpty();handover.setReservation(rental.getReservation());
+        handover.setStatus(CheckInStatus.scheduled);assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void changedRawDatesCannotReuseOldTupleEvidence() {
-        rental.setContractEndDate(LocalDate.of(2026,12,1));assertThat(adapter.read(rental)).isEmpty();
-        rental.getReservation().setEndDate(rental.getContractEndDate());assertThat(adapter.read(rental)).isEmpty();
+        rental.setContractEndDate(LocalDate.of(2026,12,1));assertThat(adapter.readHistorical(rental)).isEmpty();
+        rental.getReservation().setEndDate(rental.getContractEndDate());assertThat(adapter.readHistorical(rental)).isEmpty();
     }
     @Test void foreignUnitFailsBeforeQuerying() {
         rental.getReservation().setAssignedUnit(id(new StorageUnit()));clearInvocations(em);
-        assertThat(adapter.read(rental)).isEmpty();verifyNoInteractions(em);
+        assertThat(adapter.readHistorical(rental)).isEmpty();verifyNoInteractions(em);
     }
     @Test void completedLegacyRenewalWithoutCompletionEvidenceDoesNotFallBackToReceipt() {
-        when(completed.getResultList()).thenReturn(List.of(UUID.randomUUID()));assertThat(adapter.read(rental)).isEmpty();
+        when(completed.getResultList()).thenReturn(List.of(UUID.randomUUID()));assertThat(adapter.readHistorical(rental)).isEmpty();
         verify(logs,never()).getResultList();
     }
     @Test void malformedLatestCompletionDoesNotFallBackToReceipt() {
         var n=id(new Renewal());n.setRental(rental);n.setStatus(RenewalStatus.completed);
         var e=id(new RenewalOperationEvent(n,"COMPLETION",java.time.Instant.now(),UUID.randomUUID(),"{}"));
-        when(events.getResultList()).thenReturn(List.of(e));assertThat(adapter.read(rental)).isEmpty();
+        when(events.getResultList()).thenReturn(List.of(e));assertThat(adapter.readHistorical(rental)).isEmpty();
         verify(logs,never()).getResultList();
     }
     @Test void infrastructureFailureIsNotAnEmptySuccess() {
         when(logs.getResultList()).thenThrow(new IllegalStateException("test source outage"));
-        assertThatThrownBy(()->adapter.read(rental)).hasMessage("test source outage");
+        assertThatThrownBy(()->adapter.readHistorical(rental)).hasMessage("test source outage");
     }
     @Test void receiptMetadataIsAdditiveAndToleratesReusedIncompleteLegacyRelations() {
         var partial=id(new Rental());assertThat(RentalPeriodEvidence.receipt(partial,false)).containsEntry("convention","UNKNOWN");

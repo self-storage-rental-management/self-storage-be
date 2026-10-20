@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service @RequiredArgsConstructor @Transactional(readOnly=true)
 public class RenewalReadService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.BusinessRecordCodes displayCodes;
     private final RenewalRepository repository;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RenewalWorkflowService> workflows;
@@ -60,9 +62,11 @@ public class RenewalReadService {
         if(f.status()!=null)p.add(c.equal(r.get("status"),f.status()));
         if(f.rentalId()!=null)p.add(c.equal(rental.get("id"),f.rentalId()));
         if(f.facilityId()!=null)p.add(c.equal(rental.get("facility").get("id"),f.facilityId()));
-        if(manager&&!f.search().isEmpty()){
+        if(!f.search().isEmpty()){
             String pattern="%"+f.search().toLowerCase(Locale.ROOT).replace("\\","\\\\").replace("%","\\%").replace("_","\\_")+"%";
             List<Predicate> matches=new ArrayList<>();
+            String codeKey=displayCodes==null?null:displayCodes.resource("GH",f.search());
+            if(codeKey!=null)matches.add(c.equal(r.get("id"),UUID.fromString(codeKey.substring(3))));
             matches.add(c.like(c.lower(rental.join("storageUnit",JoinType.LEFT).get("code")),pattern,'\\'));
             matches.add(c.like(c.lower(rental.join("customer",JoinType.LEFT).get("fullName")),pattern,'\\'));
             try{UUID id=UUID.fromString(f.search());matches.add(c.equal(r.get("id"),id));matches.add(c.equal(rental.get("id"),id));}catch(IllegalArgumentException ignored){}
@@ -86,6 +90,7 @@ public class RenewalReadService {
             null,n.getNewEndDate(),n.getAmount(),"VND",n.getCreatedAt(),null,n.getRequestedBy().getId(),
             null,null,null,null,null,null,null,new RenewalResponse.FinancialCheck("UNKNOWN",null,null,null),
             new RenewalResponse.SystemVerification("UNKNOWN",null,List.of(),List.of()),
-            List.of(),List.of("Accepted snapshot, version and shared renewal integrations are not connected"),null,null);
+            List.of(),List.of("Accepted snapshot, version and shared renewal integrations are not connected"),null,null,
+            displayCodes==null?null:displayCodes.find("GH:"+n.getId()));
     }
 }

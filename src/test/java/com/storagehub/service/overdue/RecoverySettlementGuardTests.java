@@ -30,7 +30,12 @@ class RecoverySettlementGuardTests {
         jdbc.update("insert into recovery_task_operations(task_id,return_case_id) values(?,?)",bytes(task),bytes(rc.getId()));
         when(em.find(StorageUnit.class,unit.getId(),LockModeType.PESSIMISTIC_WRITE)).thenReturn(unit);
     }
-    @AfterEach void close(){jdbc.execute("shutdown");}
+    @AfterEach void close(){
+        jdbc.execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
+            try (var statement=connection.createStatement()) { statement.execute("shutdown"); }
+            return null;
+        });
+    }
     @Test void financialCompletionAloneCannotReleaseTheUnit() {
         assertThat(guard.linked(rc)).isTrue();assertThatThrownBy(()->guard.requireReadyToRelease(rc)).hasMessageContaining("physical clearance");
         assertThatThrownBy(()->guard.requireManualSettlement(rc)).hasMessageContaining("transaction evidence");
