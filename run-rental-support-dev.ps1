@@ -35,8 +35,6 @@ $rentalLocalConfiguration = @{
     'storagehub.integration.ledger.enabled' = $true
     'storagehub.integration.communication.enabled' = $true
     'storagehub.integration.renewal-operational-checks.enabled' = $true
-    # Local demo only: allow renewals at any point in the active rental period while testing.
-    'storagehub.local-demo.renewal-anytime-enabled' = $true
     'storagehub.integration.renewal-extension-holds.enabled' = $true
     'spring.jpa.show-sql' = $false
     'logging.level.root' = 'INFO'
