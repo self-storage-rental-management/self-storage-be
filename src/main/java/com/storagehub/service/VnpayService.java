@@ -59,6 +59,23 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor(onConstructor_=@Autowired)
 public class VnpayService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.RenewalInstallmentService> installments;
+
+    @Transactional
+    public RenewalVnpayPaymentResponse createInstallmentPaymentUrl(ActorPrincipal actor,UUID renewalId,UUID quoteId,String key,String ip){
+        requireConfigured();requireRenewalSandbox();
+        if(renewalSettlement==null||renewalSettlement.getIfAvailable()==null)throw ApiExceptions.conflict("Chưa bật đối soát thanh toán gia hạn.");
+        var source=installments.getIfAvailable();if(source==null)throw ApiExceptions.conflict("Chưa bật thanh toán theo kỳ.");
+        var payment=source.prepareIntent(actor,renewalId,quoteId,key);
+        if(java.util.Set.of(PaymentStatus.PAID,PaymentStatus.FAILED,PaymentStatus.CANCELLED).contains(payment.getStatus()))return renewalPaymentResponse(payment,renewalPaymentMessage(payment),null);
+        return renewalPaymentUrl(payment,ip);
+    }
+    @Transactional(readOnly=true)
+    public RenewalVnpayPaymentResponse installmentPayment(ActorPrincipal actor,UUID renewalId,UUID paymentId,String audience){
+        var source=installments.getIfAvailable();if(source==null)throw ApiExceptions.conflict("Chưa bật thanh toán theo kỳ.");
+        var p=source.read(actor,renewalId,paymentId,audience);return renewalPaymentResponse(p,renewalPaymentMessage(p),null);
+    }
 
     private static final String VERSION = "2.1.0";
     private static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
@@ -405,6 +422,11 @@ public class VnpayService {
         if (!properties.isEnabled() || properties.getTmnCode().isBlank() || properties.getHashSecret().isBlank()) {
             return ReconciliationOutcome.UNKNOWN;
         }
+        // VNPay rejects repeated QueryDr requests for the same transaction
+        // within five minutes (94). Polling every scheduler tick prevents recovery.
+        if(payment.getRenewal()!=null && payment.getLastReconciledAt()!=null
+            && payment.getLastReconciledAt().plusSeconds(300).isAfter(Instant.now()))return ReconciliationOutcome.UNKNOWN;
+        if(payment.getRenewal()!=null)payment.setLastReconciledAt(Instant.now());
         final Map<String, String> gateway;
         try {
             gateway = post(queryRequest(payment, "127.0.0.1"));
@@ -424,7 +446,12 @@ public class VnpayService {
 
         String responseCode = gateway.get("vnp_ResponseCode");
         if ("91".equals(responseCode)) {
-            if(payment.getRenewal()!=null)return ReconciliationOutcome.UNKNOWN;
+            if(payment.getRenewal()!=null && (payment.getPaymentDeadline()==null
+                || Instant.now().isBefore(payment.getPaymentDeadline().plusSeconds(300))
+                || payment.getStatus()==PaymentStatus.PAID || payment.getPaidAt()!=null
+                || payment.getRenewalEvidenceRef()!=null || payment.getRenewalLedgerReceiptRef()!=null
+                || payment.getGatewayTransactionNo()!=null && !payment.getGatewayTransactionNo().isBlank()
+                    && !"0".equals(payment.getGatewayTransactionNo())))return ReconciliationOutcome.UNKNOWN;
             markQueryFailure(payment, "91", "VNPAY could not find the transaction at the payment deadline");
             return ReconciliationOutcome.FINAL_FAILURE;
         }
@@ -457,8 +484,15 @@ public class VnpayService {
             markPaid(payment, gatewayPaidAt);
             return ReconciliationOutcome.SUCCESS;
         }
-        if ("02".equals(transactionStatus)) {
-            markQueryFailure(payment, "02", "VNPAY confirmed that the transaction failed");
+        if ("02".equals(transactionStatus) || payment.getRenewal()!=null && "08".equals(transactionStatus)) {
+            if(payment.getRenewal()!=null && (payment.getStatus()==PaymentStatus.PAID || payment.getPaidAt()!=null
+                || payment.getRenewalEvidenceRef()!=null || payment.getRenewalLedgerReceiptRef()!=null
+                || gateway.get("vnp_Amount")==null
+                || "08".equals(transactionStatus) && (payment.getPaymentDeadline()==null
+                    || payment.getPaymentDeadline().isAfter(Instant.now()))))return ReconciliationOutcome.UNKNOWN;
+            markQueryFailure(payment, transactionStatus, "08".equals(transactionStatus)
+                ? "VNPAY confirmed that the transaction timed out without successful payment"
+                : "VNPAY confirmed that the transaction failed");
             return ReconciliationOutcome.FINAL_FAILURE;
         }
         return ReconciliationOutcome.UNKNOWN;
@@ -585,6 +619,10 @@ public class VnpayService {
     }
 
     private String renewalSettlementStage(Payment payment) {
+        if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT){
+            if(payment.getStatus()!=PaymentStatus.PAID)return "AWAITING_PAYMENT";
+            return payment.getRenewalAllocatedAt()!=null?"COMPLETED":payment.getRenewalEvidenceRef()!=null?"VERIFIED_AWAITING_ALLOCATION":"RECONCILIATION_REQUIRED";
+        }
         if(payment.getRenewal().getStatus()==com.storagehub.domain.model.RenewalStatus.completed)return "COMPLETED";
         if(payment.getStatus()!=PaymentStatus.PAID)return "AWAITING_PAYMENT";
         if(payment.getRenewalSigningPreparedAt()!=null)return "AWAITING_SIGNING";
@@ -593,6 +631,12 @@ public class VnpayService {
     }
 
     private String renewalPaymentMessage(Payment payment) {
+        if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT){
+            if(payment.getStatus()==PaymentStatus.FAILED)return "Giao dịch thanh toán kỳ thất bại; có thể lấy báo giá mới để thử lại.";
+            if(payment.getStatus()==PaymentStatus.CANCELLED)return "Giao dịch thanh toán kỳ đã hủy.";
+            if(payment.getStatus()==PaymentStatus.PAID)return payment.getRenewalAllocatedAt()!=null?"Đã phân bổ tiền vào các kỳ thuê.":"Đã nhận tiền, đang đối soát phân bổ theo kỳ.";
+            return "Đang chờ kết quả thanh toán kỳ từ VNPay.";
+        }
         if(payment.getFailureCode()!=null)return "Payment received; Renewal reconciliation is required";
         return payment.getStatus()==PaymentStatus.PAID?"Renewal initial rental payment recorded"
             :payment.getStatus()==PaymentStatus.FAILED?"VNPay Renewal payment failed":"Renewal payment is awaiting VNPay confirmation";
@@ -770,7 +814,7 @@ public class VnpayService {
     }
     private boolean authenticatedRenewalCallback(Payment payment,Map<String,String> query,Instant gatewayPaidAt) {
         return payment!=null&&payment.getRenewal()!=null&&payment.getRenewalRevision()!=null
-            &&"RENEWAL".equals(payment.getPurpose().name())&&"VNPAY".equals(payment.getGatewayProvider())
+            &&java.util.Set.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(payment.getPurpose())&&"VNPAY".equals(payment.getGatewayProvider())
             &&properties.getTmnCode().equals(query.get("vnp_TmnCode"))
             &&"SANDBOX".equals(PaymentProvenance.environment(properties.getPayUrl(),properties.getApiUrl()))
             &&payment.getGatewayIntentId().equals(query.get("vnp_TxnRef"))

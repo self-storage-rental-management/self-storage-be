@@ -67,7 +67,7 @@ public class RenewalRiskReadService {
         if(renewal!=null) {
             var workflow=em.find(RenewalWorkflow.class,id);
             if(workflow!=null)try {
-                remainder=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class).remainingRentalAmount();
+                remainder=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class).dueAtSigning();
             }catch(Exception invalid){throw ApiExceptions.conflict("Accepted financial terms invalid");}
         }
         if(term==null)return new View(rental.getId(),id,now,"UNKNOWN",null,"UNKNOWN",signing,null,null,
