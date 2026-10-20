@@ -42,6 +42,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Import({AuditLogService.class,PaymentProvenance.class,RenewalVnpaySettlementService.class,RenewalPaymentReconciler.class,
     RenewalPaymentTransactionTests.Sources.class})
 class RenewalPaymentTransactionTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
     static final Instant NOW=Instant.parse("2026-10-11T01:00:00Z");
     @TestConfiguration static class Sources {
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}

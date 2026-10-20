@@ -21,6 +21,7 @@ import static com.storagehub.service.renewal.operations.RenewalOperationSources.
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class RenewalOperationService {
+    @org.springframework.beans.factory.annotation.Autowired private com.storagehub.service.BusinessRecordCodes displayCodes;
     public enum Audience { CUSTOMER, MANAGER, STAFF }
     public record Result(RenewalOperationResponse state,RenewalOperationResponse.Event event) {}
     private record Context(Renewal renewal,User user,RenewalWorkflow workflow) {}
@@ -471,7 +472,7 @@ public class RenewalOperationService {
             s==null?null:s.getEffectiveSigningDeadline(),s==null?null:s.getRecoveryCutoff(),s==null?null:s.getAppointmentRef(),
             s==null?null:s.getArrivalRef(),s==null?null:s.getConfirmedExceptionRef(),s==null?null:s.getCompletedBy(),s==null?null:s.getCompletedAt(),
             missing,s==null?null:s.getAppointmentStart(),s==null?null:s.getAppointmentEnd(),s==null?null:s.getPendingExceptionRef(),
-            s==null?null:s.getFullRentPaymentRef(),s==null?null:s.getFullRentPaidAt());
+            s==null?null:s.getFullRentPaymentRef(),s==null?null:s.getFullRentPaidAt(),displayCodes==null?null:displayCodes.find("GH:"+n.getId()));
     }
     private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
         if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
