@@ -224,7 +224,11 @@ public class RenewalOperationService {
         var eventData=new LinkedHashMap<String,Object>(mapper.convertValue(body,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
         eventData.put("rentalPeriodEvidence",com.storagehub.service.rental.period.RentalPeriodEvidence.completion(
             c.renewal().getRental(),period,newStoredEnd,c.workflow().getAcceptedRevision().getQuote().getId()));
-        return finish(c,"d3_complete",key,body,event(c,"COMPLETION",eventData,completedAt),200);
+        var completedEvent=event(c,"COMPLETION",eventData,completedAt);
+        var confirmedPeriod=com.storagehub.service.rental.period.RentalPeriod.verified(c.renewal().getRental().getId(),period.startDate(),newStoredEnd,period.convention(),"completion:"+completedEvent.getId())
+            .orElseThrow(()->ApiExceptions.conflict("Kỳ thuê gia hạn không hợp lệ."));
+        if(confirmedRentalPeriods!=null)confirmedRentalPeriods.confirm(c.renewal().getRental(),confirmedPeriod);
+        return finish(c,"d3_complete",key,body,completedEvent,200);
     }
     public Result exception(ActorPrincipal actor,UUID id,ExceptionDecision body,String key) {
         var c=context(actor,id,Audience.MANAGER,Capability.EXCEPTION,key,"d3_exception",body,body.expectedVersion());var old=replay(c,"d3_exception",key,body);if(old.isPresent())return old.get();
@@ -439,6 +443,8 @@ public class RenewalOperationService {
         if(total.add(s.unpostedOverdueFee()).compareTo(s.amount())!=0)throw deferred("Payable statement balance mismatch");
         // Source version is opaque: certification of revision/version atomicity remains the accounting owner's protocol.
     }
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.rental.period.ConfirmedRentalPeriods confirmedRentalPeriods;
     private RenewalOperationEvent event(Context c,String kind,Object data){return event(c,kind,data,now());}
     private RenewalOperationEvent event(Context c,String kind,Object data,Instant at){var e=new RenewalOperationEvent(c.renewal(),kind,at,c.user().getId(),store.canonical(data));em.persist(e);em.flush();return e;}
     private Result finish(Context c,String op,String key,Object body,RenewalOperationEvent e,int status){em.lock(c.workflow(),LockModeType.PESSIMISTIC_FORCE_INCREMENT);em.flush();var result=new Result(projection(c.renewal()),eventResponse(e,Audience.MANAGER));audit.recordMutation(c.user(),op,"Renewal",c.renewal().getId(),c.renewal().getRental().getFacility().getId(),null,Map.of("eventId",e.getId(),"state",result.state()));store.remember(c.user(),op,key,c.renewal().getId(),body,status,result);

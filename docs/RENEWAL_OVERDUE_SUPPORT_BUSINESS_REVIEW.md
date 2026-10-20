@@ -1,5 +1,7 @@
 # Rà soát nghiệp vụ gia hạn, quá hạn và hỗ trợ khách hàng
 
+> Cập nhật 20/10/2026: đã triển khai làm gọn nguồn kỳ thuê, trạng thái thu hồi và tách giao dịch đối soát cọc. Chi tiết phạm vi, chuyển đổi hồ sơ cũ và điều kiện còn giữ: [Luồng quá hạn đã đơn giản hóa](OVERDUE_SIMPLIFIED_FLOW.md).
+
 - Ngày ghi nhận: 19/10/2026.
 - Phạm vi: code BE, FE và tài liệu nghiệp vụ hiện có.
 - Trạng thái: ghi nhận kết quả rà soát và đề xuất; chưa sửa code theo tài liệu này.

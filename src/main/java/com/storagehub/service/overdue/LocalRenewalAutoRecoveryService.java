@@ -32,8 +32,6 @@ public class LocalRenewalAutoRecoveryService {
     private final ObjectProvider<Clock> clocks;
     private final NotificationService notifications;
     private final AuditLogService audit;
-    @org.springframework.beans.factory.annotation.Autowired
-    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositSettlementService> depositSettlements;
 
     @Transactional(readOnly=true)
     public List<UUID> candidates() {
@@ -95,15 +93,7 @@ public class LocalRenewalAutoRecoveryService {
         var handoff=receiver.receive(rental,ref,"AUTO_OVERDUE_DAY_8",ref,now);
         if(handoff==null||handoff.reference()==null||!Set.of("RECEIVED","ALREADY_RECEIVED").contains(handoff.status()))
             throw ApiExceptions.conflict("Recovery receiver did not acknowledge");
-        for(var renewal:renewals) {
-            if(renewal.getStatus()==RenewalStatus.completed)continue;
-            var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
-            if(state!=null&&state.getDepositPaidAt()!=null) {
-                var settlement=depositSettlements==null?null:depositSettlements.getIfAvailable();
-                if(settlement==null)throw ApiExceptions.conflict("Deposit forfeiture accounting unavailable");
-                settlement.reconcile(renewal.getId());
-            }
-        }
+        // Deposit settlement has its own coordinator/transaction. Accounting failure must not roll back the work item.
         for(var renewal:renewals) {
             if(Set.of(RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.payment_expired,RenewalStatus.completed).contains(renewal.getStatus()))continue;
             var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
