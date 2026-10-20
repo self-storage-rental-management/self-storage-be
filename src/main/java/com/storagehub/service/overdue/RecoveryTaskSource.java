@@ -30,6 +30,18 @@ public class RecoveryTaskSource implements OverdueSources.RecoverySource {
     private final RentalPeriodResolver periods;
     private final ObjectProvider<OverdueSources.TermSource> terms;
 
+    public record Progress(UUID taskId,String status) {}
+    public Optional<Progress> progress(Rental rental,Instant now) {
+        requireContext(rental,now);
+        var rows=jdbc.query("select id,facility_id,status from recovery_tasks where rental_id=?",
+            (rs,i)->new Object[]{uuid(rs.getBytes("id")),uuid(rs.getBytes("facility_id")),rs.getString("status")},bytes(rental.getId()));
+        if(rows.isEmpty())return Optional.empty();
+        var row=rows.getFirst();
+        if(!rental.getFacility().getId().equals(row[1])||!java.util.Set.of("OPEN","IN_PROGRESS","CLOSED").contains(row[2]))
+            throw ApiExceptions.conflict("Recovery task progress is inconsistent");
+        return Optional.of(new Progress((UUID)row[0],(String)row[2]));
+    }
+
     /** Only the local shared-DB writer uses this bounded check; it does not certify external Recovery coverage. */
     public void requireNoPersistedHandoff(Rental rental,Instant now) {
         requireContext(rental,now);

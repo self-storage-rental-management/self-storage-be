@@ -23,11 +23,19 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.DateSource {
     private final EntityManager em;
     private final ObjectMapper mapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ConfirmedRentalPeriods confirmedPeriods;
     /** Current project rule, explicitly enabled locally; historical evidence is not rewritten. */
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.rental-period.inclusive-end:false}")
     private boolean inclusiveEnd;
 
     public Optional<RentalReadSources.Dates> read(Rental r) {
+        if(confirmedPeriods!=null && r!=null && r.getId()!=null)
+            return confirmedPeriods.read(r).map(p->new RentalReadSources.Dates(p.rentalId(),p.startDate(),p.lastPermittedDate(),p.reference(),p.storedEndDate(),p.convention()));
+        return readHistorical(r);
+    }
+
+    public Optional<RentalReadSources.Dates> readHistorical(Rental r) {
         if (!linked(r)) return Optional.empty();
         var handovers = em.createQuery("select c from CheckIn c where c.reservation.id=:id", CheckIn.class)
             .setParameter("id", r.getReservation().getId()).setMaxResults(2).getResultList();
