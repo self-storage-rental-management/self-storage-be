@@ -26,8 +26,10 @@ import org.springframework.util.LinkedMultiValueMap;
 
 /** H2-only fixtures and explicitly TEST-ONLY integration adapters; never runtime policy/payment seeds. */
 @DataJpaTest @ActiveProfiles("test")
-@Import({RenewalOperationService.class,OverdueService.class,RenewalPersistence.class,AuditLogService.class,RenewalOperationIntegrationTests.Sources.class})
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RenewalOperationService.class,OverdueService.class,RenewalPersistence.class,AuditLogService.class,RenewalOperationIntegrationTests.Sources.class})
 class RenewalOperationIntegrationTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
     static final Instant NOW=Instant.parse("2026-10-08T02:00:00Z");
     @TestConfiguration static class Sources {
         @Bean TestDateEvidence dateEvidence(){return new TestDateEvidence();}

@@ -30,9 +30,11 @@ import org.springframework.test.context.ActiveProfiles;
 /** All records here exist ONLY in the rollback-isolated H2 test database. */
 @DataJpaTest
 @ActiveProfiles("test")
-@Import({SharedCatalogRenewalPricingSource.class, RenewalWorkflowService.class, RenewalReadService.class,
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,SharedCatalogRenewalPricingSource.class, RenewalWorkflowService.class, RenewalReadService.class,
     RenewalPersistence.class, AuditLogService.class, SharedCatalogRenewalPricingJpaTests.TestBeans.class})
 class SharedCatalogRenewalPricingJpaTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
     private static final LocalDate START = LocalDate.of(2026, 11, 1);
     @TestConfiguration
     static class TestBeans {
