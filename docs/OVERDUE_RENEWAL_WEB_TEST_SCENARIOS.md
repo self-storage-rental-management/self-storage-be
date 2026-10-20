@@ -6,6 +6,10 @@
 - Thanh toán: dùng phương án toàn kỳ; chưa kiểm thử chậm thanh toán từng tháng vì nhóm đang tạm dừng nghiệp vụ này.
 - Mọi mốc bên dưới dùng giờ Việt Nam.
 
+> Cập nhật điều kiện ngày 20/10/2026: kỳ thuê được đọc trực tiếp từ ngày bắt đầu/kết thúc trên Rental, không còn bắt buộc bản xác nhận kỳ thuê, nhận kho/nhật ký xác nhận hoặc lịch sử hoàn tất gia hạn. Các ca thiếu bằng chứng lịch sử không còn được mong đợi bị chặn chỉ vì thiếu bằng chứng; chỉ thiếu/sai ngày thuê mới chặn việc xác định kỳ thuê.
+
+**Bộ dữ liệu local đã tạo ngày 20/10/2026:** xem [Danh sách hồ sơ và cách mở trên web](OVERDUE_WEB_DEMO_DATA.md). Bộ này gồm 13 hồ sơ nền và 6 nhiệm vụ đang mở; các ca chính xác giờ/lỗi đối soát chưa được chuẩn bị đầy đủ.
+
 ## 1. Chuẩn bị trước khi quay video hoặc kiểm thử
 
 1. Khởi động MySQL, áp dụng migration `2026102001`, chạy BE và FE cùng phiên bản code.
@@ -134,7 +138,7 @@ Chuẩn bị sẵn các hồ sơ độc lập để không phải chờ thời g
 | TC-17 | Hai quản lý cùng gửi chuyển thu hồi, đồng thời tác vụ tự động quét trên cùng DL-06 | Chỉ một nhiệm vụ. Bên còn lại có thể nhận thông báo đã xử lý/phiên bản cũ và phải tải lại; không bắt buộc mọi yêu cầu cùng trả thành công |
 | TC-18 | Hai nhân viên mở cùng một nhiệm vụ; một người xử lý rồi người còn lại gửi form cũ | Chặn phiên bản cũ; tải lại hiện trạng mới, không ghi kiểm kê/biên lai/hoàn tất trùng |
 | TC-19 | Người thuộc cơ sở khác thử mở mã hồ sơ/nhiệm vụ, hoặc khách thử truy cập thao tác nhân viên | Không xem hoặc sửa được dữ liệu ngoài quyền; không chỉ ẩn nút ở FE |
-| TC-20 | Dữ liệu thiếu kỳ thuê đã xác nhận hoặc ngày hiện tại không khớp bản xác nhận | Báo thiếu nguồn/không xác minh được; không tự suy đoán ngày, không tạo nhiệm vụ từ dữ liệu chưa xác nhận |
+| TC-20 | Thiếu ngày bắt đầu/kết thúc hoặc kỳ thuê không hợp lệ | Chặn tính kỳ gia hạn; không tự đoán ngày. Nếu ngày thuê hợp lệ, việc thiếu bản xác nhận/nhận kho/lịch sử gia hạn không còn là lý do chặn |
 | TC-21 | Nhiệm vụ đã hoàn tất: tải lại, thử mở lịch sử, gửi nhắc quá hạn và tạo thu hồi lại | Xem được lịch sử; không gửi nhắc quá hạn hoặc tạo thêm nhiệm vụ. Kho giữ đúng trạng thái hoàn tất |
 | TC-22 | Khách trả kho thường trước giờ thu hồi và hoàn tất bàn giao; chờ lượt quét | Không tạo thu hồi cho hồ sơ đã trả xong. Nếu trả kho mới đang mở, hệ thống phải yêu cầu đối chiếu hồ sơ đang có, không tạo song song một quy trình thu hồi |
 
