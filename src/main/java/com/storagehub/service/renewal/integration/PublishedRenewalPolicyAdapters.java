@@ -24,7 +24,7 @@ public class PublishedRenewalPolicyAdapters implements RenewalSources.PolicySour
     private final com.storagehub.service.integration.DuongResourceAccess access;
     public Optional<RenewalSources.Policy> read(Rental r,LocalDate start) {
         if(r==null||r.getFacility()==null)return Optional.empty();
-        return policies.read(r.getFacility().getId(),start).map(s->{var p=s.policy();return new RenewalSources.Policy(s.reference(),p.version(),Duration.ofMinutes(p.quoteTtlMinutes()),Duration.ofHours(p.paymentWindowHours()),p.requestWindowDays(),p.depositRate(),p.eligiblePackageIds());});
+        return policies.read(r.getFacility().getId(),start).map(s->{var p=s.policy();return new RenewalSources.Policy(s.reference(),p.version(),Duration.ZERO,Duration.ofHours(p.paymentWindowHours()),0,p.depositRate(),p.eligiblePackageIds());});
     }
     public Optional<RenewalOperationSources.Policy> read(Renewal n) {
         if(n==null||n.getRental()==null||n.getRental().getFacility()==null)return Optional.empty();
