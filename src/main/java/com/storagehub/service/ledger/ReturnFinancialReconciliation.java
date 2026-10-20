@@ -28,8 +28,12 @@ public class ReturnFinancialReconciliation {
     private final LedgerStore ledger;
     private final PaymentProvenance provenance;
     private final ObjectMapper mapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RenewalOverdueFeeService> overdueFees;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.overdue.RecoverySettlementGuard> recoveryGuards;
     private record Security(Payment payment,BigDecimal amount,ReservationPricingSnapshot pricing) {}
-    public record View(BigDecimal deposit,BigDecimal debt,BigDecimal postedOverdueFee,long ledgerRevision) {}
+    public record View(BigDecimal deposit,BigDecimal debt,BigDecimal postedOverdueFee,long ledgerRevision,BigDecimal unpostedOverdueFee) {}
 
     private Security security(Rental rental) {
         if(em.createQuery("select count(c) from PaymentComplaint c where c.reservation.id=:id and c.status in :statuses",Long.class)
@@ -71,14 +75,34 @@ public class ReturnFinancialReconciliation {
     public BigDecimal deposit(Rental rental) {return security(rental).amount();}
 
     public View capture(ReturnCase rc) {
+        return capture(rc,false);
+    }
+    public View captureRecovery(ReturnCase rc) {
+        return capture(rc,true);
+    }
+    private View capture(ReturnCase rc,boolean recovery) {
         var rental=em.find(Rental.class,rc.getRental().getId(),LockModeType.PESSIMISTIC_WRITE);
         var security=security(rental);ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId());
         var account=ledger.read(rental.getId()).orElseThrow();ledger.lockForSettlement(rental.getId(),account.revision());
         if(!account.customerId().equals(rental.getCustomer().getId())||!account.facilityId().equals(rental.getFacility().getId()))throw ApiExceptions.conflict("Sổ công nợ không khớp hồ sơ thuê.");
+        Instant calculatedAt=rc.getInspectedAt()==null?Instant.now():rc.getInspectedAt();
+        RenewalOverdueFeeService.Quote feeQuote=null;
+        if(recovery) {
+            var source=overdueFees==null?null:overdueFees.getIfAvailable();
+            if(source==null)throw ApiExceptions.conflict("Chưa có nguồn tính phí quá hạn, không thể quyết toán thu hồi.");
+            feeQuote=source.quote(rental,account,calculatedAt);
+        }
         var allocations=new LinkedHashMap<UUID,BigDecimal>();BigDecimal debt=BigDecimal.ZERO,postedFee=BigDecimal.ZERO;
         for(var o:account.obligations()) {
             if(o.outstanding().signum()==0)continue;
             if(o.refunded().signum()>0)throw ApiExceptions.conflict("Khoản công nợ có hoàn tiền cần được đối soát trước khi đưa vào quyết toán.");
+            boolean fee=o.sourceRef().startsWith("rental-overdue:"+rental.getId()+":");
+            if(recovery&&fee) {
+                if(feeQuote.posted().stream().noneMatch(posted->posted.id().equals(o.id())))
+                    throw ApiExceptions.conflict("Phí quá hạn đã ghi sổ không khớp kỳ thuê hiện tại, cần đối soát.");
+                allocations.put(o.id(),o.outstanding());debt=debt.add(o.outstanding());postedFee=postedFee.add(o.outstanding());
+                continue;
+            }
             if(o.renewalId()==null) {
                 // Check-in payments above prove these initial funds; do not charge them a second time.
                 String prefix="reservation-snapshot:"+security.pricing().getId()+":";
@@ -91,7 +115,6 @@ public class ReturnFinancialReconciliation {
             if(renewal.getStatus()!=RenewalStatus.completed)throw ApiExceptions.conflict("Cần đối soát hoặc đóng yêu cầu gia hạn chưa hoàn tất trước khi quyết toán trả kho.");
             if(o.dueAt().isAfter(Instant.now()))continue; // Future monthly termination policy is intentionally unchanged.
             var workflow=em.find(RenewalWorkflow.class,renewal.getId());
-            boolean fee=o.sourceRef().startsWith("rental-overdue:"+rental.getId()+":");
             if(!fee) {
                 if(workflow==null||workflow.getAcceptedRevision()==null)throw ApiExceptions.conflict("Công nợ gia hạn thiếu điều khoản đã chấp nhận, cần đối soát.");
                 try {
@@ -112,13 +135,24 @@ public class ReturnFinancialReconciliation {
             rc.getId().toString(),rental.getId().toString(),account.revision(),security.payment().getId().toString(),security.amount(),debt,json(allocations),revision,Instant.now().toEpochMilli());
         else jdbc.update("update return_financial_snapshots set ledger_revision=?,security_payment_id=?,deposit_amount=?,debt_amount=?,allocations_json=?,revision=?,captured_at_ms=? where return_id=?",
             account.revision(),security.payment().getId().toString(),security.amount(),debt,json(allocations),revision,Instant.now().toEpochMilli(),rc.getId().toString());
-        rc.setDepositAmount(security.amount());return new View(security.amount(),debt,postedFee,account.revision());
+        if(feeQuote!=null) {
+            jdbc.update("insert into recovery_overdue_fee_assessments(return_id,snapshot_revision,overdue_days,accrued_amount,outstanding_amount,unposted_amount,source_ref,calculated_at_ms) values(?,?,?,?,?,?,?,?)",
+                rc.getId().toString(),revision,feeQuote.overdueDays(),feeQuote.accrued(),feeQuote.outstanding(),feeQuote.unposted(),feeQuote.sourceRef(),calculatedAt.toEpochMilli());
+            rc.setOverdueDays(Math.toIntExact(feeQuote.overdueDays()));
+        }
+        rc.setDepositAmount(security.amount());return new View(security.amount(),debt,postedFee,account.revision(),feeQuote==null?BigDecimal.ZERO:feeQuote.unposted());
     }
 
     public void requireCurrent(ReturnCase rc) {
         var rows=jdbc.queryForList("select * from return_financial_snapshots where return_id=? for update",rc.getId().toString());
         if(rows.size()!=1)throw ApiExceptions.conflict("Quyết toán cần được kiểm kê và đối soát lại theo sổ công nợ.");
         var row=rows.getFirst();if(row.get("settled_at_ms")!=null)throw ApiExceptions.conflict("Quyết toán đã hoàn tất.");
+        var recovery=recoveryGuards==null?null:recoveryGuards.getIfAvailable();
+        if(recovery!=null&&recovery.linked(rc)) {
+            var assessments=jdbc.queryForList("select unposted_amount from recovery_overdue_fee_assessments where return_id=? and snapshot_revision=?",rc.getId().toString(),row.get("revision"));
+            if(assessments.size()!=1||new BigDecimal(assessments.getFirst().get("unposted_amount").toString()).compareTo(rc.getOverdueFee())!=0)
+                throw ApiExceptions.conflict("Cần đối soát lại phí quá hạn trước khi xác nhận hoặc thu hoàn tiền.");
+        }
         var account=ledger.read(rc.getRental().getId()).orElseThrow();
         ledger.lockForSettlement(account.rentalId(),((Number)row.get("ledger_revision")).longValue());
         var proof=security(rc.getRental());
@@ -130,6 +164,38 @@ public class ReturnFinancialReconciliation {
         return rc.getStatus()==ReturnCaseStatus.completed&&method!=null&&reference!=null&&file!=null
             &&jdbc.queryForObject("select count(*) from return_settlement_receipts r join return_financial_snapshots f on f.return_id=r.return_id where r.return_id=? and r.payment_method=? and r.transaction_reference=? and r.receipt_file_id=? and f.settled_at_ms is not null",Long.class,
                 rc.getId().toString(),method,reference,file.toString())==1;
+    }
+
+    public com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt settledReceipt(ReturnCase rc, boolean recovery) {
+        if (rc.getSettlementPaidAt() == null || rc.getSettlementPaymentId() == null) {
+            if(rc.getStatus()!=ReturnCaseStatus.completed||rc.getTotalDeductions().signum()<=0
+                ||rc.getAmountDueFromCustomer().signum()!=0||rc.getNetRefundAmount().signum()!=0)return null;
+            var offsets=jdbc.query("select settlement_reference,settled_at_ms from return_financial_snapshots where return_id=? and settlement_reference=? and settled_at_ms is not null",
+                (row,index)->new com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt("OFFSET",rc.getTotalDeductions(),"DEPOSIT_OFFSET",row.getString(1),null,Instant.ofEpochMilli(row.getLong(2))),
+                rc.getId().toString(),"OFFSET:"+rc.getId());
+            return offsets.size()==1?offsets.getFirst():null;
+        }
+        String sql = recovery
+            ? "select direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_at from recovery_settlement_receipts where return_case_id=? and transaction_reference=?"
+            : "select direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_at_ms from return_settlement_receipts where return_id=? and transaction_reference=?";
+        Object returnId = recovery
+            ? java.nio.ByteBuffer.allocate(16).putLong(rc.getId().getMostSignificantBits()).putLong(rc.getId().getLeastSignificantBits()).array()
+            : rc.getId().toString();
+        var receipts = jdbc.query(sql, (row, index) -> {
+            var fileBytes=recovery?java.nio.ByteBuffer.wrap(row.getBytes("receipt_file_id")):null;
+            UUID fileId=recovery?new UUID(fileBytes.getLong(),fileBytes.getLong()):UUID.fromString(row.getString("receipt_file_id"));
+            return new com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt(
+                row.getString("direction"),row.getBigDecimal("amount"),row.getString("payment_method"),row.getString("transaction_reference"),fileId,
+                recovery?row.getTimestamp("recorded_at").toInstant():Instant.ofEpochMilli(row.getLong("recorded_at_ms")));
+        }, returnId, rc.getSettlementPaymentId());
+        return receipts.size() == 1 ? receipts.getFirst() : null;
+    }
+
+    public com.storagehub.api.returns.ReturnCaseResponse.OverdueSettlement overdueSettlement(ReturnCase rc,boolean recovery) {
+        if(!recovery||rc.getInspectedAt()==null)return null;
+        var rows=jdbc.query("select a.accrued_amount,a.outstanding_amount,a.overdue_days,a.calculated_at_ms from recovery_overdue_fee_assessments a join return_financial_snapshots f on f.return_id=a.return_id and f.revision=a.snapshot_revision where a.return_id=?",
+            (row,index)->new com.storagehub.api.returns.ReturnCaseResponse.OverdueSettlement(row.getBigDecimal(1),row.getBigDecimal(2),row.getLong(3),Instant.ofEpochMilli(row.getLong(4)),false),rc.getId().toString());
+        return rows.size()==1?rows.getFirst():new com.storagehub.api.returns.ReturnCaseResponse.OverdueSettlement(null,null,null,null,true);
     }
 
     public void receipt(ActorPrincipal actor,ReturnCase rc,String method,String reference,UUID file) {

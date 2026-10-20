@@ -22,12 +22,22 @@ SELECT JSON_OBJECT('rental',BIN_TO_UUID(r.id),'reservation',BIN_TO_UUID(r.reserv
 FROM rentals r JOIN reservations v ON v.id=r.reservation_id JOIN check_ins c ON c.rental_id=r.id
 JOIN reservation_pricing_snapshots p ON p.reservation_id=v.id JOIN users u ON u.id=r.customer_id
 WHERE u.email='customer@storagehub.demo' AND v.status='COMPLETED' AND c.status='completed'
-AND EXISTS(SELECT 1 FROM confirmed_rental_periods x WHERE x.rental_id=BIN_TO_UUID(r.id))
 AND NOT EXISTS(SELECT 1 FROM storage_units s WHERE s.id=r.storage_unit_id AND s.code LIKE 'QD%')
 ORDER BY r.id LIMIT 1;
 '@
-if (-not $templateJson) { throw 'A confirmed demo customer Rental is required.' }
+if (-not $templateJson) { throw 'A demo customer Rental with completed check-in and pricing is required.' }
 $t = $templateJson | ConvertFrom-Json
+$target = Query @'
+SELECT JSON_OBJECT('facility',BIN_TO_UUID(f.id),'unitType',BIN_TO_UUID(ut.id),'staff',BIN_TO_UUID(u.id))
+FROM facilities f JOIN unit_types ut ON ut.facility_id=f.id
+JOIN users u ON u.email='staff@storagehub.demo'
+JOIN user_facility_scopes s ON s.user_id=u.id AND s.facility_id=f.id
+WHERE f.code='HCM-Q1-F01' AND ut.status='active' AND ut.monthly_price=5500000
+AND s.scope_level IN ('OPERATE','MANAGE') ORDER BY ut.id LIMIT 1;
+'@
+if(-not $target){throw 'Demo Q1 facility, 5500000 VND UnitType and scoped Staff are required.'}
+$target=$target|ConvertFrom-Json
+$t.facility=$target.facility;$t.unitType=$target.unitType;$t.staff=$target.staff
 if ([int](Query "SELECT COUNT(*) FROM storage_units WHERE code LIKE '$Batch%';") -ne 0) { throw 'This batch already exists; existing fixtures will not be overwritten.' }
 $tables = @('storage_units','reservation_quotes','reservations','rentals','reservation_pricing_snapshots','check_ins')
 $columns = @{}
@@ -41,6 +51,9 @@ function Clone([string]$table,[string]$source,[hashtable]$changes) {
     foreach ($column in $columns[$table]) {
         $names += ('`' + $column + '`')
         if ($changes.ContainsKey($column)) { $values += $changes[$column] }
+        elseif ($column -eq 'facility_id') { $values += (Bin $t.facility) }
+        elseif ($column -eq 'unit_type_id') { $values += (Bin $t.unitType) }
+        elseif ($column -eq 'performed_by') { $values += (Bin $t.staff) }
         elseif ($column -in @('created_at','updated_at')) { $values += $sqlNow }
         else { $values += ('`' + $column + '`') }
     }
@@ -58,7 +71,7 @@ $cases = @(
     @('09-TRANH-CHAP',8,'Thu hoi; khach khieu nai / TC-13'),
     @('10-THIEU-BIEN-LAI',8,'Thu hoi; thu chan thieu chung tu / TC-11,12'),
     @('11-GUI-TRUNG',8,'Thu hoi; hai phien thao tac / TC-17,18,19,21'),
-    @('12-THIEU-NGUON',2,'Thieu ky thue xac nhan / TC-20'),
+    @('12-NGAY-6',6,'Ngay qua han thu 6 / TC-02'),
     @('13-TRA-KHO',1,'Tra kho thuong truoc thu hoi / TC-22')
 )
 $manifest = @()
@@ -90,12 +103,10 @@ foreach ($case in $cases) {
     $size=(Get-Item -LiteralPath $path).Length; $hash=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
     $storagePath=Quoted ($path.Replace('\','/'))
     $sql.Add("INSERT INTO file_assets(id,created_at,updated_at,uploaded_by,storage_key,original_name,content_type,size_bytes,checksum_sha256,entity_type,entity_id,status) VALUES($bf,$sqlNow,$sqlNow,$bs,$storagePath,'DEMO-bien-lai-$code.png','image/png',$size,'$hash','CHECK_IN',$(Bin $checkin),'ACTIVE');")
-    $sql.Add("INSERT INTO payments(id,created_at,updated_at,initiated_by,reservation_id,amount,currency,purpose,status,idempotency_key,processed_at,paid_at,gateway_intent_id,gateway_provider,gateway_transaction_no,gateway_bank_code,gateway_response_code,gateway_transaction_status) VALUES($bp,$sqlNow,$sqlNow,$bs,$bv,22000000,'VND','RENTAL_BALANCE','PAID','demo:$payment',$(Quoted $paid),$(Quoted $paid),'MANUAL-DEMO-$payment','MANUAL','DEMO-$payment','CASH','00','PAID');")
+    $sql.Add("INSERT INTO payments(id,created_at,updated_at,initiated_by,reservation_id,amount,currency,purpose,status,idempotency_key,processed_at,paid_at,gateway_intent_id,gateway_provider,gateway_transaction_no,gateway_bank_code,gateway_response_code,gateway_transaction_status,version,refunded_amount) VALUES($bp,$sqlNow,$sqlNow,$bs,$bv,22000000,'VND','RENTAL_BALANCE','PAID','demo:$payment',$(Quoted $paid),$(Quoted $paid),'MANUAL-DEMO-$payment','MANUAL','DEMO-$payment','CASH','00','PAID',0,0);")
     $proof=@{paymentId=$payment;reservationId=$res;renewalId=$null;acceptedRevisionId=$null;amount=22000000;currency='VND';paymentMethod='CASH';transactionReference="DEMO-$payment";initiatedBy=$t.staff;paidAt=$paidIso;receiptFileId=$file;localDemo=$true;batch=$Batch}|ConvertTo-Json -Compress
     $sql.Add("INSERT INTO activity_logs(id,created_at,updated_at,actor_id,facility_id,action,entity_type,entity_id,after_state_json,correlation_id) VALUES(UUID_TO_BIN(UUID()),$sqlNow,$sqlNow,$bs,$facility,'MANUAL_RENTAL_BALANCE_RECORDED_V1','Payment',$bp,$(Quoted $proof),'$Batch');")
-    if ($case[0] -ne '12-THIEU-NGUON') {
-        $sql.Add("INSERT INTO confirmed_rental_periods(rental_id,reservation_id,customer_id,facility_id,storage_unit_id,start_date,stored_end_date,end_convention,source_ref,confirmed_at) VALUES('$rental','$res','$($t.customer)','$($t.facility)','$unit',$ds,$de,'INCLUSIVE','local-demo:${Batch}:$rental',$sqlNow);")
-    }
+    $sql.Add("INSERT INTO confirmed_rental_periods(rental_id,reservation_id,customer_id,facility_id,storage_unit_id,start_date,stored_end_date,end_convention,source_ref,confirmed_at) VALUES('$rental','$res','$($t.customer)','$($t.facility)','$unit',$ds,$de,'INCLUSIVE','local-demo:${Batch}:$rental',$sqlNow);")
     $sql.Add("INSERT INTO rental_ledger_accounts(rental_id,customer_id,facility_id,revision) VALUES('$rental','$($t.customer)','$($t.facility)',0);")
     $fixture=@{localDemo=$true;batch=$Batch;rentalId=$rental;reservationId=$res;unitCode=$code;scenario=$case[2]}|ConvertTo-Json -Compress
     $sql.Add("INSERT INTO activity_logs(id,created_at,updated_at,actor_id,facility_id,action,entity_type,entity_id,after_state_json,correlation_id) VALUES(UUID_TO_BIN(UUID()),$sqlNow,$sqlNow,$bs,$facility,'LOCAL_OVERDUE_DEMO_CREATED','Rental',$br,$(Quoted $fixture),'$Batch');")
@@ -113,8 +124,10 @@ foreach($name in @('bien-ban-kiem-ke-demo','bien-lai-quyet-toan-demo','bien-ban-
     $graphics.Dispose();$sampleFont.Dispose();$image.Dispose()
 }
 $backup=Join-Path $local "$Batch-before.sql"
-docker exec storagehub-mysql sh -c 'MYSQL_PWD=$MYSQL_ROOT_PASSWORD mysqldump -uroot --hex-blob --single-transaction --routines --triggers --no-tablespaces storagehub_local' | Set-Content -LiteralPath $backup -Encoding UTF8
+docker exec storagehub-mysql sh -c 'MYSQL_PWD=$MYSQL_ROOT_PASSWORD mysqldump -uroot --hex-blob --single-transaction --routines --triggers --no-tablespaces storagehub_local > /tmp/storagehub-before-demo.sql'
 if ($LASTEXITCODE -ne 0) { throw 'Backup failed; fixtures were not inserted.' }
+docker cp storagehub-mysql:/tmp/storagehub-before-demo.sql $backup
+if($LASTEXITCODE -ne 0){throw 'Backup copy failed; fixtures were not inserted.'}
 $sqlPath=Join-Path $local "$Batch-fixtures.sql"
 [IO.File]::WriteAllText($sqlPath,($sql -join "`n"),[Text.UTF8Encoding]::new($false))
 Query ($sql -join "`n") | Out-Null
