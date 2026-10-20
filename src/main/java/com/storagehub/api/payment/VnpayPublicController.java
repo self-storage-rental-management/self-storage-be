@@ -39,6 +39,7 @@ public class VnpayPublicController {
         target.put("vnpayReturn", "true");
         target.put("status", result.requiresReconciliation()?"review":result.success()?"success":"failed");
         target.put("code", result.rspCode());
+        if (result.paymentId() != null) target.put("paymentId", result.paymentId().toString());
         if (result.reservationId() != null) target.put("reservationId", result.reservationId().toString());
         if (result.renewalId() != null) target.put("renewalId", result.renewalId().toString());
         String separator = properties.getFrontendReturnUrl().contains("?") ? "&" : "?";

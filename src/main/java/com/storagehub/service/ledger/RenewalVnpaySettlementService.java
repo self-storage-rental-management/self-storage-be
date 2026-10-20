@@ -26,6 +26,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service @RequiredArgsConstructor
 @ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled","storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
 public class RenewalVnpaySettlementService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<RenewalInstallmentService> installments;
     public record Result(boolean allocated,UUID receiptId,String reason) {}
     private final EntityManager em;
     private final LedgerStore ledger;
@@ -46,6 +48,7 @@ public class RenewalVnpaySettlementService {
 
     @Transactional(propagation=Propagation.MANDATORY)
     public Result settle(Payment payment,UUID evidenceLogId) {
+        if(payment!=null&&payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT){var source=installments.getIfAvailable();return source==null?new Result(false,null,"Chưa bật phân bổ tiền theo kỳ."):source.settle(payment,evidenceLogId);}
         return settleChecked(payment,evidenceLogId);
     }
 
@@ -113,6 +116,11 @@ public class RenewalVnpaySettlementService {
     /** Transaction C: preserves the existing signing contract; does not extend Rental here. */
     @Transactional(propagation=Propagation.MANDATORY)
     public Result prepareSigning(Payment payment) {
+        if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT){
+            if(payment.getRenewalLedgerReceiptRef()==null)return new Result(false,null,"Khoản thanh toán kỳ chưa được phân bổ.");
+            payment.setRenewalSigningPreparedAt(now());payment.setFailureCode(null);payment.setFailureReason(null);payment.setRenewalNextRetryAt(null);
+            return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
+        }
         if(payment.getRenewalSigningPreparedAt()!=null)
             return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
         if(payment.getStatus()!=PaymentStatus.PAID||payment.getRenewalAllocatedAt()==null
@@ -168,7 +176,7 @@ public class RenewalVnpaySettlementService {
         var remainderIds=new java.util.HashSet<UUID>();
         var account=ledger.read(renewal.getRental().getId()).orElse(null);
         if(terms.renewalDepositAmount().signum()>0&&account!=null) {
-            var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
+            var specs=FinancialContractSpecifications.signing(FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms));
             var remainder=specs.getLast();
             var rows=account.obligations().stream().filter(o->Objects.equals(o.renewalId(),renewal.getId())
                 &&o.kind()==remainder.kind()&&o.sourceRef().equals(remainder.sourceReference())

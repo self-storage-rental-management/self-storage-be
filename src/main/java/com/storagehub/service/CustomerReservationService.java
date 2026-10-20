@@ -52,6 +52,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class CustomerReservationService {
+    @Autowired
+    private com.storagehub.service.rental.period.ConfirmedRentalPeriods confirmedRentalPeriods;
 
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
@@ -342,6 +344,7 @@ public class CustomerReservationService {
         reservation.setStatus(ReservationStatus.COMPLETED);
         Reservation saved = reservationRepository.saveAndFlush(reservation);
 
+        if(existingRental.isEmpty() && confirmedRentalPeriods!=null) confirmedRentalPeriods.receipt(rental);
         auditLogService.recordMutation(
             saved.getCustomer(), "CUSTOMER_RECEIPT_CONFIRMED", "Reservation", saved.getId(),
             saved.getFacility().getId(),
