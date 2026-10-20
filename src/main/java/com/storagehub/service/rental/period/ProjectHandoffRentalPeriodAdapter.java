@@ -16,23 +16,23 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Scoped, read-only proof adapter. Legacy, reused and ambiguous records remain UNKNOWN. */
+/** Uses the current Rental dates; historical documents are not prerequisites for reading a period. */
 @Component @RequiredArgsConstructor @Transactional(readOnly = true)
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
     name = "storagehub.integration.rental-period.enabled", havingValue = "true", matchIfMissing = false)
 public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.DateSource {
     private final EntityManager em;
     private final ObjectMapper mapper;
-    @org.springframework.beans.factory.annotation.Autowired
-    private ConfirmedRentalPeriods confirmedPeriods;
     /** Current project rule, explicitly enabled locally; historical evidence is not rewritten. */
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.rental-period.inclusive-end:false}")
     private boolean inclusiveEnd;
 
     public Optional<RentalReadSources.Dates> read(Rental r) {
-        if(confirmedPeriods!=null && r!=null && r.getId()!=null)
-            return confirmedPeriods.read(r).map(p->new RentalReadSources.Dates(p.rentalId(),p.startDate(),p.lastPermittedDate(),p.reference(),p.storedEndDate(),p.convention()));
-        return readHistorical(r);
+        if(r==null)return Optional.empty();
+        return RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),
+            inclusiveEnd?RentalPeriod.Convention.INCLUSIVE:RentalPeriod.Convention.EXCLUSIVE,
+            "rental-record:"+r.getId())
+            .map(p->new RentalReadSources.Dates(p.rentalId(),p.startDate(),p.lastPermittedDate(),p.reference(),p.storedEndDate(),p.convention()));
     }
 
     public Optional<RentalReadSources.Dates> readHistorical(Rental r) {
