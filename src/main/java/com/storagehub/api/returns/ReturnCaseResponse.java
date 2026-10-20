@@ -66,5 +66,18 @@ public record ReturnCaseResponse(
     String sourceType,
     UUID recoveryTaskId,
     String recoveryTaskStatus,
-    Instant recoveryCompletedAt
-) {}
+    Instant recoveryCompletedAt,
+    SettlementReceipt settlementReceipt,
+    OverdueSettlement overdueSettlement,
+    String settlementBlocker
+) {
+    public record SettlementReceipt(
+        String direction,
+        BigDecimal amount,
+        String paymentMethod,
+        String transactionReference,
+        UUID receiptFileId,
+        Instant recordedAt
+    ) {}
+    public record OverdueSettlement(BigDecimal accruedAmount,BigDecimal settlementAmount,Long overdueDays,Instant calculatedAt,boolean requiresReconciliation) {}
+}

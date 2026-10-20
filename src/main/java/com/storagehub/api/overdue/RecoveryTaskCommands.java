@@ -17,8 +17,11 @@ public final class RecoveryTaskCommands {
         @JsonAnySetter public void unknown(String key,Object value){throw new IllegalArgumentException("Unsupported Recovery field: "+key);}
     }
     public enum PaymentMethod { CASH, BANK_TRANSFER }
+    public record RecalculateSettlement(@NotNull @PositiveOrZero Long expectedVersion) {
+        @JsonAnySetter public void unknown(String key,Object value){throw new IllegalArgumentException("Unsupported Recovery field: "+key);}
+    }
     public record Settlement(@NotNull @PositiveOrZero Long expectedVersion,@NotNull PaymentMethod paymentMethod,
-        @NotBlank @Pattern(regexp="[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}") String transactionReference,
+        @Pattern(regexp="(?:[A-Za-z0-9][A-Za-z0-9._:/-]{0,63})?") String transactionReference,
         @NotNull UUID receiptFileId,@NotNull @AssertTrue Boolean confirmed) {
         @JsonAnySetter public void unknown(String key,Object value){throw new IllegalArgumentException("Unsupported Recovery field: "+key);}
     }

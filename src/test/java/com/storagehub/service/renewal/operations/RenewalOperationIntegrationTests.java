@@ -26,8 +26,12 @@ import org.springframework.util.LinkedMultiValueMap;
 
 /** H2-only fixtures and explicitly TEST-ONLY integration adapters; never runtime policy/payment seeds. */
 @DataJpaTest @ActiveProfiles("test")
-@Import({RenewalOperationService.class,OverdueService.class,RenewalPersistence.class,AuditLogService.class,RenewalOperationIntegrationTests.Sources.class})
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RenewalOperationService.class,OverdueService.class,RenewalPersistence.class,AuditLogService.class,RenewalOperationIntegrationTests.Sources.class})
 class RenewalOperationIntegrationTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.ledger.LedgerStore signingLedger;
     static final Instant NOW=Instant.parse("2026-10-08T02:00:00Z");
     @TestConfiguration static class Sources {
         @Bean TestDateEvidence dateEvidence(){return new TestDateEvidence();}
@@ -343,17 +347,26 @@ class RenewalOperationIntegrationTests {
     @Test void arrivalDoesNotBypassLateCompletionAndExpiryPreservesHistory(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"late-complete")).hasMessageContaining("deadline");assertThat(service.expire(n.getId())).isTrue();assertThat(service.expire(n.getId())).isFalse();assertThat(n.getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).phase()).isEqualTo("SIGNING_EXPIRED");assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNotNull();assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.available);}
     @Test void completeAtExactDeadlinePermitted(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72));assertThat(service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"exact").state().phase()).isEqualTo("COMPLETED");}
     @Test void revokedAssignmentBlocksReplay(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var body=new Arrival(state.appointmentRef(),List.of(),version(n));service.arrival(staff,n.getId(),body,"replay");ops.authorized=false;assertThatThrownBy(()->service.arrival(staff,n.getId(),body,"replay")).hasMessageContaining("revoked");}
-    @Test void cashHistoryRemainsWhenCompletionBlockedByMoneyOrReturn(){
+    @Test void cashHistoryRemainsWhenCompletionBlockedByMoneyOrReturn() throws Exception {
         var n=scheduled();var staff=actor(n,RoleCode.STAFF);
         var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
         var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrival");
         var proof=UUID.randomUUID();
+        var workflow=em.find(RenewalWorkflow.class,n.getId());
+        var accepted=mapper().readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
+        var spec=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),accepted).stream()
+            .filter(item->item.kind()==com.storagehub.service.ledger.LedgerStore.Kind.RENEWAL_REMAINDER).findFirst().orElseThrow();
+        var rental=n.getRental();
+        var obligation=new com.storagehub.service.ledger.LedgerStore.Obligation(n.getId(),n.getId(),spec.kind(),spec.amount(),NOW,spec.sourceReference(),BigDecimal.ZERO,BigDecimal.ZERO,spec.amount());
+        when(signingLedger.read(rental.getId())).thenReturn(Optional.of(new com.storagehub.service.ledger.LedgerStore.Snapshot(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId(),0,List.of(obligation),List.of(),List.of())));
         var recorded=service.cash(staff,n.getId(),new Cash(n.getId(),"TEST-RECEIPT",true,version(n),proof,"CASH"),"cash");
         var recordedData=(Map<?,?>)recorded.event().data();
         assertThat(recordedData.get("receiptFileId")).isEqualTo(proof.toString());
-        assertThat(recordedData.get("transactionReference")).isEqualTo("TEST-RECEIPT");
+        assertThat(recordedData.get("transactionReference").toString()).matches("TM-[A-F0-9]{32}");
         var customerHistory=service.events(actor(n,RoleCode.CUSTOMER),n.getId(),RenewalOperationService.Audience.CUSTOMER,"payments",0,20,"test");
-        assertThat(((Map<?,?>)customerHistory.data().getFirst().data()).containsKey("receiptFileId")).isFalse();
+        var customerReceipt=customerHistory.data().stream().filter(event->event.kind().equals("CASH")).findFirst().orElseThrow();
+        assertThat(((Map<?,?>)customerReceipt.data()).get("receiptFileId")).isEqualTo(proof.toString());
+        assertThat(customerReceipt.actorId()).isNull();
         ops.fullyPaid=false;
         assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"debt")).hasMessageContaining("payment");
         ops.fullyPaid=true;n.getRental().setStatus(RentalStatus.return_requested);em.flush();
@@ -446,6 +459,6 @@ class RenewalOperationIntegrationTests {
         var res=new Reservation();res.setReservationCode(suffix);res.setCustomer(u);res.setSourceQuote(q);res.setIdempotencyKey(suffix);res.setFacility(f);res.setUnitType(t);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());em.persist(res);
         var r=new Rental();r.setCustomer(u);r.setFacility(f);r.setStorageUnit(unit);r.setReservation(res);r.setStartDate(q.getStartDate());r.setContractEndDate(exclusive?LocalDate.of(2026,10,7):LocalDate.of(2026,10,6));r.setMonthlyPrice(new BigDecimal("100"));em.persist(r);em.flush();if(exclusive)dateEvidence.exclusive.add(r.getId());
         var terms=new RenewalQuoteResponse.Terms(r.getContractEndDate(),LocalDate.of(2026,10,7),LocalDate.of(2026,11,7),LocalDate.of(2026,11,6),t.getId(),"TEST",UUID.randomUUID(),"v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),new BigDecimal("20"),new BigDecimal("80"),"VND","TEST","v1",unit.getId(),f.getId(),exclusive?"EXCLUSIVE":"INCLUSIVE",r.getStartDate());
-        var quote=store.storeQuote(r,u,terms,NOW,NOW.plusSeconds(1800));var n=new Renewal();n.setRental(r);n.setRequestedBy(u);n.setAmount(terms.totalAfterDiscount());n.setNewEndDate(terms.newEndDate());em.persist(n);var wf=store.acceptInitial(r,n,quote,NOW,"TEST");n.setStatus(RenewalStatus.approved);wf.reviewed(u,NOW,"TEST",NOW.plusSeconds(86400),UUID.randomUUID());em.flush();return n;
+        var quote=store.storeQuote(r,u,terms,NOW,NOW.plusSeconds(1800));var n=new Renewal();n.setRental(r);n.setRequestedBy(u);n.setAmount(terms.totalAfterDiscount());n.setNewEndDate(terms.newEndDate());em.persist(n);var wf=store.acceptInitial(r,n,quote,NOW,"TEST");n.setStatus(RenewalStatus.approved);wf.reviewed(u,NOW,"TEST",NOW.plusSeconds(1800),UUID.randomUUID());em.flush();return n;
     }
 }
