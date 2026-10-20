@@ -11,12 +11,14 @@ import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Reservation;
+import com.storagehub.domain.model.ReservationCodeSequence;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.ReservationCodeSequenceRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationQuoteRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -32,7 +34,6 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,6 +53,7 @@ public class ReservationCreationService {
     private final ReservationCompatibilityService compatibilityService;
     private final AuditLogService auditLogService;
     private final ReservationCapacityService capacityService;
+    private final ReservationCodeSequenceRepository reservationCodeSequenceRepository;
     private final DiscountCodeRepository discountCodeRepository;
     private final DiscountCodeService discountCodeService;
 
@@ -65,6 +67,7 @@ public class ReservationCreationService {
         ReservationCompatibilityService compatibilityService,
         AuditLogService auditLogService,
         ReservationCapacityService capacityService,
+        ReservationCodeSequenceRepository reservationCodeSequenceRepository,
         DiscountCodeRepository discountCodeRepository,
         DiscountCodeService discountCodeService
     ) {
@@ -76,6 +79,7 @@ public class ReservationCreationService {
         this.compatibilityService = compatibilityService;
         this.auditLogService = auditLogService;
         this.capacityService = capacityService;
+        this.reservationCodeSequenceRepository = reservationCodeSequenceRepository;
         this.discountCodeRepository = discountCodeRepository;
         this.discountCodeService = discountCodeService;
     }
@@ -92,7 +96,7 @@ public class ReservationCreationService {
     ) {
         this(
             reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
-            policyRepository, compatibilityService, auditLogService, capacityService,
+            policyRepository, compatibilityService, auditLogService, capacityService, null,
             null, null
         );
     }
@@ -148,6 +152,10 @@ public class ReservationCreationService {
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
         reservation.setIdentityDocumentNumber(clean(request.getIdentityDocumentNumber()));
+        reservation.setCustomerPhone(clean(request.getCustomerPhone()) != null
+            ? clean(request.getCustomerPhone()) : clean(quote.getCustomer().getPhone()));
+        reservation.setCustomerAddress(clean(request.getCustomerAddress()) != null
+            ? clean(request.getCustomerAddress()) : clean(quote.getCustomer().getPermanentAddress()));
         reservation.setIdempotencyKey(normalizedKey);
         reservation.setRequestFingerprint(requestFingerprint);
         reservation.setFacility(quote.getFacility());
@@ -311,6 +319,12 @@ public class ReservationCreationService {
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
+        response.setCustomerName(reservation.getCustomer().getFullName());
+        response.setCustomerEmail(reservation.getCustomer().getEmail());
+        response.setCustomerPhone(reservation.getCustomerPhone() != null
+            ? reservation.getCustomerPhone() : reservation.getCustomer().getPhone());
+        response.setCustomerAddress(reservation.getCustomerAddress() != null
+            ? reservation.getCustomerAddress() : reservation.getCustomer().getPermanentAddress());
         response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         return response;
     }
@@ -323,8 +337,18 @@ public class ReservationCreationService {
     }
 
     private String generateReservationCode() {
-        return "RSV-" + UUID.randomUUID().toString().replace("-", "")
-            .substring(0, 12).toUpperCase(Locale.ROOT);
+        if (reservationCodeSequenceRepository == null) {
+            return "RSV-000001";
+        }
+        ReservationCodeSequence sequence = reservationCodeSequenceRepository.findPrimaryForUpdate()
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation code sequence is not configured"));
+        long value = sequence.getNextValue();
+        if (value > 999999) {
+            throw ApiExceptions.conflict("Reservation code sequence has reached its limit");
+        }
+        sequence.setNextValue(value + 1);
+        reservationCodeSequenceRepository.save(sequence);
+        return String.format(Locale.ROOT, "RSV-%06d", value);
     }
 
     private BigDecimal money(BigDecimal value) {
@@ -339,6 +363,8 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, request.getQuoteId());
         append(canonical, cleanValue(request.getIdentityDocumentNumber()));
+        append(canonical, cleanValue(request.getCustomerPhone()));
+        append(canonical, cleanValue(request.getCustomerAddress()));
         append(canonical, cleanValue(request.getGoodsCondition()));
         append(canonical, cleanValue(request.getNotes()));
         if (request.getAppointmentAt() != null) {
@@ -369,6 +395,8 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, reservation.getSourceQuote().getId());
         append(canonical, cleanValue(reservation.getIdentityDocumentNumber()));
+        append(canonical, cleanValue(reservation.getCustomerPhone()));
+        append(canonical, cleanValue(reservation.getCustomerAddress()));
         append(canonical, cleanValue(reservation.getGoodsCondition()));
         append(canonical, cleanValue(reservation.getNotes()));
         if (reservation.getAppointmentAt() != null) {

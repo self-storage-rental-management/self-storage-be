@@ -37,6 +37,7 @@ public class ReservationResponse {
     private String customerName;
     private String customerEmail;
     private String customerPhone;
+    private String customerAddress;
     private String identityDocumentNumber;
 
     // Snapshot discount fields (bảo toàn lịch sử mã giảm giá trên hóa đơn / đơn đặt)
@@ -158,6 +159,8 @@ public class ReservationResponse {
     public void setCustomerEmail(String customerEmail) { this.customerEmail = customerEmail; }
     public String getCustomerPhone() { return customerPhone; }
     public void setCustomerPhone(String customerPhone) { this.customerPhone = customerPhone; }
+    public String getCustomerAddress() { return customerAddress; }
+    public void setCustomerAddress(String customerAddress) { this.customerAddress = customerAddress; }
     public String getIdentityDocumentNumber() { return identityDocumentNumber; }
     public void setIdentityDocumentNumber(String identityDocumentNumber) { this.identityDocumentNumber = identityDocumentNumber; }
 
