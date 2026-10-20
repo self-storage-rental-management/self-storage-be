@@ -1,5 +1,7 @@
 # Luồng quá hạn và thu hồi đã đơn giản hóa
 
+> **Quy tắc cập nhật 20/10/2026:** theo yêu cầu bỏ ba ràng buộc bằng chứng kỳ thuê, nguồn đọc hiện dùng trực tiếp `Rental.startDate` và `Rental.contractEndDate`. Không yêu cầu có bản xác nhận kỳ thuê, lần nhận kho/nhật ký khách xác nhận, hoặc lịch sử hoàn tất gia hạn để xác định ngày. Vẫn kiểm tra ID và ngày đầy đủ, kỳ thuê hợp lệ, quy ước ngày cuối bao gồm/không bao gồm theo cấu hình. Các phần nói về việc chặn đọc ngày do thiếu bằng chứng bên dưới là mô tả trước thay đổi này; bảng xác nhận vẫn lưu để tham chiếu, không làm điều kiện đọc kỳ thuê. Không thay đổi kiểm tra thanh toán, quyền, lịch ký và tiến độ thu hồi.
+
 Kịch bản kiểm thử trên web và dữ liệu cần chuẩn bị: [Gia hạn khi quá hạn và thu hồi](OVERDUE_RENEWAL_WEB_TEST_SCENARIOS.md).
 
 ## Nguồn kỳ thuê
