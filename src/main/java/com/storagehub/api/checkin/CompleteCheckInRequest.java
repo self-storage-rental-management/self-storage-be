@@ -5,12 +5,16 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 
 public record CompleteCheckInRequest(
     @NotNull @Valid CheckInChecklist checklist,
-    @NotBlank @Size(max = 30) String identityDocumentNumber,
+    @NotBlank
+    @Size(min = 9, max = 30)
+    @Pattern(regexp = "^[0-9A-Za-z][0-9A-Za-z .-]{8,29}$", message = "identityDocumentNumber contains unsupported characters")
+    String identityDocumentNumber,
     @NotNull @Valid CheckInMeasurements actualMeasurements,
     @Size(max = 1000) String varianceReason,
     @NotBlank @Size(max = 1000) String initialUnitCondition,

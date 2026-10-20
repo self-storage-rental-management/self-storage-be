@@ -38,6 +38,8 @@ public class RenewalPaymentExpiryService {
     private boolean simplePayment;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<RenewalOperationSources.CalendarSource> signingCalendars;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositObligationWriter> depositWriters;
 
     @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public int reconcileExpiredIntents() {
@@ -45,18 +47,20 @@ public class RenewalPaymentExpiryService {
         var candidates=new ArrayList<Payment>();
         for(PaymentStatus status:UNRESOLVED)candidates.addAll(payments.findByStatus(status));
         candidates.addAll(payments.findByStatus(PaymentStatus.FAILED));
+        candidates.addAll(payments.findByStatus(PaymentStatus.CANCELLED));
         int completed=0;
         for(Payment candidate:candidates) {
-            if(candidate.getRenewal()==null||candidate.getPurpose()!=PaymentType.RENEWAL
+            if(candidate.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(candidate.getPurpose())
                 ||candidate.getPaymentDeadline()==null||candidate.getPaymentDeadline().isAfter(now))continue;
             Payment payment=payments.findByIdForUpdate(candidate.getId()).orElse(null);
-            if(payment==null||payment.getRenewal()==null||payment.getPurpose()!=PaymentType.RENEWAL
+            if(payment==null||payment.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(payment.getPurpose())
                 ||payment.getPaymentDeadline()==null||payment.getPaymentDeadline().isAfter(now))continue;
             if(UNRESOLVED.contains(payment.getStatus())) {
                 VnpayService.ReconciliationOutcome outcome=vnpay.reconcileAtPaymentDeadline(payment);
                 payments.saveAndFlush(payment);
                 if(outcome!=VnpayService.ReconciliationOutcome.FINAL_FAILURE)continue;
-            } else if(payment.getStatus()!=PaymentStatus.FAILED)continue;
+            } else if(payment.getStatus()!=PaymentStatus.FAILED&&payment.getStatus()!=PaymentStatus.CANCELLED)continue;
+            if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT)continue; // A failed later period never expires the signed Renewal.
             if(expireIfSafe(payment.getRenewal(),payment))completed++;
         }
         return completed;
@@ -74,6 +78,11 @@ public class RenewalPaymentExpiryService {
             var safety=safetySources.getIfAvailable();if(safety==null||!safety.atomic())return false;
             safety.release(renewal,workflow.getExtensionHoldRef());holdReleased=true;
         }else if(!simplePayment)return false;
+        if(simplePayment) {
+            var writer=depositWriters.getIfAvailable();
+            if(writer==null)throw com.storagehub.common.api.ApiExceptions.conflict("Cancellation accounting source unavailable");
+            writer.cancelUnpaid(workflow);
+        }
         renewal.setStatus(RenewalStatus.payment_expired);
         var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         boolean newState=state==null;
