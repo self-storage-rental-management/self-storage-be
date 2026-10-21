@@ -27,6 +27,7 @@ class ReservationPaymentTermsTests {
     void preservesAppointmentOnOrAfterRentalStartDate() {
         Reservation reservation = new Reservation();
         Instant appointment = Instant.parse("2026-10-13T09:30:00Z");
+        reservation.setGoodsReviewStatus(com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED);
         reservation.setAppointmentAt(appointment);
 
         ReservationPaymentTerms.apply(

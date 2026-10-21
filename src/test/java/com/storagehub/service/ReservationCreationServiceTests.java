@@ -216,6 +216,9 @@ class ReservationCreationServiceTests {
         existing.setTotalGoodsVolumeM3(new BigDecimal("0.180000"));
         existing.setTotalGoodsWeightKg(new BigDecimal("36.00"));
         existing.setHoldExpiresAt(Instant.now().plusSeconds(600));
+        existing.setIdentityDocumentNumber(request().getIdentityDocumentNumber());
+        existing.setCustomerPhone(request().getCustomerPhone());
+        existing.setCustomerAddress(request().getCustomerAddress());
         existing.setGoodsCondition("Packed");
         existing.setNotes("Handle with care");
 
