@@ -30,7 +30,7 @@ import org.springframework.test.context.*;
 /** Real isolated H2 persistence and real temporary file bytes; no runtime seed/test adapter. */
 @DataJpaTest @ActiveProfiles("test")
 @TestPropertySource(properties="storagehub.integration.rental-period.enabled=true")
-@Import({DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
     RenewalPolicyPublicationService.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
     ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,
     RenewalPersistence.class,com.storagehub.service.FileStorageService.class,
