@@ -39,6 +39,7 @@ public class NotificationService {
         .withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
 
     private final NotificationRepository notificationRepository;
+    @org.springframework.beans.factory.annotation.Autowired private BusinessRecordCodes displayCodes;
     private final UserRepository userRepository;
 
     @Transactional
@@ -192,12 +193,24 @@ public class NotificationService {
     }
 
     private NotificationResponse toResponse(Notification notification) {
+        String content=notification.getContent();
+        UUID related=notification.getRelatedEntityId();
+        if(displayCodes!=null&&related!=null){
+            String key=switch(notification.getType()){
+                case RENEWAL -> "GH:"+related;
+                case SUPPORT -> "HT:"+related;
+                case OVERDUE -> "RENTAL_TERM:"+related;
+                default -> null;
+            };
+            String code=key==null?null:displayCodes.find(key);
+            if(code!=null&&(content==null||!content.contains(code)))content=code+" · "+(content==null?"":content);
+        }
         return new NotificationResponse(
             notification.getId(),
             notification.getUser().getId(),
             notification.getType(),
             notification.getType()==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(notification.getTitle()):notification.getTitle(),
-            notification.getContent(),
+            content,
             notification.getRelatedEntityId(),
             notification.isRead(),
             notification.getCreatedAt()

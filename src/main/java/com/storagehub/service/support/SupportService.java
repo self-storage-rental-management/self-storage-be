@@ -20,6 +20,8 @@ import static com.storagehub.service.support.SupportSources.*;
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class SupportService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.BusinessRecordCodes displayCodes;
     public enum Audience { CUSTOMER, MANAGER, STAFF }
     private final EntityManager em;
     private final SupportPersistence receipts;
@@ -53,7 +55,11 @@ public class SupportService {
         }
         if(q.staffId()!=null){where.append(" and t.assignedTo.id=:staff");params.put("staff",q.staffId());}
         if(q.status()!=null){where.append(" and t.status=:status");params.put("status",q.status());}
-        if(!q.search().isEmpty()){where.append(" and (lower(t.subject) like :search escape '!' or lower(t.description) like :search escape '!')");params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");}
+        if(!q.search().isEmpty()){
+String codeKey=displayCodes==null?null:displayCodes.resource("HT",q.search());
+where.append(" and (lower(t.subject) like :search escape '!' or lower(t.description) like :search escape '!'"+(codeKey==null?"":" or t.id=:codeId")+")");
+if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
+params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");}
         boolean activitySort=q.sort().equals("updatedAt");
         String activityJoin=activitySort?" left join SupportState w on w.id=t.id":"";
         String sortExpression=activitySort?"coalesce(w.changedAt,t.updatedAt)":"t."+q.sort();
@@ -90,7 +96,9 @@ public class SupportService {
         var params=new HashMap<String,Object>();params.put("open",SupportTicketStatus.open);params.put("scopes",scopes);
         if(q.status()!=null&&q.status()!=SupportTicketStatus.open)return page(List.of(),q,0,correlation);
         if(!q.search().isEmpty()){
-            where+=" and lower(t.subject) like :search escape '!'";
+            String codeKey=displayCodes==null?null:displayCodes.resource("HT",q.search());
+where+=" and (lower(t.subject) like :search escape '!'"+(codeKey==null?"":" or t.id=:codeId")+")";
+if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
             params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");
         }
         String join=" from SupportTicket t join SupportState w on w.id=t.id";
@@ -100,7 +108,7 @@ public class SupportService {
         var count=em.createQuery("select count(t)"+join+where,Long.class);
         params.forEach((k,v)->{rows.setParameter(k,v);count.setParameter(k,v);});
         var items=rows.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList().stream()
-            .map(row->new SupportQueueItem((UUID)row[0],(UUID)row[1],(String)row[2],(Instant)row[3],(Long)row[4])).toList();
+            .map(row->new SupportQueueItem((UUID)row[0],(UUID)row[1],(String)row[2],(Instant)row[3],(Long)row[4],displayCodes==null?null:displayCodes.find("HT:"+row[0]))).toList();
         return page(items,q,count.getSingleResult(),correlation);
     }
 
@@ -116,6 +124,7 @@ public class SupportService {
         if(parent!=null){var previous=em.find(SupportTicket.class,parent);if(!previous.getFacility().getId().equals(facility.getId()))throw ApiExceptions.validation("Follow-up facility must match parent",null);}
         var ticket=new SupportTicket();ticket.setCustomer(em.getReference(User.class,actor.userId()));ticket.setFacility(facility);
         ticket.setSubject(text(body.subject(),200));ticket.setDescription(text(body.description(),4000));em.persist(ticket);em.flush();
+        if(displayCodes!=null)displayCodes.assign("HT","HT:"+ticket.getId(),now());
         var state=new SupportState(ticket,body.linkedRecord()==null?null:body.linkedRecord().type().name(),body.linkedRecord()==null?null:body.linkedRecord().id(),parent,now());em.persist(state);
         append(actor,ticket,state,"CUSTOMER",Visibility.PUBLIC,body.description(),body.evidenceFileIds());
         event(actor,ticket,state,"CREATED","Created Support ticket");notifySupportStaff(ticket,"New Support ticket",ticket.getSubject());notifyManagers(ticket,"New Support ticket",ticket.getSubject());
@@ -372,7 +381,7 @@ public class SupportService {
         var state=em.find(SupportState.class,ticket.getId());var source=slas.getIfAvailable();var sla=source==null||state==null?null:source.read(ticket,state,now()).orElse(null);
         if(sla!=null&&(sla.priority()==null||!Set.of("HIGH","MEDIUM","LOW").contains(sla.priority())||sla.policyRef()==null||sla.policyRef().isBlank()||sla.policyVersion()==null||sla.policyVersion().isBlank()))throw ApiExceptions.conflict("Authoritative Support SLA inconsistent");
         if(sla!=null&&sla.activeWorkPaused()!=(ticket.getStatus()==SupportTicketStatus.waiting_customer))throw ApiExceptions.conflict("SLA processing pause must reflect waiting_customer only");
-        return new SupportResponse(ticket.getId(),ticket.getCustomer().getId(),ticket.getFacility()==null?null:ticket.getFacility().getId(),ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getId(),ticket.getStatus(),ticket.getSubject(),ticket.getDescription(),ticket.getCreatedAt(),state==null?null:state.getVersion(),state==null?null:state.getAssignmentRevision(),state==null?null:state.getAssignedAt(),state==null?null:state.getAcceptedAt(),state==null?null:state.getResolvedAt(),state==null?null:state.getClosedAt(),state==null?null:state.getResolvedBy(),state==null?null:state.getParentTicketId(),state==null?null:state.getLinkedType(),state==null?null:state.getLinkedId(),state!=null,sla==null?"UNKNOWN":"COMPLETE",sla,sla==null?"DEFERRED_SOURCE: shared Support priority/SLA/calendar":null,ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getFullName(),ticket.getCustomer().getFullName());
+        return new SupportResponse(ticket.getId(),ticket.getCustomer().getId(),ticket.getFacility()==null?null:ticket.getFacility().getId(),ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getId(),ticket.getStatus(),ticket.getSubject(),ticket.getDescription(),ticket.getCreatedAt(),state==null?null:state.getVersion(),state==null?null:state.getAssignmentRevision(),state==null?null:state.getAssignedAt(),state==null?null:state.getAcceptedAt(),state==null?null:state.getResolvedAt(),state==null?null:state.getClosedAt(),state==null?null:state.getResolvedBy(),state==null?null:state.getParentTicketId(),state==null?null:state.getLinkedType(),state==null?null:state.getLinkedId(),state!=null,sla==null?"UNKNOWN":"COMPLETE",sla,sla==null?"DEFERRED_SOURCE: shared Support priority/SLA/calendar":null,ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getFullName(),ticket.getCustomer().getFullName(),displayCodes==null?null:displayCodes.find("HT:"+ticket.getId()));
     }
     private EscalationSource receiver(Module module){var source=receivers.getIfAvailable();if(source==null||!source.atomic()||!source.supports(module))throw deferred("Authorized escalation receiving/result adapter unavailable");return source;}
     private ReceiverResult result(SupportEscalation e,EscalationSource source){if(e.getReceiverRef()==null||source==null)return null;var r=source.result(e.getTicket(),e).orElse(null);if(r!=null&&(!e.getTicket().getId().equals(r.ticketId())||!e.getId().equals(r.escalationId())||!e.getReceiverRef().equals(r.receiverRef())||!Set.of("ACKNOWLEDGED","REJECTED","COMPLETED").contains(r.status())||r.status().equals("COMPLETED")&&r.resultRef()==null))throw ApiExceptions.conflict("Escalation result reference/state inconsistent");return r;}
@@ -398,7 +407,7 @@ public class SupportService {
     private SupportResponse finish(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket){em.flush();var result=response(ticket);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private SupportResponse.Message finishMessage(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket,SupportMessage message){em.flush();var result=messageResponse(actor,ticket,message);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private void audit(ActorPrincipal actor,SupportTicket ticket,String operation){audit.recordMutation(em.getReference(User.class,actor.userId()),operation,"SupportTicket",ticket.getId(),ticket.getFacility().getId(),null,Map.of("status",ticket.getStatus().name()));}
-    private void notify(UUID recipient,SupportTicket ticket,String title,String content){notifications.createNotification(recipient,NotificationType.SUPPORT,SupportNotificationText.title(title),"Yêu cầu hỗ trợ: "+content,ticket.getId());}
+    private void notify(UUID recipient,SupportTicket ticket,String title,String content){String code=displayCodes==null?null:displayCodes.find("HT:"+ticket.getId());notifications.createNotification(recipient,NotificationType.SUPPORT,SupportNotificationText.title(title),"Yêu cầu hỗ trợ"+(code==null?"":" "+code)+": "+content,ticket.getId());}
     private void notifyAssignedStaff(SupportTicket ticket,String title,String content){if(eligible(ticket.getAssignedTo(),ticket.getFacility().getId()))notify(ticket.getAssignedTo().getId(),ticket,title,content);}
     private void notifySupportStaff(SupportTicket ticket,String title,String content){
         var staff=em.createQuery("select distinct s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel=:level and s.user.status=:active",User.class)

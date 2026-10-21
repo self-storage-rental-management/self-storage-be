@@ -61,6 +61,8 @@ class ReturnSettlementServiceTests {
     @Mock FacilityScopeService facilityScopeService;
     @Mock NotificationService notificationService;
     @Mock AuditLogService auditLogService;
+    @Mock com.storagehub.service.ledger.ReturnFinancialReconciliation returnFinance;
+    @Mock jakarta.persistence.EntityManager settlementEntityManager;
 
     ObjectMapper objectMapper = new ObjectMapper();
     ReturnSettlementService service;
@@ -134,6 +136,14 @@ class ReturnSettlementServiceTests {
             manager.getId(), UUID.randomUUID(), Set.of(RoleCode.MANAGER), Set.of("rentals:update", "returns:read"),
             Map.of(facility.getId(), com.storagehub.domain.model.FacilityScopeLevel.MANAGE)
         );
+        var sources = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        sources.addBean("returnFinance", returnFinance);
+        ReflectionTestUtils.setField(service, "returnFinances", sources.getBeanProvider(com.storagehub.service.ledger.ReturnFinancialReconciliation.class));
+        ReflectionTestUtils.setField(service, "settlementEntityManager", settlementEntityManager);
+        org.mockito.Mockito.lenient().when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        org.mockito.Mockito.lenient().when(returnFinance.deposit(rental)).thenReturn(new BigDecimal("2000000.00"));
+        org.mockito.Mockito.lenient().when(returnFinance.capture(any(ReturnCase.class))).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(new BigDecimal("2000000.00"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
     }
 
     @Test
@@ -158,6 +168,19 @@ class ReturnSettlementServiceTests {
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.requested);
         assertThat(response.depositAmount()).isEqualByComparingTo(new BigDecimal("2000000.00"));
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
+        verify(returnFinance).deposit(rental);
+    }
+
+    @Test
+    void unavailableVerifiedDepositBlocksReturnWithoutInventingItFromMonthlyPrice() {
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(returnFinance.deposit(rental)).thenThrow(com.storagehub.common.api.ApiExceptions.conflict("Verified deposit unavailable"));
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "Return")))
+            .hasMessageContaining("Verified deposit unavailable");
+        org.mockito.Mockito.verify(returnCaseRepository,org.mockito.Mockito.never()).save(any());
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
     }
 
     @Test
@@ -292,6 +315,7 @@ class ReturnSettlementServiceTests {
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
         assertThat(response.customerConfirmed()).isTrue();
         assertThat(response.customerDecision()).isEqualTo(CustomerDecision.accepted);
+        verify(returnFinance).requireCurrent(returnCase);
     }
 
     @Test
@@ -375,7 +399,9 @@ class ReturnSettlementServiceTests {
         var response=service.customerConfirmSettlement(customerActor,rc.getId(),new CustomerConfirmSettlementRequest(CustomerDecision.accepted,"Accepted"));
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.completed);
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_inspection);assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.occupied);
-        org.mockito.Mockito.verifyNoInteractions(rentalRepository,storageUnitRepository);
+        verify(rentalRepository).findByIdForUpdate(rental.getId());
+        org.mockito.Mockito.verify(rentalRepository,org.mockito.Mockito.never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(storageUnitRepository);
     }
 
     @Test
@@ -407,5 +433,7 @@ class ReturnSettlementServiceTests {
         assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
         verify(rentalRepository).save(rental);
         verify(storageUnitRepository).save(unit);
+        verify(returnFinance).receipt(staffActor, returnCase, request.paymentMethod(), request.transactionReference(), request.receiptFileId());
+        verify(returnFinance).settle(returnCase, staffActor.userId(), request.transactionReference(), true);
     }
 }

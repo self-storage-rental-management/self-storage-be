@@ -25,9 +25,12 @@ public class RenewalOverdueFeeService {
 
     public BigDecimal estimate(Rental rental,Instant now) {return daily(rental,now).accrued();}
     public Quote quote(Renewal renewal,LedgerStore.Snapshot snapshot,Instant now) {
-        var daily=daily(renewal.getRental(),now);
-        if(!snapshot.rentalId().equals(renewal.getRental().getId()))throw ApiExceptions.conflict("Overdue fee rental binding invalid");
-        String prefix="rental-overdue:"+renewal.getRental().getId()+":";
+        return quote(renewal.getRental(),snapshot,now);
+    }
+    public Quote quote(Rental rental,LedgerStore.Snapshot snapshot,Instant now) {
+        var daily=daily(rental,now);
+        if(!snapshot.rentalId().equals(rental.getId()))throw ApiExceptions.conflict("Overdue fee rental binding invalid");
+        String prefix="rental-overdue:"+rental.getId()+":";
         var posted=snapshot.obligations().stream().filter(o->o.sourceRef().startsWith(prefix+daily.lastPermittedDate()+":")).toList();
         String source=prefix+daily.source();
         for(var o:posted)if(o.kind()!=LedgerStore.Kind.RENEWAL_REMAINDER||!o.sourceRef().startsWith(source+":"))

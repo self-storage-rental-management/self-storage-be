@@ -42,6 +42,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Import({AuditLogService.class,PaymentProvenance.class,RenewalVnpaySettlementService.class,RenewalPaymentReconciler.class,
     RenewalPaymentTransactionTests.Sources.class})
 class RenewalPaymentTransactionTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
     static final Instant NOW=Instant.parse("2026-10-11T01:00:00Z");
     @TestConfiguration static class Sources {
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}
@@ -52,6 +54,11 @@ class RenewalPaymentTransactionTests {
         @Bean RenewalOperationSources.CalendarSource calendar(){return mock(RenewalOperationSources.CalendarSource.class);}
         @Bean RenewalOperationSources.SafetySource safety(){return mock(RenewalOperationSources.SafetySource.class);}
         @Bean RenewalSources.FinancialSource finance(){return mock(RenewalSources.FinancialSource.class);}
+        @Bean com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks localPaymentChecks(
+            EntityManager em, ObjectProvider<LedgerStore> ledgers,
+            ObjectProvider<com.storagehub.service.overdue.OverdueSources.TermSource> terms) {
+            return new com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks(em,ledgers,terms);
+        }
     }
     @Autowired EntityManager em; @Autowired PaymentRepository payments; @Autowired JdbcTemplate jdbc;
     @Autowired AuditLogService audit; @Autowired ObjectMapper mapper; @Autowired LedgerStore ledger;
@@ -69,6 +76,7 @@ class RenewalPaymentTransactionTests {
         if(jdbc.queryForObject("select count(*) from information_schema.tables where table_name='RENTAL_LEDGER_ACCOUNTS'",Long.class)==0)
             new ResourceDatabasePopulator(new ClassPathResource("rental-ledger-test-schema.sql")).execute(jdbc.getDataSource());
         jdbc.execute("create table if not exists rental_ledger_gateway_evidence(receipt_id varchar(36) primary key,payment_id varchar(36) unique,proof_log_id varchar(36) unique,environment varchar(16),transaction_no varchar(128) unique)");
+        jdbc.execute("create table if not exists renewal_deposit_forfeitures(renewal_id varchar(36) primary key,rental_id varchar(36),payment_id varchar(36) unique,receipt_id varchar(36) unique,obligation_id varchar(36),amount decimal(19,2),environment varchar(16),forfeited_at timestamp,reason varchar(64))");
         config=new VnpayProperties();config.setEnabled(true);config.setTmnCode("TEST");config.setHashSecret("test-only");
         gateway=new VnpayService(config,payments,mock(PaymentComplaintRepository.class),mock(ReservationRepository.class),
             mock(ReservationPricingSnapshotRepository.class),mock(UserRepository.class),mock(AdminAuthorizationService.class),
@@ -197,7 +205,7 @@ class RenewalPaymentTransactionTests {
         worker.reconcile(id);assertThat(receiptCount(id)).isZero();assertThat(read(id).getStatus()).isEqualTo(PaymentStatus.PAID);
     }
     @Test void signingExpiryForfeitsVerifiedDepositOnceWithoutExtendingTheRental() throws Exception {
-        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(4)));
+        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(29)));
         UUID renewalId=tx.execute(s->payments.findById(payment).orElseThrow().getRenewal().getId());
         tx.executeWithoutResult(s->{assertThat(source.reconcile(renewalId)).isTrue();assertThat(source.reconcile(renewalId)).isFalse();
             assertThat(source.read(renewalId).status()).isEqualTo("FORFEITED");
@@ -206,13 +214,23 @@ class RenewalPaymentTransactionTests {
             assertThat(ledger.read(n.getRental().getId()).orElseThrow().knownOutstanding()).isZero();
         });
     }
-    @Test void unresolvedFacilityIncidentPreventsAutomaticDepositForfeiture() throws Exception {
+    @Test void expiredSigningDoesNotForfeitDepositBeforeDayEightRecoveryStart() throws Exception {
         UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(4)));
+        tx.executeWithoutResult(s->{
+            var n=payments.findById(payment).orElseThrow().getRenewal();
+            assertThat(source.reconcile(n.getId())).isFalse();
+            assertThat(source.read(n.getId()).status()).isEqualTo("AWAITING_RECOVERY_DEADLINE");
+            assertThat(jdbc.queryForObject("select count(*) from renewal_deposit_forfeitures where renewal_id=?",Long.class,n.getId().toString())).isZero();
+            assertThat(n.getStatus()).isEqualTo(RenewalStatus.deposit_paid);
+        });
+    }
+    @Test void unresolvedFacilityIncidentPreventsAutomaticDepositForfeiture() throws Exception {
+        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(29)));
         tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();incident(n,false);
-            assertThat(source.reconcile(n.getId())).isTrue();assertThat(source.read(n.getId()).status()).isEqualTo("REVIEW_REQUIRED");});
+            assertThat(source.reconcile(n.getId())).isFalse();assertThat(source.read(n.getId()).status()).isEqualTo("AWAITING_FAULT_REVIEW");});
     }
     @Test void depositSettlementAfterRecoveryPreservesANewerRenewalOpenSlot() throws Exception {
-        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(4)));
+        UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(29)));
         tx.executeWithoutResult(s->{
             var old=payments.findById(payment).orElseThrow().getRenewal();
             em.remove(em.find(RenewalOpenSlot.class,old.getRental().getId()));em.flush();
@@ -298,11 +316,24 @@ class RenewalPaymentTransactionTests {
         var sources=new org.springframework.beans.factory.support.StaticListableBeanFactory();sources.addBean("calendar",calendar);sources.addBean("safety",safety);sources.addBean("policy",policy);
         sources.addBean("clock",Clock.fixed(now,ZoneOffset.UTC));sources.addBean("operations",mock(com.storagehub.service.renewal.operations.RenewalOperationService.class));
         sources.addBean("credits",new RenewalLedgerAdjustments(jdbc));
+        sources.addBean("forfeitures",new RenewalDepositForfeitures(jdbc));
+        var termSource=mock(com.storagehub.service.overdue.OverdueSources.TermSource.class);
+        when(termSource.term(any(),any())).thenAnswer(call->{
+            var rental=(Rental)call.getArgument(0);var end=rental.getContractEndDate();var zone=ZoneId.of("Asia/Ho_Chi_Minh");
+            return Optional.of(new com.storagehub.service.overdue.OverdueSources.Term("test","v1",end,3,6,7,8,
+                end.plusDays(7).atTime(17,0).atZone(zone).toInstant(),end.plusDays(8).atTime(8,0).atZone(zone).toInstant()));
+        });
+        sources.addBean("terms",termSource);
         org.springframework.test.util.ReflectionTestUtils.setField(ledger,"cancellationCredits",sources.getBeanProvider(RenewalLedgerAdjustments.class));
         var source=new RenewalDepositSettlementService(em,mapper,ledger,payments,provenance,new RenewalPersistence(em,mapper),audit,mock(NotificationService.class),
             sources.getBeanProvider(Clock.class),sources.getBeanProvider(RenewalOperationSources.PolicySource.class),sources.getBeanProvider(RenewalOperationSources.CalendarSource.class),
             sources.getBeanProvider(RenewalOperationSources.SafetySource.class),sources.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationService.class));
-        org.springframework.test.util.ReflectionTestUtils.setField(source,"cancellationCredits",sources.getBeanProvider(RenewalLedgerAdjustments.class));return source;
+        org.springframework.test.util.ReflectionTestUtils.setField(source,"cancellationCredits",sources.getBeanProvider(RenewalLedgerAdjustments.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(source,"forfeitures",sources.getBeanProvider(RenewalDepositForfeitures.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(source,"overdueTerms",sources.getBeanProvider(com.storagehub.service.overdue.OverdueSources.TermSource.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(source,"faultGuard",new RenewalDepositFaultGuard(
+            em,mapper,mock(com.storagehub.service.integration.DuongResourceAccess.class)));
+        return source;
     }
     Payment read(UUID id){return payments.findById(id).orElseThrow();}
     long receiptCount(UUID id){return jdbc.queryForObject("select count(*) from rental_ledger_receipts where evidence_ref=?",Long.class,"payment:"+id);}
@@ -329,7 +360,8 @@ class RenewalPaymentTransactionTests {
                 var spec=FinancialContractSpecifications.accepted(revision,terms).getFirst();ledger.charge(rental.getId(),n.getId(),spec.kind(),spec.amount(),workflow.getPaymentDeadline(),spec.sourceReference(),rental.getCustomer().getId(),(deposit?"renewal-prepayment:":"renewal-full-rent:")+revision.getId(),0);
                 if(deposit) {
                     var remainder=FinancialContractSpecifications.accepted(revision,terms).getLast();
-                    ledger.charge(rental.getId(),n.getId(),remainder.kind(),remainder.amount(),workflow.getPaymentDeadline(),remainder.sourceReference(),rental.getCustomer().getId(),"renewal-remainder:"+revision.getId(),1);
+                    workflow.signingBalanceDue(NOW.plusSeconds(9000));
+                    ledger.charge(rental.getId(),n.getId(),remainder.kind(),remainder.amount(),workflow.getSigningBalanceDueAt(),remainder.sourceReference(),rental.getCustomer().getId(),"renewal-remainder:"+revision.getId(),1);
                 }
                 var p=new Payment();p.setInitiatedBy(rental.getCustomer());p.setRenewal(n);p.setRenewalRevision(revision);p.setPaymentDeadline(workflow.getPaymentDeadline());p.setAmount(new BigDecimal(deposit?"40":"100"));p.setCurrency("VND");p.setPurpose(PaymentType.RENEWAL);p.setGatewayProvider("VNPAY");p.setGatewayIntentId("test-"+UUID.randomUUID());p.setIdempotencyKey(UUID.randomUUID().toString());payments.saveAndFlush(p);return p.getId();
             } catch(Exception e){throw new IllegalStateException(e);}
