@@ -245,6 +245,28 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         var f = fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT, CheckInStatus.completed, false);
         service.confirmReceipt(f.actor(), f.reservationId());
         var rental = rentals.findByReservation_Id(f.reservationId()).orElseThrow();
+        assertThatThrownBy(() -> returns.createCustomerReturnRequest(f.actor(), rental.getId(),
+            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "TEST missing receipt")))
+            .hasMessageContaining("Chưa xác minh được cọc thực thu");
+        // Persist a real manual-payment proof, rather than bypassing deposit reconciliation.
+        var reservation = em.find(Reservation.class, f.reservationId());
+        var paidAt = Instant.now().minusSeconds(1).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        var payment = new Payment();payment.setReservation(reservation);payment.setInitiatedBy(reservation.getCustomer());
+        payment.setAmount(new BigDecimal("100000"));payment.setCurrency("VND");payment.setPurpose(PaymentType.RENTAL_BALANCE);
+        payment.setStatus(PaymentStatus.PAID);payment.setGatewayProvider("MANUAL");payment.setGatewayBankCode("CASH");
+        payment.setGatewayIntentId("MANUAL-RENTAL-"+UUID.randomUUID());
+        payment.setGatewayTransactionNo("TEST-RETURN-"+f.reservationId());payment.setIdempotencyKey("TEST-RETURN-"+f.reservationId());
+        payment.setPaidAt(paidAt);em.persist(payment);em.flush();
+        var proof = new java.util.LinkedHashMap<String,Object>();proof.put("paymentId",payment.getId());
+        proof.put("reservationId",reservation.getId());proof.put("renewalId",null);proof.put("initiatedBy",reservation.getCustomer().getId());
+        proof.put("currency","VND");proof.put("amount",payment.getAmount());proof.put("paymentMethod","CASH");
+        proof.put("transactionReference",payment.getGatewayTransactionNo());proof.put("paidAt",paidAt.toString());
+        var log = new ActivityLog();log.setActor(reservation.getCustomer());log.setFacility(reservation.getFacility());
+        log.setAction(com.storagehub.service.ManualRentalPaymentService.AUDIT_ACTION);log.setEntityType("Payment");log.setEntityId(payment.getId());
+        log.setCorrelationId("TEST-RETURN-PROOF");
+        try {log.setAfterStateJson(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(proof));}
+        catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw new IllegalStateException(invalid);}
+        em.persist(log);em.flush();
         var requested = returns.createCustomerReturnRequest(f.actor(), rental.getId(),
             new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "TEST search"));
         em.flush();
