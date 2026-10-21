@@ -114,8 +114,8 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         assertThat(response.getGoodsReviewStatus()).isEqualTo(GoodsReviewStatus.APPROVED);
         assertThat(goodsItem.getReviewStatus()).isEqualTo(GoodsReviewStatus.APPROVED);
         assertThat(reservation.getPaymentExpiresAt()).isAfter(Instant.now());
-        assertThat(reservation.getPaymentExpiresAt()).isBefore(Instant.now().plus(25, ChronoUnit.HOURS));
-        assertThat(reservation.getPaymentExpiresAt()).isAfter(Instant.now().plus(23, ChronoUnit.HOURS));
+        assertThat(reservation.getPaymentExpiresAt()).isBefore(Instant.now().plus(16, ChronoUnit.MINUTES));
+        assertThat(reservation.getPaymentExpiresAt()).isAfter(Instant.now().plus(14, ChronoUnit.MINUTES));
         verify(notificationService).createNotification(
             reservation.getCustomer().getId(),
             com.storagehub.domain.model.NotificationType.RESERVATION,

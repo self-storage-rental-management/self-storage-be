@@ -70,8 +70,21 @@ class CustomerReceiptPeriodCompatibilityTests {
         checkIn = id(new CheckIn());
         checkIn.setReservation(reservation);
         checkIn.setStatus(CheckInStatus.completed);
-        var snapshot = new ReservationPricingSnapshot();
+        var snapshot = id(new ReservationPricingSnapshot());
+        snapshot.setReservation(reservation);
+        snapshot.setPricingPackageCode("TEST-1M");
+        snapshot.setPricingPolicyVersion("test-v1");
+        snapshot.setRentalMonths(1);
         snapshot.setMonthlyPrice(new BigDecimal("123456"));
+        snapshot.setGrossRentalAmount(new BigDecimal("123456"));
+        snapshot.setDiscountRate(BigDecimal.ZERO);
+        snapshot.setDiscountAmount(BigDecimal.ZERO);
+        snapshot.setNetRentalAmount(new BigDecimal("123456"));
+        snapshot.setReservationDepositAmount(new BigDecimal("24691.20"));
+        snapshot.setSecurityDepositAmount(new BigDecimal("123456"));
+        snapshot.setRemainingRentalAmount(new BigDecimal("98764.80"));
+        snapshot.setDueAtCheckIn(new BigDecimal("222220.80"));
+        snapshot.setTotalInitialObligation(new BigDecimal("246912"));
         actor = new ActorPrincipal(user.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
 
         when(reservations.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
@@ -135,7 +148,8 @@ class CustomerReceiptPeriodCompatibilityTests {
         assertThat(existing.getContractEndDate()).isEqualTo(LocalDate.of(2026, 10, 31));
         assertThat(existing.getMonthlyPrice()).isEqualByComparingTo("999");
         verify(rentals, never()).saveAndFlush(any());
-        verifyNoInteractions(ledger, ledgerStores);
+        verifyNoInteractions(ledger);
+        verify(ledgerStores).getIfAvailable();
         assertThat(evidence(existing)).containsEntry("rentalCreated", false).containsEntry("convention", "UNKNOWN");
     }
 
