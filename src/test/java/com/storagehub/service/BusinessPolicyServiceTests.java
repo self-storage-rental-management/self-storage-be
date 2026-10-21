@@ -203,7 +203,7 @@ class BusinessPolicyServiceTests {
 
         assertThatThrownBy(() -> service.createPackagePolicy(businessActor, req))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("already has an active 6-month package");
+            .hasMessageContaining("đã có gói 6 tháng");
     }
 
     @Test

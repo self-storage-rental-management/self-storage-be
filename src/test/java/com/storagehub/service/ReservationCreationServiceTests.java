@@ -96,10 +96,10 @@ class ReservationCreationServiceTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("495000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("16005000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("6402000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("3201000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("5500000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("9603000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("15103000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("12804000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("18304000.00"));
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
@@ -138,9 +138,9 @@ class ReservationCreationServiceTests {
         var response = service.create(actor, request, "create-1");
 
         assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
-        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("6402000.00");
-        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("9603000.00");
-        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("15103000.00");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
+        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
+        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
         assertThat(response.getReservationCode()).startsWith("RSV-");
     }
 
@@ -154,10 +154,10 @@ class ReservationCreationServiceTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("180000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("5820000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("2328000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("1164000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("200000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("3492000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("3692000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("4656000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("4856000.00"));
         quote.setTotalInitialObligation(new BigDecimal("6020000.00"));
 
         CreateReservationRequest request = request();
@@ -204,6 +204,7 @@ class ReservationCreationServiceTests {
         ReflectionTestUtils.setField(existing, "createdAt", Instant.now());
         existing.setReservationCode("RSV-EXISTING001");
         existing.setCustomer(quote.getCustomer());
+        existing.setIdentityDocumentNumber("079203009988");
         existing.setSourceQuote(quote);
         existing.setIdempotencyKey("create-retry");
         existing.setFacility(quote.getFacility());

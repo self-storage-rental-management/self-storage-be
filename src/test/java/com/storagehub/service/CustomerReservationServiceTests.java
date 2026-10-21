@@ -180,8 +180,9 @@ class CustomerReservationServiceTests {
             storageUnitRepository, snapshotRepository, goodsItemRepository, auditLogService,
             notificationService
         );
-        Instant previousAppointment = Instant.now().plusSeconds(3_600);
-        Instant newAppointment = previousAppointment.plusSeconds(7_200);
+        Instant previousAppointment = ReservationCheckInPolicy.plannedWindow(reservation.getCreatedAt(),
+            reservation.getGoodsReviewStatus() != com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED).availableAt();
+        Instant newAppointment = previousAppointment.plusSeconds(86_400);
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setAppointmentAt(previousAppointment);
         CheckIn checkIn = new CheckIn();
@@ -215,7 +216,7 @@ class CustomerReservationServiceTests {
         assertThatThrownBy(() -> service.setCheckInAppointment(
             actor, reservation.getId(), new CheckInAppointmentRequest(invalidAppointment)
         )).isInstanceOf(ApiException.class)
-            .hasMessageContaining("rental start date");
+            .hasMessageContaining("permitted seven-day window");
     }
 
     @Test

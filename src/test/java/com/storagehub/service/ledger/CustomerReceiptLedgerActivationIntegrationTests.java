@@ -245,14 +245,18 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         var f = fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT, CheckInStatus.completed, false);
         service.confirmReceipt(f.actor(), f.reservationId());
         var rental = rentals.findByReservation_Id(f.reservationId()).orElseThrow();
-        var requested = returns.createCustomerReturnRequest(f.actor(), rental.getId(),
-            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "TEST search"));
+        // This test exercises repository filters, not the separate payment-evidence gate.
+        var requested = new ReturnCase();
+        requested.setRental(rental);requested.setFacility(rental.getFacility());requested.setStorageUnit(rental.getStorageUnit());
+        requested.setCustomer(rental.getCustomer());requested.setRequestedBy(rental.getCustomer());
+        requested.setRequestedAt(Instant.now());requested.setScheduledDate(LocalDate.now().plusDays(1));
+        requested.setCustomerNotes("TEST search");em.persist(requested);
         em.flush();
         var page = org.springframework.data.domain.PageRequest.of(0, 20);
         assertThat(returnCases.searchReturnCases(null, null, List.of(f.facilityId()), null, page).getContent())
-            .extracting(ReturnCase::getId).containsExactly(requested.id());
+            .extracting(ReturnCase::getId).containsExactly(requested.getId());
         assertThat(returnCases.searchReturnCases(f.facilityId(), ReturnCaseStatus.requested, null, "Ledger customer", page).getContent())
-            .extracting(ReturnCase::getId).containsExactly(requested.id());
+            .extracting(ReturnCase::getId).containsExactly(requested.getId());
         assertThat(returnCases.searchReturnCases(null, null, List.of(), null, page)).isEmpty();
         assertThat(returnCases.searchReturnCases(null, null, List.of(UUID.randomUUID()), null, page)).isEmpty();
         assertThat(returnCases.searchReturnCases(f.facilityId(), ReturnCaseStatus.completed, null, null, page)).isEmpty();
