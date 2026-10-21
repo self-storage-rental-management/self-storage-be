@@ -180,8 +180,10 @@ class PaymentComplaintServiceTests {
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
         assertThat(reservation.getStartDate()).isEqualTo(
-            payment.getPaidAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
-                .toLocalDate().plusDays(1)
+            ReservationCheckInPolicy.plannedWindow(
+                reservation.getCreatedAt() != null ? reservation.getCreatedAt() : payment.getPaidAt(),
+                reservation.getGoodsReviewStatus() != com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED
+            ).availableAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate()
         );
         assertThat(reservation.getEndDate()).isEqualTo(reservation.getStartDate().plusMonths(2));
     }
