@@ -51,11 +51,17 @@ class ReservationConcurrencyIntegrationTests {
     @Autowired private RentalPackagePolicyRepository policyRepository;
     @Autowired private ReservationQuoteRepository quoteRepository;
     @Autowired private ReservationRepository reservationRepository;
+    @Autowired private com.storagehub.domain.repo.ReservationCodeSequenceRepository sequenceRepository;
 
     @Test
     void onlyOneOfTwoConcurrentRequestsCanReserveTheLastCapacity() throws Exception {
-        LocalDate startDate = LocalDate.of(2031, 1, 1);
-        LocalDate endDate = LocalDate.of(2031, 4, 1);
+        LocalDate startDate = ReservationCheckInPolicy.plannedWindow(Instant.now(), false)
+            .availableAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
+        LocalDate endDate = startDate.plusMonths(3);
+        var sequence = new com.storagehub.domain.model.ReservationCodeSequence();
+        sequence.setId(1);
+        sequence.setNextValue(1);
+        sequenceRepository.saveAndFlush(sequence);
         Facility facility = facilityRepository.saveAndFlush(facility());
         UnitType unitType = unitTypeRepository.saveAndFlush(unitType(facility));
         storageUnitRepository.saveAndFlush(storageUnit(facility, unitType));
@@ -83,7 +89,7 @@ class ReservationConcurrencyIntegrationTests {
             start.countDown();
 
             List<Result> results = List.of(first.get(), second.get());
-            assertThat(results).filteredOn(Result::success).hasSize(1);
+            assertThat(results).as("Concurrent creation results: %s", results).filteredOn(Result::success).hasSize(1);
             assertThat(results).filteredOn(result -> result.status() == 409).hasSize(1);
         }
 
@@ -103,9 +109,9 @@ class ReservationConcurrencyIntegrationTests {
         try {
             start.await();
             creationService.create(actor, request, key);
-            return new Result(true, 200);
+            return new Result(true, 200, null);
         } catch (ApiException exception) {
-            return new Result(false, exception.getStatus().value());
+            return new Result(false, exception.getStatus().value(), exception.getMessage());
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
@@ -162,7 +168,7 @@ class ReservationConcurrencyIntegrationTests {
         policy.setRentalMonths(3);
         policy.setDiscountRate(new BigDecimal("0.0300"));
         policy.setPolicyVersion("concurrency-v1");
-        policy.setEffectiveFrom(LocalDate.of(2030, 1, 1));
+        policy.setEffectiveFrom(LocalDate.of(2020, 1, 1));
         return policy;
     }
 
@@ -182,10 +188,10 @@ class ReservationConcurrencyIntegrationTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("495000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("16005000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("6402000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("3201000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("5500000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("9603000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("15103000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("12804000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("18304000.00"));
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
@@ -207,5 +213,5 @@ class ReservationConcurrencyIntegrationTests {
         return new CreateReservationRequest(quote.getId(), "Packed", "Concurrency test", List.of(item));
     }
 
-    private record Result(boolean success, int status) {}
+    private record Result(boolean success, int status, String message) {}
 }
