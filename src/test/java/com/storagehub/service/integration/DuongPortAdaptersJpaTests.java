@@ -54,6 +54,11 @@ class DuongPortAdaptersJpaTests {
     @Autowired com.storagehub.service.FileStorageService storage;
     @Autowired com.storagehub.service.support.SupportService support;
     @TempDir Path root;
+    @Test void completedRenewalCannotAcceptFaultReview() {
+        renewal.setStatus(RenewalStatus.completed);em.flush();var a=actor(manager,RoleCode.MANAGER);
+        assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"completed-fault")).hasMessageContaining("Completed Renewal");
+        assertThat(em.createQuery("select count(e) from RenewalOperationEvent e",Long.class).getSingleResult()).isZero();
+    }
     @Test void expiredPaymentCanRecordBoundFaultReviewWithoutReopeningPayment() {
         renewal.setStatus(RenewalStatus.payment_expired);em.flush();var a=actor(manager,RoleCode.MANAGER);
         var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW.minusSeconds(60),staff.getId(),"{}");em.persist(incident);em.flush();

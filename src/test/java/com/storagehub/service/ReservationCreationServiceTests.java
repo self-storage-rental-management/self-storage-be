@@ -204,6 +204,7 @@ class ReservationCreationServiceTests {
         ReflectionTestUtils.setField(existing, "createdAt", Instant.now());
         existing.setReservationCode("RSV-EXISTING001");
         existing.setCustomer(quote.getCustomer());
+        existing.setIdentityDocumentNumber("079203009988");
         existing.setSourceQuote(quote);
         existing.setIdempotencyKey("create-retry");
         existing.setFacility(quote.getFacility());
