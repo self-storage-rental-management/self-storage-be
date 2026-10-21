@@ -51,15 +51,17 @@ class ReservationConcurrencyIntegrationTests {
     @Autowired private RentalPackagePolicyRepository policyRepository;
     @Autowired private ReservationQuoteRepository quoteRepository;
     @Autowired private ReservationRepository reservationRepository;
-    @Autowired private com.storagehub.domain.repo.ReservationCodeSequenceRepository codeSequences;
+    @Autowired private com.storagehub.domain.repo.ReservationCodeSequenceRepository sequenceRepository;
 
     @Test
     void onlyOneOfTwoConcurrentRequestsCanReserveTheLastCapacity() throws Exception {
-        LocalDate startDate = ReservationCheckInPolicy.plannedWindow(Instant.now(), false).availableAt()
-            .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
+        LocalDate startDate = ReservationCheckInPolicy.plannedWindow(Instant.now(), false)
+            .availableAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         LocalDate endDate = startDate.plusMonths(3);
         var sequence = new com.storagehub.domain.model.ReservationCodeSequence();
-        sequence.setId(1);sequence.setNextValue(1);codeSequences.saveAndFlush(sequence);
+        sequence.setId(1);
+        sequence.setNextValue(1);
+        sequenceRepository.saveAndFlush(sequence);
         Facility facility = facilityRepository.saveAndFlush(facility());
         UnitType unitType = unitTypeRepository.saveAndFlush(unitType(facility));
         storageUnitRepository.saveAndFlush(storageUnit(facility, unitType));
@@ -87,7 +89,7 @@ class ReservationConcurrencyIntegrationTests {
             start.countDown();
 
             List<Result> results = List.of(first.get(), second.get());
-            assertThat(results).filteredOn(Result::success).hasSize(1);
+            assertThat(results).as("Concurrent creation results: %s", results).filteredOn(Result::success).hasSize(1);
             assertThat(results).filteredOn(result -> result.status() == 409).hasSize(1);
         }
 
@@ -107,9 +109,9 @@ class ReservationConcurrencyIntegrationTests {
         try {
             start.await();
             creationService.create(actor, request, key);
-            return new Result(true, 200);
+            return new Result(true, 200, null);
         } catch (ApiException exception) {
-            return new Result(false, exception.getStatus().value());
+            return new Result(false, exception.getStatus().value(), exception.getMessage());
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
@@ -211,5 +213,5 @@ class ReservationConcurrencyIntegrationTests {
         return new CreateReservationRequest(quote.getId(), "Packed", "Concurrency test", List.of(item));
     }
 
-    private record Result(boolean success, int status) {}
+    private record Result(boolean success, int status, String message) {}
 }

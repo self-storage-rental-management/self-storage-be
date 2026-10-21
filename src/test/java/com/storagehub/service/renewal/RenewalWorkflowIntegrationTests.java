@@ -308,43 +308,45 @@ class RenewalWorkflowIntegrationTests {
         }
     }
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
-    @Test void simplePaymentRequiresSigningSlotButNotRecoveryCoverageOrExtensionHold() {
+    @Test void simplePaymentRequiresReservedFutureAppointmentWithoutLegacyCoverageOrExtensionHold() {
         var simple=mock(com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks.class);
         var writer=mock(com.storagehub.service.ledger.RenewalDepositObligationWriter.class);
-        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("simple",simple);beans.addBean("writer",writer);
+        var calendar=mock(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class);
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("simple",simple);beans.addBean("writer",writer);beans.addBean("calendar",calendar);
         Object old=org.springframework.test.util.ReflectionTestUtils.getField(commands,"localPaymentChecks");
         Object oldWriter=org.springframework.test.util.ReflectionTestUtils.getField(commands,"depositWriters");
-        Object oldCalendars=org.springframework.test.util.ReflectionTestUtils.getField(commands,"calendars");
-        var calendar=mock(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class);
-        beans.addBean("calendar",calendar);
-        when(calendar.atomic()).thenReturn(true);
-        var signingSlot=new com.storagehub.service.renewal.operations.RenewalOperationSources.Slot("TEST-SLOT",NOW.plusSeconds(3600),NOW.plusSeconds(5400));
-        when(calendar.slot(any(),eq(signingSlot.start()))).thenReturn(Optional.of(signingSlot));
+        Object oldCalendar=org.springframework.test.util.ReflectionTestUtils.getField(commands,"calendars");
         try {
-            org.springframework.test.util.ReflectionTestUtils.setField(commands,"calendars",beans.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class));
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"localPaymentChecks",beans.getBeanProvider(com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks.class));
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",beans.getBeanProvider(com.storagehub.service.ledger.RenewalDepositObligationWriter.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"calendars",beans.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class));
             var r=fixture();r.getStorageUnit().setStatus(StorageUnitStatus.occupied);em.flush();
             when(simple.cutoff(any(),any())).thenReturn(NOW.plusSeconds(86400));
             eligibility.unknown=true;finance.unknown=true;
             var actor=customer(r);var q=commands.quote(actor,r.getId(),new RenewalCommands.Quote("TEST"));
             var submitted=commands.submit(actor,r.getId(),new RenewalCommands.Submit(q.id(),null),"simple-submit");
-            assertThatThrownBy(()->commands.prepareVnpayPayment(actor,submitted.id())).hasMessageContaining("Select a future signing appointment");
-            var selected=new com.storagehub.service.renewal.operations.RenewalOperationState(em.find(Renewal.class,submitted.id()));
-            selected.awaitingPayment(NOW.plusSeconds(900),NOW.plusSeconds(86400),"test-policy","v1");
-            selected.appointment(UUID.randomUUID(),signingSlot.start(),signingSlot.end());em.persist(selected);em.flush();
+            assertThatThrownBy(()->commands.prepareVnpayPayment(actor,submitted.id()))
+                .hasMessageContaining("Select a future signing appointment before payment");
+            verifyNoInteractions(writer,calendar);
+            var slot=new com.storagehub.service.renewal.operations.RenewalOperationSources.Slot("TEST",NOW.plusSeconds(3600),NOW.plusSeconds(5400));
+            var state=new com.storagehub.service.renewal.operations.RenewalOperationState(em.find(Renewal.class,submitted.id()));
+            state.awaitingPayment(NOW.plusSeconds(900),NOW.plusSeconds(86400),"TEST","v1");
+            state.appointment(UUID.randomUUID(),slot.start(),slot.end());em.persist(state);em.flush();
+            when(calendar.atomic()).thenReturn(true);
+            when(calendar.slot(any(),eq(slot.start()))).thenReturn(Optional.of(slot));
             var result=commands.prepareVnpayPayment(actor,submitted.id());
             assertThat(result.workflow().getExtensionHoldRef()).isNull();assertThat(result.paymentDeadline()).isAfter(NOW);
             assertThat(result.terms().renewalDepositAmount()).isEqualByComparingTo("20");
-            verify(calendar).reserve(any(),eq(signingSlot),eq(NOW));
+            assertThat(result.workflow().getSigningBalanceDueAt()).isEqualTo(slot.end());
+            verify(calendar).reserve(any(),eq(slot),eq(NOW));
             verify(simple).requireKnownFinance(any(),eq(submitted.id()),eq(NOW));
             verify(writer).paymentIntentAvailable(any(),any(),eq(actor.userId()));
             Instant original=result.paymentDeadline();
             assertThat(commands.prepareVnpayPayment(actor,submitted.id()).paymentDeadline()).isEqualTo(original);
         } finally {
-            org.springframework.test.util.ReflectionTestUtils.setField(commands,"calendars",oldCalendars);
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"localPaymentChecks",old);
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",oldWriter);
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"calendars",oldCalendar);
         }
     }
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.

@@ -148,8 +148,8 @@ class CustomerReceiptPeriodCompatibilityTests {
         assertThat(existing.getContractEndDate()).isEqualTo(LocalDate.of(2026, 10, 31));
         assertThat(existing.getMonthlyPrice()).isEqualByComparingTo("999");
         verify(rentals, never()).saveAndFlush(any());
-        verifyNoInteractions(ledger);
         verify(ledgerStores).getIfAvailable();
+        verifyNoInteractions(ledger);
         assertThat(evidence(existing)).containsEntry("rentalCreated", false).containsEntry("convention", "UNKNOWN");
     }
 

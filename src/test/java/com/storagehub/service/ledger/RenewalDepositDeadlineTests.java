@@ -36,7 +36,8 @@ class RenewalDepositDeadlineTests {
             beans.getBeanProvider(Clock.class),beans.getBeanProvider(RenewalOperationSources.PolicySource.class),beans.getBeanProvider(RenewalOperationSources.CalendarSource.class),
             beans.getBeanProvider(RenewalOperationSources.SafetySource.class),beans.getBeanProvider(RenewalOperationService.class));
         ReflectionTestUtils.setField(service,"overdueTerms",beans.getBeanProvider(OverdueSources.TermSource.class));
-        ReflectionTestUtils.setField(service,"faultGuard",mock(RenewalDepositFaultGuard.class));return service;
+        ReflectionTestUtils.setField(service,"faultGuard",mock(RenewalDepositFaultGuard.class));
+        return service;
     }
     @Test void expiredSigningDeadlineDoesNotForfeitBeforeDayEight(){assertThat(service(dayEight.minusSeconds(1)).reconcile(id)).isFalse();verifyNoInteractions(ledger);}
     @Test void exactDayEightRequiresVerifiedMoneyRatherThanInventingForfeiture(){var service=service(dayEight);assertThatThrownBy(()->service.reconcile(id)).hasMessageContaining("Verified deposit and accepted revision required");verifyNoInteractions(ledger);}

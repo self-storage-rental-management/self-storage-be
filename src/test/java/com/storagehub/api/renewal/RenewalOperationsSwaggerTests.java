@@ -23,12 +23,15 @@ class RenewalOperationsSwaggerTests {
             String actual=path.replace("{id}",path.contains("overdue-cases")?"RENTAL_TERM:"+UUID.randomUUID():UUID.randomUUID().toString());
             var unauthorized=client.send(HttpRequest.newBuilder(URI.create(base+actual)).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString("{}")).build(),HttpResponse.BodyHandlers.ofString());assertThat(unauthorized.statusCode()).isEqualTo(401);
         }
-        assertThat(paths.path("/api/manager/renewals/{id}/staff-assignment").path("post").isMissingNode()).isTrue();
-        assertThat(paths.path("/api/manager/renewals/{id}/staff-assignment").path("get").isMissingNode()).isFalse();
         for(String path:List.of("/api/manager/renewals/{id}/facility-fault-reviews")) {
             var operation=paths.path(path).path("post");assertThat(operation.isMissingNode()).isFalse();assertThat(operation.path("security").toString()).contains("bearerAuth");assertThat(operation.path("parameters").toString()).contains("Idempotency-Key");
             var unauthorized=client.send(HttpRequest.newBuilder(URI.create(base+path.replace("{id}",UUID.randomUUID().toString()))).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString("{}")).build(),HttpResponse.BodyHandlers.ofString());assertThat(unauthorized.statusCode()).isEqualTo(401);
         }
+        var assignment=paths.path("/api/manager/renewals/{id}/staff-assignment");
+        assertThat(assignment.has("post")).isFalse();
+        assertThat(assignment.path("get").path("security").toString()).contains("bearerAuth");
+        var deniedAssignment=client.send(HttpRequest.newBuilder(URI.create(base+"/api/manager/renewals/"+UUID.randomUUID()+"/staff-assignment")).GET().build(),HttpResponse.BodyHandlers.ofString());
+        assertThat(deniedAssignment.statusCode()).isEqualTo(401);
         var policyPath="/api/business/facilities/{facilityId}/renewal-policy";
         for(String method:List.of("get","put"))assertThat(paths.path(policyPath).path(method).path("security").toString()).contains("bearerAuth");
         var deniedPolicy=client.send(HttpRequest.newBuilder(URI.create(base+policyPath.replace("{facilityId}",UUID.randomUUID().toString()))).GET().build(),HttpResponse.BodyHandlers.ofString());assertThat(deniedPolicy.statusCode()).isEqualTo(401);

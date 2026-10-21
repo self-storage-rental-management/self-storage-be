@@ -59,6 +59,15 @@ class DuongPortAdaptersJpaTests {
         assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"completed-fault")).hasMessageContaining("Completed Renewal");
         assertThat(em.createQuery("select count(e) from RenewalOperationEvent e",Long.class).getSingleResult()).isZero();
     }
+    @Test void expiredPaymentCanRecordBoundFaultReviewWithoutReopeningPayment() {
+        renewal.setStatus(RenewalStatus.payment_expired);em.flush();var a=actor(manager,RoleCode.MANAGER);
+        var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW.minusSeconds(60),staff.getId(),"{}");em.persist(incident);em.flush();
+        assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"missing-incident"))
+            .hasMessageContaining("Related event not found");
+        operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(incident.getId(),true,"TEST",List.of(),0L),"expired-fault");
+        assertThat(renewal.getStatus()).isEqualTo(RenewalStatus.payment_expired);
+        assertThat(em.createQuery("select count(e) from RenewalOperationEvent e where e.kind='FAULT_REVIEW'",Long.class).getSingleResult()).isEqualTo(1);
+    }
     Facility facility;User customer,staff,manager,business;Rental rental;Renewal renewal;
     @BeforeEach void fixture() throws Exception {
         fileProperties.setStoragePath(root.toString());
@@ -112,12 +121,12 @@ class DuongPortAdaptersJpaTests {
         for(boolean verdict:List.of(true,false))em.persist(new RenewalOperationEvent(renewal,"FAULT_REVIEW",NOW.plusSeconds(1),manager.getId(),mapper.writeValueAsString(Map.of("incidentId",incident.getId(),"facilityFault",verdict))));em.flush();
         assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),manager.getId())).hasMessageContaining("ambiguous");
     }
-    @Test void managerCanManageInternalSupportEvidenceButCannotPublishPublicEvidence() throws Exception {
+    @Test void managerCanAttachInternalSupportEvidenceButCannotPublishCustomerEvidence() throws Exception {
         var t=ticket();var f=file(manager,DuongFileEvidence.INTERNAL,t.getId());
         files.requireUpload(actor(manager,RoleCode.MANAGER),DuongFileEvidence.INTERNAL,t.getId());
         files.requireAttach(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()));
-        assertThatThrownBy(()->files.requireUpload(actor(manager,RoleCode.MANAGER),DuongFileEvidence.PUBLIC,t.getId())).hasMessageContaining("internal");
-        assertThatThrownBy(()->files.requireAttach(actor(manager,RoleCode.MANAGER),t,Visibility.PUBLIC,List.of(f.getId()))).hasMessageContaining("internal");
+        assertThatThrownBy(()->files.requireUpload(actor(manager,RoleCode.MANAGER),DuongFileEvidence.PUBLIC,t.getId())).hasMessageContaining("only upload internal");
+        assertThatThrownBy(()->files.requireAttach(actor(manager,RoleCode.MANAGER),t,Visibility.PUBLIC,List.of(f.getId()))).hasMessageContaining("only attach internal");
         files.requireRead(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()));
     }
     @Test void publicAttachmentBindsAndCanBeReadFromDb() throws Exception {var ticket=ticket();var f=file(customer,DuongFileEvidence.UPLOAD,customer.getId());files.requireAttach(actor(customer,RoleCode.CUSTOMER),ticket,Visibility.PUBLIC,List.of(f.getId()));em.flush();UUID id=f.getId();em.clear();f=em.find(FileAsset.class,id);ticket=em.find(SupportTicket.class,ticket.getId());assertThat(f.getEntityType()).isEqualTo(DuongFileEvidence.PUBLIC);assertThat(f.getEntityId()).isEqualTo(ticket.getId());files.requireRead(actor(customer,RoleCode.CUSTOMER),ticket,Visibility.PUBLIC,List.of(id));files.requireDownload(actor(customer,RoleCode.CUSTOMER),f);}
