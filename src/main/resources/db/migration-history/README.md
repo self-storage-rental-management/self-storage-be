@@ -8,6 +8,8 @@ Develop SQL `2026101404`–`2026101406` is also preserved unchanged under indivi
 
 Never add this root directory to Flyway locations: scanning all variants would duplicate versions. Spring Boot registers the customizer automatically. Standalone Java Flyway callers using `classpath:db/migration` must call `DevelopMigrationHistoryLocations.configure(configuration)` before `load()`.
 
+Reservation contact snapshot and code sequence scripts were renumbered in develop to `2026102002` and `2026102003`. Databases that already applied the identical SQL at `2026101900` and `2026101904` retain those immutable resources and do not execute the DDL again. Fresh databases use the develop versions. This routing only reads history and never repairs or rewrites it.
+
 | Folder | Selected when |
 | --- | --- |
 | develop-0909 | No 0909 history, or applied develop VNPay 0909 |
