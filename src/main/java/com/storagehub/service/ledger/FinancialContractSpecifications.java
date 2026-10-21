@@ -61,7 +61,10 @@ public final class FinancialContractSpecifications {
         equal(t.subtotal().subtract(t.discountAmount()),t.totalAfterDiscount());
         equal(t.renewalDepositAmount().add(t.remainingRentalAmount()),t.totalAfterDiscount());
         if(t.paymentPlan()!=null) {
-            equal(t.discountRate(),BigDecimal.ZERO);equal(t.discountAmount(),BigDecimal.ZERO);
+            if(t.monthly()) {
+                equal(t.discountRate(),BigDecimal.ZERO);
+                equal(t.discountAmount(),BigDecimal.ZERO);
+            }
             equal(t.renewalDepositAmount(),(t.monthly()?t.monthlyPrice():t.totalAfterDiscount()).multiply(new BigDecimal("0.20")).setScale(0,RoundingMode.HALF_UP));
             if(t.monthlyPrice().stripTrailingZeros().scale()>0)fail("Giá thuê tháng phải là số nguyên VND");
         }
