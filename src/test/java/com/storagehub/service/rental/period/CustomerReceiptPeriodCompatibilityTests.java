@@ -80,11 +80,11 @@ class CustomerReceiptPeriodCompatibilityTests {
         snapshot.setDiscountRate(BigDecimal.ZERO);
         snapshot.setDiscountAmount(BigDecimal.ZERO);
         snapshot.setNetRentalAmount(new BigDecimal("123456"));
-        snapshot.setReservationDepositAmount(BigDecimal.ZERO);
-        snapshot.setSecurityDepositAmount(BigDecimal.ZERO);
-        snapshot.setRemainingRentalAmount(new BigDecimal("123456"));
-        snapshot.setDueAtCheckIn(new BigDecimal("123456"));
-        snapshot.setTotalInitialObligation(new BigDecimal("123456"));
+        snapshot.setReservationDepositAmount(new BigDecimal("24691.20"));
+        snapshot.setSecurityDepositAmount(new BigDecimal("123456"));
+        snapshot.setRemainingRentalAmount(new BigDecimal("98764.80"));
+        snapshot.setDueAtCheckIn(new BigDecimal("222220.80"));
+        snapshot.setTotalInitialObligation(new BigDecimal("246912"));
         actor = new ActorPrincipal(user.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
 
         when(reservations.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
