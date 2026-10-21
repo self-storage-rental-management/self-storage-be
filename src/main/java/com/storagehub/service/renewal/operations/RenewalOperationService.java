@@ -190,9 +190,7 @@ public class RenewalOperationService {
         evidence(actor,c.renewal(),"CASH_RECEIPT",List.of(body.receiptFileId()));
         String method=body.paymentMethod()==null?"CASH":body.paymentMethod().trim().toUpperCase(java.util.Locale.ROOT);
         if(!Set.of("CASH","BANK_TRANSFER").contains(method))throw ApiExceptions.validation("Phương thức thanh toán không hợp lệ.",null);
-        String receiptReference="CASH".equals(method)?"TM-"+UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT)
-            :body.receiptReference()==null?"":body.receiptReference().trim();
-        if(receiptReference.isBlank()||receiptReference.length()>100)throw ApiExceptions.validation("Cần mã giao dịch chuyển khoản hợp lệ.",null);
+        String receiptReference=("CASH".equals(method)?"TM-":"CK-")+UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT);
         var receipt=finance.balance(c.renewal(),body.payableStatementRef(),receiptReference,body.receiptFileId(),method,actor.userId(),key,now());
         if(receipt==null||receipt.reference()==null||!id.equals(receipt.renewalId())||!statement.reference().equals(receipt.statementRef())||receipt.amount()==null||receipt.amount().compareTo(statement.amount())!=0||!statement.currency().equals(receipt.currency())||receipt.receivedAt()==null||receipt.receivedAt().isAfter(now()))throw deferred("Shared CASH receipt is incomplete or inconsistent");
         var eventData=new LinkedHashMap<String,Object>(mapper.convertValue(receipt,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));

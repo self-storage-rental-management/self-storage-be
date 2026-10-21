@@ -345,7 +345,8 @@ public class RenewalWorkflowService {
     }
     private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code,RenewalPaymentPlan plan){
         var p=prices(r,new PolicyPeriod(g.policy(),g.period())).stream().filter(x->x.packageCode().equals(code)).findFirst().orElseThrow(()->ApiExceptions.conflict("Package not eligible for Renewal"));
-        var discount=plan==null?p.discountRate():BigDecimal.ZERO;
+        // Package discounts apply to full-term payment. Monthly installments use the catalog monthly price.
+        var discount=plan==RenewalPaymentPlan.MONTHLY?BigDecimal.ZERO:p.discountRate();
         var t=RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),discount,plan==null?BigDecimal.ZERO:new BigDecimal("0.20"));
         var deposit=plan==null?t.depositAmount():(plan==RenewalPaymentPlan.MONTHLY?p.monthlyPrice():t.netRent()).multiply(new BigDecimal("0.20")).setScale(0,java.math.RoundingMode.HALF_UP);
         if(t.netRent().precision()>14)throw ApiExceptions.conflict("Shared renewal amount exceeds supported precision");
