@@ -22,13 +22,14 @@ class RenewalPersistenceTests {
     @Autowired RenewalPersistence store;
     private static final Instant NOW=Instant.parse("2026-10-06T00:00:00Z");
 
-    @Test void quotePersistsImmutableSnapshotAndExpiryIsExclusive() {
+    @Test void quotePersistsImmutableSnapshotWithoutTimeExpiryAndKeepsCustomerBinding() {
         var rental=fixture();var quote=store.storeQuote(rental,rental.getCustomer(),Map.of("source","test-only-authoritative-fixture","amount",123),NOW,NOW.plusSeconds(1800));
         em.flush();UUID id=quote.getId();em.clear();var actualRental=em.find(Rental.class,rental.getId());
         var result=store.validQuote(id,actualRental,actualRental.getCustomer(),NOW.plusSeconds(1799));
         assertThat(result.getTermsJson()).contains("test-only-authoritative-fixture");
         assertThat(result.getTermsHash()).hasSize(64);
-        assertThatThrownBy(()->store.validQuote(id,actualRental,actualRental.getCustomer(),NOW.plusSeconds(1800))).isInstanceOf(ApiException.class);
+        assertThat(store.validQuote(id,actualRental,actualRental.getCustomer(),NOW.plusSeconds(1800)).getId()).isEqualTo(id);
+        assertThat(store.validQuote(id,actualRental,actualRental.getCustomer(),NOW.plusSeconds(86400)).getTermsHash()).isEqualTo(result.getTermsHash());
         var other=new User();other.setEmail("other@test.invalid");other.setFullName("Other");other.setPasswordHash("test");em.persist(other);
         assertThatThrownBy(()->store.validQuote(id,actualRental,other,NOW)).isInstanceOfSatisfying(ApiException.class,e->assertThat(e.getStatus().value()).isEqualTo(404));
     }

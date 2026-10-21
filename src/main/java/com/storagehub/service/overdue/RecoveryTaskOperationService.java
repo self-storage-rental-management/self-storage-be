@@ -40,7 +40,8 @@ public class RecoveryTaskOperationService {
 
     public record View(UUID taskId,String status,long expectedVersion,UUID startedBy,Instant startedAt,
         UUID returnCaseId,ReturnCaseStatus settlementStatus,List<UUID> evidenceFileIds,
-        UUID receiptFileId,boolean assetsCleared,UUID completionFileId,Instant completedAt) {}
+        UUID receiptFileId,boolean assetsCleared,UUID completionFileId,Instant completedAt,String transactionReference) {}
+    private record SettlementReceipt(UUID fileId,String reference) {}
     private record State(long version,UUID startedBy,Instant startedAt,UUID returnId,String inspection,
         Instant clearedAt,UUID completionFile,Instant completedAt) {}
     private record Context(RecoveryTaskReadService.View task,Rental rental,User actor) {}
@@ -86,13 +87,27 @@ public class RecoveryTaskOperationService {
         return finish(c,key,"INSPECTION",body);
     }
 
+    public View recalculate(ActorPrincipal actor,RoleCode role,UUID id,RecalculateSettlement body,String key) {
+        var c=context(actor,role,id);var replay=replay(c,key,"RECALCULATE_SETTLEMENT",body);if(replay.isPresent())return replay.get();
+        var s=version(id,body.expectedVersion());inProgress(c,s);var rc=returnCase(c,s);
+        if(jdbc.queryForObject("select count(*) from recovery_settlement_receipts where task_id=?",Long.class,bytes(id))>0)
+            throw ApiExceptions.conflict("Đã ghi nhận biên lai, không thể tự sửa quyết toán cũ.");
+        returns.recalculateRecoverySettlement(actor,rc.getId());
+        jdbc.update("update recovery_task_operations set version=version+1 where task_id=?",bytes(id));
+        return finish(c,key,"RECALCULATE_SETTLEMENT",body);
+    }
+
     public View settle(ActorPrincipal actor,RoleCode role,UUID id,Settlement body,String key) {
         var c=context(actor,role,id);
         access.require(actor,role,c.task().facilityId(),FacilityScopeLevel.OPERATE,SystemPermission.MANAGE_PAYMENTS);
         var replay=replay(c,key,"SETTLEMENT",body);if(replay.isPresent())return replay.get();
         var s=version(id,body.expectedVersion());inProgress(c,s);var rc=returnCase(c,s);
-        if(!Boolean.TRUE.equals(body.confirmed())||body.paymentMethod()==null||body.transactionReference()==null
-            ||!body.transactionReference().matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}"))throw ApiExceptions.validation("Explicit payment/refund attestation and transaction reference required",null);
+        if(!Boolean.TRUE.equals(body.confirmed())||body.paymentMethod()==null)
+            throw ApiExceptions.validation("Cần chọn phương thức và xác nhận đã thực thu hoặc thực hoàn tiền.",null);
+        String transactionReference=body.paymentMethod()==PaymentMethod.CASH
+            ?"TM-"+UUID.randomUUID().toString().replace("-","").toUpperCase(Locale.ROOT):body.transactionReference();
+        if(transactionReference==null||!transactionReference.matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}"))
+            throw ApiExceptions.validation("Cần nhập mã giao dịch chuyển khoản hợp lệ, tối đa 64 ký tự.",null);
         String direction=rc.getStatus()==ReturnCaseStatus.payment_due?"COLLECTION":rc.getStatus()==ReturnCaseStatus.refund_pending?"REFUND":null;
         if(direction==null)throw ApiExceptions.conflict("Settlement must first be confirmed or the dispute resolved");
         var amount=direction.equals("COLLECTION")?rc.getAmountDueFromCustomer():rc.getNetRefundAmount();
@@ -100,9 +115,9 @@ public class RecoveryTaskOperationService {
         evidence.require(actor,id,"SETTLEMENT",Collections.singletonList(body.receiptFileId()));
         try {
             jdbc.update("insert into recovery_settlement_receipts(task_id,return_case_id,direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_by,recorded_at) values(?,?,?,?,?,?,?,?,?)",
-                bytes(id),bytes(rc.getId()),direction,amount,body.paymentMethod().name(),body.transactionReference(),bytes(body.receiptFileId()),bytes(actor.userId()),Timestamp.from(now()));
+                bytes(id),bytes(rc.getId()),direction,amount,body.paymentMethod().name(),transactionReference,bytes(body.receiptFileId()),bytes(actor.userId()),Timestamp.from(now()));
         }catch(DuplicateKeyException used){throw ApiExceptions.conflict("Recovery settlement or transaction evidence was already recorded");}
-        returns.completeRecoverySettlement(actor,rc.getId(),body.transactionReference());
+        returns.completeRecoverySettlement(actor,rc.getId(),transactionReference);
         jdbc.update("update recovery_task_operations set version=version+1 where task_id=?",bytes(id));
         return finish(c,key,"SETTLEMENT",body);
     }
@@ -146,16 +161,16 @@ public class RecoveryTaskOperationService {
         em.refresh(rc,LockModeType.PESSIMISTIC_WRITE);return rc;
     }
     private View project(RecoveryTaskReadService.View task) {
-        var state=state(task.id());if(state==null)return new View(task.id(),task.status(),0,null,null,null,null,List.of(),null,false,null,null);
+        var state=state(task.id());if(state==null)return new View(task.id(),task.status(),0,null,null,null,null,List.of(),null,false,null,null,null);
         var rc=state.returnId()==null?null:em.find(ReturnCase.class,state.returnId());
         if(state.returnId()!=null&&(rc==null||!task.rentalId().equals(rc.getRental().getId())||!task.facilityId().equals(rc.getFacility().getId())))
             throw ApiExceptions.conflict("Recovery settlement binding invalid");
         List<UUID> files=new ArrayList<>();
         if(state.inspection()!=null)try{for(var file:mapper.readTree(state.inspection()).path("evidenceFileIds"))files.add(UUID.fromString(file.asText()));}
         catch(Exception invalid){throw ApiExceptions.conflict("Recovery inventory evidence is invalid");}
-        var receipts=jdbc.query("select receipt_file_id from recovery_settlement_receipts where task_id=?",(rs,i)->uuid(rs.getBytes(1)),bytes(task.id()));
+        var receipts=jdbc.query("select receipt_file_id,transaction_reference from recovery_settlement_receipts where task_id=?",(rs,i)->new SettlementReceipt(uuid(rs.getBytes(1)),rs.getString(2)),bytes(task.id()));
         return new View(task.id(),task.status(),state.version(),state.startedBy(),state.startedAt(),state.returnId(),rc==null?null:rc.getStatus(),
-            List.copyOf(files),receipts.isEmpty()?null:receipts.getFirst(),state.clearedAt()!=null,state.completionFile(),state.completedAt());
+            List.copyOf(files),receipts.isEmpty()?null:receipts.getFirst().fileId(),state.clearedAt()!=null,state.completionFile(),state.completedAt(),receipts.isEmpty()?null:receipts.getFirst().reference());
     }
     private State state(UUID task) {
         return jdbc.query("select * from recovery_task_operations where task_id=?",(rs,i)->new State(rs.getLong("version"),uuid(rs.getBytes("started_by")),instant(rs.getTimestamp("started_at")),

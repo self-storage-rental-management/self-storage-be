@@ -26,6 +26,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Transactional(propagation=Propagation.MANDATORY)
 public class RecoveryTaskSource implements OverdueSources.RecoverySource {
     private final JdbcTemplate jdbc;
+    @org.springframework.beans.factory.annotation.Autowired private com.storagehub.service.BusinessRecordCodes displayCodes;
     private final EntityManager em;
     private final RentalPeriodResolver periods;
     private final ObjectProvider<OverdueSources.TermSource> terms;
@@ -98,6 +99,7 @@ public class RecoveryTaskSource implements OverdueSources.RecoverySource {
         Long openReturn=em.createQuery("select count(c) from ReturnCase c where c.rental.id=:id and c.status<>:completed",Long.class)
             .setParameter("id",locked.getId()).setParameter("completed",ReturnCaseStatus.completed).getSingleResult();
         if(openReturn>0)throw ApiExceptions.conflict("Return case requires reconciliation before Recovery");
+        if(displayCodes!=null)displayCodes.assign("QH",caseRef,now);
         var existing=jdbc.query("select id,case_ref,facility_id from recovery_tasks where rental_id=? for update",
             (rs,i)->new Existing(uuid(rs.getBytes("id")),rs.getString("case_ref"),uuid(rs.getBytes("facility_id"))),
             bytes(locked.getId()));

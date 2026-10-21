@@ -39,7 +39,10 @@ class LedgerFinancialAdaptersTests {
             new LedgerStore.Snapshot(rental.getId(),customer.getId(),UUID.randomUUID(),1,List.of(debt),List.of(),List.of()),
             new LedgerStore.Snapshot(rental.getId(),customer.getId(),facility.getId(),1,List.of(debt),List.of(new LedgerStore.Receipt(UUID.randomUUID(),LedgerStore.Method.VERIFIED_BANK,amount,"test",null,now)),List.of()),
             new LedgerStore.Snapshot(rental.getId(),customer.getId(),facility.getId(),1,List.of(debt),List.of(),List.of(new LedgerStore.Refund(UUID.randomUUID(),UUID.randomUUID(),id,amount,"PENDING","test",null))))) {
-            when(store.read(rental.getId())).thenReturn(Optional.of(unsafe));assertThat(adapters.read(rental,now)).isEmpty();
+            when(store.read(rental.getId())).thenReturn(Optional.of(unsafe));
+            when(inventory.inspect(rental,Optional.of(unsafe))).thenReturn(new LedgerCoverageInventory.Inventory(
+                rental.getId(),unsafe.revision(),"UNKNOWN",List.of("UNVERIFIED_TEST_ACCOUNT"),List.of(),false,List.of()));
+            assertThat(adapters.read(rental,now)).isEmpty();
         }
     }
     @Test void matchedRenewalDebtRemainsVisibleAsPartialAfterAuthenticatedBookingSandboxReceipt() {

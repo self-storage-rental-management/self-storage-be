@@ -27,7 +27,7 @@ import org.springframework.util.LinkedMultiValueMap;
 
 /** All records/policy/receiver fixtures exist only in the rollback-only H2 test context. */
 @DataJpaTest(showSql=false) @ActiveProfiles("test")
-@Import({SupportService.class,SupportPersistence.class,SupportWorkflowIntegrationTests.Sources.class})
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,SupportService.class,SupportPersistence.class,SupportWorkflowIntegrationTests.Sources.class})
 class SupportWorkflowIntegrationTests {
     static final Instant NOW=Instant.parse("2026-10-08T03:00:00Z");
     @TestConfiguration static class Sources {
