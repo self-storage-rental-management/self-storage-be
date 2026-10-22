@@ -188,6 +188,44 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void rejectsMismatchedIdentityWithoutVerificationNote() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+
+        CompleteCheckInRequest request = completionRequest("079203009999", "");
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), request))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+    }
+
+    @Test
+    void rejectsMismatchedIdentityEvenWhenVerificationNoteIsRecorded() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+
+        assertThatThrownBy(() -> service.complete(
+            actor, checkIn.getId(), completionRequest("079203009999", "Tên trên giấy tờ không trùng với hồ sơ")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+    }
+
+    @Test
+    void rejectsLegacyReservationWithoutDeclaredIdentity() {
+        reservation.setIdentityDocumentNumber(null);
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+    }
+
+    @Test
     void rejectsHandoverWhenGoodsExceedUnitCapacity() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
@@ -195,6 +233,7 @@ class CheckInHandoverServiceTests {
         CompleteCheckInRequest oversized = new CompleteCheckInRequest(
             base.checklist(),
             base.identityDocumentNumber(),
+            base.identityVerificationNote(),
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("1001"), BigDecimal.ONE, false
@@ -239,6 +278,7 @@ class CheckInHandoverServiceTests {
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
             base.checklist(),
             base.identityDocumentNumber(),
+            base.identityVerificationNote(),
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("120"), new BigDecimal("1.2"), false
@@ -262,7 +302,7 @@ class CheckInHandoverServiceTests {
             .thenReturn(List.of(declaredItem));
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
-            base.checklist(), base.identityDocumentNumber(), new CheckInMeasurements(
+            base.checklist(), base.identityDocumentNumber(), base.identityVerificationNote(), new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, false
             ), null, base.initialUnitCondition(),
@@ -288,7 +328,7 @@ class CheckInHandoverServiceTests {
             .thenReturn(List.of(declaredItem));
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
-            base.checklist(), base.identityDocumentNumber(), new CheckInMeasurements(
+            base.checklist(), base.identityDocumentNumber(), base.identityVerificationNote(), new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, false
             ), null, base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
@@ -355,16 +395,21 @@ class CheckInHandoverServiceTests {
     }
 
     private CompleteCheckInRequest validCompletionRequest() {
+        return completionRequest("079203009988", "Đã bàn giao");
+    }
+
+    private CompleteCheckInRequest completionRequest(String identityDocumentNumber, String notes) {
         return new CompleteCheckInRequest(
             new CheckInChecklist(true, true, true, true, true, true, true, true),
-            "079203009988",
+            identityDocumentNumber,
+            notes.isBlank() ? null : notes,
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, true
             ),
             null,
             "Kho sạch, không hư hại", "Hàng nguyên vẹn", 3, "Đồ gia dụng",
-            List.of("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"), List.of("PIN", "Biên nhận"), "Đã bàn giao"
+            List.of("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"), List.of("PIN", "Biên nhận"), notes
         );
     }
 

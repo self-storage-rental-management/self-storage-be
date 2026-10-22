@@ -28,7 +28,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                 query.setString(1, history);
                 try (var result = query.executeQuery()) {
                     if (result.next() && result.getInt(1) > 0) {
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502')")) {
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101904','2026102002','2026102003')")) {
                             while (rows.next()) {
                                 var value = new Applied(rows.getString("script"),rows.getString("type"),rows.getBoolean("success"));
                                 if (applied.put(rows.getString("version"), value) != null) throw new IllegalStateException("Duplicate version in applied migration history; no repair performed");
@@ -39,6 +39,12 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             }
         } catch (SQLException error) { throw new IllegalStateException("Cannot inspect actual Flyway history; no migration performed", error); }
         var selected = new ArrayList<>(locations.stream().filter(location -> !location.startsWith("classpath:db/migration-history/")).toList());
+        // Develop renumbered these scripts after local databases had already applied them.
+        // Resolve their original checksums without repeating the same DDL at the new version.
+        selectRenumbered(selected, applied, "2026101900", "2026102002",
+            "add_reservation_customer_contact_snapshot", "legacy-contact-1900", "develop-contact-2002");
+        selectRenumbered(selected, applied, "2026101904", "2026102003",
+            "add_reservation_code_sequence", "legacy-sequence-1904", "develop-sequence-2003");
         // Resolve the original immutable SQL only on databases that actually applied it.
         // Never install version 1202 on a fresh database or collide with another 1202 history.
         var historicalGateway = applied.get("2026101202");
@@ -131,6 +137,16 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             selected.add("classpath:db/migration-history/applied-vnpay-0910");
         }
         return configuration.locations(selected.toArray(String[]::new));
+    }
+    private static void selectRenumbered(ArrayList<String> selected, Map<String,Applied> applied,
+        String oldVersion, String newVersion, String name, String oldFolder, String newFolder) {
+        if (applied.containsKey(oldVersion)) {
+            require(applied.get(oldVersion), "V" + oldVersion + "__" + name + ".sql");
+            selected.add("classpath:db/migration-history/" + oldFolder);
+        }
+        if (applied.containsKey(newVersion)) require(applied.get(newVersion), "V" + newVersion + "__" + name + ".sql");
+        if (!applied.containsKey(oldVersion) || applied.containsKey(newVersion))
+            selected.add("classpath:db/migration-history/" + newFolder);
     }
     private static String select(Map<String,Applied> applied,String version,String developScript,String developFolder,String legacyScript,String legacyFolder) {
         var value=applied.get(version);
