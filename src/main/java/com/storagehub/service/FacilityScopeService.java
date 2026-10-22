@@ -27,19 +27,34 @@ public class FacilityScopeService {
         assertCanAccess(actor, facilityId, FacilityScopeLevel.MANAGE);
     }
 
-    private void assertCanAccess(ActorPrincipal actor, UUID facilityId, FacilityScopeLevel required) {
-        if (actor.hasAnyRole(RoleCode.ADMIN, RoleCode.BUSINESS)) {
-            return;
+    public boolean hasGlobalScope(ActorPrincipal actor) {
+        if (actor == null) return false;
+        if (actor.hasRole(RoleCode.ADMIN)) return true;
+        if (actor.hasRole(RoleCode.BUSINESS)) {
+            return actor.facilityScopes() == null || actor.facilityScopes().isEmpty();
+        }
+        return false;
+    }
+
+    public boolean canAccessFacility(ActorPrincipal actor, UUID facilityId, FacilityScopeLevel required) {
+        if (actor == null) return false;
+        if (actor.hasRole(RoleCode.ADMIN)) return true;
+        if (actor.hasRole(RoleCode.BUSINESS)) {
+            if (actor.facilityScopes() == null || actor.facilityScopes().isEmpty()) {
+                return true;
+            }
+            FacilityScopeLevel actual = actor.facilityScopes().get(facilityId);
+            return actual != null && actual.includes(required);
         }
         if (actor.hasRole(RoleCode.CUSTOMER)) {
-            if (required == FacilityScopeLevel.READ) {
-                return;
-            }
-            throw ApiExceptions.forbidden("The actor has no required scope for this facility");
+            return required == FacilityScopeLevel.READ;
         }
-
         FacilityScopeLevel actual = actor.facilityScopes().get(facilityId);
-        if (actual == null || !actual.includes(required)) {
+        return actual != null && actual.includes(required);
+    }
+
+    private void assertCanAccess(ActorPrincipal actor, UUID facilityId, FacilityScopeLevel required) {
+        if (!canAccessFacility(actor, facilityId, required)) {
             throw ApiExceptions.forbidden("The actor has no required scope for this facility");
         }
     }

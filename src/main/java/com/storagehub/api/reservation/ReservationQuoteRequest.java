@@ -34,6 +34,8 @@ public class ReservationQuoteRequest {
     @Valid
     private List<GoodsItemRequest> goodsItems;
 
+    private String voucherCode;
+
     public ReservationQuoteRequest() {
     }
 
@@ -63,4 +65,6 @@ public class ReservationQuoteRequest {
     public void setGoodsCondition(String goodsCondition) { this.goodsCondition = goodsCondition; }
     public List<GoodsItemRequest> getGoodsItems() { return goodsItems; }
     public void setGoodsItems(List<GoodsItemRequest> goodsItems) { this.goodsItems = goodsItems; }
+    public String getVoucherCode() { return voucherCode; }
+    public void setVoucherCode(String voucherCode) { this.voucherCode = voucherCode; }
 }

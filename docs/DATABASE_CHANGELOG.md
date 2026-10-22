@@ -1,5 +1,13 @@
 # Database changelog
 
+## 2026-10-20 — Bổ sung loại thông báo gia hạn
+
+`V2026102005__add_renewal_notification_type.sql` thêm `RENEWAL` vào cuối ENUM `notifications.type`, giữ các giá trị cũ và dữ liệu hiện có. DB khôi phục cũ thiếu loại này khiến bước tạo thông báo lỗi và hoàn tác yêu cầu gia hạn. Áp dụng trên local qua Flyway; DB chung cần triển khai migration riêng.
+
+## 2026-10-20 — Đồng bộ trạng thái gia hạn cho database cũ
+
+`V2026102004__extend_renewal_status_values.sql` bổ sung `accepted` và `full_rent_paid` vào `renewals.status`, đồng bộ đầy đủ với `RenewalStatus`. Giữ thứ tự 10 giá trị ENUM cũ, thêm hai giá trị ở cuối; không cập nhật trạng thái hoặc tiền của hồ sơ hiện có. Migration nằm trong `db/migration`, không phụ thuộc Hibernate tự cập nhật schema. Cần chạy bằng Flyway trên từng database đích; commit/push code không tự áp dụng vào DB chung. Bản sao lưu local trước cập nhật: `.local/before-renewal-status-2026102004.sql`, xuất ID nhị phân dưới dạng hex.
+
 ## 2026-10-11 — Ưu tiên version develop, tương thích lịch sử đã áp dụng
 
 Mục này thay thế phương án reconcile bên dưới. DB mới dùng `2026100909=add_vnpay_payment_fields` và `2026101001=add_customer_checkin_appointment` của develop. Ledger/outbox dùng Java version mới `2026101103`; `2026101102` giữ nguyên để bổ sung cột thiếu cho DB cũ.

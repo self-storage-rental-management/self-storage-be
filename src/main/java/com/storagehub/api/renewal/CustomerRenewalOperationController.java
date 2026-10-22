@@ -33,6 +33,8 @@ public class CustomerRenewalOperationController {
     public ApiResponse<RenewalOperationService.Result> confirm(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.Confirmation body,@RequestHeader("Idempotency-Key") String key){return response(service.confirm(actors.required(),id,body,key));}
     @GetMapping("/payments") @Operation(summary="Read persisted Renewal payment/receipt events")
     public PageResponse<RenewalOperationResponse.Event> payments(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"payments");}
+    @GetMapping("/documents") @Operation(summary="Read customer-visible arrival and signed-contract evidence events")
+    public PageResponse<RenewalOperationResponse.Event> documents(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"documents");}
     @GetMapping("/refunds") @Operation(summary="Read refund review reservations, not proof of payout")
     public PageResponse<RenewalOperationResponse.Event> refunds(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"refunds");}
     private PageResponse<RenewalOperationResponse.Event> timeline(UUID id,MultiValueMap<String,String> query,String kind){var q=RenewalOperationQuery.parse(query);return service.events(actors.required(),id,CUSTOMER,kind,q.page(),q.size(),CorrelationIdContext.current());}

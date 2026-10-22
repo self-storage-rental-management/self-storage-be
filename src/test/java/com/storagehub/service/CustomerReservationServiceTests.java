@@ -180,8 +180,11 @@ class CustomerReservationServiceTests {
             storageUnitRepository, snapshotRepository, goodsItemRepository, auditLogService,
             notificationService
         );
-        Instant previousAppointment = Instant.now().plusSeconds(3_600);
-        Instant newAppointment = previousAppointment.plusSeconds(7_200);
+        Instant registeredAt = Instant.parse("2026-10-19T01:00:00Z");
+        ReflectionTestUtils.setField(reservation, "createdAt", registeredAt);
+        reservation.setGoodsReviewStatus(com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED);
+        Instant previousAppointment = ReservationCheckInPolicy.plannedWindow(registeredAt, false).availableAt();
+        Instant newAppointment = previousAppointment.plusSeconds(1_800);
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setAppointmentAt(previousAppointment);
         CheckIn checkIn = new CheckIn();
@@ -215,16 +218,19 @@ class CustomerReservationServiceTests {
         assertThatThrownBy(() -> service.setCheckInAppointment(
             actor, reservation.getId(), new CheckInAppointmentRequest(invalidAppointment)
         )).isInstanceOf(ApiException.class)
-            .hasMessageContaining("rental start date");
+            .hasMessageContaining("permitted seven-day window");
     }
 
     @Test
     void preservesHistoricalDiscountSnapshotDetailsWhenRetrievingReservation() {
         snapshot.setRentalMonths(6);
         snapshot.setPricingPackageCode("PKG-6M");
+        snapshot.setMonthlyPrice(new BigDecimal("2000000.00"));
         snapshot.setGrossRentalAmount(new BigDecimal("12000000.00"));
         snapshot.setDiscountRate(new BigDecimal("0.0800"));
         snapshot.setDiscountAmount(new BigDecimal("960000.00"));
+        snapshot.setVoucherCode("HELLO2026");
+        snapshot.setVoucherDiscountAmount(new BigDecimal("100000.00"));
         snapshot.setNetRentalAmount(new BigDecimal("11040000.00"));
 
         when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
@@ -238,9 +244,12 @@ class CustomerReservationServiceTests {
         var item = response.data().get(0);
         assertThat(item.getPricingPackageCode()).isEqualTo("PKG-6M");
         assertThat(item.getRentalMonths()).isEqualTo(6);
+        assertThat(item.getMonthlyPrice()).isEqualByComparingTo("2000000.00");
         assertThat(item.getGrossRentalAmount()).isEqualByComparingTo("12000000.00");
         assertThat(item.getDiscountRate()).isEqualByComparingTo("0.0800");
         assertThat(item.getDiscountAmount()).isEqualByComparingTo("960000.00");
+        assertThat(item.getVoucherCode()).isEqualTo("HELLO2026");
+        assertThat(item.getVoucherDiscountAmount()).isEqualByComparingTo("100000.00");
     }
 
     @Test

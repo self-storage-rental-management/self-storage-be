@@ -34,6 +34,8 @@ public class ManagerRenewalOperationController {
     public PageResponse<RenewalOperationResponse.Event> incidents(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"facility-incidents");}
     @GetMapping("/payments") @Operation(summary="Read facility Renewal payment events")
     public PageResponse<RenewalOperationResponse.Event> payments(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"payments");}
+    @GetMapping("/documents") @Operation(summary="Read facility Renewal arrival and signed-contract evidence events")
+    public PageResponse<RenewalOperationResponse.Event> documents(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"documents");}
     @GetMapping("/refunds") @Operation(summary="Read refund review reservations")
     public PageResponse<RenewalOperationResponse.Event> refunds(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"refunds");}
     private PageResponse<RenewalOperationResponse.Event> timeline(UUID id,MultiValueMap<String,String> query,String kind){var q=RenewalOperationQuery.parse(query);return service.events(actors.required(),id,MANAGER,kind,q.page(),q.size(),CorrelationIdContext.current());}

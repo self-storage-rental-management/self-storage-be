@@ -32,7 +32,13 @@ class RecoveryTaskReadServiceTests {
         jdbc.execute("create table rentals(id binary(16) primary key,customer_id binary(16),storage_unit_id binary(16))");
         jdbc.execute("create table recovery_tasks(id binary(16) primary key,case_ref varchar(120),rental_id binary(16),facility_id binary(16),status varchar(24),reason varchar(2000),received_at timestamp)");
     }
-    @AfterEach void close() {jdbc.execute("shutdown");}
+    @AfterEach void close() {
+        // SHUTDOWN closes H2 before JdbcTemplate can inspect statement warnings.
+        jdbc.execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
+            try (var statement=connection.createStatement()) { statement.execute("shutdown"); }
+            return null;
+        });
+    }
 
     @Test void queueUsesPersistedTasksAndKeepsFacilityScopeBeforePagination() {
         task(facility,now.minusSeconds(1),"Older");
