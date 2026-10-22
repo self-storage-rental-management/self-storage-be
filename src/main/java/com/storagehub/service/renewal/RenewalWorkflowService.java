@@ -217,33 +217,6 @@ public class RenewalWorkflowService {
     public record PreparedPayment(Renewal renewal,RenewalWorkflow workflow,RenewalAcceptedRevision revision,
         RenewalQuoteResponse.Terms terms,Instant paymentDeadline) {}
 
-    /** Retained for package-level historical migration tests only; no Manager API exposes this command after Q17. */
-    RenewalResponse decision(ActorPrincipal a,UUID id,RenewalCommands.Decision body,String key){
-        RenewalReadService.authorize(a,true,true);var n=reads.findForDecision(a,id);RenewalReadService.requireScope(a,n.getRental().getFacility().getId(),FacilityScopeLevel.MANAGE);
-        var user=lockActor(a);var r=store.lockRental(n.getRental().getId());em.refresh(r);
-        RenewalReadService.requireScope(a,r.getFacility().getId(),FacilityScopeLevel.MANAGE);
-        var replay=store.replay(user,"decision",key,id,body);if(replay.isPresent())return decode(replay.get().dataJson(),RenewalResponse.class);
-        em.refresh(n);if(n.getStatus()!=RenewalStatus.pending)throw ApiExceptions.conflict("Only legacy pending Renewal may use the historical decision command");var wf=store.lockWorkflow(id,body.expectedVersion());Instant now=now();var before=Map.of("status",n.getStatus());
-        if(body.decision()==RenewalCommands.DecisionType.REJECT){
-            if(body.reason()==null||body.reason().isBlank())throw ApiExceptions.validation("REJECT requires reason",null);
-            n.setStatus(RenewalStatus.rejected);wf.reviewed(user,now,body.reason(),null,null);store.releaseSlot(wf);
-        }else{
-            var g=gate(r,now);var accepted=decode(wf.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);requireSnapshot(r,accepted);
-            com.storagehub.service.ledger.FinancialContractSpecifications.accepted(wf.getAcceptedRevision(),accepted);
-            requireCurrentTerms(r,g,accepted);
-            var f=finance.getIfAvailable();if(f==null||!f.consistentThroughApproval())throw deferred("Consistent financial source missing");var state=f.read(r).orElseThrow(()->deferred("Financial state UNKNOWN"));
-            if(state.checkedAt()==null||state.checkedAt().isAfter(now)||state.dueObligations()==null)throw deferred("Financial state incomplete");
-            if(state.unresolvedDispute()||!state.dueObligations().isEmpty())throw ApiExceptions.conflict("Due obligations or dispute block approval");
-            var h=holds.getIfAvailable();if(h==null||!h.participatesInTransaction())throw deferred("Atomic shared extension hold unavailable");
-            var lifecycle=lifecycles.getIfAvailable();if(lifecycle==null||!lifecycle.ready(r))throw deferred("Approval expiry/payment/hold lifecycle unavailable");
-            Instant deadline=min(now.plus(RENEWAL_PAYMENT_WINDOW),g.eligibility.recoveryCutoff());
-            UUID hold=h.acquire(r,id,accepted.extensionStartDate(),accepted.extensionEndExclusive(),deadline);
-            if(hold==null)throw deferred("Shared hold returned no authoritative reference");
-            n.setStatus(RenewalStatus.approved);wf.reviewed(user,now,body.reason(),deadline,hold);
-            var writer=depositWriters.getIfAvailable();if(writer!=null)writer.approved(wf,accepted);
-        }
-        return finish(user,"decision",key,id,body,n,200,before);
-    }
     private RenewalResponse finish(User user,String operation,String key,UUID resource,Object payload,Renewal n,int status,Object before){
         em.flush();var result=project(n);audit.recordMutation(user,"renewal_"+operation,"Renewal",n.getId(),n.getRental().getFacility().getId(),before,Map.of("result",result,"command",payload));
         store.remember(user,operation,key,resource,payload,status,result);
