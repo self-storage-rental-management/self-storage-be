@@ -196,33 +196,33 @@ class CheckInHandoverServiceTests {
 
         assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), request))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("verification note");
+            .hasMessageContaining("identity does not match");
         assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
     }
 
     @Test
-    void acceptsMismatchedIdentityWhenVerificationNoteIsRecorded() {
+    void rejectsMismatchedIdentityEvenWhenVerificationNoteIsRecorded() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(true);
 
-        var response = service.complete(
-            actor, checkIn.getId(), completionRequest("079203009999", "Tên trên giấy tờ không trùng với hồ sơ, đã ghi nhận để kiểm tra lại")
-        );
-
-        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.completed);
-        assertThat(response.handover().identityDocumentNumber()).isEqualTo("079203009999");
-        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("079203009988");
+        assertThatThrownBy(() -> service.complete(
+            actor, checkIn.getId(), completionRequest("079203009999", "Tên trên giấy tờ không trùng với hồ sơ")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
     }
 
     @Test
-    void populatesLegacyReservationIdentityFromVerifiedCheckInDocument() {
+    void rejectsLegacyReservationWithoutDeclaredIdentity() {
         reservation.setIdentityDocumentNumber(null);
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(true);
 
-        service.complete(actor, checkIn.getId(), validCompletionRequest());
-
-        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("079203009988");
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
     }
 
     @Test
