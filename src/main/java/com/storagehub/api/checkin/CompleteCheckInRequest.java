@@ -11,10 +11,8 @@ import java.util.List;
 
 public record CompleteCheckInRequest(
     @NotNull @Valid CheckInChecklist checklist,
-    @NotBlank
-    @Size(min = 9, max = 30)
-    @Pattern(regexp = "^[0-9A-Za-z][0-9A-Za-z .-]{8,29}$", message = "identityDocumentNumber contains unsupported characters")
-    String identityDocumentNumber,
+    @NotBlank @Size(max = 30) String identityDocumentNumber,
+    @Size(max = 1000) String identityVerificationNote,
     @NotNull @Valid CheckInMeasurements actualMeasurements,
     @Size(max = 1000) String varianceReason,
     @NotBlank @Size(max = 1000) String initialUnitCondition,
