@@ -3,6 +3,7 @@ package com.storagehub.api.reservation;
 import com.storagehub.domain.model.GoodsCategory;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
@@ -13,7 +14,7 @@ public class GoodsItemRequest {
     @Size(max = 160) private String customGoodsName;
     @Size(max = 120) private String materialName;
     @Size(max = 120) private String customMaterial;
-    @Size(max = 1000) private String description;
+    @NotBlank @Size(max = 1000) private String description;
     @Size(max = 1000) private String customerNote;
     @Min(1) private int quantity;
     @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal lengthCm;

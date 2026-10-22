@@ -20,12 +20,19 @@ public class CreateReservationRequest {
     @Pattern(regexp = "^[0-9A-Za-z][0-9A-Za-z .-]{8,29}$", message = "identityDocumentNumber contains unsupported characters")
     private String identityDocumentNumber;
 
+    @NotBlank
     @Size(max = 40)
+    @Pattern(
+        regexp = "^(?=(?:\\D*\\d){9,15}\\D*$)\\+?[0-9][0-9 .()-]*$",
+        message = "customerPhone must contain 9 to 15 digits and use a supported format"
+    )
     private String customerPhone;
 
+    @NotBlank
     @Size(max = 500)
     private String customerAddress;
 
+    @NotBlank
     @Size(max = 500)
     private String goodsCondition;
 
@@ -34,7 +41,7 @@ public class CreateReservationRequest {
 
     @NotEmpty
     @Valid
-    private List<GoodsItemRequest> goodsItems;
+    private List<@NotNull @Valid GoodsItemRequest> goodsItems;
 
     private Instant appointmentAt;
 

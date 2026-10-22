@@ -129,12 +129,20 @@ public class VnpayService {
         Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         requirePayable(reservation);
-        Payment alreadyPaid = paymentRepository
+        Payment latestPayment = paymentRepository
             .findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(reservationId, PaymentType.RESERVATION_DEPOSIT)
-            .filter(value -> value.getStatus() == PaymentStatus.PAID)
             .orElse(null);
+        Payment alreadyPaid = latestPayment != null && latestPayment.getStatus() == PaymentStatus.PAID
+            ? latestPayment : null;
         if (alreadyPaid != null) {
             throw ApiExceptions.conflict("Reservation deposit is already paid");
+        }
+        if (latestPayment != null && latestPayment.getStatus() == PaymentStatus.PENDING) {
+            if (latestPayment.getInitiatedBy() == null
+                || !latestPayment.getInitiatedBy().getId().equals(actor.userId())) {
+                throw ApiExceptions.conflict("Reservation already has a pending payment");
+            }
+            return paymentUrl(latestPayment, clientIp);
         }
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
@@ -246,7 +254,7 @@ public class VnpayService {
         UUID reservationId=payment.getReservation()==null?null:payment.getReservation().getId();
         UUID renewalId=payment.getRenewal()==null?null:payment.getRenewal().getId();
         boolean renewalPayment=renewalId!=null;
-        if (renewalPayment && !properties.getTmnCode().equals(query.get("vnp_TmnCode")))
+        if (!properties.getTmnCode().equals(query.get("vnp_TmnCode")))
             return new CallbackResult("97", "Invalid merchant", payment.getId(), null, renewalId, false, false);
         long receivedAmount;
         try {
@@ -293,7 +301,7 @@ public class VnpayService {
         Reservation reservation = payment.getReservation();
         if (success) {
             Instant gatewayPaidAt = parseGatewayPayDate(payment.getGatewayPayDate());
-            if (gatewayPaidAt == null || (renewalPayment && gatewayPaidAt.isAfter(Instant.now()))) {
+            if (gatewayPaidAt == null || gatewayPaidAt.isAfter(Instant.now())) {
                 paymentRepository.saveAndFlush(payment);
                 return new CallbackResult("04", "Invalid payment date", payment.getId(), reservationId, renewalId, false, false);
             }

@@ -209,8 +209,18 @@ class VnpayProvenanceCallbackTests {
         assertThat(p.getStatus()).isEqualTo(PaymentStatus.FAILED);
         verify(notifications, times(1)).createNotification(any(), any(), any(), any(), any()); noProof();
     }
-    @Test void mismatchedMerchantDoesNotCertifyCredit() throws Exception {
-        fixture(); service.processCallback(callback(Map.of("vnp_TmnCode", "OTHER_MERCHANT"))); noProof();
+    @Test void mismatchedMerchantCannotChangeReservationDepositState() throws Exception {
+        var payment=fixture();var result=service.processCallback(callback(Map.of("vnp_TmnCode", "OTHER_MERCHANT")));
+        assertThat(result.rspCode()).isEqualTo("97");
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PENDING);
+        assertThat(payment.getReservation().getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
+        verify(payments,never()).saveAndFlush(any());noProof();
+    }
+    @Test void futureGatewayPaymentDateCannotConfirmReservationDeposit() throws Exception {
+        var payment=fixture();var result=service.processCallback(callback(Map.of("vnp_PayDate","20990101080000")));
+        assertThat(result.rspCode()).isEqualTo("04");
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PENDING);
+        assertThat(payment.getReservation().getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);noProof();
     }
     @Test void missingTransactionNumberDoesNotCertifyCredit() throws Exception {
         fixture(); service.processCallback(callback(Map.of("vnp_TransactionNo", ""))); noProof();

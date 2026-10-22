@@ -25,6 +25,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 class RenewalPaymentIntentTests {
     PaymentRepository payments=mock(PaymentRepository.class);UserRepository users=mock(UserRepository.class);
+    ReservationRepository reservations=mock(ReservationRepository.class);
+    ReservationPricingSnapshotRepository snapshots=mock(ReservationPricingSnapshotRepository.class);
     RenewalWorkflowService renewal=mock(RenewalWorkflowService.class);VnpayService gateway;
     UUID renewalId=UUID.randomUUID();User user=id(new User());Renewal n=id(new Renewal());
     VnpayProperties config=new VnpayProperties();
@@ -34,8 +36,8 @@ class RenewalPaymentIntentTests {
     @BeforeEach void setup() {
         config.setEnabled(true);config.setTmnCode("TEST");config.setHashSecret("test-only");
         var beans=new StaticListableBeanFactory();beans.addBean("settlement",mock(RenewalVnpaySettlementService.class));
-        gateway=new VnpayService(config,payments,mock(PaymentComplaintRepository.class),mock(ReservationRepository.class),
-            mock(ReservationPricingSnapshotRepository.class),users,mock(AdminAuthorizationService.class),mock(AuditLogService.class),
+        gateway=new VnpayService(config,payments,mock(PaymentComplaintRepository.class),reservations,
+            snapshots,users,mock(AdminAuthorizationService.class),mock(AuditLogService.class),
             mock(NotificationService.class),new ObjectMapper(),renewal,beans.getBeanProvider(RenewalVnpaySettlementService.class));
         actor=new ActorPrincipal(user.getId(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());
         ReflectionTestUtils.setField(n,"id",renewalId);var rental=id(new Rental());rental.setCustomer(user);rental.setFacility(id(new Facility()));n.setRental(rental);
@@ -46,6 +48,22 @@ class RenewalPaymentIntentTests {
         when(users.findById(user.getId())).thenReturn(Optional.of(user));when(payments.findByIdempotencyKey(any())).thenReturn(Optional.empty());
         when(payments.findAllByRenewal_IdAndStatusIn(any(),any())).thenReturn(List.of());
         when(payments.saveAndFlush(any())).thenAnswer(c->{Payment p=c.getArgument(0);if(p.getId()==null)id(p);return p;});
+    }
+    @Test void reservationReusesItsPendingDepositIntentWhenClientUsesANewKey() {
+        var reservation=id(new Reservation());reservation.setReservationCode("TEST-RESERVATION");
+        reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);reservation.setPaymentExpiresAt(deadline);
+        var pending=id(new Payment());pending.setReservation(reservation);pending.setInitiatedBy(user);
+        pending.setAmount(new BigDecimal("20"));pending.setCurrency("VND");pending.setPurpose(PaymentType.RESERVATION_DEPOSIT);
+        pending.setStatus(PaymentStatus.PENDING);pending.setGatewayIntentId("existing-reservation-intent");
+        when(reservations.findOwnedByIdForUpdate(reservation.getId(),user.getId())).thenReturn(Optional.of(reservation));
+        when(payments.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(reservation.getId(),PaymentType.RESERVATION_DEPOSIT))
+            .thenReturn(Optional.of(pending));
+
+        var response=gateway.createPaymentUrl(actor,reservation.getId(),"new-client-key","127.0.0.1");
+
+        assertThat(response.paymentId()).isEqualTo(pending.getId());
+        assertThat(response.paymentUrl()).contains("existing-reservation-intent");
+        verify(payments,never()).saveAndFlush(any(Payment.class));
     }
     @Test void intentUsesAcceptedServerQuoteAndBindsFullRentRevisionDeadline() {
         var response=gateway.createRenewalPaymentUrl(actor,renewalId,"stable-key","127.0.0.1");

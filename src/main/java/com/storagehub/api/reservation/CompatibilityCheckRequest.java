@@ -22,12 +22,13 @@ public class CompatibilityCheckRequest {
     @NotNull
     private LocalDate endDate;
 
+    @jakarta.validation.constraints.NotBlank
     @Size(max = 500)
     private String goodsCondition;
 
     @NotEmpty
     @Valid
-    private List<GoodsItemRequest> goodsItems;
+    private List<@NotNull @Valid GoodsItemRequest> goodsItems;
 
     public CompatibilityCheckRequest() {
     }

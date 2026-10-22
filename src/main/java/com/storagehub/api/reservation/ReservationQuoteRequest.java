@@ -27,12 +27,13 @@ public class ReservationQuoteRequest {
     @NotNull
     private LocalDate endDate;
 
+    @NotBlank
     @Size(max = 500)
     private String goodsCondition;
 
     @NotEmpty
     @Valid
-    private List<GoodsItemRequest> goodsItems;
+    private List<@NotNull @Valid GoodsItemRequest> goodsItems;
 
     private String voucherCode;
 
