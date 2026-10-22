@@ -1,5 +1,7 @@
 package com.storagehub.service.ledger;
 
+import com.storagehub.time.BusinessTime;
+
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.service.rental.period.RentalPeriodResolver;
@@ -48,7 +50,7 @@ public class RenewalOverdueFeeService {
     }
     private Daily daily(Rental rental,Instant now) {
         var period=periods.require(rental);
-        var published=policies.read(rental.getFacility().getId(),now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate())
+        var published=policies.read(rental.getFacility().getId(),now.atZone(BusinessTime.ZONE).toLocalDate())
             .filter(p->p.policy().term()!=null).orElseThrow(()->ApiExceptions.conflict("DEFERRED_SOURCE: Overdue fee timezone policy missing"));
         ZoneId zone=ZoneId.of(published.policy().term().timezone());LocalDate today=now.atZone(zone).toLocalDate();
         long days=Math.max(0,ChronoUnit.DAYS.between(period.lastPermittedDate(),today));

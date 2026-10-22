@@ -1,5 +1,7 @@
 package com.storagehub.service.renewal.operations;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.renewal.*;
 import com.storagehub.api.renewal.RenewalOperationCommands.*;
@@ -342,7 +344,7 @@ public class RenewalOperationService {
         var pageable=PageRequest.of(page,size,Sort.by("appointmentStart").and(Sort.by("id")));if(ids.isEmpty())return PageResponse.from(Page.empty(pageable),correlation);
         String filter=" where s.appointmentRef is not null and s.id in :ids and s.renewal.rental.facility.id in :facilities"+(facilityId==null?"":" and s.renewal.rental.facility.id=:facility")+(phase==null?"":" and s.phase=:phase")+(date==null?"":" and s.appointmentStart>=:start and s.appointmentStart<:end");
         var query=em.createQuery("select s from RenewalOperationState s"+filter+" order by s.appointmentStart,s.id",RenewalOperationState.class);var count=em.createQuery("select count(s) from RenewalOperationState s"+filter,Long.class);
-        for(var q:List.of(query,count)){q.setParameter("ids",ids);q.setParameter("facilities",scopeIds);if(facilityId!=null)q.setParameter("facility",facilityId);if(phase!=null)q.setParameter("phase",RenewalOperationState.Phase.valueOf(phase));if(date!=null){var zone=ZoneId.of("Asia/Ho_Chi_Minh");q.setParameter("start",date.atStartOfDay(zone).toInstant());q.setParameter("end",date.plusDays(1).atStartOfDay(zone).toInstant());}}
+        for(var q:List.of(query,count)){q.setParameter("ids",ids);q.setParameter("facilities",scopeIds);if(facilityId!=null)q.setParameter("facility",facilityId);if(phase!=null)q.setParameter("phase",RenewalOperationState.Phase.valueOf(phase));if(date!=null){var zone=BusinessTime.ZONE;q.setParameter("start",date.atStartOfDay(zone).toInstant());q.setParameter("end",date.plusDays(1).atStartOfDay(zone).toInstant());}}
         var rows=query.setFirstResult(page*size).setMaxResults(size).getResultList().stream().map(s->{auth.require(actor,s.getRenewal(),Capability.READ);return projection(s.getRenewal());}).toList();return PageResponse.from(new PageImpl<>(rows,pageable,count.getSingleResult()),correlation);
     }
     @Transactional(readOnly=true)
