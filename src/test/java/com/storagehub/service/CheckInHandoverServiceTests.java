@@ -203,7 +203,7 @@ class CheckInHandoverServiceTests {
     @Test
     void rejectsMismatchedIdentityEvenWhenVerificationNoteIsRecorded() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
-        mockCompletionChecks(true);
+        mockCompletionChecks(false);
 
         assertThatThrownBy(() -> service.complete(
             actor, checkIn.getId(), completionRequest("079203009999", "Tên trên giấy tờ không trùng với hồ sơ")
@@ -217,7 +217,7 @@ class CheckInHandoverServiceTests {
     void rejectsLegacyReservationWithoutDeclaredIdentity() {
         reservation.setIdentityDocumentNumber(null);
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
-        mockCompletionChecks(true);
+        mockCompletionChecks(false);
 
         assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
             .isInstanceOf(ApiException.class)
