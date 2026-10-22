@@ -1,0 +1,26 @@
+-- Migration 3: Create damage_incidents table
+CREATE TABLE damage_incidents (
+    id BINARY(16) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL,
+    incident_code VARCHAR(32) NOT NULL,
+    facility_id BINARY(16) NOT NULL,
+    storage_unit_id BINARY(16) NULL,
+    cause VARCHAR(32) NOT NULL,
+    severity VARCHAR(16) NOT NULL,
+    description TEXT NOT NULL,
+    occurred_at TIMESTAMP(6) NOT NULL,
+    reported_at TIMESTAMP(6) NOT NULL,
+    reported_by BINARY(16) NOT NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'REPORTED',
+    resolution_notes TEXT NULL,
+    evidence_photos_json TEXT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uk_damage_incidents_code UNIQUE (incident_code),
+    CONSTRAINT fk_damage_incidents_facility FOREIGN KEY (facility_id) REFERENCES facilities(id),
+    CONSTRAINT fk_damage_incidents_unit FOREIGN KEY (storage_unit_id) REFERENCES storage_units(id),
+    CONSTRAINT fk_damage_incidents_reporter FOREIGN KEY (reported_by) REFERENCES users(id),
+    CONSTRAINT chk_damage_cause CHECK (cause IN ('NATURE', 'HUMAN', 'WEAR_AND_TEAR', 'UNKNOWN')),
+    CONSTRAINT chk_damage_severity CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    CONSTRAINT chk_damage_status CHECK (status IN ('REPORTED', 'INVESTIGATING', 'CONFIRMED', 'RESOLVED', 'CLOSED'))
+) ENGINE=InnoDB;

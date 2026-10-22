@@ -39,7 +39,7 @@ build/
 /application-local.properties
 src/main/resources/application-local.properties
 src/main/resources/application-local.yml
-.local/vnpay.json
+/.local/
 start-dev.*
 start-all.*
 uploads/

@@ -6,7 +6,6 @@ import com.storagehub.security.ActorContext;
 import com.storagehub.service.AdminSettingsService;
 import jakarta.validation.Valid;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,11 +15,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/admin/settings")
-@RequiredArgsConstructor
 public class AdminSettingsController {
 
     private final ActorContext actorContext;
     private final AdminSettingsService adminSettingsService;
+
+    public AdminSettingsController(ActorContext actorContext, AdminSettingsService adminSettingsService) {
+        this.actorContext = actorContext;
+        this.adminSettingsService = adminSettingsService;
+    }
 
     @GetMapping
     public ApiResponse<List<AdminSettingResponse>> list() {

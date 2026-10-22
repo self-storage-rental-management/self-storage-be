@@ -1,5 +1,6 @@
 package com.storagehub.api.auth;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -24,4 +25,10 @@ public record UpdateProfileRequest(
     ) String emergencyContactPhone,
     @Size(max = 500_000) String avatarUrl
 ) {
+    @AssertTrue(message = "emergency contact name and phone must be provided together")
+    public boolean isEmergencyContactComplete() {
+        boolean hasName = emergencyContactName != null && !emergencyContactName.isBlank();
+        boolean hasPhone = emergencyContactPhone != null && !emergencyContactPhone.isBlank();
+        return hasName == hasPhone;
+    }
 }
