@@ -13,18 +13,28 @@ import com.storagehub.security.ActorPrincipal;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class AdminSettingsService {
 
     private final SystemSettingRepository repository;
     private final AdminAuthorizationService authorizationService;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+
+    public AdminSettingsService(
+        SystemSettingRepository repository,
+        AdminAuthorizationService authorizationService,
+        AuditLogService auditLogService,
+        ObjectMapper objectMapper
+    ) {
+        this.repository = repository;
+        this.authorizationService = authorizationService;
+        this.auditLogService = auditLogService;
+        this.objectMapper = objectMapper;
+    }
 
     @Transactional(readOnly = true)
     public List<AdminSettingResponse> list(ActorPrincipal actor) {

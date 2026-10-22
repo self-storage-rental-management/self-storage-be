@@ -5,6 +5,7 @@ public enum NotificationType {
     PAYMENT,
     CHECKIN,
     RETURN,
+    RENEWAL,
     OVERDUE,
     SUPPORT,
     SYSTEM

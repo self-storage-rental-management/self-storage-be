@@ -11,12 +11,14 @@ import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Reservation;
+import com.storagehub.domain.model.ReservationCodeSequence;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.ReservationCodeSequenceRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationQuoteRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -32,17 +34,17 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.storagehub.domain.repo.DiscountCodeRepository;
+
 @Service
-@RequiredArgsConstructor
 public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
-    private static final BigDecimal RESERVATION_DEPOSIT_RATE = new BigDecimal("0.40");
+    private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
@@ -51,6 +53,53 @@ public class ReservationCreationService {
     private final ReservationCompatibilityService compatibilityService;
     private final AuditLogService auditLogService;
     private final ReservationCapacityService capacityService;
+    private final ReservationCodeSequenceRepository reservationCodeSequenceRepository;
+    private final DiscountCodeRepository discountCodeRepository;
+    private final DiscountCodeService discountCodeService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ReservationCreationService(
+        ReservationRepository reservationRepository,
+        ReservationQuoteRepository quoteRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        RentalPackagePolicyRepository policyRepository,
+        ReservationCompatibilityService compatibilityService,
+        AuditLogService auditLogService,
+        ReservationCapacityService capacityService,
+        ReservationCodeSequenceRepository reservationCodeSequenceRepository,
+        DiscountCodeRepository discountCodeRepository,
+        DiscountCodeService discountCodeService
+    ) {
+        this.reservationRepository = reservationRepository;
+        this.quoteRepository = quoteRepository;
+        this.goodsItemRepository = goodsItemRepository;
+        this.snapshotRepository = snapshotRepository;
+        this.policyRepository = policyRepository;
+        this.compatibilityService = compatibilityService;
+        this.auditLogService = auditLogService;
+        this.capacityService = capacityService;
+        this.reservationCodeSequenceRepository = reservationCodeSequenceRepository;
+        this.discountCodeRepository = discountCodeRepository;
+        this.discountCodeService = discountCodeService;
+    }
+
+    public ReservationCreationService(
+        ReservationRepository reservationRepository,
+        ReservationQuoteRepository quoteRepository,
+        ReservationGoodsItemRepository goodsItemRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,
+        RentalPackagePolicyRepository policyRepository,
+        ReservationCompatibilityService compatibilityService,
+        AuditLogService auditLogService,
+        ReservationCapacityService capacityService
+    ) {
+        this(
+            reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
+            policyRepository, compatibilityService, auditLogService, capacityService, null,
+            null, null
+        );
+    }
 
     @Transactional
     public ReservationResponse create(ActorPrincipal actor, CreateReservationRequest request,
@@ -103,6 +152,10 @@ public class ReservationCreationService {
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
         reservation.setIdentityDocumentNumber(clean(request.getIdentityDocumentNumber()));
+        reservation.setCustomerPhone(clean(request.getCustomerPhone()) != null
+            ? clean(request.getCustomerPhone()) : clean(quote.getCustomer().getPhone()));
+        reservation.setCustomerAddress(clean(request.getCustomerAddress()) != null
+            ? clean(request.getCustomerAddress()) : clean(quote.getCustomer().getPermanentAddress()));
         reservation.setIdempotencyKey(normalizedKey);
         reservation.setRequestFingerprint(requestFingerprint);
         reservation.setFacility(quote.getFacility());
@@ -122,6 +175,7 @@ public class ReservationCreationService {
                 "appointmentAt must be within the permitted seven-day check-in window", null
             );
         }
+        FacilityAppointmentHours.validate(request.getAppointmentAt(), quote.getFacility().getAccessHours());
         java.time.LocalDate rentalStartDate = checkInWindow.availableAt()
             .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         reservation.setStartDate(rentalStartDate);
@@ -143,6 +197,15 @@ public class ReservationCreationService {
         }
         goodsItemRepository.saveAll(goodsItems);
 
+        if (discountCodeService != null && quote.getVoucherCode() != null && !quote.getVoucherCode().isBlank()) {
+            if (discountCodeRepository != null) {
+                var discountOpt = discountCodeRepository.findByCodeIgnoreCase(quote.getVoucherCode());
+                if (discountOpt.isPresent()) {
+                    discountCodeService.redeemVoucher(discountOpt.get().getId());
+                }
+            }
+        }
+
         ReservationPricingSnapshot snapshot = toSnapshot(saved, quote);
         ReservationPricingSnapshot savedSnapshot = snapshotRepository.saveAndFlush(snapshot);
         ReservationResponse response = toResponse(saved, savedSnapshot);
@@ -163,9 +226,15 @@ public class ReservationCreationService {
         BigDecimal currentMonthlyPrice = money(quote.getUnitType().getMonthlyPrice());
         BigDecimal subtotal = money(currentMonthlyPrice.multiply(BigDecimal.valueOf(quote.getRentalMonths())));
         BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
-        BigDecimal totalAfterDiscount = money(subtotal.subtract(discountAmount));
+        BigDecimal baseEligible = money(subtotal.subtract(discountAmount));
+        BigDecimal voucherDiscountAmount = quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO;
+        BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
         BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
-        BigDecimal securityDeposit = currentMonthlyPrice;
+        BigDecimal securityDeposit = money(
+            (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
+                ? currentMonthlyPrice
+                : quote.getUnitType().getSecurityDepositAmount()
+        );
 
         boolean policyInvalid = !policy.isActive()
             || !policy.getPolicyVersion().equals(quote.getPolicyVersion())
@@ -215,6 +284,14 @@ public class ReservationCreationService {
         snapshot.setGrossRentalAmount(quote.getSubtotal());
         snapshot.setDiscountRate(quote.getDiscountRate());
         snapshot.setDiscountAmount(quote.getDiscountAmount());
+        snapshot.setVoucherCode(quote.getVoucherCode());
+        if (discountCodeRepository != null && quote.getVoucherCode() != null && !quote.getVoucherCode().isBlank()) {
+            discountCodeRepository.findByCodeIgnoreCase(quote.getVoucherCode()).ifPresent(discount -> {
+                snapshot.setVoucherDiscountType(discount.getDiscountType());
+                snapshot.setVoucherDiscountValue(discount.getDiscountValue());
+            });
+        }
+        snapshot.setVoucherDiscountAmount(quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO);
         snapshot.setNetRentalAmount(quote.getTotalAfterDiscount());
         snapshot.setReservationDepositAmount(quote.getReservationDepositAmount());
         snapshot.setSecurityDepositAmount(quote.getSecurityDepositAmount());
@@ -239,6 +316,15 @@ public class ReservationCreationService {
             snapshot.getPricingPackageCode(), snapshot.getRentalMonths(), snapshot.getGrossRentalAmount(),
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
+        response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setVoucherCode(snapshot.getVoucherCode());
+        response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
+        response.setCustomerName(reservation.getCustomer().getFullName());
+        response.setCustomerEmail(reservation.getCustomer().getEmail());
+        response.setCustomerPhone(reservation.getCustomerPhone() != null
+            ? reservation.getCustomerPhone() : reservation.getCustomer().getPhone());
+        response.setCustomerAddress(reservation.getCustomerAddress() != null
+            ? reservation.getCustomerAddress() : reservation.getCustomer().getPermanentAddress());
         response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         return response;
     }
@@ -251,8 +337,18 @@ public class ReservationCreationService {
     }
 
     private String generateReservationCode() {
-        return "RSV-" + UUID.randomUUID().toString().replace("-", "")
-            .substring(0, 12).toUpperCase(Locale.ROOT);
+        if (reservationCodeSequenceRepository == null) {
+            return "RSV-000001";
+        }
+        ReservationCodeSequence sequence = reservationCodeSequenceRepository.findPrimaryForUpdate()
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation code sequence is not configured"));
+        long value = sequence.getNextValue();
+        if (value > 999999) {
+            throw ApiExceptions.conflict("Reservation code sequence has reached its limit");
+        }
+        sequence.setNextValue(value + 1);
+        reservationCodeSequenceRepository.save(sequence);
+        return String.format(Locale.ROOT, "RSV-%06d", value);
     }
 
     private BigDecimal money(BigDecimal value) {
@@ -267,6 +363,8 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, request.getQuoteId());
         append(canonical, cleanValue(request.getIdentityDocumentNumber()));
+        append(canonical, cleanValue(request.getCustomerPhone()));
+        append(canonical, cleanValue(request.getCustomerAddress()));
         append(canonical, cleanValue(request.getGoodsCondition()));
         append(canonical, cleanValue(request.getNotes()));
         if (request.getAppointmentAt() != null) {
@@ -297,6 +395,8 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, reservation.getSourceQuote().getId());
         append(canonical, cleanValue(reservation.getIdentityDocumentNumber()));
+        append(canonical, cleanValue(reservation.getCustomerPhone()));
+        append(canonical, cleanValue(reservation.getCustomerAddress()));
         append(canonical, cleanValue(reservation.getGoodsCondition()));
         append(canonical, cleanValue(reservation.getNotes()));
         if (reservation.getAppointmentAt() != null) {

@@ -64,6 +64,13 @@ public class PaymentProvenance {
         try{return proof.size()==1&&fileId.toString().equals(mapper.readTree(proof.getFirst().getAfterStateJson()).path("receiptFileId").asText());}
         catch(Exception invalid){return false;}
     }
+    public UUID manualReceiptFileId(Payment payment) {
+        if(payment==null||classify(payment)!=Classification.VERIFIED)return null;
+        var proof=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",payment.getId(),ManualRentalPaymentService.AUDIT_ACTION);
+        if(proof.size()!=1)return null;
+        try{return UUID.fromString(mapper.readTree(proof.getFirst().getAfterStateJson()).path("receiptFileId").asText());}
+        catch(Exception invalid){return null;}
+    }
     private Classification classifyManualBalance(Payment p) {
         if(p.getStatus()!=PaymentStatus.PAID||p.getAmount()==null||p.getAmount().signum()<=0||!"VND".equals(p.getCurrency())
             ||p.getPaidAt()==null||p.getInitiatedBy()==null||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0
@@ -91,7 +98,7 @@ public class PaymentProvenance {
         if(p.getRenewal()==null||p.getRenewal().getRental()==null||p.getRenewal().getRental().getCustomer()==null
             ||p.getRenewalRevision()==null||p.getPaymentDeadline()==null||p.getStatus()!=PaymentStatus.PAID
             ||(p.getFailureCode()!=null&&!"RENEWAL_PAYMENT_RECONCILIATION_REQUIRED".equals(p.getFailureCode()))
-            ||!"VNPAY".equals(p.getGatewayProvider())||p.getPurpose()!=PaymentType.RENEWAL
+            ||!"VNPAY".equals(p.getGatewayProvider())||!Set.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(p.getPurpose())
             ||!"VND".equals(p.getCurrency())||p.getPaidAt()==null||p.getGatewayTransactionNo()==null
             ||p.getGatewayTransactionNo().isBlank()||!"00".equals(p.getGatewayResponseCode())
             ||!"00".equals(p.getGatewayTransactionStatus())||p.getPaidAt().isAfter(p.getPaymentDeadline()))
