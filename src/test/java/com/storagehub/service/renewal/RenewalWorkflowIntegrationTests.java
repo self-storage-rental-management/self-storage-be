@@ -24,8 +24,10 @@ import org.springframework.context.annotation.*;
 import org.springframework.test.context.ActiveProfiles;
 
 @DataJpaTest @ActiveProfiles("test")
-@Import({RenewalWorkflowService.class,RenewalPersistence.class,RenewalReadService.class,AuditLogService.class,RenewalWorkflowIntegrationTests.Sources.class})
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RenewalWorkflowService.class,RenewalPersistence.class,RenewalReadService.class,AuditLogService.class,RenewalWorkflowIntegrationTests.Sources.class})
 class RenewalWorkflowIntegrationTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
     static final Instant NOW=Instant.parse("2026-10-06T00:00:00Z");
     static final UUID PACKAGE=UUID.fromString("00000000-0000-0000-0000-000000000001");
     @TestConfiguration static class Sources {
@@ -117,8 +119,8 @@ class RenewalWorkflowIntegrationTests {
         assertThat(detail.acceptedTerms()).usingRecursiveComparison()
             .withComparatorForType(BigDecimal::compareTo,BigDecimal.class).isEqualTo(q.terms());
         assertThat(detail.acceptedTerms().monthlyPrice()).isEqualByComparingTo("100");
-        assertThat(detail.acceptedTerms().renewalDepositAmount()).isEqualByComparingTo("0");
-        assertThat(detail.acceptedTerms().remainingRentalAmount()).isEqualByComparingTo("100");
+        assertThat(detail.acceptedTerms().renewalDepositAmount()).isEqualByComparingTo("20");
+        assertThat(detail.acceptedTerms().remainingRentalAmount()).isEqualByComparingTo("80");
         assertThat(detail.reviewState()).isEqualTo("AWAITING_CUSTOMER_CONFIRMATION");
     }
     @Test void mismatchedPersistedAmountFailsReadWithoutRepair(){
@@ -306,23 +308,37 @@ class RenewalWorkflowIntegrationTests {
         }
     }
     private ActorPrincipal manager(Rental r){return new ActorPrincipal(r.getCustomer().getId(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(r.getFacility().getId(),FacilityScopeLevel.MANAGE));}
-    @Test void simplePaymentOpensWithoutCalendarRecoveryCoverageOrExtensionHold() {
+    @Test void simplePaymentRequiresReservedFutureAppointmentWithoutLegacyCoverageOrExtensionHold() {
         var simple=mock(com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks.class);
         var writer=mock(com.storagehub.service.ledger.RenewalDepositObligationWriter.class);
-        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("simple",simple);beans.addBean("writer",writer);
+        var calendar=mock(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class);
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("simple",simple);beans.addBean("writer",writer);beans.addBean("calendar",calendar);
         Object old=org.springframework.test.util.ReflectionTestUtils.getField(commands,"localPaymentChecks");
         Object oldWriter=org.springframework.test.util.ReflectionTestUtils.getField(commands,"depositWriters");
+        Object oldCalendar=org.springframework.test.util.ReflectionTestUtils.getField(commands,"calendars");
         try {
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"localPaymentChecks",beans.getBeanProvider(com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks.class));
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",beans.getBeanProvider(com.storagehub.service.ledger.RenewalDepositObligationWriter.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"calendars",beans.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationSources.CalendarSource.class));
             var r=fixture();r.getStorageUnit().setStatus(StorageUnitStatus.occupied);em.flush();
             when(simple.cutoff(any(),any())).thenReturn(NOW.plusSeconds(86400));
             eligibility.unknown=true;finance.unknown=true;
             var actor=customer(r);var q=commands.quote(actor,r.getId(),new RenewalCommands.Quote("TEST"));
             var submitted=commands.submit(actor,r.getId(),new RenewalCommands.Submit(q.id(),null),"simple-submit");
+            assertThatThrownBy(()->commands.prepareVnpayPayment(actor,submitted.id()))
+                .hasMessageContaining("Select a future signing appointment before payment");
+            verifyNoInteractions(writer,calendar);
+            var slot=new com.storagehub.service.renewal.operations.RenewalOperationSources.Slot("TEST",NOW.plusSeconds(3600),NOW.plusSeconds(5400));
+            var state=new com.storagehub.service.renewal.operations.RenewalOperationState(em.find(Renewal.class,submitted.id()));
+            state.awaitingPayment(NOW.plusSeconds(900),NOW.plusSeconds(86400),"TEST","v1");
+            state.appointment(UUID.randomUUID(),slot.start(),slot.end());em.persist(state);em.flush();
+            when(calendar.atomic()).thenReturn(true);
+            when(calendar.slot(any(),eq(slot.start()))).thenReturn(Optional.of(slot));
             var result=commands.prepareVnpayPayment(actor,submitted.id());
             assertThat(result.workflow().getExtensionHoldRef()).isNull();assertThat(result.paymentDeadline()).isAfter(NOW);
-            assertThat(result.terms().renewalDepositAmount()).isZero();
+            assertThat(result.terms().renewalDepositAmount()).isEqualByComparingTo("20");
+            assertThat(result.workflow().getSigningBalanceDueAt()).isEqualTo(slot.end());
+            verify(calendar).reserve(any(),eq(slot),eq(NOW));
             verify(simple).requireKnownFinance(any(),eq(submitted.id()),eq(NOW));
             verify(writer).paymentIntentAvailable(any(),any(),eq(actor.userId()));
             Instant original=result.paymentDeadline();
@@ -330,6 +346,7 @@ class RenewalWorkflowIntegrationTests {
         } finally {
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"localPaymentChecks",old);
             org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositWriters",oldWriter);
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"calendars",oldCalendar);
         }
     }
     // Clearly labeled H2-only fixture; no runtime policy/data seeds.

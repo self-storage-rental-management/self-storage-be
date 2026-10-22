@@ -12,18 +12,24 @@ import java.util.Set;
 import java.util.UUID;
 import java.time.Instant;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class AdminActivityLogService {
 
     private final ActivityLogRepository activityLogRepository;
     private final AdminAuthorizationService authorizationService;
+
+    public AdminActivityLogService(
+        ActivityLogRepository activityLogRepository,
+        AdminAuthorizationService authorizationService
+    ) {
+        this.activityLogRepository = activityLogRepository;
+        this.authorizationService = authorizationService;
+    }
 
     @Transactional(readOnly = true)
     public PageResponse<AdminActivityLogResponse> list(

@@ -48,6 +48,7 @@ class RenewalExceptionProposalTests {
         service=new RenewalOperationService(em,mapper,store,mock(AuditLogService.class),clocks,
             provider(null),policies,calendars,safeties,provider(null),provider(null),provider(null));
         ReflectionTestUtils.setField(service,"assignmentSources",provider(null));
+        ReflectionTestUtils.setField(service,"ledgers",provider(mock(com.storagehub.service.ledger.LedgerStore.class)));
         customer=id(new User());var facility=id(new Facility());var type=id(new UnitType());
         var unit=id(new StorageUnit());unit.setFacility(facility);unit.setUnitType(type);
         var rental=id(new Rental());rental.setCustomer(customer);rental.setFacility(facility);rental.setStorageUnit(unit);
@@ -60,7 +61,9 @@ class RenewalExceptionProposalTests {
         var terms=new RenewalQuoteResponse.Terms(rental.getContractEndDate(),LocalDate.of(2026,10,9),LocalDate.of(2026,11,9),n.getNewEndDate(),
             type.getId(),"TEST",UUID.randomUUID(),"TEST-v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,
             new BigDecimal("100"),new BigDecimal("20"),new BigDecimal("80"),"VND","TEST-policy","TEST-v1",unit.getId(),facility.getId());
-        var quote=id(new RenewalQuote(rental,customer,mapper.writeValueAsString(terms),"TEST-hash",NOW.minusSeconds(1800),NOW.plusSeconds(1800)));
+        String termsJson=mapper.writeValueAsString(terms);
+        String termsHash=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(termsJson.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        var quote=id(new RenewalQuote(rental,customer,termsJson,termsHash,NOW.minusSeconds(1800),null));
         var rev=id(new RenewalAcceptedRevision(n,quote,1,NOW.minusSeconds(1000),"INTERNAL_ACCEPTANCE_NOTE"));
         workflow=new RenewalWorkflow(n,rev);ReflectionTestUtils.setField(workflow,"version",3L);
         workflow.reviewed(customer,NOW.minusSeconds(900),"INTERNAL_MANAGER_REASON",NOW.plusSeconds(300),UUID.randomUUID());

@@ -44,6 +44,19 @@ public class ReservationPricingSnapshot extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal discountAmount = BigDecimal.ZERO;
 
+    @Column(name = "voucher_code", length = 50)
+    private String voucherCode;
+
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @Column(name = "voucher_discount_type", length = 20)
+    private DiscountType voucherDiscountType;
+
+    @Column(name = "voucher_discount_value", precision = 14, scale = 2)
+    private BigDecimal voucherDiscountValue;
+
+    @Column(name = "voucher_discount_amount", nullable = false, precision = 14, scale = 2)
+    private BigDecimal voucherDiscountAmount = BigDecimal.ZERO;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal netRentalAmount;
 

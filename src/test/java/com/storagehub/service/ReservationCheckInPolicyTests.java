@@ -15,9 +15,9 @@ class ReservationCheckInPolicyTests {
     @CsvSource({
         "2026-10-12T02:00,2026-10-14T08:00",
         "2026-10-12T08:00,2026-10-14T08:00",
-        "2026-10-12T09:00,2026-10-14T15:00",
-        "2026-10-12T10:00,2026-10-14T16:00",
-        "2026-10-12T12:00,2026-10-15T08:00",
+        "2026-10-12T09:00,2026-10-14T09:30",
+        "2026-10-12T10:00,2026-10-14T10:30",
+        "2026-10-12T12:00,2026-10-14T12:30",
         "2026-10-12T16:30,2026-10-15T08:00",
         "2026-10-12T17:38,2026-10-15T08:00"
     })
@@ -29,13 +29,13 @@ class ReservationCheckInPolicyTests {
     }
 
     @Test
-    void normalGoodsIncludeSixHoursForPaymentAndOneWorkingDayForAssignment() {
+    void normalGoodsIncludeFifteenMinutesForPaymentAndOneWorkingDayForAssignment() {
         var window = ReservationCheckInPolicy.plannedWindow(
             Instant.parse("2026-10-12T03:00:00Z"), false
         );
 
-        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-13T09:00:00Z"));
-        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-20T09:00:00Z"));
+        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-13T03:30:00Z"));
+        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-19T09:30:00Z"));
     }
 
     @Test
@@ -44,7 +44,7 @@ class ReservationCheckInPolicyTests {
             Instant.parse("2026-10-12T03:00:00Z"), true
         );
 
-        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-14T09:00:00Z"));
+        assertThat(window.availableAt()).isEqualTo(Instant.parse("2026-10-14T03:30:00Z"));
     }
 
     @Test
@@ -82,5 +82,32 @@ class ReservationCheckInPolicyTests {
         assertThat(ReservationCheckInPolicy.staffReviewDueAt(
             Instant.parse("2026-10-12T10:30:00Z")
         )).isEqualTo(Instant.parse("2026-10-13T10:00:00Z"));
+    }
+
+    @Test
+    void availabilityDateIsDayOneAndWeekendAppointmentsRemainAvailable() {
+        var window = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-12T03:00:00Z"), false
+        );
+
+        assertThat(window.deadlineAt()).isEqualTo(Instant.parse("2026-10-19T09:30:00Z"));
+        assertThat(window.contains(Instant.parse("2026-10-17T03:00:00Z"))).isTrue();
+        assertThat(window.contains(Instant.parse("2026-10-19T09:30:00Z"))).isTrue();
+        assertThat(window.contains(Instant.parse("2026-10-20T01:00:00Z"))).isFalse();
+    }
+
+    @Test
+    void calculatesRepresentativeWindowsFromNineteenthOctober2026() {
+        var normalGoods = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-19T03:00:00Z"), false
+        );
+        assertThat(normalGoods.availableAt()).isEqualTo(Instant.parse("2026-10-20T03:30:00Z"));
+        assertThat(normalGoods.deadlineAt()).isEqualTo(Instant.parse("2026-10-26T09:30:00Z"));
+
+        var otherGoods = ReservationCheckInPolicy.plannedWindow(
+            Instant.parse("2026-10-19T03:00:00Z"), true
+        );
+        assertThat(otherGoods.availableAt()).isEqualTo(Instant.parse("2026-10-21T03:30:00Z"));
+        assertThat(otherGoods.deadlineAt()).isEqualTo(Instant.parse("2026-10-27T09:30:00Z"));
     }
 }

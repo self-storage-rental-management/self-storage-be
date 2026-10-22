@@ -99,6 +99,8 @@ class SimulatedPaymentServiceTests {
     @Test
     void successUsesSnapshotAndConfirmsReservation() {
         properties.setSimulationOutcome(PaymentSimulationOutcome.SUCCESS);
+        ReflectionTestUtils.setField(reservation, "createdAt", Instant.parse("2026-10-12T03:00:00Z"));
+        reservation.setGoodsReviewStatus(com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED);
 
         var response = service.pay(actor, reservation.getId(), "sim-success");
 
@@ -108,8 +110,7 @@ class SimulatedPaymentServiceTests {
         assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.CONFIRMED);
         assertThat(reservation.getDepositPaidAt()).isNotNull();
         assertThat(reservation.getStartDate()).isEqualTo(
-            reservation.getDepositPaidAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
-                .toLocalDate().plusDays(1)
+            java.time.LocalDate.of(2026, 10, 13)
         );
         assertThat(reservation.getEndDate()).isEqualTo(reservation.getStartDate().plusMonths(3));
         verify(reservationRepository).saveAndFlush(reservation);

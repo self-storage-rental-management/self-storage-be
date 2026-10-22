@@ -12,15 +12,17 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import lombok.Getter;
-import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
 @Table(name = "rentals")
 @Getter
 @Setter
-@NoArgsConstructor
 public class Rental extends BaseEntity {
+
+    public Rental() {
+        super();
+    }
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false)

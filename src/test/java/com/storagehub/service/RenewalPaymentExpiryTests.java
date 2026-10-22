@@ -23,9 +23,12 @@ class RenewalPaymentExpiryTests {
     @BeforeEach void setup() {
         ReflectionTestUtils.setField(payment,"id",UUID.randomUUID());ReflectionTestUtils.setField(renewal,"id",UUID.randomUUID());
         var rental=new Rental();var facility=new Facility();ReflectionTestUtils.setField(facility,"id",UUID.randomUUID());rental.setFacility(facility);renewal.setRental(rental);renewal.setStatus(RenewalStatus.accepted);
+        var customer=new User();ReflectionTestUtils.setField(customer,"id",UUID.randomUUID());rental.setCustomer(customer);
         payment.setRenewal(renewal);payment.setPurpose(PaymentType.RENEWAL);payment.setPaymentDeadline(Instant.now().minusSeconds(30));
         var beans=new StaticListableBeanFactory();beans.addBean("safety",safety);
-        service=new RenewalPaymentExpiryService(payments,gateway,em,persistence,new ObjectMapper().findAndRegisterModules(),mock(AuditLogService.class),beans.getBeanProvider(RenewalOperationSources.SafetySource.class));
+        beans.addBean("depositWriter",mock(com.storagehub.service.ledger.RenewalDepositObligationWriter.class));
+        service=new RenewalPaymentExpiryService(payments,gateway,em,persistence,new ObjectMapper().findAndRegisterModules(),mock(AuditLogService.class),mock(NotificationService.class),beans.getBeanProvider(RenewalOperationSources.SafetySource.class));
+        ReflectionTestUtils.setField(service,"depositWriters",beans.getBeanProvider(com.storagehub.service.ledger.RenewalDepositObligationWriter.class));
         when(payments.findByStatus(PaymentStatus.PENDING)).thenReturn(List.of(payment));
         when(payments.findByIdForUpdate(payment.getId())).thenReturn(Optional.of(payment));
     }

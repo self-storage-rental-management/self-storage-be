@@ -25,6 +25,7 @@ class FacilityDeletionSafetyTests {
     @Mock NotificationService notifications;
     @Mock UnitTypeChangeRequestRepository changes;
     @Mock UserRepository users;
+    @Mock org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Spy com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
     @InjectMocks FacilityLifecycleService service;
 
@@ -39,11 +40,13 @@ class FacilityDeletionSafetyTests {
         verify(facilities, never()).delete(any());
     }
 
-    @Test void preservesFacilityWithPhysicalUnits() {
-        when(facilities.findById(id)).thenReturn(Optional.of(new Facility()));
-        when(units.countByFacility_Id(id)).thenReturn(1L);
-        assertThatThrownBy(() -> service.deleteFacility(actor, id)).hasMessageContaining("Ngừng hoạt động");
-        verify(facilities, never()).delete(any());
+    @Test void allowsDeletingFacilityWithPhysicalUnitsWhenNoReservations() {
+        Facility facility = new Facility();
+        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        when(reservations.existsByFacility_Id(id)).thenReturn(false);
+        service.deleteFacility(actor, id);
+        verify(facilities).delete(facility);
+        verify(facilities).flush();
     }
 
     @Test void allowsDeletingEmptyFacility() {
@@ -109,6 +112,7 @@ class FacilityDeletionSafetyTests {
         service.updateUnitType(manager(), id, request);
         assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
         assertThat(type.getImageUrl()).isNull();
+        assertThat(type.getDetailImageUrl()).isNull();
         verify(notifications).notifyBusinessOfUnitTypeReview(eq(type), any());
         verify(unitTypes, never()).save(any());
         verify(reservations, never()).existsByUnitType_Id(any());
@@ -139,6 +143,7 @@ class FacilityDeletionSafetyTests {
         assertThat(type.getName()).isEqualTo("Kho M");
         assertThat(type.getDescription()).isEqualTo("Mô tả");
         assertThat(type.getImageUrl()).isEqualTo("/images/customer-units/kho-m.jpg");
+        assertThat(type.getDetailImageUrl()).isEqualTo("/images/customer-units/layout-m.png");
         assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.active);
         assertThat(request.getStatus()).isEqualTo("APPROVED");
         verify(notifications).notifyUnitTypeReviewResult(request);
@@ -232,6 +237,6 @@ class FacilityDeletionSafetyTests {
         var four = new java.math.BigDecimal("4.00");
         return new com.storagehub.api.facility.ManagerUnitTypeRequest("M", "Kho M", "Mô tả", length,
             four, four, four, 4, four, four, four, four, "Xe đẩy", 10, 5,
-            "/images/customer-units/kho-m.jpg", 4, "2", "Khu B");
+            "/images/customer-units/kho-m.jpg", 4, "2", "Khu B", "/images/customer-units/layout-m.png");
     }
 }

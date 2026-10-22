@@ -41,6 +41,27 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     );
 
     @Query("""
+        select distinct u from User u
+        where u.status = :status
+          and exists (
+              select scope from UserFacilityScope scope
+              where scope.user.id = u.id
+                and scope.facility.id = :facilityId
+                and scope.scopeLevel in :scopeLevels
+          )
+        order by u.fullName asc
+        """)
+    List<User> findByFacilityScope(
+        @Param("facilityId") UUID facilityId,
+        @Param("scopeLevels") java.util.Collection<FacilityScopeLevel> scopeLevels,
+        @Param("status") UserStatus status
+    );
+
+    default List<User> findByFacilityScope(UUID facilityId, java.util.Collection<FacilityScopeLevel> scopeLevels) {
+        return findByFacilityScope(facilityId, scopeLevels, UserStatus.ACTIVE);
+    }
+
+    @Query("""
         select assignedRole.code as roleCode, count(distinct u.id) as total
         from User u
         join u.roles assignedRole

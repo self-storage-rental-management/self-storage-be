@@ -59,6 +59,12 @@ public class ReservationQuote extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal discountAmount;
 
+    @Column(name = "voucher_code", length = 50)
+    private String voucherCode;
+
+    @Column(name = "voucher_discount_amount", nullable = false, precision = 14, scale = 2)
+    private BigDecimal voucherDiscountAmount = BigDecimal.ZERO;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal totalAfterDiscount;
 

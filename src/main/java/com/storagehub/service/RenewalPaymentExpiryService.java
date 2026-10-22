@@ -32,11 +32,14 @@ public class RenewalPaymentExpiryService {
     private final RenewalPersistence renewals;
     private final ObjectMapper mapper;
     private final AuditLogService audit;
+    private final NotificationService notifications;
     private final ObjectProvider<RenewalOperationSources.SafetySource> safetySources;
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.renewal-simple-payment.enabled:false}")
     private boolean simplePayment;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<RenewalOperationSources.CalendarSource> signingCalendars;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositObligationWriter> depositWriters;
 
     @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public int reconcileExpiredIntents() {
@@ -44,18 +47,20 @@ public class RenewalPaymentExpiryService {
         var candidates=new ArrayList<Payment>();
         for(PaymentStatus status:UNRESOLVED)candidates.addAll(payments.findByStatus(status));
         candidates.addAll(payments.findByStatus(PaymentStatus.FAILED));
+        candidates.addAll(payments.findByStatus(PaymentStatus.CANCELLED));
         int completed=0;
         for(Payment candidate:candidates) {
-            if(candidate.getRenewal()==null||candidate.getPurpose()!=PaymentType.RENEWAL
+            if(candidate.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(candidate.getPurpose())
                 ||candidate.getPaymentDeadline()==null||candidate.getPaymentDeadline().isAfter(now))continue;
             Payment payment=payments.findByIdForUpdate(candidate.getId()).orElse(null);
-            if(payment==null||payment.getRenewal()==null||payment.getPurpose()!=PaymentType.RENEWAL
+            if(payment==null||payment.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(payment.getPurpose())
                 ||payment.getPaymentDeadline()==null||payment.getPaymentDeadline().isAfter(now))continue;
             if(UNRESOLVED.contains(payment.getStatus())) {
                 VnpayService.ReconciliationOutcome outcome=vnpay.reconcileAtPaymentDeadline(payment);
                 payments.saveAndFlush(payment);
                 if(outcome!=VnpayService.ReconciliationOutcome.FINAL_FAILURE)continue;
-            } else if(payment.getStatus()!=PaymentStatus.FAILED)continue;
+            } else if(payment.getStatus()!=PaymentStatus.FAILED&&payment.getStatus()!=PaymentStatus.CANCELLED)continue;
+            if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT)continue; // A failed later period never expires the signed Renewal.
             if(expireIfSafe(payment.getRenewal(),payment))completed++;
         }
         return completed;
@@ -73,6 +78,11 @@ public class RenewalPaymentExpiryService {
             var safety=safetySources.getIfAvailable();if(safety==null||!safety.atomic())return false;
             safety.release(renewal,workflow.getExtensionHoldRef());holdReleased=true;
         }else if(!simplePayment)return false;
+        if(simplePayment) {
+            var writer=depositWriters.getIfAvailable();
+            if(writer==null)throw com.storagehub.common.api.ApiExceptions.conflict("Cancellation accounting source unavailable");
+            writer.cancelUnpaid(workflow);
+        }
         renewal.setStatus(RenewalStatus.payment_expired);
         var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         boolean newState=state==null;
@@ -92,6 +102,9 @@ public class RenewalPaymentExpiryService {
         catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw new IllegalStateException("Could not persist Renewal payment expiry event",invalid);}
         audit.recordMutation((User)null,"RENEWAL_PAYMENT_EXPIRED","Renewal",renewal.getId(),renewal.getRental().getFacility().getId(),
             Map.of("status",RenewalStatus.accepted),Map.of("status",RenewalStatus.payment_expired,"paymentId",payment.getId()));
+        notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
+            "Yêu cầu thanh toán gia hạn đã hết hạn",
+            "Yêu cầu thanh toán gia hạn cho hồ sơ "+renewal.getRental().getId()+" đã hết hạn và được đóng.",renewal.getId());
         return true;
     }
 }
