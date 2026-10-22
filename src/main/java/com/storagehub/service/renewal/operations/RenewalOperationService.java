@@ -163,9 +163,9 @@ public class RenewalOperationService {
         var c=context(actor,id,Audience.STAFF,Capability.ARRIVAL,key,"d3_arrival",body,body.expectedVersion());var old=replay(c,"d3_arrival",key,body);if(old.isPresent())return old.get();
         var s=signing(c,true);currentAppointment(c,s,body.appointmentRef());
         if(s.getArrivalRef()!=null)throw ApiExceptions.conflict("Arrival already recorded for this appointment");
-        requireUnexpiredAppointment(s);
+        requireAppointmentStart(s);
         evidence(actor,c.renewal(),"ARRIVAL",body.evidenceFileIds());
-        requireUnexpiredAppointment(s);
+        requireAppointmentStart(s);
         var e=event(c,"ARRIVAL",Map.of("appointmentRef",body.appointmentRef(),"evidenceFileIds",body.evidenceFileIds()));s.arrival(e.getId());
         return finish(c,"d3_arrival",key,body,e,201);
     }
@@ -396,10 +396,10 @@ public class RenewalOperationService {
         if(t.renewalDepositAmount()==null||t.renewalDepositAmount().signum()<0||t.remainingRentalAmount()==null||t.remainingRentalAmount().signum()<0||t.renewalDepositAmount().add(t.remainingRentalAmount()).compareTo(t.totalAfterDiscount())!=0||!"VND".equals(t.currency()))throw ApiExceptions.conflict("Accepted period/financial terms inconsistent");
         return t;
     }
-    private void requireUnexpiredAppointment(RenewalOperationState s) {
-        if(s.getAppointmentStart()==null||s.getAppointmentEnd()==null||!s.getAppointmentEnd().isAfter(s.getAppointmentStart()))
-            throw deferred("Appointment period unavailable");
-        if(now().isAfter(s.getAppointmentEnd()))throw ApiExceptions.conflict("Appointment has expired; reschedule or incident review required");
+    private void requireAppointmentStart(RenewalOperationState s) {
+        if(s.getAppointmentStart()==null)throw deferred("Appointment start unavailable");
+        // Calendar slot ends allocate staff capacity; the effective signing deadline governs arrival.
+        beforeOrEqual(now(),s.getEffectiveSigningDeadline());
     }
     private void currentAppointment(Context c,RenewalOperationState s,UUID ref){if(ref==null||!ref.equals(s.getAppointmentRef()))throw ApiExceptions.conflict("Current appointment required");linked(c.renewal(),ref,"APPOINTMENT");}
     private RenewalOperationEvent linked(Renewal n,UUID ref,String kind){var e=ref==null?null:em.find(RenewalOperationEvent.class,ref);if(e==null||!n.getId().equals(e.getRenewal().getId())||!kind.equals(e.getKind()))throw ApiExceptions.notFound("Related event not found");return e;}
