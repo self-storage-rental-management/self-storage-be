@@ -45,6 +45,7 @@ public class UnitTypeQueryService {
         Facility facility = facilityRepository.findById(facilityId)
             .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
         facilityScopeService.assertCanRead(actor, facility.getId());
+        requireCustomerVisibleFacility(actor, facility);
 
         validateDateRange(startDate, endDate);
         UnitTypeStatus effectiveStatus = actor.hasRole(RoleCode.CUSTOMER) ? UnitTypeStatus.active : status;
@@ -67,6 +68,7 @@ public class UnitTypeQueryService {
         UnitType unitType = unitTypeRepository.findById(unitTypeId)
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         facilityScopeService.assertCanRead(actor, unitType.getFacility().getId());
+        requireCustomerVisibleFacility(actor, unitType.getFacility());
         if (actor.hasRole(RoleCode.CUSTOMER) && unitType.getStatus() != UnitTypeStatus.active) {
             throw ApiExceptions.notFound("Unit type was not found");
         }
@@ -141,6 +143,12 @@ public class UnitTypeQueryService {
         }
         if (startDate != null && !endDate.isAfter(startDate)) {
             throw ApiExceptions.validation("endDate must be after startDate", null);
+        }
+    }
+
+    private void requireCustomerVisibleFacility(ActorPrincipal actor, Facility facility) {
+        if (actor.hasRole(RoleCode.CUSTOMER) && facility.getStatus() != FacilityStatus.active) {
+            throw ApiExceptions.notFound("Facility was not found");
         }
     }
 }
