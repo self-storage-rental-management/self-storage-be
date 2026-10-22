@@ -242,6 +242,9 @@ public class CheckInHandoverService {
         if (reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
+        if (!request.checklist().identityVerified()) {
+            throw ApiExceptions.conflict("Customer identity verification is required");
+        }
         UnitAssignment assignment = activeAssignment(reservation.getId());
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
@@ -743,19 +746,8 @@ public class CheckInHandoverService {
             throw ApiExceptions.validation("identityDocumentNumber is required", null);
         }
 
-        if (declaredIdentity == null) {
-            // Legacy reservations were created before the reservation identity column existed.
-            // Save the verified document at the first check-in so subsequent FE reads are populated.
-            reservation.setIdentityDocumentNumber(actualIdentity);
-            return;
-        }
-
-        if (!declaredIdentity.equals(actualIdentity)
-            && (request.identityVerificationNote() == null || request.identityVerificationNote().isBlank())) {
-            throw ApiExceptions.validation(
-                "A verification note is required when the check-in identity differs from the reservation",
-                Map.of("declaredIdentityDocumentNumber", reservation.getIdentityDocumentNumber())
-            );
+        if (declaredIdentity == null || !declaredIdentity.equals(actualIdentity)) {
+            throw ApiExceptions.conflict("Customer identity does not match the reservation");
         }
     }
 
