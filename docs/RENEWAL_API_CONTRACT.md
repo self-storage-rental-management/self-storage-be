@@ -1,5 +1,13 @@
 # Renewal API contract
 
+## Mốc hẹn ký và hạn hoàn tất — 22/10/2026
+
+- Lịch ký hiển thị một mốc `appointmentStart`: giờ khách dự kiến đến cơ sở.
+- Không dùng `appointmentEnd` để từ chối ghi nhận khách đến hoặc yêu cầu đổi lịch chỉ vì đã qua 30 phút. Staff vẫn được ghi nhận khách đến và hoàn tất gia hạn trong `effectiveSigningDeadline`, với các điều kiện thanh toán, minh chứng và quyền hiện có.
+- `appointmentEnd` và khung 30 phút trong calendar chỉ phục vụ đặt chỗ/phân bổ sức chứa Staff, không phải hạn hoàn tất ký của khách. Không thay đổi schema hay xóa dữ liệu lịch cũ.
+- Hạn hoàn tất ký, cutoff xử lý quá hạn/thu hồi và kiểm tra idempotency vẫn có hiệu lực. Replay một lượt khách đến đã thành công không tạo thêm sự kiện, kể cả sau hạn ký.
+- Mô tả lịch 30 phút ở các phần lịch sử bên dưới được hiểu là khung đặt chỗ nội bộ, không phải thời hạn bắt buộc hoàn tất gia hạn.
+
 ## Điều kiện gói gia hạn, 22/10/2026
 
 - Gói phải thuộc đúng cơ sở, đang hoạt động và được chọn trong chính sách gia hạn của cơ sở.
