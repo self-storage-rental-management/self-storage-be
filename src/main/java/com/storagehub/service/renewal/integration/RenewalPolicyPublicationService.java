@@ -59,8 +59,8 @@ public class RenewalPolicyPublicationService {
         long revision=before==null?0:before.revision();
         if(input.expectedRevision()!=revision)throw ApiExceptions.conflict("Renewal policy revision changed; reload required");
         var p=new PublishedRenewalPolicy("RENEWAL_POLICY_V1",facility,Math.addExact(revision,1),UUID.randomUUID().toString(),user.getId(),Instant.now(),
-            input.effectiveFrom(),input.effectiveTo(),input.quoteTtlMinutes(),input.paymentWindowHours(),input.requestWindowDays(),input.depositRate(),
-            Set.copyOf(input.eligiblePackageIds()),input.signing(),input.term());
+            input.effectiveFrom(),input.effectiveTo(),0,input.paymentWindowHours(),0,input.depositRate(),
+            Set.copyOf(input.eligiblePackageIds()),input.signing(),com.storagehub.service.overdue.RenewalOverdueTimeline.policy());
         var json=encode(p);if(json.length()>2000)throw ApiExceptions.validation("Policy exceeds existing settings storage limit",null);
         if(setting==null){setting=new SystemSetting();setting.setSettingKey(key(facility));setting.setGroupName("Chính sách gia hạn");setting.setLabel("Chính sách gia hạn theo cơ sở");setting.setSettingType("text");setting.setValue(json);em.persist(setting);}
         setting.setValue(json);em.flush();
@@ -70,17 +70,23 @@ public class RenewalPolicyPublicationService {
     private PublishedRenewalPolicy decode(SystemSetting setting,UUID facility) {
         try {
             var tree=mapper.readTree(setting.getValue());
-            if(tree==null||!tree.hasNonNull("quoteTtlMinutes")||!tree.hasNonNull("paymentWindowHours")||!tree.hasNonNull("requestWindowDays"))throw ApiExceptions.conflict("Published renewal policy fields are incomplete");
+            if(tree==null||!tree.hasNonNull("paymentWindowHours"))throw ApiExceptions.conflict("Published renewal policy fields are incomplete");
             var p=mapper.readValue(setting.getValue(),PublishedRenewalPolicy.class);
             if(p==null||!"RENEWAL_POLICY_V1".equals(p.schema())||!facility.equals(p.facilityId())||p.revision()<1||p.version()==null||p.version().isBlank()||p.publishedBy()==null||p.publishedAt()==null)throw ApiExceptions.conflict("Published renewal policy metadata is incomplete");
             validate(new PublishedRenewalPolicy.Input(p.revision(),p.effectiveFrom(),p.effectiveTo(),p.quoteTtlMinutes(),p.paymentWindowHours(),p.requestWindowDays(),p.depositRate(),p.eligiblePackageIds(),p.signing(),p.term()));
-            return p;
+            return withFixedOverduePolicy(p);
         }catch(JsonProcessingException e){throw ApiExceptions.conflict("Published renewal policy is invalid");}
     }
     private String encode(Object value){try{return mapper.writeValueAsString(value);}catch(JsonProcessingException e){throw new IllegalStateException("Policy serialization failed",e);}}
+    /** Legacy settings remain stored unchanged; readers see the same fixed schedule as runtime. */
+    public static PublishedRenewalPolicy withFixedOverduePolicy(PublishedRenewalPolicy p) {
+        return new PublishedRenewalPolicy(p.schema(),p.facilityId(),p.revision(),p.version(),p.publishedBy(),p.publishedAt(),
+            p.effectiveFrom(),p.effectiveTo(),p.quoteTtlMinutes(),p.paymentWindowHours(),p.requestWindowDays(),p.depositRate(),
+            p.eligiblePackageIds(),p.signing(),com.storagehub.service.overdue.RenewalOverdueTimeline.policy());
+    }
     public static void validate(PublishedRenewalPolicy.Input p) {
         if(p==null||p.expectedRevision()==null||p.expectedRevision()<0||p.effectiveFrom()==null||p.effectiveTo()!=null&&p.effectiveTo().isBefore(p.effectiveFrom())
-            ||p.quoteTtlMinutes()==null||p.quoteTtlMinutes()<1||p.paymentWindowHours()==null||p.paymentWindowHours()<1||p.requestWindowDays()==null||p.requestWindowDays()<0
+            ||p.paymentWindowHours()==null||p.paymentWindowHours()<1
             ||p.depositRate()==null||p.depositRate().signum()<0||p.depositRate().compareTo(java.math.BigDecimal.ONE)>0||p.eligiblePackageIds()==null||p.eligiblePackageIds().size()>20||p.eligiblePackageIds().stream().anyMatch(Objects::isNull))
             throw ApiExceptions.validation("Incomplete or invalid renewal policy",null);
         var s=p.signing();if(s!=null&&(s.signingWindowMinutes()==null||s.signingWindowMinutes()<1||s.exceptionExtensionLimitMinutes()==null||s.exceptionExtensionLimitMinutes()<1))throw ApiExceptions.validation("Invalid signing policy",null);

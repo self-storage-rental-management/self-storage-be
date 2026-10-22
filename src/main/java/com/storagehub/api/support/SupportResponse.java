@@ -10,7 +10,15 @@ public record SupportResponse(UUID id,UUID customerId,UUID facilityId,UUID assig
     String subject,String description,Instant createdAt,Long version,Long assignmentRevision,
     Instant assignedAt,Instant acceptedAt,Instant resolvedAt,Instant closedAt,UUID resolvedBy,
     UUID parentTicketId,String linkedType,UUID linkedId,boolean workflowReady,
-    String slaCompleteness,Sla sla,String missingSourceReason,String assignedStaffName,String customerName) {
+    String slaCompleteness,Sla sla,String missingSourceReason,String assignedStaffName,String customerName,String displayCode) {
+    public SupportResponse(UUID id,UUID customerId,UUID facilityId,UUID assignedStaffId,SupportTicketStatus status,
+        String subject,String description,Instant createdAt,Long version,Long assignmentRevision,Instant assignedAt,
+        Instant acceptedAt,Instant resolvedAt,Instant closedAt,UUID resolvedBy,UUID parentTicketId,String linkedType,
+        UUID linkedId,boolean workflowReady,String slaCompleteness,Sla sla,String missingSourceReason,String assignedStaffName,String customerName) {
+        this(id,customerId,facilityId,assignedStaffId,status,subject,description,createdAt,version,assignmentRevision,assignedAt,
+            acceptedAt,resolvedAt,closedAt,resolvedBy,parentTicketId,linkedType,linkedId,workflowReady,slaCompleteness,sla,
+            missingSourceReason,assignedStaffName,customerName,null);
+    }
     public record Message(UUID id,UUID ticketId,UUID authorId,String authorRole,String visibility,String body,
         Instant sentAt,String evidenceCompleteness,List<UUID> evidenceFileIds) {}
     public record Event(UUID id,String type,UUID actorId,UUID assignedStaffId,long assignmentRevision,String reason,Instant recordedAt) {}

@@ -103,10 +103,10 @@ class ReservationQuoteServiceTests {
         assertThat(response.getSubtotal()).isEqualByComparingTo("16500000.00");
         assertThat(response.getDiscountAmount()).isEqualByComparingTo("495000.00");
         assertThat(response.getTotalAfterDiscount()).isEqualByComparingTo("16005000.00");
-        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("6402000.00");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
         assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("5500000.00");
-        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("9603000.00");
-        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("15103000.00");
+        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
+        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("21505000.00");
         assertThat(response.getQuoteId()).isNotNull();
     }
@@ -159,7 +159,7 @@ class ReservationQuoteServiceTests {
 
     @Test
     void rejectsRentalPeriodThatIsNotCompleteMonths() {
-        ReservationQuoteRequest request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 9));
+        ReservationQuoteRequest request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 5));
         stubCompatible(request);
 
         assertThatThrownBy(() -> service.createQuote(actor, request))

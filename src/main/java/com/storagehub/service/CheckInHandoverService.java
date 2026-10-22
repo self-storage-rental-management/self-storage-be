@@ -242,6 +242,10 @@ public class CheckInHandoverService {
         if (reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
+        if (!request.checklist().identityVerified()) {
+            throw ApiExceptions.conflict("Customer identity verification is required");
+        }
+        assertIdentityMatchesReservation(reservation, request.identityDocumentNumber());
         UnitAssignment assignment = activeAssignment(reservation.getId());
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
@@ -533,6 +537,21 @@ public class CheckInHandoverService {
             || !assignment.getReservation().getId().equals(reservation.getId())) {
             throw ApiExceptions.conflict("Reservation, assignment and storage unit do not match");
         }
+    }
+
+    private void assertIdentityMatchesReservation(Reservation reservation, String providedIdentity) {
+        String expected = normalizeIdentity(reservation.getIdentityDocumentNumber());
+        String actual = normalizeIdentity(providedIdentity);
+        if (expected == null || actual == null || !expected.equals(actual)) {
+            throw ApiExceptions.conflict("Customer identity does not match the reservation");
+        }
+    }
+
+    private String normalizeIdentity(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().replaceAll("[\\s.-]", "").toUpperCase(Locale.ROOT);
     }
 
     private UnitAssignment activeAssignment(UUID reservationId) {

@@ -17,7 +17,6 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
@@ -27,13 +26,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class JwtService {
 
     private final JwtEncoder jwtEncoder;
     private final JwtProperties properties;
     private final UserFacilityScopeRepository scopeRepository;
     private final SecureRandom secureRandom = new SecureRandom();
+
+    public JwtService(
+        JwtEncoder jwtEncoder,
+        JwtProperties properties,
+        UserFacilityScopeRepository scopeRepository
+    ) {
+        this.jwtEncoder = jwtEncoder;
+        this.properties = properties;
+        this.scopeRepository = scopeRepository;
+    }
 
     @Transactional(readOnly = true)
     public IssuedToken issue(User user, Session session) {

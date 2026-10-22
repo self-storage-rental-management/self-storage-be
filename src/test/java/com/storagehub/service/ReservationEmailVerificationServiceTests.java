@@ -93,7 +93,7 @@ class ReservationEmailVerificationServiceTests {
         assertThat(response.getReservationStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
         assertThat(verification.getVerifiedAt()).isNotNull();
         assertThat(reservation.getPaymentExpiresAt()).isBetween(
-            Instant.now().plus(23, ChronoUnit.HOURS), Instant.now().plus(25, ChronoUnit.HOURS)
+            Instant.now().plus(14, ChronoUnit.MINUTES), Instant.now().plus(16, ChronoUnit.MINUTES)
         );
         verify(reservationRepository).saveAndFlush(reservation);
     }

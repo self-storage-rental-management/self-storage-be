@@ -13,5 +13,12 @@ public record ManagerPaymentHistoryResponse(
     String currency,
     BigDecimal refundedAmount,
     String paymentMethod,
-    Instant occurredAt
-) {}
+    Instant occurredAt,
+    java.util.UUID renewalId,
+    java.util.UUID receiptFileId
+) {
+    public ManagerPaymentHistoryResponse(String id,String transactionReference,String customerName,String type,String status,
+        BigDecimal amount,String currency,BigDecimal refundedAmount,String paymentMethod,Instant occurredAt) {
+        this(id,transactionReference,customerName,type,status,amount,currency,refundedAmount,paymentMethod,occurredAt,null,null);
+    }
+}
