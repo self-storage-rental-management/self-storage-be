@@ -1,5 +1,10 @@
 # Renewal API contract
 
+## Điều kiện gói gia hạn, 22/10/2026
+
+- Gói phải thuộc đúng cơ sở, đang hoạt động và được chọn trong chính sách gia hạn của cơ sở.
+- Luồng gia hạn không kiểm tra ngày bắt đầu hoặc ngày kết thúc hiệu lực riêng của từng gói. Ngày hiệu lực của chính sách gia hạn cấp cơ sở vẫn được áp dụng.
+
 ## Cách tính báo giá hiện hành, 21/10/2026
 
 Mục này thay thế mô tả tỷ lệ cọc 40% và phần còn lại 60% của báo giá mới bên dưới.
