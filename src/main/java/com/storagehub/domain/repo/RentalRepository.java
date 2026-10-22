@@ -44,7 +44,12 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     java.util.List<Rental> findByFacility_IdAndStatus(UUID facilityId, RentalStatus status);
 
+    @Query("select r.id from Rental r where r.status = :status and r.actualReturnedAt is null")
+    java.util.List<UUID> findActiveUnreturnedIds(@Param("status") RentalStatus status);
+
     long countByFacility_IdAndStatus(UUID facilityId, RentalStatus status);
+
+    java.util.List<Rental> findByStatus(RentalStatus status);
 
     long countByStatus(RentalStatus status);
 }

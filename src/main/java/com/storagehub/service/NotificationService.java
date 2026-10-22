@@ -39,6 +39,7 @@ public class NotificationService {
         .withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
 
     private final NotificationRepository notificationRepository;
+    @org.springframework.beans.factory.annotation.Autowired private BusinessRecordCodes displayCodes;
     private final UserRepository userRepository;
 
     @Transactional
@@ -102,11 +103,19 @@ public class NotificationService {
         Notification notification = new Notification();
         notification.setUser(user);
         notification.setType(type);
-        notification.setTitle(title);
+        notification.setTitle(type==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(title):title);
         notification.setContent(content);
         notification.setRelatedEntityId(relatedEntityId);
         notification.setRead(false);
         return notificationRepository.save(notification);
+    }
+
+    @Transactional
+    public void notifyCustomerRentalEventOnce(UUID customerId, UUID rentalId, String title, String content) {
+        if (!notificationRepository.existsByUser_IdAndRelatedEntityIdAndTypeAndTitleAndContent(
+            customerId, rentalId, NotificationType.OVERDUE, title, content)) {
+            createNotification(customerId, NotificationType.OVERDUE, title, content, rentalId);
+        }
     }
 
     /**
@@ -123,6 +132,18 @@ public class NotificationService {
         String content,
         UUID relatedEntityId
     ) {
+        createFacilityOperationsNotificationsExcept(facilityId, type, title, content, relatedEntityId, null);
+    }
+
+    @Transactional
+    public void createFacilityOperationsNotificationsExcept(
+        UUID facilityId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        UUID excludedUserId
+    ) {
         Set<UUID> recipientIds = new LinkedHashSet<>();
         recipientIds.addAll(userRepository.findEligibleStaff(
             UserStatus.ACTIVE,
@@ -137,9 +158,9 @@ public class NotificationService {
             List.of(FacilityScopeLevel.READ, FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
         ).stream().map(User::getId).toList());
 
-        recipientIds.forEach(recipientId -> createNotification(
-            recipientId, type, title, content, relatedEntityId
-        ));
+        recipientIds.stream()
+            .filter(recipientId -> !Objects.equals(recipientId, excludedUserId))
+            .forEach(recipientId -> createNotification(recipientId, type, title, content, relatedEntityId));
     }
 
     @Transactional
@@ -172,12 +193,24 @@ public class NotificationService {
     }
 
     private NotificationResponse toResponse(Notification notification) {
+        String content=notification.getContent();
+        UUID related=notification.getRelatedEntityId();
+        if(displayCodes!=null&&related!=null){
+            String key=switch(notification.getType()){
+                case RENEWAL -> "GH:"+related;
+                case SUPPORT -> "HT:"+related;
+                case OVERDUE -> "RENTAL_TERM:"+related;
+                default -> null;
+            };
+            String code=key==null?null:displayCodes.find(key);
+            if(code!=null&&(content==null||!content.contains(code)))content=code+" · "+(content==null?"":content);
+        }
         return new NotificationResponse(
             notification.getId(),
             notification.getUser().getId(),
             notification.getType(),
-            notification.getTitle(),
-            notification.getContent(),
+            notification.getType()==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(notification.getTitle()):notification.getTitle(),
+            content,
             notification.getRelatedEntityId(),
             notification.isRead(),
             notification.getCreatedAt()

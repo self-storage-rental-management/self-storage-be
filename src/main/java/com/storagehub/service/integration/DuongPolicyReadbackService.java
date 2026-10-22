@@ -64,12 +64,12 @@ public class DuongPolicyReadbackService {
     private Object decode(JsonNode n, String kind) {
         try {
             if (kind.equals("renewal")) {
-                for (String field : List.of("quoteTtlMinutes", "paymentWindowHours", "requestWindowDays"))
+                for (String field : List.of("paymentWindowHours"))
                     if (!n.hasNonNull(field)) throw ApiExceptions.conflict("Policy fields are incomplete");
                 var p = mapper.treeToValue(n, PublishedRenewalPolicy.class);
                 if (!"RENEWAL_POLICY_V1".equals(p.schema())) throw ApiExceptions.conflict("Policy schema is invalid");
                 RenewalPolicyPublicationService.validate(new PublishedRenewalPolicy.Input(p.revision(), p.effectiveFrom(), p.effectiveTo(), p.quoteTtlMinutes(), p.paymentWindowHours(), p.requestWindowDays(), p.depositRate(), p.eligiblePackageIds(), p.signing(), p.term()));
-                return p;
+                return RenewalPolicyPublicationService.withFixedOverduePolicy(p);
             }
             var p = mapper.treeToValue(n, CommunicationPolicyService.Policy.class);
             if (p.effectiveFrom() == null || p.effectiveTo() != null && p.effectiveTo().isBefore(p.effectiveFrom())

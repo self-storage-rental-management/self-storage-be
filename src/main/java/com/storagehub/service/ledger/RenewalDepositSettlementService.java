@@ -33,6 +33,8 @@ public class RenewalDepositSettlementService implements RefundSource {
     private final RenewalPersistence store;
     private final AuditLogService audit;
     private final NotificationService notifications;
+    @org.springframework.beans.factory.annotation.Autowired
+    private RenewalDepositFaultGuard faultGuard;
     private final ObjectProvider<Clock> clocks;
     private final ObjectProvider<PolicySource> policies;
     private final ObjectProvider<CalendarSource> calendars;
@@ -40,6 +42,10 @@ public class RenewalDepositSettlementService implements RefundSource {
     private final ObjectProvider<RenewalOperationService> operations;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<RenewalLedgerAdjustments> cancellationCredits;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<RenewalDepositForfeitures> forfeitures;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.overdue.OverdueSources.TermSource> overdueTerms;
     public record View(UUID renewalId,Long expectedVersion,String status,BigDecimal amount,BigDecimal refundedAmount,
         String currency,String environment,UUID refundId,Instant signingDeadline,Instant checkedAt) {}
     private record Proof(RenewalOperationState state,RenewalWorkflow workflow,Payment payment,LedgerStore.Snapshot account,
@@ -59,7 +65,11 @@ public class RenewalDepositSettlementService implements RefundSource {
         else {
             var events=events(n,"DEPOSIT_DISPOSITION");
             if(!events.isEmpty())status=json(events.getFirst()).path("status").asText();
-            else if(now.isAfter(s.getEffectiveSigningDeadline()))status="REVIEW_REQUIRED";
+            else {
+                var held=faultGuard.holdReason(n,s);
+                if(held!=null)status=held;
+                else if(now.isAfter(s.getEffectiveSigningDeadline()))status="AWAITING_RECOVERY_DEADLINE";
+            }
         }
         return new View(id,p.workflow().getVersion(),status,p.payment().getAmount(),p.payment().getRefundedAmount(),"VND",p.environment(),refund==null?null:refund.getId(),s.getEffectiveSigningDeadline(),now);
     }
@@ -72,28 +82,48 @@ public class RenewalDepositSettlementService implements RefundSource {
     public boolean reconcile(UUID id) {
         var n=lock(id);var s=em.find(RenewalOperationState.class,id,LockModeType.PESSIMISTIC_WRITE);
         if(n.getStatus()==RenewalStatus.completed||s==null||s.getDepositPaidAt()==null||s.getEffectiveSigningDeadline()==null||!now().isAfter(s.getEffectiveSigningDeadline()))return false;
+        var source=overdueTerms.getIfAvailable();
+        var term=source==null?null:source.term(n.getRental(),now()).orElse(null);
+        if(term==null||term.recoveryFromDay()!=8||term.recoveryStart()==null||term.recoveryCutoff()==null
+            ||!term.recoveryStart().isAfter(term.recoveryCutoff()))throw ApiExceptions.conflict("Verified day-eight forfeiture deadline required");
+        if(now().isBefore(term.recoveryStart()))return false;
+        var holdReason=faultGuard.holdReason(n,s);
+        if(holdReason!=null) {
+            if(events(n,"DEPOSIT_REVIEW_REQUIRED").isEmpty()) {
+                em.persist(new RenewalOperationEvent(n,"DEPOSIT_REVIEW_REQUIRED",now(),null,store.canonical(Map.of("status",holdReason))));
+                notifications.createFacilityOperationsNotifications(n.getRental().getFacility().getId(),NotificationType.RENEWAL,
+                    "Cọc gia hạn cần được đối soát trách nhiệm","Có sự cố từ cơ sở hoặc trách nhiệm chưa được xác minh; chưa ghi nhận mất cọc.",id);
+            }
+            return false;
+        }
         var p=proof(n,true);requireReconciled(n);
         if(refundRows(p.payment()).stream().anyMatch(r->Set.of(RefundStatus.PENDING,RefundStatus.PROCESSING,RefundStatus.COMPLETED).contains(r.getStatus())))return false;
+        if(p.payment().getRefundedAmount().signum()!=0)throw ApiExceptions.conflict("Refunded deposit requires reconciliation before forfeiture");
         operations.getObject().expire(id);
-        String status=disposition(n,p);
+        String status="FORFEITED";
+        var accounting=forfeitures.getIfAvailable();
+        if(accounting==null)throw ApiExceptions.conflict("Deposit forfeiture accounting unavailable");
+        accounting.record(id,p.payment().getId(),p.account(),p.obligation(),p.receipt(),p.environment(),now());
         var old=events(n,"DEPOSIT_DISPOSITION");
         if(!old.isEmpty()&&status.equals(json(old.getFirst()).path("status").asText()))return false;
         if(status.equals("FORFEITED")) {
-            cancelRemainder(n,p);n.setStatus(RenewalStatus.cancelled);p.workflow().cancelled("SIGNING_EXPIRED_CUSTOMER");releaseOwnSlot(p.workflow());
+            cancelRemainder(n,p);n.setStatus(RenewalStatus.cancelled);p.workflow().cancelled("OVERDUE_DAY_8");releaseOwnSlot(p.workflow());
         }
         var data=Map.of("status",status,"amount",p.payment().getAmount(),"currency","VND","paymentId",p.payment().getId(),
-            "environment",p.environment(),"reason",status.equals("FORFEITED")?(s.getArrivalRef()==null?"CUSTOMER_NO_SHOW":"CUSTOMER_DID_NOT_COMPLETE"):"FACILITY_INCIDENT_REVIEW");
+            "environment",p.environment(),"reason","OVERDUE_DAY_8");
         var e=new RenewalOperationEvent(n,"DEPOSIT_DISPOSITION",now(),null,store.canonical(data));em.persist(e);em.flush();
         em.lock(p.workflow(),LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         audit.recordMutation((User)null,"RENEWAL_DEPOSIT_DISPOSITION","Renewal",id,n.getRental().getFacility().getId(),null,data);
         if(status.equals("FORFEITED"))notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.PAYMENT,
-            "Cọc gia hạn không được hoàn lại","Yêu cầu gia hạn đã hết hạn ký. Cọc không được hoàn lại do khách chưa hoàn tất hồ sơ đúng hạn.",id);
+            "Đã ghi nhận mất cọc gia hạn","Hợp đồng đã sang ngày quá hạn thứ 8 và gia hạn chưa hoàn tất. Cọc gia hạn được ghi nhận không hoàn lại.",id);
         return true;
     }
     @Override @Transactional(propagation=Propagation.MANDATORY)
     public RefundReservation reserve(Renewal n,UUID incident,UUID actor,String key,Instant now) {
         if(n.getStatus()==RenewalStatus.completed)throw ApiExceptions.conflict("Completed Renewal deposit cannot be refunded as a signing failure");
         var p=proof(n,true);requireReconciled(n);requireValidIncident(n,p,incident);
+        if(forfeitures.getObject().containsReceipt(p.receipt().id())||events(n,"DEPOSIT_DISPOSITION").stream().anyMatch(e->"FORFEITED".equals(json(e).path("status").asText())))
+            throw ApiExceptions.conflict("Forfeited Renewal deposit is not refundable");
         var policy=policies.getIfAvailable();if(policy==null)throw ApiExceptions.conflict("Facility fault classification source missing");
         policy.requireFacilityFault(n,incident,actor);
         if(now.isBefore(p.state().getEffectiveSigningDeadline())) {
@@ -176,21 +206,6 @@ public class RenewalDepositSettlementService implements RefundSource {
             throw ApiExceptions.conflict("Actual deposit allocation evidence missing");
         return new Proof(s,w,payment,account,obligation,receipt,classification==PaymentProvenance.Classification.SANDBOX?"SANDBOX":"PRODUCTION");
     }
-    private String disposition(Renewal n,Proof p) {
-        if(p.state().getAppointmentRef()==null)return "REVIEW_REQUIRED";
-        try{requireValidAppointment(n,p,p.state().getAppointmentRef());}catch(RuntimeException invalid){return "REVIEW_REQUIRED";}
-        boolean unknown=p.state().getPendingExceptionRef()!=null,fault=false;
-        for(var incident:events(n,"INCIDENT")) {
-            try{requireValidIncident(n,p,incident.getId());}catch(com.storagehub.common.api.ApiException invalid){unknown=true;continue;}
-            var reviews=events(n,"FAULT_REVIEW").stream().filter(e->incident.getId().toString().equals(json(e).path("incidentId").asText())).toList();
-            if(reviews.isEmpty()){unknown=true;continue;}
-            if(reviews.size()>1&&Objects.equals(reviews.get(0).getOccurredAt(),reviews.get(1).getOccurredAt())){unknown=true;continue;}
-            var verdict=json(reviews.getFirst()).get("facilityFault");
-            if(verdict==null||!verdict.isBoolean()){unknown=true;continue;}
-            if(verdict.booleanValue())fault=true;
-        }
-        return fault?"REFUND_ELIGIBLE":unknown?"REVIEW_REQUIRED":"FORFEITED";
-    }
     private void requireValidIncident(Renewal n,Proof p,UUID incidentId) {
         var incident=em.find(RenewalOperationEvent.class,incidentId);
         if(incident==null||!incident.getKind().equals("INCIDENT")||!n.getId().equals(incident.getRenewal().getId()))throw ApiExceptions.notFound("Related incident not found");
@@ -219,10 +234,13 @@ public class RenewalDepositSettlementService implements RefundSource {
             throw ApiExceptions.conflict("Renewal payments require reconciliation before deposit settlement");
     }
     private void cancelRemainder(Renewal n,Proof p) {
+        final boolean monthly;
+        try{monthly="MONTHLY".equals(mapper.readTree(p.workflow().getAcceptedRevision().getQuote().getTermsJson()).path("paymentPlan").asText());}
+        catch(Exception invalid){throw ApiExceptions.conflict("Điều khoản thanh toán đã lưu không hợp lệ.");}
         var account=ledger.read(n.getRental().getId()).orElseThrow();
         for(var o:account.obligations())if(Objects.equals(o.renewalId(),n.getId())&&o.kind()==LedgerStore.Kind.RENEWAL_REMAINDER
             &&o.sourceRef().startsWith("renewal-accepted:"+p.workflow().getAcceptedRevision().getId()+":")&&o.outstanding().signum()>0) {
-            credits().cancelOutstanding(account,o,o.outstanding(),"void-remainder:"+n.getId(),"SIGNING_FAILURE_UNEARNED_RENT");
+            credits().cancelOutstanding(account,o,o.outstanding(),"void-remainder:"+n.getId()+(monthly?":"+o.id():""),"SIGNING_FAILURE_UNEARNED_RENT");
             account=ledger.read(n.getRental().getId()).orElseThrow();
         }
     }

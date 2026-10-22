@@ -33,6 +33,7 @@ public record UnitTypeResponse(
     long availableCount,
     long occupiedCount,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    String detailImageUrl
 ) {
 }

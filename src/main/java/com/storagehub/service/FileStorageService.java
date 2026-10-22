@@ -170,6 +170,11 @@ public class FileStorageService {
                 .findById(asset.getEntityId())
                 .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
 
+            if (actor.hasRole(RoleCode.CUSTOMER)
+                && goodsItem.getReservation().getCustomer().getId().equals(actor.userId())) {
+                return;
+            }
+
             authorizationService.require(
                 actor,
                 SystemPermission.VIEW_RESERVATIONS

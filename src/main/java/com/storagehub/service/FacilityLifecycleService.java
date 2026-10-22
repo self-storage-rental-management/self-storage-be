@@ -44,6 +44,15 @@ public class FacilityLifecycleService {
     private final com.storagehub.domain.repo.UnitTypeChangeRequestRepository changes;
     private final com.storagehub.domain.repo.UserRepository users;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    private static byte[] bytes(UUID id) {
+        if (id == null) return null;
+        return java.nio.ByteBuffer.allocate(16)
+            .putLong(id.getMostSignificantBits())
+            .putLong(id.getLeastSignificantBits())
+            .array();
+    }
 
     @Transactional
     public void deleteFacility(ActorPrincipal actor, UUID facilityId) {
@@ -52,11 +61,23 @@ public class FacilityLifecycleService {
         if (reservations.existsByFacility_Id(facilityId)) {
             throw ApiExceptions.conflict("Cơ sở đã có hồ sơ đặt hoặc thuê kho. Vui lòng chuyển sang Ngừng hoạt động để giữ lịch sử.");
         }
-        if (units.countByFacility_Id(facilityId) > 0 || !unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).isEmpty()
-            || !userFacilityScopes.findByFacility_Id(facilityId).isEmpty()
-            || !packages.findByFacility_IdOrderByRentalMonthsAsc(facilityId).isEmpty()) {
-            throw ApiExceptions.conflict("Cơ sở đã có kho hoặc phân công nhân sự. Vui lòng chuyển sang Ngừng hoạt động để giữ lịch sử.");
-        }
+
+        byte[] facBytes = bytes(facilityId);
+        jdbc.update("UPDATE activity_logs SET facility_id = NULL WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM support_ticket_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE facility_id = ?)", facBytes);
+        jdbc.update("DELETE FROM support_tickets WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM damage_incidents WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM maintenance_tasks WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM access_credentials WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM unit_assignments WHERE storage_unit_id IN (SELECT id FROM storage_units WHERE facility_id = ?)", facBytes);
+        jdbc.update("DELETE FROM storage_units WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM reservation_quotes WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM unit_type_change_requests WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM unit_types WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM discount_codes WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM rental_package_policies WHERE facility_id = ?", facBytes);
+        jdbc.update("DELETE FROM user_facility_scopes WHERE facility_id = ?", facBytes);
+
         facilities.delete(facility);
         facilities.flush();
     }
@@ -132,7 +153,8 @@ public class FacilityLifecycleService {
         ManagerUnitTypeRequest after = normalizedChange(request);
         if (!technicalChanged && java.util.Objects.equals(type.getName(), after.name())
             && java.util.Objects.equals(type.getDescription(), after.description())
-            && java.util.Objects.equals(type.getImageUrl(), after.imageUrl())) {
+            && java.util.Objects.equals(type.getImageUrl(), after.imageUrl())
+            && java.util.Objects.equals(type.getDetailImageUrl(), after.detailImageUrl())) {
             throw ApiExceptions.conflict("Thông tin loại kho chưa có thay đổi.");
         }
         var change = new com.storagehub.domain.model.UnitTypeChangeRequest();
@@ -154,13 +176,13 @@ public class FacilityLifecycleService {
         return new ManagerUnitTypeRequest(t.getCode(), t.getName(), t.getDescription(), t.getLengthM(), t.getWidthM(),
             t.getHeightM(), t.getMaxLoadKg(), t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(),
             t.getAisleWidthM(), t.getTrolleyType(), t.getSmallBoxCapacity() == null ? 0 : t.getSmallBoxCapacity(),
-            t.getLargeBoxCapacity() == null ? 0 : t.getLargeBoxCapacity(), t.getImageUrl(), 0, null, null);
+            t.getLargeBoxCapacity() == null ? 0 : t.getLargeBoxCapacity(), t.getImageUrl(), 0, null, null, t.getDetailImageUrl());
     }
 
     private ManagerUnitTypeRequest normalizedChange(ManagerUnitTypeRequest r) {
         return new ManagerUnitTypeRequest(r.code().trim(), r.name().trim(), clean(r.description()), r.lengthM(),
             r.widthM(), r.heightM(), r.maxLoadKg(), r.rackCount(), r.rackLengthM(), r.rackWidthM(), r.rackHeightM(),
-            r.aisleWidthM(), r.trolleyType().trim(), r.smallBoxCapacity(), r.largeBoxCapacity(), clean(r.imageUrl()), 0, null, null);
+            r.aisleWidthM(), r.trolleyType().trim(), r.smallBoxCapacity(), r.largeBoxCapacity(), clean(r.imageUrl()), 0, null, null, clean(r.detailImageUrl()));
     }
 
     private String json(Object value) {
@@ -205,7 +227,7 @@ public class FacilityLifecycleService {
             if (technicalChanged(type, after) && reservations.existsByUnitType_Id(type.getId())) {
                 throw ApiExceptions.conflict("Loại kho đã có hồ sơ đặt/thuê; không thể duyệt thay đổi kỹ thuật. Hãy từ chối và tạo loại kho mới.");
             }
-            if (!json(technicalSnapshot(type)).equals(change.getBeforeJson())) {
+            if (!json(technicalSnapshot(type)).equals(json(readChange(change.getBeforeJson())))) {
                 throw ApiExceptions.conflict("Thông tin gốc đã thay đổi. Hãy từ chối và yêu cầu Manager gửi lại.");
             }
             UnitTypeResponse before = unitTypeResponse(type);
@@ -334,6 +356,7 @@ public class FacilityLifecycleService {
         type.setSmallBoxCapacity(request.smallBoxCapacity());
         type.setLargeBoxCapacity(request.largeBoxCapacity());
         type.setImageUrl(request.imageUrl() == null || request.imageUrl().isBlank() ? null : request.imageUrl().trim());
+        type.setDetailImageUrl(clean(request.detailImageUrl()));
     }
 
     private void createPhysicalUnits(UnitType type, int count, String floor, String zone) {
@@ -393,6 +416,6 @@ public class FacilityLifecycleService {
             t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getAisleWidthM(), t.getTrolleyType(),
             t.getSmallBoxCapacity(), t.getLargeBoxCapacity(), t.getStatus(),
             units.countByFacility_IdAndUnitType_Id(t.getFacility().getId(), t.getId()), available,
-            units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt());
+            units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt(), t.getDetailImageUrl());
     }
 }

@@ -8,8 +8,9 @@ import com.storagehub.domain.model.UserStatus;
 import com.storagehub.security.ActorContext;
 import com.storagehub.service.AdminUserService;
 import jakarta.validation.Valid;
+import java.util.Map;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,11 +22,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/admin/users")
-@RequiredArgsConstructor
 public class AdminUserController {
 
     private final ActorContext actorContext;
     private final AdminUserService adminUserService;
+
+    public AdminUserController(ActorContext actorContext, AdminUserService adminUserService) {
+        this.actorContext = actorContext;
+        this.adminUserService = adminUserService;
+    }
 
     @GetMapping
     public PageResponse<AdminUserResponse> list(
@@ -95,4 +100,11 @@ public class AdminUserController {
     ) {
         return new ApiResponse<>(adminUserService.resetPassword(actorContext.required(), id, request), CorrelationIdContext.current());
     }
+
+    @DeleteMapping("/{id}")
+    public ApiResponse<Map<String, Object>> delete(@PathVariable UUID id) {
+        adminUserService.delete(actorContext.required(), id);
+        return new ApiResponse<>(Map.of("success", true), CorrelationIdContext.current());
+    }
 }
+

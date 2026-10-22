@@ -30,6 +30,8 @@ public class ManagerPaymentHistoryService {
     private final ReturnCaseRepository returnCaseRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private PaymentProvenance paymentProvenance;
 
     @Transactional(readOnly = true)
     public PageResponse<ManagerPaymentHistoryResponse> list(
@@ -87,7 +89,9 @@ public class ManagerPaymentHistoryService {
             payment.getId().toString(), reference, customerName, payment.getPurpose().name(),
             payment.getStatus().name(), payment.getAmount(), payment.getCurrency(),
             payment.getRefundedAmount() == null ? BigDecimal.ZERO : payment.getRefundedAmount(),
-            method, occurredAt
+            method, occurredAt,
+            payment.getRenewal()==null?null:payment.getRenewal().getId(),
+            paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null
         );
     }
 

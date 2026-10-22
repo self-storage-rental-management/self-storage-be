@@ -7,7 +7,6 @@ import com.storagehub.security.ActorContext;
 import com.storagehub.service.AdminDashboardService;
 import com.storagehub.service.AdminSecurityService;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -17,12 +16,21 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/admin")
-@RequiredArgsConstructor
 public class AdminSecurityController {
 
     private final ActorContext actorContext;
     private final AdminDashboardService adminDashboardService;
     private final AdminSecurityService adminSecurityService;
+
+    public AdminSecurityController(
+        ActorContext actorContext,
+        AdminDashboardService adminDashboardService,
+        AdminSecurityService adminSecurityService
+    ) {
+        this.actorContext = actorContext;
+        this.adminDashboardService = adminDashboardService;
+        this.adminSecurityService = adminSecurityService;
+    }
 
     @GetMapping("/dashboard")
     public ApiResponse<AdminDashboardResponse> dashboard() {

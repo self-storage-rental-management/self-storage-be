@@ -49,6 +49,12 @@ public class ReturnSettlementService {
 
     @Autowired
     private AccessCredentialService accessCredentialService;
+    @Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.overdue.RecoverySettlementGuard> recoveryGuards;
+    @Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.ReturnFinancialReconciliation> returnFinances;
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager settlementEntityManager;
 
     private final ReturnCaseRepository returnCaseRepository;
     private final RentalRepository rentalRepository;
@@ -74,6 +80,8 @@ public class ReturnSettlementService {
         if (rental.getStatus() != RentalStatus.active) {
             throw ApiExceptions.conflict("Only active rentals can request return");
         }
+        var recoveryGuard=recoveryGuard();
+        if(recoveryGuard!=null)recoveryGuard.requireNoActiveRecovery(rental);
 
         if (request.scheduledDate().isBefore(LocalDate.now())) {
             throw ApiExceptions.validation("scheduledDate cannot be in the past", null);
@@ -90,14 +98,8 @@ public class ReturnSettlementService {
         User customer = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Customer user not found"));
 
-        // Deposit amount is derived from reservation pricing snapshot security deposit or monthly price
-        BigDecimal depositAmount = rental.getMonthlyPrice();
-        if (rental.getReservation() != null && rental.getReservation().getSourceQuote() != null) {
-            BigDecimal secDeposit = rental.getReservation().getSourceQuote().getSecurityDepositAmount();
-            if (secDeposit != null && secDeposit.compareTo(BigDecimal.ZERO) > 0) {
-                depositAmount = secDeposit;
-            }
-        }
+        // Only verified check-in funds establish the available security deposit.
+        BigDecimal depositAmount = securityDeposit(rental);
 
         ReturnCase returnCase = new ReturnCase();
         returnCase.setRental(rental);
@@ -136,6 +138,22 @@ public class ReturnSettlementService {
         return toResponse(saved);
     }
 
+    @Transactional
+    public ReturnCaseResponse updateCustomerReturnRequest(ActorPrincipal actor, UUID returnId, CustomerCreateReturnRequest request) {
+        if (!actor.hasRole(com.storagehub.domain.model.RoleCode.CUSTOMER)) throw ApiExceptions.forbidden("Chỉ khách hàng được sửa yêu cầu trả kho.");
+        ReturnCase record = returnCaseRepository.findOwnedForUpdate(returnId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
+        if (record.getStatus() != ReturnCaseStatus.requested) throw ApiExceptions.conflict("Yêu cầu đã được nhân viên xử lý, không thể đổi ngày hoặc lý do.");
+        if (request.scheduledDate().isBefore(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")))) throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+        if (request.notes() == null || request.notes().isBlank()) throw ApiExceptions.validation("Vui lòng nhập lý do trả kho.", null);
+        var before = toResponse(record);
+        record.setScheduledDate(request.scheduledDate());
+        record.setCustomerNotes(request.notes().trim());
+        ReturnCase saved = returnCaseRepository.saveAndFlush(record);
+        auditLogService.recordMutation("CUSTOMER_RETURN_REQUEST_UPDATED", "return", saved.getId(), saved.getFacility().getId(), before, toResponse(saved));
+        return toResponse(saved);
+    }
+
     @Transactional(readOnly = true)
     public ReturnCaseResponse getReturnForCustomer(ActorPrincipal actor, UUID returnId) {
         ReturnCase returnCase = returnCaseRepository.findByIdAndCustomer_Id(returnId, actor.userId())
@@ -162,6 +180,7 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
         facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
+        lockRecoveryReturn(returnCase);
 
         if (returnCase.getStatus() != ReturnCaseStatus.requested && returnCase.getStatus() != ReturnCaseStatus.scheduled) {
             throw ApiExceptions.conflict("Return case is not in a state awaiting inspection (current: " + returnCase.getStatus() + ")");
@@ -174,7 +193,11 @@ public class ReturnSettlementService {
         BigDecimal safeCleaning = safeFee(request.cleaningFee());
         BigDecimal safeLostItem = safeFee(request.lostItemFee());
         BigDecimal safeOverdue = safeFee(request.overdueFee());
-        BigDecimal safeOutstanding = safeFee(request.outstandingFee());
+        Instant inspectionAt=Instant.now();
+        returnCase.setInspectedAt(inspectionAt);
+        var verifiedFinance=captureFinance(returnCase);
+        BigDecimal safeOutstanding = verifiedFinance.debt();
+        safeOverdue=settlementOverdueFee(returnCase,safeOverdue,verifiedFinance);
 
         BigDecimal totalDeductions = safeDamage
             .add(safeCleaning)
@@ -182,13 +205,14 @@ public class ReturnSettlementService {
             .add(safeOverdue)
             .add(safeOutstanding)
             .setScale(2, RoundingMode.HALF_UP);
+        requireSettlementLimit(totalDeductions);
 
         BigDecimal deposit = returnCase.getDepositAmount() != null ? returnCase.getDepositAmount() : BigDecimal.ZERO;
         BigDecimal netRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
         BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
 
         returnCase.setInspectedBy(staff);
-        returnCase.setInspectedAt(Instant.now());
+        returnCase.setInspectedAt(inspectionAt);
         returnCase.setInventoryMatch(request.inventoryMatch());
         returnCase.setDamageClassification(request.damageClassification());
         returnCase.setInspectionNotes(request.staffNotes());
@@ -258,6 +282,7 @@ public class ReturnSettlementService {
         ReturnCase returnCase = returnCaseRepository.findByIdAndCustomer_Id(returnId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
+        lockRecoveryReturn(returnCase);
         if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation) {
             throw ApiExceptions.conflict("Return case is not awaiting customer confirmation");
         }
@@ -274,11 +299,13 @@ public class ReturnSettlementService {
             returnCase.setStatus(ReturnCaseStatus.disputed);
         } else {
             // Decision accepted
+            finance().requireCurrent(returnCase);
             if (returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
                 returnCase.setStatus(ReturnCaseStatus.payment_due);
             } else if (returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
                 returnCase.setStatus(ReturnCaseStatus.refund_pending);
             } else {
+                finance().settle(returnCase,actor.userId(),"OFFSET:"+returnCase.getId(),false);
                 returnCase.setStatus(ReturnCaseStatus.completed);
                 returnCase.setCompletedAt(Instant.now());
                 finalizeRentalAndUnit(returnCase);
@@ -310,6 +337,7 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
         facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
+        lockRecoveryReturn(returnCase);
 
         if (returnCase.getStatus() != ReturnCaseStatus.disputed) {
             throw ApiExceptions.conflict("Return case is not in disputed status");
@@ -322,7 +350,9 @@ public class ReturnSettlementService {
         BigDecimal safeCleaning = safeFee(request.cleaningFee());
         BigDecimal safeLostItem = safeFee(request.lostItemFee());
         BigDecimal safeOverdue = safeFee(request.overdueFee());
-        BigDecimal safeOutstanding = safeFee(request.outstandingFee());
+        var verifiedFinance=captureFinance(returnCase);
+        BigDecimal safeOutstanding = verifiedFinance.debt();
+        safeOverdue=settlementOverdueFee(returnCase,safeOverdue,verifiedFinance);
 
         BigDecimal totalDeductions = safeDamage
             .add(safeCleaning)
@@ -335,6 +365,7 @@ public class ReturnSettlementService {
         BigDecimal netRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
         BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
 
+        requireSettlementLimit(totalDeductions);
         returnCase.setReviewedBy(manager);
         returnCase.setReviewedAt(Instant.now());
         returnCase.setManagerResolutionNote(request.resolutionNote());
@@ -357,6 +388,7 @@ public class ReturnSettlementService {
         } else if (netRefund.compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.refund_pending);
         } else {
+            finance().settle(returnCase,actor.userId(),"OFFSET:"+returnCase.getId(),false);
             returnCase.setStatus(ReturnCaseStatus.completed);
             returnCase.setCompletedAt(Instant.now());
             finalizeRentalAndUnit(returnCase);
@@ -396,9 +428,15 @@ public class ReturnSettlementService {
 
         facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
 
+        lockRecoveryReturn(returnCase);
+        var recoveryGuard=recoveryGuard();
+        if(recoveryGuard!=null)recoveryGuard.requireManualSettlement(returnCase);
         if (returnCase.getStatus() != ReturnCaseStatus.refund_pending) {
             throw ApiExceptions.conflict("Return case is not pending refund");
         }
+        authorizationService.require(actor,SystemPermission.MANAGE_PAYMENTS);
+        finance().receipt(actor,returnCase,request.paymentMethod(),request.transactionReference(),request.receiptFileId());
+        finance().settle(returnCase,actor.userId(),request.transactionReference(),true);
 
         returnCase.setStatus(ReturnCaseStatus.completed);
         returnCase.setCompletedAt(Instant.now());
@@ -430,37 +468,33 @@ public class ReturnSettlementService {
     }
 
     @Transactional
-    public ReturnCaseResponse customerPaySettlement(
-        ActorPrincipal actor,
-        UUID returnId,
-        CustomerPaySettlementRequest request
-    ) {
-        ReturnCase returnCase = returnCaseRepository.findByIdAndCustomer_Id(returnId, actor.userId())
-            .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
+    public ReturnCaseResponse customerPaySettlement(ActorPrincipal actor,UUID returnId,CustomerPaySettlementRequest request) {
+        var rc=returnCaseRepository.findByIdAndCustomer_Id(returnId,actor.userId()).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
+        lockRecoveryReturn(rc);
+        if(rc.getStatus()!=ReturnCaseStatus.payment_due)throw ApiExceptions.conflict("Return case has no outstanding payment due");
+        throw ApiExceptions.conflict("Nhân viên cần xác minh biên lai quyết toán trước khi ghi nhận đã thanh toán.");
+    }
 
-        if (returnCase.getStatus() != ReturnCaseStatus.payment_due) {
-            throw ApiExceptions.conflict("Return case has no outstanding payment due");
-        }
-
-        returnCase.setStatus(ReturnCaseStatus.completed);
-        returnCase.setCompletedAt(Instant.now());
-        returnCase.setSettlementPaidAt(Instant.now());
-        returnCase.setSettlementPaymentId("SETTLEMENT-PAY-" + UUID.randomUUID().toString().substring(0, 8));
-
-        finalizeRentalAndUnit(returnCase);
-
-        ReturnCase saved = returnCaseRepository.save(returnCase);
-
-        auditLogService.recordMutation(
-            "RETURN_SETTLEMENT_PAID",
-            "return",
-            saved.getId(),
-            saved.getFacility().getId(),
-            null,
-            toResponse(saved)
-        );
-
-        return toResponse(saved);
+    @Transactional
+    public ReturnCaseResponse recordSettlement(ActorPrincipal actor,UUID returnId,com.storagehub.api.returns.StaffReturnSettlementRequest request) {
+        authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
+        authorizationService.require(actor,SystemPermission.MANAGE_PAYMENTS);
+        var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
+        facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
+        var guard=recoveryGuard();if(guard!=null)guard.requireManualSettlement(rc);
+        if(!Boolean.TRUE.equals(request.confirmed()))throw ApiExceptions.validation("Cần xác nhận đã thực thu hoặc thực hoàn tiền.",null);
+        var receiptAmount = rc.getAmountDueFromCustomer() != null && rc.getAmountDueFromCustomer().signum() > 0
+            ? rc.getAmountDueFromCustomer() : rc.getNetRefundAmount();
+        if(request.amount() == null || receiptAmount == null || request.amount().compareTo(receiptAmount) != 0)
+            throw ApiExceptions.conflict("Số tiền quyết toán đã thay đổi. Tải lại hồ sơ và đối chiếu biên lai trước khi xác nhận.");
+        if(finance().recordedReceiptMatches(rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId()))return toResponse(rc);
+        finance().receipt(actor,rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId());
+        finance().settle(rc,actor.userId(),request.transactionReference(),true);
+        rc.setStatus(ReturnCaseStatus.completed);rc.setCompletedAt(Instant.now());rc.setSettlementPaidAt(Instant.now());
+        rc.setSettlementPaymentId(request.transactionReference());returnCaseRepository.saveAndFlush(rc);finalizeRentalAndUnit(rc);
+        auditLogService.recordMutation("RETURN_FINANCIAL_SETTLED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));
+        notificationService.createNotification(rc.getCustomer().getId(),NotificationType.PAYMENT,"Đã ghi nhận quyết toán trả kho","Nhân viên đã đối chiếu biên lai và hoàn tất thu hoặc hoàn tiền cho hồ sơ trả kho.",returnId);
+        return toResponse(rc);
     }
 
     @Transactional(readOnly = true)
@@ -508,7 +542,108 @@ public class ReturnSettlementService {
         return toResponse(returnCase);
     }
 
+    /** Called by the Recovery workflow, never by a Customer return-request endpoint. */
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public ReturnCase createRecoveryReturn(ActorPrincipal actor,UUID rentalId) {
+        authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
+        Rental rental=rentalRepository.findByIdForUpdate(rentalId).orElseThrow(()->ApiExceptions.notFound("Rental not found"));
+        facilityScopeService.assertCanOperate(actor,rental.getFacility().getId());
+        var guard=recoveryGuard();
+        if(guard==null)throw ApiExceptions.conflict("Recovery settlement is not enabled");
+        guard.requireActiveTask(rental);
+        if(rental.getStatus()!=RentalStatus.active||rental.getActualReturnedAt()!=null
+            ||returnCaseRepository.existsByRental_IdAndStatusNotIn(rentalId,List.of(ReturnCaseStatus.completed)))
+            throw ApiExceptions.conflict("Rental already has an active return or is not eligible for Recovery settlement");
+        var rc=new ReturnCase();rc.setRental(rental);rc.setFacility(rental.getFacility());rc.setStorageUnit(rental.getStorageUnit());
+        rc.setCustomer(rental.getCustomer());rc.setRequestedBy(userRepository.findById(actor.userId()).orElseThrow(()->ApiExceptions.notFound("Staff not found")));
+        rc.setRequestedAt(Instant.now());rc.setScheduledDate(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")));
+        rc.setCustomerNotes("OVERDUE_REPOSSESSION — hồ sơ do nhân viên lập từ nhiệm vụ thu hồi");
+        rc.setDepositAmount(securityDeposit(rental));
+        // This is the original Rental security deposit, never the forfeited Renewal prepayment.
+        return returnCaseRepository.saveAndFlush(rc);
+    }
+
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public ReturnCaseResponse completeRecoverySettlement(ActorPrincipal actor,UUID returnId,String reference) {
+        authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
+        authorizationService.require(actor,SystemPermission.MANAGE_PAYMENTS);
+        var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
+        facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
+        var guard=recoveryGuard();if(guard==null)throw ApiExceptions.conflict("Recovery settlement is not enabled");
+        guard.requireReceipt(rc,reference);
+        finance().settle(rc,actor.userId(),reference,true);
+        rc.setStatus(ReturnCaseStatus.completed);rc.setCompletedAt(Instant.now());
+        rc.setSettlementPaymentId(reference);rc.setSettlementPaidAt(Instant.now());returnCaseRepository.saveAndFlush(rc);
+        // Physical release is exclusively the Recovery completion command.
+        auditLogService.recordMutation("RECOVERY_SETTLEMENT_RECORDED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));
+        notificationService.createNotification(rc.getCustomer().getId(),NotificationType.PAYMENT,"Đã ghi nhận quyết toán thu hồi",
+            "Nhân viên đã ghi nhận chứng từ quyết toán hồ sơ thu hồi kho.",returnId);
+        return toResponse(rc);
+    }
+
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void finalizeRecoveryReturn(ActorPrincipal actor,UUID returnId) {
+        authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
+        var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
+        facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
+        var guard=recoveryGuard();if(guard==null)throw ApiExceptions.conflict("Recovery settlement is not enabled");
+        guard.requireReadyToRelease(rc);releaseRentalAndUnit(rc);
+        auditLogService.recordMutation("RECOVERY_RENTAL_RELEASED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));
+    }
+
+    private BigDecimal securityDeposit(Rental rental) {return finance().deposit(rental);}
+    private boolean isRecovery(ReturnCase rc) {var guard=recoveryGuard();return guard!=null&&guard.linked(rc);}
+    private com.storagehub.service.ledger.ReturnFinancialReconciliation.View captureFinance(ReturnCase rc) {
+        return isRecovery(rc)?finance().captureRecovery(rc):finance().capture(rc);
+    }
+    private BigDecimal settlementOverdueFee(ReturnCase rc,BigDecimal requested,com.storagehub.service.ledger.ReturnFinancialReconciliation.View view) {
+        return isRecovery(rc)?view.unpostedOverdueFee():requested.subtract(view.postedOverdueFee()).max(BigDecimal.ZERO);
+    }
+    private void requireSettlementLimit(BigDecimal total) {
+        if(total.compareTo(new BigDecimal("999999999999"))>0)throw ApiExceptions.conflict("Tổng phí quyết toán vượt giới hạn cho phép, cần đối soát.");
+    }
+
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public ReturnCaseResponse recalculateRecoverySettlement(ActorPrincipal actor,UUID returnId) {
+        authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
+        var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
+        facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
+        if(!isRecovery(rc)||rc.getInspectedAt()==null||rc.getSettlementPaidAt()!=null||rc.getCompletedAt()!=null
+            ||!List.of(ReturnCaseStatus.awaiting_customer_confirmation,ReturnCaseStatus.payment_due,ReturnCaseStatus.refund_pending).contains(rc.getStatus()))
+            throw ApiExceptions.conflict("Chỉ được đối soát lại hồ sơ thu hồi đã kiểm kê và chưa thu hoàn tiền.");
+        var before=toResponse(rc);
+        var calculated=finance().captureRecovery(rc);
+        BigDecimal total=rc.getDamageFee().add(rc.getCleaningFee()).add(rc.getLostItemFee()).add(calculated.unpostedOverdueFee()).add(calculated.debt());
+        requireSettlementLimit(total);
+        rc.setOverdueFee(calculated.unpostedOverdueFee());rc.setOutstandingFee(calculated.debt());rc.setTotalDeductions(total);
+        rc.setNetRefundAmount(rc.getDepositAmount().subtract(total).max(BigDecimal.ZERO));
+        rc.setAmountDueFromCustomer(total.subtract(rc.getDepositAmount()).max(BigDecimal.ZERO));
+        rc.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);rc.setCustomerConfirmed(false);rc.setCustomerConfirmedAt(null);
+        rc.setCustomerDecision(null);rc.setCustomerDecisionNote(null);
+        returnCaseRepository.saveAndFlush(rc);
+        var response=toResponse(rc);
+        auditLogService.recordMutation("RECOVERY_SETTLEMENT_RECALCULATED","return",returnId,rc.getFacility().getId(),before,response);
+        notificationService.createNotification(rc.getCustomer().getId(),NotificationType.RETURN,"Quyết toán thu hồi đã cập nhật",
+            "Phí quá hạn đã được đối soát, vui lòng kiểm tra và xác nhận lại quyết toán.",returnId);
+        return response;
+    }
+    private com.storagehub.service.ledger.ReturnFinancialReconciliation finance() {
+        var source=returnFinances==null?null:returnFinances.getIfAvailable();
+        if(source==null)throw ApiExceptions.conflict("Nguồn đối soát công nợ và cọc thực thu chưa sẵn sàng.");
+        return source;
+    }
+    private com.storagehub.service.overdue.RecoverySettlementGuard recoveryGuard(){return recoveryGuards==null?null:recoveryGuards.getIfAvailable();}
+    private void lockRecoveryReturn(ReturnCase rc){
+        rentalRepository.findByIdForUpdate(rc.getRental().getId()).orElseThrow(()->ApiExceptions.notFound("Rental not found"));
+        settlementEntityManager.refresh(rc,jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        var guard=recoveryGuard();if(guard!=null)guard.lock(rc);
+    }
+
     private void finalizeRentalAndUnit(ReturnCase returnCase) {
+        var guard=recoveryGuard();if(guard!=null&&guard.linked(returnCase))return;
+        releaseRentalAndUnit(returnCase);
+    }
+    private void releaseRentalAndUnit(ReturnCase returnCase) {
         Rental rental = returnCase.getRental();
         rental.setStatus(RentalStatus.completed);
         rental.setActualReturnedAt(Instant.now());
@@ -525,10 +660,10 @@ public class ReturnSettlementService {
     }
 
     private BigDecimal safeFee(BigDecimal fee) {
-        if (fee == null || fee.compareTo(BigDecimal.ZERO) < 0) {
-            return BigDecimal.ZERO;
-        }
-        return fee.setScale(2, RoundingMode.HALF_UP);
+        if(fee==null)return BigDecimal.ZERO;
+        if(fee.signum()<0)throw ApiExceptions.validation("Phí quyết toán không được âm.",null);
+        try{return fee.setScale(0,RoundingMode.UNNECESSARY);}
+        catch(ArithmeticException invalid){throw ApiExceptions.validation("Phí quyết toán phải là số nguyên đồng Việt Nam.",null);}
     }
 
     private PageRequest pageable(int page, int size) {
@@ -539,6 +674,13 @@ public class ReturnSettlementService {
     }
 
     public ReturnCaseResponse toResponse(ReturnCase rc) {
+        var recoveryGuard=recoveryGuard();
+        var recovery=recoveryGuard==null?null:recoveryGuard.source(rc);
+        var finances=returnFinances==null?null:returnFinances.getIfAvailable();
+        var settlementReceipt=finances==null?null:finances.settledReceipt(rc,recovery!=null);
+        var overdueSettlement=finances==null?null:finances.overdueSettlement(rc,recovery!=null);
+        String settlementBlocker=overdueSettlement!=null&&overdueSettlement.requiresReconciliation()&&rc.getStatus()!=ReturnCaseStatus.completed
+            ?"Cần cơ sở đối soát lại phí quá hạn trước khi xác nhận quyết toán.":null;
         List<String> evidencePhotos = Collections.emptyList();
         if (rc.getEvidencePhotosJson() != null && !rc.getEvidencePhotosJson().isBlank()) {
             try {
@@ -592,7 +734,14 @@ public class ReturnSettlementService {
             rc.getManagerResolutionNote(),
             rc.getSettlementPaymentId(),
             rc.getSettlementPaidAt(),
-            rc.getCompletedAt()
+            rc.getCompletedAt(),
+            recovery==null?"CUSTOMER_RETURN":"RECOVERY",
+            recovery==null?null:recovery.taskId(),
+            recovery==null?null:recovery.status(),
+            recovery==null?null:recovery.completedAt(),
+            settlementReceipt,
+            overdueSettlement,
+            settlementBlocker
         );
     }
 }

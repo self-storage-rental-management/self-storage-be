@@ -19,14 +19,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class AdminDashboardService {
 
     private static final Set<String> SECURITY_ACTIONS = Set.of(
@@ -53,6 +51,18 @@ public class AdminDashboardService {
     private final LoginHistoryRepository loginHistoryRepository;
     private final ActivityLogRepository activityLogRepository;
     private final AdminAuthorizationService authorizationService;
+
+    public AdminDashboardService(
+        UserRepository userRepository,
+        LoginHistoryRepository loginHistoryRepository,
+        ActivityLogRepository activityLogRepository,
+        AdminAuthorizationService authorizationService
+    ) {
+        this.userRepository = userRepository;
+        this.loginHistoryRepository = loginHistoryRepository;
+        this.activityLogRepository = activityLogRepository;
+        this.authorizationService = authorizationService;
+    }
 
     @Transactional(readOnly = true)
     public AdminDashboardResponse dashboard(ActorPrincipal actor) {
