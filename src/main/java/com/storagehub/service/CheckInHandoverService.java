@@ -245,7 +245,6 @@ public class CheckInHandoverService {
         if (!request.checklist().identityVerified()) {
             throw ApiExceptions.conflict("Customer identity verification is required");
         }
-        assertIdentityMatchesReservation(reservation, request.identityDocumentNumber());
         UnitAssignment assignment = activeAssignment(reservation.getId());
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
@@ -256,6 +255,7 @@ public class CheckInHandoverService {
         if (rentalRepository.existsActiveRental(reservation.getId(), unit.getId(), RentalStatus.active)) {
             throw ApiExceptions.conflict("Reservation or storage unit already has an active rental");
         }
+        validateIdentityDocument(reservation, request);
         if (request.actualMeasurements().weightKg().compareTo(unit.getUnitType().getMaxLoadKg()) > 0) {
             throw ApiExceptions.conflict("Actual goods weight exceeds the storage unit limit");
         }
@@ -538,21 +538,6 @@ public class CheckInHandoverService {
         }
     }
 
-    private void assertIdentityMatchesReservation(Reservation reservation, String providedIdentity) {
-        String expected = normalizeIdentity(reservation.getIdentityDocumentNumber());
-        String actual = normalizeIdentity(providedIdentity);
-        if (expected == null || actual == null || !expected.equals(actual)) {
-            throw ApiExceptions.conflict("Customer identity does not match the reservation");
-        }
-    }
-
-    private String normalizeIdentity(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim().replaceAll("[\\s.-]", "").toUpperCase(Locale.ROOT);
-    }
-
     private UnitAssignment activeAssignment(UUID reservationId) {
         return assignmentRepository.findByReservation_IdAndStatus(
             reservationId, UnitAssignmentStatus.ACTIVE
@@ -752,6 +737,25 @@ public class CheckInHandoverService {
         if (request.varianceReason() == null || request.varianceReason().isBlank()) {
             throw ApiExceptions.validation("varianceReason is required when actual goods differ", null);
         }
+    }
+
+    private void validateIdentityDocument(Reservation reservation, CompleteCheckInRequest request) {
+        String actualIdentity = normalizeIdentityDocument(request.identityDocumentNumber());
+        String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
+        if (actualIdentity == null) {
+            throw ApiExceptions.validation("identityDocumentNumber is required", null);
+        }
+
+        if (declaredIdentity == null || !declaredIdentity.equals(actualIdentity)) {
+            throw ApiExceptions.conflict("Customer identity does not match the reservation");
+        }
+    }
+
+    private String normalizeIdentityDocument(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
     }
 
     private boolean exceedsTolerance(BigDecimal actual, BigDecimal declared, BigDecimal minimumTolerance) {

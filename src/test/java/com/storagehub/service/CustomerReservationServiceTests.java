@@ -182,6 +182,7 @@ class CustomerReservationServiceTests {
         );
         Instant registeredAt = Instant.parse("2026-10-19T01:00:00Z");
         ReflectionTestUtils.setField(reservation, "createdAt", registeredAt);
+        reservation.setGoodsReviewStatus(com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED);
         Instant previousAppointment = ReservationCheckInPolicy.plannedWindow(registeredAt, false).availableAt();
         Instant newAppointment = previousAppointment.plusSeconds(1_800);
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
