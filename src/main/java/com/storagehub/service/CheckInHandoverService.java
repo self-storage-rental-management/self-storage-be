@@ -252,6 +252,7 @@ public class CheckInHandoverService {
         if (rentalRepository.existsActiveRental(reservation.getId(), unit.getId(), RentalStatus.active)) {
             throw ApiExceptions.conflict("Reservation or storage unit already has an active rental");
         }
+        validateIdentityDocument(reservation, request);
         if (request.actualMeasurements().weightKg().compareTo(unit.getUnitType().getMaxLoadKg()) > 0) {
             throw ApiExceptions.conflict("Actual goods weight exceeds the storage unit limit");
         }
@@ -733,6 +734,36 @@ public class CheckInHandoverService {
         if (request.varianceReason() == null || request.varianceReason().isBlank()) {
             throw ApiExceptions.validation("varianceReason is required when actual goods differ", null);
         }
+    }
+
+    private void validateIdentityDocument(Reservation reservation, CompleteCheckInRequest request) {
+        String actualIdentity = normalizeIdentityDocument(request.identityDocumentNumber());
+        String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
+        if (actualIdentity == null) {
+            throw ApiExceptions.validation("identityDocumentNumber is required", null);
+        }
+
+        if (declaredIdentity == null) {
+            // Legacy reservations were created before the reservation identity column existed.
+            // Save the verified document at the first check-in so subsequent FE reads are populated.
+            reservation.setIdentityDocumentNumber(actualIdentity);
+            return;
+        }
+
+        if (!declaredIdentity.equals(actualIdentity)
+            && (request.identityVerificationNote() == null || request.identityVerificationNote().isBlank())) {
+            throw ApiExceptions.validation(
+                "A verification note is required when the check-in identity differs from the reservation",
+                Map.of("declaredIdentityDocumentNumber", reservation.getIdentityDocumentNumber())
+            );
+        }
+    }
+
+    private String normalizeIdentityDocument(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
     }
 
     private boolean exceedsTolerance(BigDecimal actual, BigDecimal declared, BigDecimal minimumTolerance) {
