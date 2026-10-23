@@ -40,6 +40,7 @@ public class OverdueService {
     public OverdueResponse.ListResult list(ActorPrincipal actor,OverdueQuery q,String correlation) {
         RenewalReadService.authorize(actor,true,false);if(q.facilityId()!=null)RenewalReadService.requireScope(actor,q.facilityId(),FacilityScopeLevel.READ);
         var scopes=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.READ)).map(Map.Entry::getKey).toList();
+        if(scopes.isEmpty())scopes=List.of(new UUID(0L,0L));
         var query=em.createQuery("select r from Rental r join fetch r.customer join fetch r.facility join fetch r.storageUnit where r.facility.id in :ids"+(q.facilityId()==null?"":" and r.facility.id=:facility"),Rental.class).setParameter("ids",scopes);
         if(q.facilityId()!=null)query.setParameter("facility",q.facilityId());
         Instant asOf=now();var missing=new TreeSet<String>();String search=q.search().toLowerCase(Locale.ROOT);
