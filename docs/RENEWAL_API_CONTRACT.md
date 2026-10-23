@@ -493,7 +493,7 @@ Nguồn term không thu phí, khóa kho, tạo Recovery hoặc thay số dư.
 
 #### 3. Staff processing permissions
 
-Manager Staff-assignment POST is removed. Eligible Staff at the Renewal facility can process the request without assignment. The current database and token must grant rentals:read for viewing, rentals:update for arrival/incident/completion, and payments:read/payments:collect for CASH. Historical STAFF_ASSIGNMENT records are metadata only. Staff lists are filtered by current facility OPERATE scope before pagination.
+Manager Staff-assignment POST is removed. Eligible Staff at the Renewal facility can process the request without assignment. The current database and token must grant rentals:read for viewing, `renewals:operate` for arrival/incident/completion, and payments:read/payments:collect for CASH. Historical STAFF_ASSIGNMENT records are metadata only. Staff lists are filtered by current facility OPERATE scope before pagination. Manager uses rentals:read/rentals:update for management decisions.
 
 #### 4. Xác minh lỗi cơ sở
 

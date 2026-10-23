@@ -18,7 +18,7 @@ Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Sel
    - Backend sử dụng 100% CSDL quan hệ MySQL 8 được đồng bộ chuẩn hóa qua 23 tệp migration Flyway (`V2026100200` đến `V2026101504`).
    - Frontend cấu hình `VITE_ENABLE_DEMO_DATA=false`, thực hiện gọi API trực tiếp tới Backend qua tầng `apiClient.ts` và các service module chuyên biệt. Hệ thống FE vẫn giữ lại các logic mock/fallback nội bộ trong `StorageHubContext.tsx` khi mất kết nối mạng hoặc trong chế độ demo offline.
 3. **Phân hệ nghiệp vụ cốt lõi đã hiện thực đầy đủ (Implemented & Verified)**:
-   - **Xác thực & Phân quyền (RBAC + Facility Scope)**: Quản lý 5 Role (`CUSTOMER`, `STAFF`, `MANAGER`, `BUSINESS`, `ADMIN`), 27 quyền hạt nhân (`SystemPermission`), và phân quyền theo phạm vi cơ sở kho (`FacilityScopeLevel`: `READ`, `OPERATE`, `MANAGE`).
+   - **Xác thực & Phân quyền (RBAC + Facility Scope)**: Quản lý 5 Role (`CUSTOMER`, `STAFF`, `MANAGER`, `BUSINESS`, `ADMIN`), 32 quyền canonical (`SystemPermission`), và phân quyền theo phạm vi cơ sở kho (`FacilityScopeLevel`: `READ`, `OPERATE`, `MANAGE`).
    - **Đặt giữ kho (Reservation Lifecycle)**: Từ báo giá tức thời (Quote tính cọc 20% + quy đổi kích thước theo hệ số 5000), xác thực OTP qua email, thanh toán cọc VNPay / Mô phỏng, duyệt hàng hóa đặc biệt, gán kho vật lý, đến tạo biên bản check-in.
    - **Nhận kho & Bàn giao (Check-in & Handover)**: Nghiệm thu kích thước thực tế, thu tiền còn lại và tiền cọc an ninh (1 tháng tiền thuê), cấp phát mã định danh mở cửa (`AccessCredential`), và khách hàng ký duyệt hợp đồng điện tử (`Contract`).
    - **Quản lý Hợp đồng & Nhắc nợ (Rental Lifecycle & Overdue Handling)**: Theo dõi kỳ thanh toán, thông báo D-14, D-3, D+1, D+3 (ân hạn grace period), D+7 (escalation thu hồi), phát sinh phí phạt trả chậm 1 lần duy nhất cho mỗi kỳ.
@@ -92,7 +92,7 @@ Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Sel
 
 ### 2.3 Bản đồ thư mục Frontend (`self-storage-FE/src/`)
 - `main.tsx`, `App.tsx`: Điểm khởi chạy ứng dụng, phân luồng route theo domain/subdomain và URL path.
-- `auth/`: `rbac.ts` (định nghĩa 27 permissions, vai trò và hàm chuẩn hóa quyền `normalizeRolePermissions`).
+- `auth/`: `rbac.ts` (định nghĩa 32 permissions, vai trò và hàm chuẩn hóa quyền `normalizeRolePermissions`).
 - `domain/`: Chứa các quy tắc nghiệp vụ thuần túy (pure business logic) phía client:
   - `businessRules.ts`: Quy tắc tạo mã cơ sở, giới hạn phân bổ kho, kiểm tra an toàn khi xóa kho.
   - `managerRules.ts`: Quy tắc tính ngày kết thúc tháng lịch, chu kỳ quá hạn, kiểm tra xung đột phân bổ kho, công thức quyết toán trả kho.
@@ -167,72 +167,52 @@ Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Sel
 Mã vai trò chuẩn hóa trong CSDL (`roles.code`):
 - `CUSTOMER`: Vai trò người dùng bên ngoài.
 - `STAFF`: Vai trò nhân viên vận hành cơ sở.
-- `MANAGER`: Vai trò cấp quản lý cơ sở (có quyền cao hơn Staff tại cơ sở được gán).
+- `MANAGER`: Vai trò cấp quản lý cơ sở tại cơ sở được gán; không kế thừa permission của Staff.
 - `BUSINESS`: Vai trò quản trị kinh doanh và chính sách toàn cục.
 - `ADMIN`: Vai trò quản trị kỹ thuật cao nhất (Superuser).
 
 ### 4.3 Ma trận Quyền Hệ Thống (System Permissions Matrix)
-Hệ thống định nghĩa 27 quyền nguyên tử (`SystemPermission`):
-1. `facilities:read`
-2. `facilities:manage`
-3. `units:read`
-4. `units:manage`
-5. `policies:read`
-6. `policies:update`
-7. `reservations:read`
-8. `reservations:approve`
-9. `reservations:assign`
-10. `checkins:read`
-11. `checkins:process`
-12. `rentals:read`
-13. `rentals:manage`
-14. `returns:read`
-15. `returns:inspect`
-16. `returns:settle`
-17. `overdue:read`
-18. `overdue:manage`
-19. `maintenance:read`
-20. `maintenance:manage`
-21. `support:read`
-22. `support:manage`
-23. `reports:read`
-24. `payments:read`
-25. `users:manage`
-26. `roles:manage`
-27. `settings:manage`
 
-#### Bảng phân bổ quyền mặc định theo vai trò:
-| System Permission | Customer | Staff | Manager | Business | Admin |
+Backend và frontend dùng cùng quy ước canonical `resource:action`. Đây là ma trận mặc định cuối cùng; scope, ownership và trạng thái resource vẫn được service kiểm tra thêm.
+
+| Permission | Customer | Staff | Manager | Business | Admin |
 |---|:---:|:---:|:---:|:---:|:---:|
-| `facilities:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `facilities:manage` | ✗ | ✗ | ✗ | ✓ | ✓ |
-| `units:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `units:manage` | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `policies:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `policies:update` | ✗ | ✗ | ✗ | ✓ | ✓ |
-| `reservations:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `reservations:approve` | ✗ | ✓ (Scoped) | ✗ | ✗ | ✓ |
-| `reservations:assign` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `checkins:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `checkins:process` | ✗ | ✓ (Scoped) | ✗ | ✗ | ✓ |
-| `rentals:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `rentals:manage` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `returns:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `returns:inspect` | ✗ | ✓ (Scoped) | ✗ | ✗ | ✓ |
-| `returns:settle` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `overdue:read` | Own | ✗ | ✓ (Scoped) | ✓ | ✓ |
-| `overdue:manage` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `maintenance:read` | ✗ | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `maintenance:manage` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `support:read` | Own | ✓ | ✓ | ✓ | ✓ |
-| `support:manage` | ✗ | ✓ | ✓ | ✗ | ✓ |
-| `reports:read` | ✗ | ✗ | ✓ (Scoped) | ✓ | ✓ |
-| `payments:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `users:manage` | ✗ | ✗ | ✗ | ✗ | ✓ |
-| `roles:manage` | ✗ | ✗ | ✗ | ✗ | ✓ |
-| `settings:manage` | ✗ | ✗ | ✗ | ✗ | ✓ |
+| `dashboard:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `facilities:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `storage_units:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `reservations:create` | ✓ |  |  |  |  |
+| `reservations:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `reservations:approve` |  | ✓ | ✓ |  |  |
+| `storage_units:assign` |  |  | ✓ |  |  |
+| `contracts:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `checkins:read` |  | ✓ | ✓ |  |  |
+| `checkins:process` |  | ✓ |  |  |  |
+| `rentals:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `rentals:update` |  |  | ✓ |  |  |
+| `renewals:operate` |  | ✓ |  |  |  |
+| `returns:read` |  | ✓ | ✓ | ✓ |  |
+| `returns:process` |  | ✓ | ✓ |  |  |
+| `payments:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `payments:collect` |  | ✓ | ✓ |  |  |
+| `payments:confirm` |  |  | ✓ |  |  |
+| `refunds:approve` |  |  | ✓ | ✓ |  |
+| `fees:waive` |  |  | ✓ | ✓ |  |
+| `policies:read` | ✓ |  | ✓ | ✓ |  |
+| `policies:update` |  |  |  | ✓ |  |
+| `support:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `support:update` |  | ✓ |  |  |  |
+| `inventory:update` |  |  | ✓ |  |  |
+| `staff_tasks:update` |  |  | ✓ |  |  |
+| `reports:read` |  |  | ✓ | ✓ |  |
+| `audit_logs:read` |  |  |  |  | ✓ |
+| `users:manage` |  |  |  |  | ✓ |
+| `roles:manage` |  |  |  |  | ✓ |
+| `settings:manage` |  |  |  |  | ✓ |
+| `sessions:manage` |  |  |  |  | ✓ |
 
-*(Ghi chú: `Own`: Chỉ xem được dữ liệu do chính tài khoản sở hữu; `Scoped`: Bị ràng buộc bởi cơ sở kho được gán trong `user_facility_scopes`).*
+Staff chỉ thu tiền mặt trong phiên thu; Business chỉ duyệt refund/fee vượt hạn mức và không thao tác hiện trường. Customer còn bị ràng buộc ownership. `ADMIN` và `CUSTOMER` là role loại trừ; Manager không kế thừa Staff.
+
+Hạn mức Manager tự duyệt refund/miễn giảm chưa có giá trị chốt từ Business nên chưa hard-code; service đã tách capability `refunds:approve` và `fees:waive` để gắn policy khi có tham số chính thức.
 
 ### 4.4 Cơ chế Phân quyền theo Phạm vi Cơ sở (Facility Scoping Mechanism)
 - Bảng CSDL: `user_facility_scopes(user_id, facility_id, scope_level)`.
@@ -1150,7 +1130,7 @@ Kiến trúc định tuyến FE phân tách độc lập hai cổng dựa trên 
 ### 18.3 CSDL & Flyway Migrations
 - `V2026100200__create_initial_schema.sql`: Khởi tạo bảng người dùng, vai trò, cơ sở, loại kho, gian kho, đơn đặt chỗ, thanh toán.
 - `V2026100701__complete_checkin_handover_schema.sql`: Hoàn thiện bảng `check_ins` và trường hợp đồng.
-- `V2026100902__normalize_permissions_and_role_hierarchy.sql`: Chuẩn hóa 27 quyền hệ thống và phân bổ vai trò.
+- `V2026100902__normalize_permissions_and_role_hierarchy.sql`: Migration lịch sử chuẩn hóa permission; ma trận hiện hành gồm 32 quyền canonical và được bổ sung qua RoleDataInitializer.
 - `V2026100904__create_overdue_renewal_support_persistence.sql`: Bổ sung bảng nợ, gia hạn, và ticket hỗ trợ.
 - `V2026100905__align_return_case_settlement_columns.sql`: Cập nhật cấu trúc bảng `return_cases` phục vụ quyết toán bù trừ cọc.
 - `V2026101201__create_access_credentials.sql`: Tạo bảng mã PIN mở cửa `access_credentials`.

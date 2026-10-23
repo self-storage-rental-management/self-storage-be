@@ -125,10 +125,12 @@ public class AdminRoleService {
         }
 
         Set<String> adminOnly = Set.of(
+            SystemPermission.VIEW_DASHBOARD.code(),
             SystemPermission.MANAGE_USERS.code(),
             SystemPermission.MANAGE_ROLES.code(),
             SystemPermission.MANAGE_SETTINGS.code(),
-            SystemPermission.VIEW_AUDIT_LOGS.code()
+            SystemPermission.VIEW_AUDIT_LOGS.code(),
+            SystemPermission.MANAGE_SESSIONS.code()
         );
         if (roleCode == RoleCode.ADMIN && !permissions.equals(adminOnly)) {
             throw ApiExceptions.conflict("Admin permissions are limited to account, role, system and audit administration");
@@ -137,7 +139,14 @@ public class AdminRoleService {
         if (roleCode == RoleCode.MANAGER) {
             Set<String> required = Set.of(
                 SystemPermission.APPROVE_RESERVATIONS.code(),
+                SystemPermission.ASSIGN_UNITS.code(),
+                SystemPermission.MANAGE_RENTALS.code(),
                 SystemPermission.VIEW_POLICIES.code(),
+                SystemPermission.VIEW_PAYMENTS.code(),
+                SystemPermission.MANAGE_PAYMENTS.code(),
+                SystemPermission.CONFIRM_PAYMENTS.code(),
+                SystemPermission.APPROVE_REFUNDS.code(),
+                SystemPermission.WAIVE_FEES.code(),
                 SystemPermission.MANAGE_STAFF_TASKS.code(),
                 SystemPermission.VIEW_REPORTS.code()
             );
@@ -147,26 +156,56 @@ public class AdminRoleService {
             if (permissions.contains(SystemPermission.MANAGE_POLICIES.code())) {
                 throw ApiExceptions.conflict("Manager may read policies; only Business Operations may edit them");
             }
+            if (intersects(permissions, Set.of(
+                SystemPermission.PERFORM_CHECKIN.code(),
+                SystemPermission.MANAGE_SUPPORT.code(),
+                SystemPermission.OPERATE_RENEWALS.code()
+            ))) {
+                throw ApiExceptions.conflict("Manager cannot perform Staff-only check-in, renewal operation or support updates");
+            }
         }
 
-        if (roleCode == RoleCode.STAFF && intersects(permissions, Set.of(
-            SystemPermission.MANAGE_POLICIES.code(),
-            SystemPermission.MANAGE_STAFF_TASKS.code()
+        if (roleCode == RoleCode.STAFF && !permissions.containsAll(Set.of(
+            SystemPermission.APPROVE_RESERVATIONS.code(),
+            SystemPermission.PERFORM_CHECKIN.code(),
+            SystemPermission.PROCESS_RETURNS.code(),
+            SystemPermission.VIEW_PAYMENTS.code(),
+            SystemPermission.MANAGE_PAYMENTS.code(),
+            SystemPermission.OPERATE_RENEWALS.code(),
+            SystemPermission.VIEW_SUPPORT.code(),
+            SystemPermission.MANAGE_SUPPORT.code()
         ))) {
-            throw ApiExceptions.conflict("Staff cannot edit policies or coordinate staff tasks");
+            throw ApiExceptions.conflict("Staff must retain check-in, return, renewal, payment and support permissions");
+        }
+        if (roleCode == RoleCode.STAFF && intersects(permissions, Set.of(
+            SystemPermission.ASSIGN_UNITS.code(),
+            SystemPermission.MANAGE_RENTALS.code(),
+            SystemPermission.MANAGE_POLICIES.code(),
+            SystemPermission.MANAGE_STAFF_TASKS.code(),
+            SystemPermission.CONFIRM_PAYMENTS.code(),
+            SystemPermission.APPROVE_REFUNDS.code(),
+            SystemPermission.WAIVE_FEES.code()
+        ))) {
+            throw ApiExceptions.conflict("Staff cannot assign units, edit rentals, confirm payments, approve refunds or waive fees");
         }
 
         if (roleCode == RoleCode.BUSINESS && !permissions.containsAll(Set.of(
-            SystemPermission.VIEW_POLICIES.code(), SystemPermission.MANAGE_POLICIES.code()
+            SystemPermission.VIEW_POLICIES.code(), SystemPermission.MANAGE_POLICIES.code(),
+            SystemPermission.APPROVE_REFUNDS.code(), SystemPermission.WAIVE_FEES.code()
         ))) {
-            throw ApiExceptions.conflict("Business Operations must retain policy read and edit permissions");
+            throw ApiExceptions.conflict("Business Operations must retain policy and over-limit approval permissions");
         }
         if (roleCode == RoleCode.BUSINESS && intersects(permissions, Set.of(
             SystemPermission.MANAGE_SETTINGS.code(),
             SystemPermission.MANAGE_PAYMENTS.code(),
-            SystemPermission.APPROVE_RESERVATIONS.code()
+            SystemPermission.APPROVE_RESERVATIONS.code(),
+            SystemPermission.PROCESS_RETURNS.code(),
+            SystemPermission.MANAGE_RENTALS.code(),
+            SystemPermission.PERFORM_CHECKIN.code(),
+            SystemPermission.ASSIGN_UNITS.code(),
+            SystemPermission.MANAGE_SUPPORT.code()
         ))) {
-            throw ApiExceptions.conflict("Business Operations cannot manage system settings, collect payments or approve reservations");
+            throw ApiExceptions.conflict("Business Operations cannot perform field operations, collect payments or approve reservations");
         }
     }
 
