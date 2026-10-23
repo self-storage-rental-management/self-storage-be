@@ -110,10 +110,9 @@ public class RecoveryTaskOperationService {
         String direction=rc.getStatus()==ReturnCaseStatus.payment_due?"COLLECTION":rc.getStatus()==ReturnCaseStatus.refund_pending?"REFUND":null;
         if(direction==null)throw ApiExceptions.conflict("Settlement must first be confirmed or the dispute resolved");
         if ("REFUND".equals(direction)) {
-            if (actor.hasRole(RoleCode.STAFF)) {
-                throw ApiExceptions.forbidden("Staff cannot approve or execute refunds");
-            }
-            access.require(actor,role,c.task().facilityId(),FacilityScopeLevel.MANAGE,SystemPermission.APPROVE_REFUNDS);
+            if (actor.hasRole(RoleCode.MANAGER)) throw ApiExceptions.forbidden("Manager approves refunds but cannot execute them");
+            access.require(actor,role,c.task().facilityId(),FacilityScopeLevel.OPERATE,SystemPermission.PROCESS_RETURNS,
+                SystemPermission.MANAGE_PAYMENTS,SystemPermission.EXECUTE_REFUNDS);
         } else {
             access.require(actor,role,c.task().facilityId(),FacilityScopeLevel.OPERATE,SystemPermission.MANAGE_PAYMENTS);
             if (actor.hasRole(RoleCode.STAFF) && body.paymentMethod()!=PaymentMethod.CASH) {
