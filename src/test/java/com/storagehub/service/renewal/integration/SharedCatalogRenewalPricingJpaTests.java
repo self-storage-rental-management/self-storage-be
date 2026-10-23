@@ -90,7 +90,7 @@ class SharedCatalogRenewalPricingJpaTests {
         assertThat(rental.getMonthlyPrice()).isEqualByComparingTo("100.00");
     }
 
-    @Test void catalogIsFacilityScopedAndEvaluatesFutureExtensionDate() {
+    @Test void catalogIsFacilityScopedAndIgnoresPackageDatesForActivePackages() {
         var rental = fixture();
         var own = persistPackage(rental.getFacility(), "BASE", 1, BigDecimal.ZERO);
         own.setEffectiveFrom(START); own.setEffectiveTo(START);
@@ -102,7 +102,7 @@ class SharedCatalogRenewalPricingJpaTests {
         inactive.setActive(false);
         em.flush(); em.clear();
         var prices = source.read(em.find(Rental.class, rental.getId()), START).orElseThrow();
-        assertThat(prices).extracting(p -> p.packageCode()).containsExactly("BASE");
+        assertThat(prices).extracting(p -> p.packageCode()).containsExactly("BASE", "EXPIRED");
     }
 
     @Test void emptyDatabaseCatalogDoesNotCreateDefaults() {

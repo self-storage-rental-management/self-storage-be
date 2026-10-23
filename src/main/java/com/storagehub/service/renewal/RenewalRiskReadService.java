@@ -1,5 +1,7 @@
 package com.storagehub.service.renewal;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.renewal.RenewalQuoteResponse;
 import com.storagehub.common.api.ApiExceptions;
@@ -73,9 +75,9 @@ public class RenewalRiskReadService {
         if(term==null)return new View(rental.getId(),id,now,"UNKNOWN",null,"UNKNOWN",signing,null,null,
             task==null?null:false,remainder,null,"VND",recoveryStatus,startedAt,taskId);
         // The term provider owns normalization of inclusive/exclusive Rental dates and timezone.
-        ZoneId zone=policies.read(rental.getFacility().getId(),now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate())
+        ZoneId zone=policies.read(rental.getFacility().getId(),now.atZone(BusinessTime.ZONE).toLocalDate())
             .filter(s->s.policy().term()!=null).map(s->ZoneId.of(s.policy().term().timezone()))
-            .orElse(ZoneId.of("Asia/Ho_Chi_Minh"));
+            .orElse(BusinessTime.ZONE);
         long days=RenewalOverdueTimeline.overdueDays(term.lastPermittedDate(),now,zone);
         boolean allowed=task==null&&rental.getStatus()==RentalStatus.active&&rental.getActualReturnedAt()==null&&now.isBefore(term.recoveryCutoff());
         BigDecimal fee=null;var feeSource=overdueFees==null?null:overdueFees.getIfAvailable();
