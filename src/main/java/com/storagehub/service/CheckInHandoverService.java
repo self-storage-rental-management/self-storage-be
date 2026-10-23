@@ -6,6 +6,7 @@ import com.storagehub.api.checkin.CheckInResponse;
 import com.storagehub.api.checkin.CheckInPaymentRequest;
 import com.storagehub.api.checkin.CheckInPaymentResponse;
 import com.storagehub.api.checkin.CompleteCheckInRequest;
+import com.storagehub.api.credential.IssueAccessCredentialRequest;
 import com.storagehub.api.checkin.MarkNoShowRequest;
 import com.storagehub.api.checkin.RejectCheckInRequest;
 import com.storagehub.api.checkin.ScheduleCheckInRequest;
@@ -267,10 +268,17 @@ public class CheckInHandoverService {
         }
         validateVariance(reservation, request);
         validateEvidence(checkInId, request.evidenceReferences());
+        validateNoPasswordHandover(request);
         requireRemainingPayment(reservation);
-        if (accessCredentialService != null
-            && !accessCredentialService.hasActiveForReservation(reservation.getId())) {
-            throw ApiExceptions.conflict("At least one active access credential must be issued before handover");
+        if (accessCredentialService != null) {
+            accessCredentialService.issue(
+                actor, checkInId,
+                new IssueAccessCredentialRequest(
+                    com.storagehub.domain.model.AccessCredentialType.LOCK,
+                    request.lockReference().trim(),
+                    "Kích hoạt mã ổ khóa trong giao dịch hoàn tất bàn giao"
+                )
+            );
         }
 
         User operator = requireActor(actor);
@@ -280,7 +288,7 @@ public class CheckInHandoverService {
         checkIn.setCheckedInAt(now);
         checkIn.setChecklistJson(writeHandover(request));
         assignment.setStatus(UnitAssignmentStatus.COMPLETED);
-        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        reservation.setStatus(ReservationStatus.COMPLETED);
         unit.setStatus(StorageUnitStatus.assigned);
 
         storageUnitRepository.saveAndFlush(unit);
@@ -298,7 +306,7 @@ public class CheckInHandoverService {
             ),
             Map.of(
                 "checkInStatus", CheckInStatus.completed,
-                "reservationStatus", ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+                "reservationStatus", ReservationStatus.COMPLETED,
                 "assignmentStatus", UnitAssignmentStatus.COMPLETED,
                 "storageUnitStatus", StorageUnitStatus.assigned
             )
@@ -312,9 +320,9 @@ public class CheckInHandoverService {
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.CHECKIN,
-            "Bàn giao đã hoàn tất, chờ khách xác nhận",
+            "Bàn giao đã hoàn tất",
             "Đơn " + reservation.getReservationCode()
-                + " đã bàn giao gian kho và đang chờ khách hàng xác nhận nhận kho.",
+                + " đã bàn giao gian kho và được chuyển sang trạng thái COMPLETED.",
             reservation.getId()
         );
         return toResponse(reservation, saved, assignment);
@@ -748,6 +756,15 @@ public class CheckInHandoverService {
 
         if (declaredIdentity == null || !declaredIdentity.equals(actualIdentity)) {
             throw ApiExceptions.conflict("Customer identity does not match the reservation");
+        }
+    }
+
+    private void validateNoPasswordHandover(CompleteCheckInRequest request) {
+        boolean mentionsPassword = request.handedOverItems().stream()
+            .map(value -> value == null ? "" : value.toLowerCase(Locale.ROOT))
+            .anyMatch(value -> value.contains("password") || value.contains("mật khẩu") || value.matches(".*\\bpin\\b.*"));
+        if (mentionsPassword) {
+            throw ApiExceptions.validation("New handover data must contain only the lock/key reference, not a password or PIN", null);
         }
     }
 

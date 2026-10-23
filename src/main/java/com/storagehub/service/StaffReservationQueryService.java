@@ -29,7 +29,8 @@ public class StaffReservationQueryService {
         ReservationStatus.CONFIRMED,
         ReservationStatus.UNIT_RESERVED,
         ReservationStatus.READY_FOR_CHECKIN,
-        ReservationStatus.AWAITING_CUSTOMER_RECEIPT
+        ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+        ReservationStatus.COMPLETED
     );
 
     private final ReservationRepository reservationRepository;

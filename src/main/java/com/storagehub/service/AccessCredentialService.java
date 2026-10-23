@@ -84,6 +84,9 @@ public class AccessCredentialService {
             || reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
             throw ApiExceptions.conflict("Credentials can only be issued during a scheduled handover");
         }
+        if (request.type() != AccessCredentialType.LOCK) {
+            throw ApiExceptions.validation("Only a lock credential can be handed over during check-in", null);
+        }
         UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
             reservation.getId(), UnitAssignmentStatus.ACTIVE
         ).orElseThrow(() -> ApiExceptions.conflict("Reservation has no active unit assignment"));
@@ -111,7 +114,7 @@ public class AccessCredentialService {
         credential.setType(request.type());
         credential.setStatus(AccessCredentialStatus.ACTIVE);
         credential.setReference(request.reference().trim());
-        credential.setSecretHash(hashSecret(request.secret()));
+        credential.setSecretHash(null);
         credential.setIssuedBy(staff);
         credential.setIssuedAt(Instant.now());
         credential.setNote(clean(request.note()));
@@ -328,7 +331,7 @@ public class AccessCredentialService {
                 reservation.getFacility().getId(), reservation.getFacility().getName(),
                 reservation.getAssignedUnit().getId(), reservation.getAssignedUnit().getCode(),
                 reservation.getCustomer().getId(), reservation.getCustomer().getFullName(), null, null,
-                checkIn.getScheduledAt(), "Hồ sơ đã sẵn sàng nhận kho nhưng chưa cấp PIN/thẻ/chìa khóa/khóa"
+                checkIn.getScheduledAt(), "Hồ sơ đã sẵn sàng nhận kho nhưng chưa cấp mã ổ khóa"
             ));
         }
 

@@ -8,6 +8,5 @@ import jakarta.validation.constraints.Size;
 public record IssueAccessCredentialRequest(
     @NotNull AccessCredentialType type,
     @NotBlank @Size(max = 160) String reference,
-    @Size(max = 200) String secret,
     @Size(max = 1000) String note
 ) {}
