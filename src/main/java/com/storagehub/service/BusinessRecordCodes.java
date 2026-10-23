@@ -1,6 +1,7 @@
 package com.storagehub.service;
 
 import com.storagehub.common.api.ApiExceptions;
+import java.security.SecureRandom;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -13,6 +14,7 @@ import org.springframework.transaction.annotation.*;
 @Service @RequiredArgsConstructor
 public class BusinessRecordCodes {
     private final JdbcTemplate jdbc;
+    private static final SecureRandom RANDOM = new SecureRandom();
     private static final DateTimeFormatter PERIOD=DateTimeFormatter.ofPattern("yyMM").withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
     @Transactional(readOnly=true)
     public String find(String key) {
@@ -31,15 +33,30 @@ public class BusinessRecordCodes {
             throw ApiExceptions.conflict("Thông tin cấp mã hồ sơ không hợp lệ.");
         String old=find(key);if(old!=null)return old;
         String period=PERIOD.format(recordedAt);
-        // Lock order is always sequence then registry; both writes commit with the business transaction.
-        jdbc.update("insert into business_record_code_sequences(type_code,period,serial_value) values(?,?,1) on duplicate key update serial_value=least(serial_value+1,1000000)",type,period);
+        // Serialize allocation for each type/month before locking the registry. For GH the
+        // sequence row is only a mutex: new codes use random numbers, not the counter.
+        boolean randomCode="GH".equals(type);
+        String update=randomCode?"serial_value=serial_value":"serial_value=least(serial_value+1,1000000)";
+        jdbc.update("insert into business_record_code_sequences(type_code,period,serial_value) values(?,?,1) on duplicate key update "+update,type,period);
         long serial=jdbc.queryForObject("select serial_value from business_record_code_sequences where type_code=? and period=? for update",Long.class,type,period);
         old=jdbc.query("select display_code from business_record_codes where resource_key=? for update",(rs,i)->rs.getString(1),key).stream().findFirst().orElse(null);
         if(old!=null)return old;
-        if(serial>999999)throw ApiExceptions.conflict("Đã hết dải mã hồ sơ trong tháng.");
-        String code=type+"-"+period+"-"+String.format(Locale.ROOT,"%06d",serial);
+        if(!randomCode&&serial>999999)throw ApiExceptions.conflict("Đã hết dải mã hồ sơ trong tháng.");
+        String code=randomCode?randomRenewalCode(period):type+"-"+period+"-"+String.format(Locale.ROOT,"%06d",serial);
         jdbc.update("insert into business_record_codes(resource_key,type_code,period,display_code,recorded_at) values(?,?,?,?,?)",
             key,type,period,code,java.sql.Timestamp.from(recordedAt));
         return code;
+    }
+
+    private String randomRenewalCode(String period) {
+        for(int attempt=0;attempt<128;attempt++) {
+            String candidate="GH-"+period+"-"+String.format(Locale.ROOT,"%06d",RANDOM.nextInt(999999)+1);
+            // A locking read sees codes committed while waiting for the allocation mutex,
+            // including historical sequential codes. The unique DB index remains in place.
+            var existing=jdbc.query("select display_code from business_record_codes where display_code=? for update",
+                (rs,i)->rs.getString(1),candidate);
+            if(existing.isEmpty())return candidate;
+        }
+        throw ApiExceptions.conflict("Chưa thể cấp mã hồ sơ mới. Vui lòng thử lại.");
     }
 }
