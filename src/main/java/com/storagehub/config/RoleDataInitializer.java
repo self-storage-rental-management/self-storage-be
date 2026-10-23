@@ -29,6 +29,7 @@ public class RoleDataInitializer {
     private static final int STAFF_RENEWAL_OPERATIONS_VERSION = 8;
     private static final int STAFF_RENEWAL_PAYMENTS_VERSION = 9;
     private static final int MANAGER_UNIT_ASSIGNMENT_VERSION = 10;
+    private static final int FINAL_POLICY_VERSION = 11;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -59,13 +60,9 @@ public class RoleDataInitializer {
                 roles.put(code, role);
             });
 
-            // A manager is a staff member with additional approval,
-            // coordination and reporting responsibilities; BO owns policy edits.
-            roles.get(RoleCode.MANAGER).setParentRole(roles.get(RoleCode.STAFF));
-            roles.get(RoleCode.STAFF).setParentRole(null);
-            roles.values().stream()
-                .filter(role -> role.getCode() != RoleCode.MANAGER && role.getCode() != RoleCode.STAFF)
-                .forEach(role -> role.setParentRole(null));
+            // Manager must not inherit Staff's check-in permissions. Keep the
+            // matrix explicit so separation of duties is visible in data.
+            roles.values().forEach(role -> role.setParentRole(null));
 
             // Migrate the old broad defaults once. Later role edits remain
             // persistent and are protected by AdminRoleService policies.
@@ -153,6 +150,12 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(MANAGER_UNIT_ASSIGNMENT_VERSION);
                 }
+                // Apply the final matrix once. Later Admin edits remain
+                // persistent because the policy version is already current.
+                if (role.getPermissionsPolicyVersion() < FINAL_POLICY_VERSION) {
+                    role.setPermissions(defaultPermissions(code, permissions));
+                    role.setPermissionsPolicyVersion(FINAL_POLICY_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -164,21 +167,35 @@ public class RoleDataInitializer {
     ) {
         return switch (roleCode) {
             case ADMIN -> permissionSet(permissions,
+                SystemPermission.VIEW_DASHBOARD,
                 SystemPermission.MANAGE_USERS,
                 SystemPermission.MANAGE_ROLES,
                 SystemPermission.MANAGE_SETTINGS,
-                SystemPermission.VIEW_AUDIT_LOGS
+                SystemPermission.VIEW_AUDIT_LOGS,
+                SystemPermission.MANAGE_SESSIONS
             );
             case MANAGER -> permissionSet(permissions,
+                SystemPermission.VIEW_DASHBOARD,
+                SystemPermission.VIEW_FACILITIES,
+                SystemPermission.VIEW_UNITS,
+                SystemPermission.VIEW_RESERVATIONS,
                 SystemPermission.APPROVE_RESERVATIONS,
                 SystemPermission.ASSIGN_UNITS,
+                SystemPermission.VIEW_CONTRACTS,
+                SystemPermission.VIEW_CHECKINS,
+                SystemPermission.VIEW_RENTALS,
+                SystemPermission.MANAGE_RENTALS,
+                SystemPermission.VIEW_RETURNS,
+                SystemPermission.PROCESS_RETURNS,
                 SystemPermission.VIEW_PAYMENTS,
-                SystemPermission.VIEW_POLICIES,
+                SystemPermission.CONFIRM_PAYMENTS,
                 SystemPermission.MANAGE_PAYMENTS,
+                SystemPermission.APPROVE_REFUNDS,
+                SystemPermission.WAIVE_FEES,
+                SystemPermission.VIEW_POLICIES,
                 SystemPermission.MANAGE_INVENTORY,
                 SystemPermission.MANAGE_STAFF_TASKS,
                 SystemPermission.VIEW_SUPPORT,
-                SystemPermission.MANAGE_SUPPORT,
                 SystemPermission.VIEW_REPORTS
             );
             case STAFF -> permissionSet(permissions,
@@ -191,11 +208,11 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_CHECKINS,
                 SystemPermission.PERFORM_CHECKIN,
                 SystemPermission.VIEW_RENTALS,
-                SystemPermission.MANAGE_RENTALS,
                 SystemPermission.VIEW_PAYMENTS,
                 SystemPermission.MANAGE_PAYMENTS,
                 SystemPermission.VIEW_RETURNS,
                 SystemPermission.PROCESS_RETURNS,
+                SystemPermission.OPERATE_RENEWALS,
                 SystemPermission.VIEW_SUPPORT,
                 SystemPermission.MANAGE_SUPPORT
             );
@@ -208,8 +225,9 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_RENTALS,
                 SystemPermission.VIEW_RETURNS,
-                SystemPermission.MANAGE_RENTALS,
                 SystemPermission.VIEW_PAYMENTS,
+                SystemPermission.APPROVE_REFUNDS,
+                SystemPermission.WAIVE_FEES,
                 SystemPermission.VIEW_POLICIES,
                 SystemPermission.VIEW_SUPPORT,
                 SystemPermission.VIEW_REPORTS
@@ -223,6 +241,7 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_RENTALS,
                 SystemPermission.VIEW_PAYMENTS,
+                SystemPermission.VIEW_POLICIES,
                 SystemPermission.VIEW_SUPPORT
             );
         };

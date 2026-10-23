@@ -35,7 +35,7 @@ public class RenewalAssignmentReadService {
         }
         if (current.isEmpty()) return new View(id, version, "UNASSIGNED", null, null);
         var a = current.get(); var staff = em.find(User.class, a.staffId());
-        boolean eligible = access.eligible(staff, RoleCode.STAFF, SystemPermission.VIEW_RENTALS, SystemPermission.MANAGE_RENTALS)
+        boolean eligible = access.eligible(staff, RoleCode.STAFF, SystemPermission.VIEW_RENTALS, SystemPermission.OPERATE_RENEWALS)
             && access.scope(a.staffId(), facility, FacilityScopeLevel.OPERATE);
         return new View(id, version, eligible ? "ASSIGNED" : "INELIGIBLE", a.staffId(), staff == null || staff.getFullName() == null || staff.getFullName().isBlank() ? null : staff.getFullName());
     }
