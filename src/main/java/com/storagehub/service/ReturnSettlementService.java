@@ -27,6 +27,7 @@ import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.time.BusinessTime;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -84,7 +85,7 @@ public class ReturnSettlementService {
         var recoveryGuard=recoveryGuard();
         if(recoveryGuard!=null)recoveryGuard.requireNoActiveRecovery(rental);
 
-        if (request.scheduledDate().isBefore(LocalDate.now())) {
+        if (request.scheduledDate().isBefore(LocalDate.now(BusinessTime.ZONE))) {
             throw ApiExceptions.validation("scheduledDate cannot be in the past", null);
         }
 

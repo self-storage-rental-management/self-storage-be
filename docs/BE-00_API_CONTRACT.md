@@ -123,6 +123,14 @@ Không có request body.
 
 Retries with the same key and the same actor return the original result. Reusing a key for a different request conflicts. The response outcome is `SUCCESS`, `FAILED` or `NOT_RECEIVED`; there is no external gateway, redirect, IPN or webhook endpoint.
 
+## Return role contract
+
+- `CUSTOMER` uses `/api/customer/...` for ownership-bound return requests and settlement decisions.
+- `STAFF` uses `/api/staff/returns/...` for inspection, cash collection, and operational return completion.
+- `MANAGER` uses `/api/manager/returns/...` for dispute review only. `rentals:update` belongs to Manager; Manager cannot execute refunds.
+- `BUSINESS` uses `/api/business/returns/...` to read scoped return cases and execute an already approved refund. Business does not inspect returns, resolve disputes, or collect settlement payments; the actor must have the facility `MANAGE` scope.
+- Empty facility scope never means global access. Only `ADMIN` is global; scoped roles receive an empty result or `403`/`404` according to the endpoint contract.
+
 ## File contract
 
 ### `POST /api/files`
