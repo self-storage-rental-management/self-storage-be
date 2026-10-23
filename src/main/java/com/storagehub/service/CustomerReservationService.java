@@ -272,10 +272,8 @@ public class CustomerReservationService {
             reservationId, actor.userId()
         ).orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
 
-        if (reservation.getStatus() == ReservationStatus.COMPLETED) {
-            return toDetailResponse(reservation);
-        }
-        if (reservation.getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT) {
+        if (reservation.getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT
+            && reservation.getStatus() != ReservationStatus.COMPLETED) {
             throw ApiExceptions.conflict("Reservation is not waiting for customer receipt confirmation");
         }
         if (reservation.getAssignedUnit() == null) {
