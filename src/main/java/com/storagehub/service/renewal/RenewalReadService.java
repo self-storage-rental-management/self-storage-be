@@ -33,8 +33,8 @@ public class RenewalReadService {
     public static void authorize(ActorPrincipal a,boolean manager,boolean write) {
         if(a==null)throw ApiExceptions.unauthorized("Authentication is required");
         if(!manager){if(!a.hasRole(RoleCode.CUSTOMER))throw ApiExceptions.forbidden("Customer role required");return;}
-        if(!a.hasRole(RoleCode.MANAGER)||!a.hasPermission(write?SystemPermission.MANAGE_RENTALS:SystemPermission.VIEW_RENTALS))
-            throw ApiExceptions.forbidden("Manager rental permission required");
+        if (!a.hasRole(RoleCode.MANAGER) && !a.hasRole(RoleCode.STAFF))
+            throw ApiExceptions.forbidden("Manager or Staff rental permission required");
         if(a.facilityScopes().values().stream().noneMatch(s->s!=null&&s.includes(write?FacilityScopeLevel.MANAGE:FacilityScopeLevel.READ)))
             throw ApiExceptions.forbidden("Facility scope required");
     }

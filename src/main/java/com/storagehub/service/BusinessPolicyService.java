@@ -186,6 +186,7 @@ public class BusinessPolicyService {
         policy.setRentalYears(years);
         policy.setDescription(request.description());
         policy.setDiscountRate(request.discountRate());
+        policy.setDepositRate(request.depositRate() != null ? request.depositRate() : new BigDecimal("0.2000"));
         policy.setPolicyVersion(request.policyVersion().trim());
         policy.setPublicationStatus(pubStatus);
 
@@ -243,6 +244,9 @@ public class BusinessPolicyService {
         policy.setRentalYears(years);
         policy.setDescription(request.description());
         policy.setDiscountRate(request.discountRate());
+        if (request.depositRate() != null) {
+            policy.setDepositRate(request.depositRate());
+        }
         policy.setPolicyVersion(request.policyVersion().trim());
         if (request.publicationStatus() != null && request.publicationStatus() != PublicationStatus.PUBLISHED) {
             policy.setPublicationStatus(request.publicationStatus());
@@ -508,6 +512,7 @@ public class BusinessPolicyService {
             p.getRentalYears(),
             p.getDescription(),
             p.getDiscountRate(),
+            p.getDepositRate(),
             p.getPolicyVersion(),
             pub,
             runtimeStatus,

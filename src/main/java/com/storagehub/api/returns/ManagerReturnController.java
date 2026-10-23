@@ -56,4 +56,27 @@ public class ManagerReturnController {
             CorrelationIdContext.current()
         );
     }
+
+    @PostMapping("/{returnId}/complete-refund")
+    public ApiResponse<ReturnCaseResponse> completeRefund(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody(required = false) StaffCompleteRefundRequest request
+    ) {
+        StaffCompleteRefundRequest safeRequest = request != null ? request : new StaffCompleteRefundRequest(null, null);
+        return new ApiResponse<>(
+            returnSettlementService.staffCompleteRefund(actorContext.required(), returnId, safeRequest),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{returnId}/settlement-receipts")
+    public ApiResponse<ReturnCaseResponse> recordSettlement(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody StaffReturnSettlementRequest request
+    ) {
+        return new ApiResponse<>(
+            returnSettlementService.recordSettlement(actorContext.required(), returnId, request),
+            CorrelationIdContext.current()
+        );
+    }
 }

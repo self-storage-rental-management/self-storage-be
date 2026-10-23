@@ -59,7 +59,7 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
 
     Page<ReturnCase> findByCustomer_Id(UUID customerId, Pageable pageable);
 
-    Optional<ReturnCase> findByRental_Id(UUID rentalId);
+    List<ReturnCase> findByRental_Id(UUID rentalId);
 
     boolean existsByRental_IdAndStatusNotIn(UUID rentalId, Collection<ReturnCaseStatus> statuses);
 

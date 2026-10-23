@@ -68,6 +68,9 @@ public class ReservationQuote extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal totalAfterDiscount;
 
+    @Column(name = "reservation_deposit_rate", nullable = false, precision = 5, scale = 4)
+    private BigDecimal reservationDepositRate = new BigDecimal("0.2000");
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal reservationDepositAmount;
 

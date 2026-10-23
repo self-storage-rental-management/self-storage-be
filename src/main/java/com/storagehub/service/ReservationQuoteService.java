@@ -103,7 +103,8 @@ public class ReservationQuoteService {
                 policy.getName(),
                 policy.getRentalMonths(),
                 policy.getDiscountRate(),
-                policy.getPolicyVersion()
+                policy.getPolicyVersion(),
+                policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE
             ))
             .toList();
     }
@@ -123,6 +124,9 @@ public class ReservationQuoteService {
 
         UnitType unitType = unitTypeRepository.findById(request.getUnitTypeId())
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (!unitType.getFacility().getId().equals(request.getFacilityId())) {
+            throw ApiExceptions.validation("Unit type does not belong to the selected facility", null);
+        }
         User customer = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
 
@@ -155,7 +159,8 @@ public class ReservationQuoteService {
         }
 
         BigDecimal totalAfterDiscount = money(baseEligibleAmount.subtract(voucherDiscountAmount));
-        BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
+        BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
+        BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(depositRate));
         BigDecimal securityDepositAmount = money(
             (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
                 ? monthlyPrice
@@ -182,6 +187,7 @@ public class ReservationQuoteService {
         quote.setVoucherCode(appliedVoucherCode);
         quote.setVoucherDiscountAmount(voucherDiscountAmount);
         quote.setTotalAfterDiscount(totalAfterDiscount);
+        quote.setReservationDepositRate(depositRate);
         quote.setReservationDepositAmount(reservationDepositAmount);
         quote.setSecurityDepositAmount(securityDepositAmount);
         quote.setRemainingRentalAmount(remainingRentalAmount);
@@ -223,6 +229,7 @@ public class ReservationQuoteService {
         policy.setName("Gói " + rentalMonths + " tháng tiêu chuẩn");
         policy.setRentalMonths(rentalMonths);
         policy.setDiscountRate(BigDecimal.ZERO);
+        policy.setDepositRate(RESERVATION_DEPOSIT_RATE);
         policy.setPolicyVersion("STANDARD-1.0");
         policy.setActive(true);
         policy.setEffectiveFrom(LocalDate.of(2020, 1, 1));
@@ -245,8 +252,10 @@ public class ReservationQuoteService {
     }
 
     private ReservationQuoteResponse toResponse(ReservationQuote quote) {
-        return new ReservationQuoteResponse(
-            quote.getId(), quote.getFacility().getId(), quote.getUnitType().getId(),
+        ReservationQuoteResponse response = new ReservationQuoteResponse(
+            quote.getId(),
+            quote.getFacility().getId(), quote.getFacility().getName(),
+            quote.getUnitType().getId(), quote.getUnitType().getName(),
             quote.getStartDate(), quote.getEndDate(), quote.getRentalMonths(),
             quote.getMonthlyPrice(), quote.getSubtotal(), quote.getPricingPackageCode(),
             quote.getDiscountRate(), quote.getDiscountAmount(),
@@ -257,5 +266,9 @@ public class ReservationQuoteService {
             quote.getTotalInitialObligation(),
             quote.getPolicyVersion(), quote.getQuotedAt(), quote.getExpiresAt()
         );
+        response.setReservationDepositRate(
+            quote.getReservationDepositRate() != null ? quote.getReservationDepositRate() : RESERVATION_DEPOSIT_RATE
+        );
+        return response;
     }
 }

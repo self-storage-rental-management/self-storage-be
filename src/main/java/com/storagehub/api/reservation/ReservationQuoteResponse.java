@@ -9,7 +9,9 @@ public class ReservationQuoteResponse {
 
     private UUID quoteId;
     private UUID facilityId;
+    private String facilityName;
     private UUID unitTypeId;
+    private String unitTypeName;
     private LocalDate startDate;
     private LocalDate endDate;
     private int rentalMonths;
@@ -21,6 +23,7 @@ public class ReservationQuoteResponse {
     private String voucherCode;
     private BigDecimal voucherDiscountAmount = BigDecimal.ZERO;
     private BigDecimal totalAfterDiscount;
+    private BigDecimal reservationDepositRate = new BigDecimal("0.20");
     private BigDecimal reservationDepositAmount;
     private BigDecimal securityDepositAmount;
     private BigDecimal remainingRentalAmount;
@@ -41,7 +44,7 @@ public class ReservationQuoteResponse {
                                     BigDecimal securityDepositAmount, BigDecimal remainingRentalAmount,
                                     BigDecimal dueAtCheckIn, BigDecimal totalInitialObligation,
                                     String policyVersion, Instant quotedAt, Instant expiresAt) {
-        this(quoteId, facilityId, unitTypeId, startDate, endDate, rentalMonths, monthlyPrice, subtotal,
+        this(quoteId, facilityId, null, unitTypeId, null, startDate, endDate, rentalMonths, monthlyPrice, subtotal,
              null, discountRate, discountAmount, null, BigDecimal.ZERO, totalAfterDiscount,
              reservationDepositAmount, securityDepositAmount, remainingRentalAmount, dueAtCheckIn,
              totalInitialObligation, policyVersion, quotedAt, expiresAt);
@@ -56,7 +59,7 @@ public class ReservationQuoteResponse {
                                     BigDecimal securityDepositAmount, BigDecimal remainingRentalAmount,
                                     BigDecimal dueAtCheckIn, BigDecimal totalInitialObligation,
                                     String policyVersion, Instant quotedAt, Instant expiresAt) {
-        this(quoteId, facilityId, unitTypeId, startDate, endDate, rentalMonths, monthlyPrice, subtotal,
+        this(quoteId, facilityId, null, unitTypeId, null, startDate, endDate, rentalMonths, monthlyPrice, subtotal,
              pricingPackageCode, discountRate, discountAmount, null, BigDecimal.ZERO, totalAfterDiscount,
              reservationDepositAmount, securityDepositAmount, remainingRentalAmount, dueAtCheckIn,
              totalInitialObligation, policyVersion, quotedAt, expiresAt);
@@ -72,9 +75,28 @@ public class ReservationQuoteResponse {
                                     BigDecimal securityDepositAmount, BigDecimal remainingRentalAmount,
                                     BigDecimal dueAtCheckIn, BigDecimal totalInitialObligation,
                                     String policyVersion, Instant quotedAt, Instant expiresAt) {
+        this(quoteId, facilityId, null, unitTypeId, null, startDate, endDate, rentalMonths, monthlyPrice, subtotal,
+             pricingPackageCode, discountRate, discountAmount, voucherCode, voucherDiscountAmount, totalAfterDiscount,
+             reservationDepositAmount, securityDepositAmount, remainingRentalAmount, dueAtCheckIn,
+             totalInitialObligation, policyVersion, quotedAt, expiresAt);
+    }
+
+    public ReservationQuoteResponse(UUID quoteId, UUID facilityId, String facilityName,
+                                    UUID unitTypeId, String unitTypeName,
+                                    LocalDate startDate, LocalDate endDate, int rentalMonths,
+                                    BigDecimal monthlyPrice, BigDecimal subtotal,
+                                    String pricingPackageCode,
+                                    BigDecimal discountRate, BigDecimal discountAmount,
+                                    String voucherCode, BigDecimal voucherDiscountAmount,
+                                    BigDecimal totalAfterDiscount, BigDecimal reservationDepositAmount,
+                                    BigDecimal securityDepositAmount, BigDecimal remainingRentalAmount,
+                                    BigDecimal dueAtCheckIn, BigDecimal totalInitialObligation,
+                                    String policyVersion, Instant quotedAt, Instant expiresAt) {
         this.quoteId = quoteId;
         this.facilityId = facilityId;
+        this.facilityName = facilityName;
         this.unitTypeId = unitTypeId;
+        this.unitTypeName = unitTypeName;
         this.startDate = startDate;
         this.endDate = endDate;
         this.rentalMonths = rentalMonths;
@@ -98,7 +120,11 @@ public class ReservationQuoteResponse {
 
     public UUID getQuoteId() { return quoteId; }
     public UUID getFacilityId() { return facilityId; }
+    public String getFacilityName() { return facilityName; }
+    public void setFacilityName(String facilityName) { this.facilityName = facilityName; }
     public UUID getUnitTypeId() { return unitTypeId; }
+    public String getUnitTypeName() { return unitTypeName; }
+    public void setUnitTypeName(String unitTypeName) { this.unitTypeName = unitTypeName; }
     public LocalDate getStartDate() { return startDate; }
     public LocalDate getEndDate() { return endDate; }
     public int getRentalMonths() { return rentalMonths; }
@@ -110,6 +136,8 @@ public class ReservationQuoteResponse {
     public String getVoucherCode() { return voucherCode; }
     public BigDecimal getVoucherDiscountAmount() { return voucherDiscountAmount; }
     public BigDecimal getTotalAfterDiscount() { return totalAfterDiscount; }
+    public BigDecimal getReservationDepositRate() { return reservationDepositRate != null ? reservationDepositRate : new BigDecimal("0.20"); }
+    public void setReservationDepositRate(BigDecimal reservationDepositRate) { this.reservationDepositRate = reservationDepositRate; }
     public BigDecimal getReservationDepositAmount() { return reservationDepositAmount; }
     public BigDecimal getSecurityDepositAmount() { return securityDepositAmount; }
     public BigDecimal getRemainingRentalAmount() { return remainingRentalAmount; }
