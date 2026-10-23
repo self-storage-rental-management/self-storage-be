@@ -108,6 +108,18 @@ public class VnpayService {
             authorizationService,null,auditLogService,notificationService,objectMapper,null,null);
     }
 
+    /** Backward-compatible constructor for renewal payment unit fixtures. */
+    public VnpayService(VnpayProperties properties,PaymentRepository paymentRepository,
+        PaymentComplaintRepository complaintRepository,ReservationRepository reservationRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,UserRepository userRepository,
+        AdminAuthorizationService authorizationService,AuditLogService auditLogService,
+        NotificationService notificationService,ObjectMapper objectMapper,
+        RenewalWorkflowService renewalWorkflowService,
+        ObjectProvider<RenewalVnpaySettlementService> renewalSettlement) {
+        this(properties,paymentRepository,complaintRepository,reservationRepository,snapshotRepository,userRepository,
+            authorizationService,null,auditLogService,notificationService,objectMapper,renewalWorkflowService,renewalSettlement);
+    }
+
     @Transactional
     public VnpayPaymentUrlResponse createPaymentUrl(
         ActorPrincipal actor,
