@@ -288,7 +288,7 @@ public class CheckInHandoverService {
         checkIn.setCheckedInAt(now);
         checkIn.setChecklistJson(writeHandover(request));
         assignment.setStatus(UnitAssignmentStatus.COMPLETED);
-        reservation.setStatus(ReservationStatus.COMPLETED);
+        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         unit.setStatus(StorageUnitStatus.assigned);
 
         storageUnitRepository.saveAndFlush(unit);
@@ -314,7 +314,7 @@ public class CheckInHandoverService {
             ),
             Map.of(
                 "checkInStatus", CheckInStatus.completed,
-                "reservationStatus", ReservationStatus.COMPLETED,
+                "reservationStatus", ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
                 "assignmentStatus", UnitAssignmentStatus.COMPLETED,
                 "storageUnitStatus", StorageUnitStatus.assigned
             )
@@ -330,7 +330,7 @@ public class CheckInHandoverService {
             reservation.getFacility().getId(), NotificationType.CHECKIN,
             "Bàn giao đã hoàn tất",
             "Đơn " + reservation.getReservationCode()
-                + " đã bàn giao gian kho và được chuyển sang trạng thái COMPLETED.",
+                + " đã bàn giao gian kho và đang chờ khách xác nhận nhận kho.",
             reservation.getId()
         );
         return toResponse(reservation, saved, assignment);

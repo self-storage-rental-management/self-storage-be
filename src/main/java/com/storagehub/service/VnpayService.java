@@ -11,7 +11,6 @@ import com.storagehub.config.VnpayProperties;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
-import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.PaymentComplaint;
 import com.storagehub.domain.model.PaymentComplaintStatus;
 import com.storagehub.domain.model.NotificationType;
@@ -515,25 +514,18 @@ public class VnpayService {
         String clientIp
     ) {
         requireConfigured();
-        if (actor == null || !actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS)) {
-            throw ApiExceptions.forbidden("Manager or Business approval is required for VNPAY refunds");
+        if (actor == null || !actor.hasAnyRole(RoleCode.BUSINESS)) {
+            throw ApiExceptions.forbidden("Business Operations execution is required for VNPAY refunds");
         }
-        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
+        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
         if (payment.getStatus() != PaymentStatus.PAID || payment.getGatewayTransactionNo() == null) {
             throw ApiExceptions.conflict("Only a successful VNPAY payment can be refunded");
         }
         UUID facilityId = payment.getReservation().getFacility().getId();
-        if (actor.hasRole(RoleCode.MANAGER)
-            && (actor.facilityScopes().get(facilityId) == null
-                || !actor.facilityScopes().get(facilityId).includes(FacilityScopeLevel.MANAGE))) {
-            throw ApiExceptions.forbidden("Manager MANAGE scope is required for refunds");
-        }
-        if (actor.hasRole(RoleCode.BUSINESS) && !actor.facilityScopes().isEmpty()
-            && (actor.facilityScopes().get(facilityId) == null
-                || !actor.facilityScopes().get(facilityId).includes(FacilityScopeLevel.MANAGE))) {
-            throw ApiExceptions.forbidden("Business MANAGE scope is required for scoped refunds");
+        if (actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS)) {
+            facilityScopeService.assertCanManage(actor, facilityId);
         }
         if(payment.getRenewal()!=null)
             throw ApiExceptions.conflict("Renewal refunds require the Renewal refund entitlement and payout workflow");
