@@ -39,6 +39,11 @@ public class RenewalAssignmentSource implements RenewalOperationSources.Authoriz
             else access.require(actor,RoleCode.MANAGER,f,FacilityScopeLevel.MANAGE,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS);
             return;
         }
+        if(capability==RenewalOperationSources.Capability.REFUND_EXECUTION) {
+            access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.VIEW_PAYMENTS,
+                SystemPermission.MANAGE_PAYMENTS,SystemPermission.OPERATE_RENEWALS,SystemPermission.EXECUTE_REFUNDS);
+            return;
+        }
         if(capability==RenewalOperationSources.Capability.CASH)access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS);
         else if(capability==RenewalOperationSources.Capability.READ)access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS);
         else access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.OPERATE_RENEWALS);
