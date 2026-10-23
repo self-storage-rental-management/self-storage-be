@@ -196,6 +196,7 @@ Backend và frontend dùng cùng quy ước canonical `resource:action`. Đây l
 | `payments:collect` |  | ✓ | ✓ |  |  |
 | `payments:confirm` |  |  | ✓ |  |  |
 | `refunds:approve` |  |  | ✓ | ✓ |  |
+| `refunds:execute` |  | ✓ |  | ✓ |  |
 | `fees:waive` |  |  | ✓ | ✓ |  |
 | `policies:read` | ✓ |  | ✓ | ✓ |  |
 | `policies:update` |  |  |  | ✓ |  |
@@ -210,7 +211,7 @@ Backend và frontend dùng cùng quy ước canonical `resource:action`. Đây l
 | `settings:manage` |  |  |  |  | ✓ |
 | `sessions:manage` |  |  |  |  | ✓ |
 
-Staff chỉ thu tiền mặt trong phiên thu; Business chỉ duyệt refund/fee vượt hạn mức và không thao tác hiện trường. Customer còn bị ràng buộc ownership. `ADMIN` và `CUSTOMER` là role loại trừ; Manager không kế thừa Staff.
+Staff chỉ thu tiền mặt trong phiên thu và chỉ thực thi refund sau khi hồ sơ đã được duyệt; Manager chỉ duyệt, không thực thi refund; Business Operations thực thi refund/fee theo nghiệp vụ return trong scope MANAGE và không thao tác hiện trường. Customer còn bị ràng buộc ownership. `ADMIN` và `CUSTOMER` là role loại trừ; Manager không kế thừa Staff.
 
 Hạn mức Manager tự duyệt refund/miễn giảm chưa có giá trị chốt từ Business nên chưa hard-code; service đã tách capability `refunds:approve` và `fees:waive` để gắn policy khi có tham số chính thức.
 
