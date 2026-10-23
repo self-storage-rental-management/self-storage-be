@@ -754,7 +754,10 @@ public class CheckInHandoverService {
             throw ApiExceptions.validation("identityDocumentNumber is required", null);
         }
 
-        if (declaredIdentity == null || !declaredIdentity.equals(actualIdentity)) {
+        if (declaredIdentity == null) {
+            throw ApiExceptions.conflict("Customer identity does not match the reservation: declared identity is missing");
+        }
+        if (!declaredIdentity.equals(actualIdentity)) {
             throw ApiExceptions.conflict("Customer identity does not match the reservation");
         }
     }
