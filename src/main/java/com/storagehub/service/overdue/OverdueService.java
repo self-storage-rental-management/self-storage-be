@@ -56,7 +56,7 @@ public class OverdueService {
     }
     @Transactional(readOnly=true)
     public OverdueResponse detail(ActorPrincipal actor,String id){
-        if(id!=null&&id.toUpperCase(Locale.ROOT).matches("QH-\\d{4}-\\d{6}")&&displayCodes!=null){
+        if(id!=null&&id.toUpperCase(Locale.ROOT).matches("(?:SH-\\d{6}|QH-\\d{4}-\\d{6})")&&displayCodes!=null){
             String resource=displayCodes.resource("QH",id);
             if(resource==null)throw ApiExceptions.notFound("Không tìm thấy hồ sơ quá hạn.");
             id=resource;
