@@ -163,6 +163,28 @@ class SupportWorkflowIntegrationTests {
         assertThat(count("SupportTicket")).isEqualTo(1);assertThat(count("SupportMessage")).isEqualTo(1);
         assertThatThrownBy(()->service.create(c,new Create("Changed","Please help",facility.getId(),null,List.of()),"create")).isInstanceOf(ApiException.class).hasMessageContaining("key");
     }
+    @Test void handoffHistoryIsOrderedDurableAndReplayedOnlyOnce(){
+        var history=List.of(new HandoffMessage(ContextRole.CUSTOMER,"Tôi cần gia hạn"),new HandoffMessage(ContextRole.ASSISTANT,"Bạn mở hồ sơ thuê để gửi yêu cầu."));
+        var body=new Create("Gặp nhân viên","Tôi muốn gặp nhân viên.",facility.getId(),null,List.of(),history);
+        var created=service.create(c,body,"handoff-create");
+        assertThat(service.create(c,body,"handoff-create").id()).isEqualTo(created.id());
+        em.flush();em.clear();
+        var timeline=service.messages(c,CUSTOMER,created.id(),query,"test").data();
+        assertThat(timeline).extracting(SupportResponse.Message::authorRole).containsExactly("USER_CONTEXT","AI_CONTEXT","CUSTOMER");
+        assertThat(timeline).extracting(SupportResponse.Message::body).containsExactly("Tôi cần gia hạn","Bạn mở hồ sơ thuê để gửi yêu cầu.","Tôi muốn gặp nhân viên.");
+        assertThat(timeline).allMatch(message->message.authorId().equals(c.userId())&&message.visibility().equals("PUBLIC"));
+        var claimed=service.claim(s,created.id(),new SupportCommands.Version(created.version()),"handoff-claim");
+        assertThat(claimed.acceptedAt()).isNotNull();
+        assertThat(service.messages(s,STAFF,created.id(),query,"test",Visibility.PUBLIC).data()).hasSize(3);
+        assertThatThrownBy(()->service.messages(actor(otherCustomer,RoleCode.CUSTOMER,null),CUSTOMER,created.id(),query,"test"))
+            .isInstanceOf(ApiException.class);
+    }
+    @Test void oversizedHandoffDoesNotCreatePartialTicket(){
+        var history=Collections.nCopies(51,new HandoffMessage(ContextRole.ASSISTANT,"x".repeat(4000)));
+        assertThatThrownBy(()->service.create(c,new Create("Gặp nhân viên","Hỗ trợ",facility.getId(),null,List.of(),history),"oversized-handoff"))
+            .isInstanceOf(ApiException.class);
+        assertThat(count("SupportTicket")).isZero();assertThat(count("SupportMessage")).isZero();
+    }
     @Test void facilityIsRequiredWithoutOwnedLink(){
         assertThatThrownBy(()->service.create(c,new Create("Question","Help",null,null,List.of()),"missing")).isInstanceOf(ApiException.class).hasMessageContaining("Facility required");
         assertThat(count("SupportTicket")).isZero();

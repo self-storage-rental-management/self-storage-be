@@ -118,6 +118,10 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
         Object payload=Arrays.asList(body,parent);String operation=parent==null?"support_create":"support_follow_up";
         if(parent!=null){var previous=visible(actor,Audience.CUSTOMER,parent,true);if(previous.getStatus()!=SupportTicketStatus.closed)throw ApiExceptions.conflict("Follow-up requires a closed parent ticket");}
         var replay=receipts.replay(actor.userId(),operation,key,payload,SupportResponse.class);if(replay.isPresent())return replay.get();
+        var context=body.handoffMessages()==null?List.<HandoffMessage>of():body.handoffMessages();
+        if(context.size()>200||context.stream().anyMatch(m->m==null||m.role()==null||m.body()==null||m.body().isBlank()||m.body().length()>4000)
+            ||context.stream().mapToLong(m->m.body().length()).sum()>200000)
+            throw ApiExceptions.validation("Lịch sử chuyển tiếp vượt giới hạn cho phép.",null);
         UUID requestedFacility=body.facilityId();
         if(parent!=null&&requestedFacility==null)requestedFacility=em.find(SupportTicket.class,parent).getFacility().getId();
         Facility facility=linkedFacility(actor,body.linkedRecord(),requestedFacility);
@@ -126,6 +130,15 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
         ticket.setSubject(text(body.subject(),200));ticket.setDescription(text(body.description(),4000));em.persist(ticket);em.flush();
         if(displayCodes!=null)displayCodes.assign("HT","HT:"+ticket.getId(),now());
         var state=new SupportState(ticket,body.linkedRecord()==null?null:body.linkedRecord().type().name(),body.linkedRecord()==null?null:body.linkedRecord().id(),parent,now());em.persist(state);
+        // Context is copied atomically with ticket creation and the idempotency receipt.
+        // Distinct roles identify unverified Customer-supplied history, not Staff replies.
+        // Millisecond offsets preserve source order with both MySQL and H2 timestamp precision.
+        Instant contextStart=now().minusSeconds(1);
+        for(int i=0;i<context.size();i++) {
+            var message=context.get(i);
+            em.persist(new SupportMessage(ticket,actor.userId(),message.role()==ContextRole.ASSISTANT?"AI_CONTEXT":"USER_CONTEXT",
+                Visibility.PUBLIC.name(),text(message.body(),4000),"[]",contextStart.plusMillis(i)));
+        }
         append(actor,ticket,state,"CUSTOMER",Visibility.PUBLIC,body.description(),body.evidenceFileIds());
         event(actor,ticket,state,"CREATED","Created Support ticket");notifySupportStaff(ticket,"New Support ticket",ticket.getSubject());notifyManagers(ticket,"New Support ticket",ticket.getSubject());
         notify(ticket.getCustomer().getId(),ticket,"Đã ghi nhận yêu cầu hỗ trợ của bạn",ticket.getSubject());
