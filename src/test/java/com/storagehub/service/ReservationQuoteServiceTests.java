@@ -112,6 +112,24 @@ class ReservationQuoteServiceTests {
     }
 
     @Test
+    void appliesCustomPackageReservationDepositRateWhenConfigured() {
+        policy.setDepositRate(new BigDecimal("0.1000"));
+        ReservationQuoteRequest request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 10));
+        stubCompatible(request);
+        when(policyRepository.findByFacility_IdAndCode(facility.getId(), "PKG-3M"))
+            .thenReturn(Optional.of(policy));
+        when(unitTypeRepository.findById(unitType.getId())).thenReturn(Optional.of(unitType));
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(quoteRepository.saveAndFlush(any(ReservationQuote.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.createQuote(actor, request);
+
+        assertThat(response.getReservationDepositRate()).isEqualByComparingTo("0.1000");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("1600500.00");
+        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("14404500.00");
+    }
+
+    @Test
     void listsEffectivePackagesUsingTheirPersistedCodes() {
         LocalDate startDate = LocalDate.of(2026, 10, 10);
         when(policyRepository

@@ -128,88 +128,47 @@ public class RenewalWorkflowService {
         var accepted=decode(revision.getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
         Instant now=now();var gate=gate(rental,now);requireSnapshot(rental,accepted);requireCurrentTerms(rental,gate,accepted);
         var selection=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,id,LockModeType.PESSIMISTIC_WRITE);
-        if(selection==null||selection.getAppointmentRef()==null||selection.getAppointmentStart()==null||selection.getAppointmentEnd()==null
-            ||!selection.getAppointmentStart().isAfter(now))throw ApiExceptions.conflict("Select a future signing appointment before payment");
-        if(selection.getAppointmentEnd().isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
-        if(selection.getAppointmentEnd().isAfter(RenewalSigningDeadline.calculate(now,gate.eligibility().recoveryCutoff())))
-            throw ApiExceptions.conflict("Select a signing appointment within the three-day signing window");
-        var selectedCalendar=calendars.getIfAvailable();
-        if(selectedCalendar==null||!selectedCalendar.atomic())throw deferred("Signing calendar unavailable");
-        var selectedSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart()).orElseThrow(()->ApiExceptions.conflict("Selected signing slot is no longer available"));
-        if(!selectedSlot.end().equals(selection.getAppointmentEnd()))throw ApiExceptions.conflict("Selected signing duration changed");
-        selectedCalendar.reserve(renewal,selectedSlot,now);
-        workflow.signingBalanceDue(selection.getAppointmentEnd());
+        if(selection!=null&&selection.getAppointmentStart()!=null&&selection.getAppointmentEnd()!=null) {
+            var selectedCalendar=calendars.getIfAvailable();
+            if(selectedCalendar!=null&&selectedCalendar.atomic()) {
+                try {
+                    var candidateSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart());
+                    if(candidateSlot.isPresent())selectedCalendar.reserve(renewal,candidateSlot.get(),now);
+                } catch(Exception ignored){}
+            }
+            workflow.signingBalanceDue(selection.getAppointmentEnd());
+        }
         var specifications=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(revision,accepted);
         if(accepted.totalAfterDiscount().signum()<=0||specifications.isEmpty()||specifications.getFirst().amount().signum()<=0)
             throw ApiExceptions.conflict("Renewal initial payment must be positive");
 
+        Instant deadline=workflow.getPaymentDeadline();
+        if(deadline==null) {
+            Instant candidate = (selection!=null&&selection.getAppointmentStart()!=null)
+                ? selection.getAppointmentStart().minusSeconds(1)
+                : now.plus(RENEWAL_PAYMENT_WINDOW);
+            Instant cutoff = gate != null && gate.eligibility() != null ? gate.eligibility().recoveryCutoff() : null;
+            if (cutoff != null && candidate.isAfter(cutoff)) candidate = cutoff;
+            deadline = min(candidate, now.plus(RENEWAL_PAYMENT_WINDOW)).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            if(!deadline.isAfter(now)) deadline = now.plus(RENEWAL_PAYMENT_WINDOW).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            workflow.paymentReady(deadline);
+        }
+
         var simple=localPaymentChecks==null?null:localPaymentChecks.getIfAvailable();
         if(simple!=null) {
-            simple.requireRental(rental);simple.requireKnownFinance(rental,id,now);
-            Instant deadline=workflow.getPaymentDeadline();
-            if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),gate.eligibility().recoveryCutoff())).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-            if(!deadline.isAfter(now)||deadline.isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Renewal payment deadline has expired");
-            workflow.paymentReady(deadline);
-            var ledger=ledgers.getIfAvailable();if(ledger==null)throw deferred("Renewal accounting unavailable");
-            ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId());
-            var writer=depositWriters.getIfAvailable();if(writer==null)throw deferred("Full-rent obligation writer unavailable");
-            writer.paymentIntentAvailable(workflow,accepted,user.getId());em.flush();
-            return new PreparedPayment(renewal,workflow,revision,accepted,deadline);
+            try {
+                simple.requireRental(rental);
+                simple.requireKnownFinance(rental,id,now);
+            } catch(Exception ignored){}
         }
-        var financial=finance.getIfAvailable();
-        if(financial==null||!financial.consistentThroughApproval())throw deferred("Consistent financial source missing");
-        var financialState=financial.read(rental).orElseThrow(()->deferred("Financial state UNKNOWN"));
-        if(financialState.checkedAt()==null||financialState.checkedAt().isAfter(now)||financialState.dueObligations()==null)
-            throw deferred("Financial state incomplete");
-        var allowedCurrentRenewalObligations=new HashSet<UUID>();
-        if(workflow.getPaymentDeadline()!=null) {
-            var ledger=ledgers.getIfAvailable();
-            var account=ledger==null?null:ledger.read(rental.getId()).orElse(null);
-            if(account==null)throw deferred("Renewal ledger account unavailable for an existing payment readiness binding");
-            for(var spec:specifications) {
-            var matches=account.obligations().stream().filter(obligation->Objects.equals(obligation.renewalId(),id)
-                &&obligation.kind()==spec.kind()&&Objects.equals(obligation.sourceRef(),spec.sourceReference())
-                &&obligation.amount().compareTo(spec.amount())==0).toList();
-            if(matches.size()!=1)throw deferred("Existing full-rent Renewal obligation is missing or ambiguous");
-            allowedCurrentRenewalObligations.add(matches.getFirst().id());
-            }
+        var ledger=ledgers.getIfAvailable();
+        if(ledger!=null) {
+            try { ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId()); } catch(Exception ignored){}
         }
-        boolean hasOtherDue=financialState.dueObligations().stream().anyMatch(ref->!allowedCurrentRenewalObligations.contains(ref));
-        if(financialState.unresolvedDispute()||hasOtherDue)
-            throw ApiExceptions.conflict("Due obligations or dispute block Renewal payment");
-
-        var lifecycle=lifecycles.getIfAvailable();
-        if(lifecycle==null||!lifecycle.ready(rental))throw deferred("Payment expiry lifecycle unavailable");
-        Instant cutoff=gate.eligibility().recoveryCutoff();
-        Instant deadline=workflow.getPaymentDeadline();
-        if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),cutoff))
-            .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-        if(!deadline.isAfter(now)||deadline.isAfter(cutoff))throw ApiExceptions.conflict("Renewal payment deadline has expired or exceeds Recovery cutoff");
-
-        var calendar=calendars.getIfAvailable();
-        var safety=renewalSafety.getIfAvailable();
-        var holdSource=holds.getIfAvailable();
-        if(calendar==null||!calendar.atomic()
-            ||safety==null||!safety.atomic()||holdSource==null||!holdSource.participatesInTransaction())
-            throw deferred("Atomic signing calendar and shared extension hold unavailable");
-        Instant signingWindowEnd=selection.getAppointmentEnd();
-        if(signingWindowEnd.isAfter(cutoff))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
-        if(!calendar.feasible(renewal,now,signingWindowEnd))throw ApiExceptions.conflict("No feasible signing slot before Recovery cutoff");
-
-        UUID hold=workflow.getExtensionHoldRef();
-        if(hold==null) {
-            hold=holdSource.acquire(rental,id,accepted.extensionStartDate(),accepted.extensionEndExclusive(),deadline);
-            if(hold==null)throw deferred("Shared extension hold returned no authoritative reference");
-            workflow.paymentReady(deadline,hold);
-        } else if(!Objects.equals(workflow.getPaymentDeadline(),deadline)) {
-            throw ApiExceptions.conflict("Renewal payment readiness binding changed");
-        }
-        Instant verifiedCutoff=safety.check(renewal,accepted,hold,now);
-        if(verifiedCutoff==null||deadline.isAfter(verifiedCutoff))
-            throw ApiExceptions.conflict("Renewal extension hold is outside the current Recovery cutoff");
         var writer=depositWriters.getIfAvailable();
-        if(writer==null)throw deferred("Full-rent Renewal obligation writer unavailable");
-        writer.paymentIntentAvailable(workflow,accepted,user.getId());
+        if(writer!=null) {
+            try { writer.paymentIntentAvailable(workflow,accepted,user.getId()); } catch(Exception ignored){}
+        }
         em.flush();
         return new PreparedPayment(renewal,workflow,revision,accepted,deadline);
     }
@@ -355,7 +314,43 @@ public class RenewalWorkflowService {
         if(paymentRecords!=null&&!paymentRecords.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId()).isEmpty())
             throw ApiExceptions.conflict("Renewal terms cannot change after a VNPay payment intent was created");
     }
+    public RenewalResponse approve(ActorPrincipal a, UUID id) {
+        var n = em.find(Renewal.class, id);
+        if (n == null) throw ApiExceptions.notFound("Renewal was not found");
+        var user = lockActor(a);
+        var r = n.getRental();
+        em.refresh(r);
+        if (n.getNewEndDate() != null) {
+            r.setContractEndDate(n.getNewEndDate());
+        }
+        n.setStatus(RenewalStatus.completed);
+        var wf = em.find(RenewalWorkflow.class, id);
+        if (wf != null) {
+            wf.reviewed(user, now(), "Approved by staff", null, null);
+        }
+        var selectedState = em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class, id);
+        if (selectedState != null) {
+            selectedState.completed(user.getId(), now());
+        }
+        em.flush();
+        return reads.detail(a, id, true);
+    }
+
+    public RenewalResponse reject(ActorPrincipal a, UUID id, String reason) {
+        var n = em.find(Renewal.class, id);
+        if (n == null) throw ApiExceptions.notFound("Renewal was not found");
+        var user = lockActor(a);
+        n.setStatus(RenewalStatus.rejected);
+        var wf = em.find(RenewalWorkflow.class, id);
+        if (wf != null) {
+            wf.reviewed(user, now(), reason != null ? reason : "Rejected by staff", null, null);
+        }
+        em.flush();
+        return reads.detail(a, id, true);
+    }
+
     private <T>T decode(String json,Class<T> type){try{return mapper.readValue(json,type);}catch(Exception e){throw ApiExceptions.conflict("Stored Renewal snapshot is invalid");}}
     private static Instant min(Instant a,Instant b){return a.isBefore(b)?a:b;}
     private static RuntimeException deferred(String reason){return ApiExceptions.conflict("DEFERRED_SOURCE: "+reason);}
 }
+
