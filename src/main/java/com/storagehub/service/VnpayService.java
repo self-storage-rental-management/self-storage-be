@@ -88,6 +88,7 @@ public class VnpayService {
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
+    private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
@@ -104,7 +105,7 @@ public class VnpayService {
         AdminAuthorizationService authorizationService,AuditLogService auditLogService,
         NotificationService notificationService,ObjectMapper objectMapper) {
         this(properties,paymentRepository,complaintRepository,reservationRepository,snapshotRepository,userRepository,
-            authorizationService,auditLogService,notificationService,objectMapper,null,null);
+            authorizationService,null,auditLogService,notificationService,objectMapper,null,null);
     }
 
     @Transactional
