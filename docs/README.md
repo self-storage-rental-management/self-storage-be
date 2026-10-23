@@ -21,3 +21,14 @@ Mỗi flow có một contract chính. Khi bổ sung hoặc sửa API, cập nh�
 | Tích hợp Ledger và Communication | [LEDGER_COMMUNICATION_INTEGRATION_API_CONTRACT.md](LEDGER_COMMUNICATION_INTEGRATION_API_CONTRACT.md) |
 
 `DATABASE_CHANGELOG.md`, `PAYMENT_GATEWAY_MIGRATION.md`, `RENTAL_SUPPORT_SCHEMA_ROLLOUT.md` và `email-api-changes.md` là lịch sử hoặc hướng dẫn triển khai, không thay thế contract API. File SQL và cấu hình mẫu không phải contract riêng.
+
+## Kịch bản demo và kiểm thử thủ công
+
+- [Happy path 4 flow chính](HAPPY_PATH_ALL_FLOWS.md): đặt kho và nhận kho, trả kho, gia hạn, hỗ trợ khách hàng; gồm điều kiện, thao tác và kết quả mong đợi.
+- [Gia hạn, quá hạn và hỗ trợ — chi tiết](HAPPY_PATH_RENEWAL_OVERDUE_SUPPORT.md): thao tác, kết quả từng bước và phiếu ghi nhận cho ba flow này.
+
+Các kịch bản là hướng dẫn chạy, không thay thế contract và không phải bằng chứng đã kiểm thử thành công trên môi trường triển khai.
+
+## Kế hoạch phát triển
+
+- [Chat hỗ trợ AI và bàn giao Staff](SUPPORT_AI_CHAT_PLAN.md): phạm vi, hạng mục thêm/sửa/xóa, API và dữ liệu đề xuất, kiểm thử và công cụ hỗ trợ.
