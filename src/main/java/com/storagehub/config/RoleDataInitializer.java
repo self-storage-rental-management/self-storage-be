@@ -28,6 +28,7 @@ public class RoleDataInitializer {
     private static final int BUSINESS_RETURNS_VERSION = 7;
     private static final int STAFF_RENEWAL_OPERATIONS_VERSION = 8;
     private static final int STAFF_RENEWAL_PAYMENTS_VERSION = 9;
+    private static final int MANAGER_UNIT_ASSIGNMENT_VERSION = 10;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -98,9 +99,9 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(STAFF_RESERVATION_REVIEW_VERSION);
                 }
-                // The confirmed-reservation to handover workflow is operated
-                // from the Staff portal. Preserve custom grants while adding
-                // physical unit assignment to existing Staff roles.
+                // The confirmed-reservation handover workflow used to grant
+                // physical unit assignment to Staff. Keep this historical
+                // upgrade for databases that have not reached policy version 6.
                 if (role.getPermissionsPolicyVersion() < STAFF_TRAM_WORKFLOW_VERSION) {
                     if (code == RoleCode.STAFF) {
                         var updated = new HashSet<>(role.getPermissions());
@@ -141,6 +142,17 @@ public class RoleDataInitializer {
                     }
                     role.setPermissionsPolicyVersion(STAFF_RENEWAL_PAYMENTS_VERSION);
                 }
+                // Physical unit assignment belongs to the Manager workflow.
+                // Revoke the old Staff grant from persisted roles as well as
+                // from newly seeded defaults.
+                if (role.getPermissionsPolicyVersion() < MANAGER_UNIT_ASSIGNMENT_VERSION) {
+                    if (code == RoleCode.STAFF) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.remove(permissions.get(SystemPermission.ASSIGN_UNITS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(MANAGER_UNIT_ASSIGNMENT_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -175,7 +187,6 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_UNITS,
                 SystemPermission.VIEW_RESERVATIONS,
                 SystemPermission.APPROVE_RESERVATIONS,
-                SystemPermission.ASSIGN_UNITS,
                 SystemPermission.VIEW_CONTRACTS,
                 SystemPermission.VIEW_CHECKINS,
                 SystemPermission.PERFORM_CHECKIN,

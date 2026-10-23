@@ -255,7 +255,7 @@ public class CheckInHandoverService {
         if (rentalRepository.existsActiveRental(reservation.getId(), unit.getId(), RentalStatus.active)) {
             throw ApiExceptions.conflict("Reservation or storage unit already has an active rental");
         }
-        validateIdentityDocument(reservation, request);
+        boolean identityCapturedAtCheckIn = validateIdentityDocument(reservation, request);
         if (request.actualMeasurements().weightKg().compareTo(unit.getUnitType().getMaxLoadKg()) > 0) {
             throw ApiExceptions.conflict("Actual goods weight exceeds the storage unit limit");
         }
@@ -287,6 +287,14 @@ public class CheckInHandoverService {
         reservationRepository.saveAndFlush(reservation);
         assignmentRepository.saveAndFlush(assignment);
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
+        if (identityCapturedAtCheckIn) {
+            auditLogService.recordMutation(
+                operator, "RESERVATION_IDENTITY_CAPTURED_AT_CHECKIN", "Reservation", reservation.getId(),
+                reservation.getFacility().getId(),
+                Map.of("identityDocumentStatus", "missing"),
+                Map.of("identityDocumentStatus", "captured_at_checkin")
+            );
+        }
         auditLogService.recordMutation(
             operator, "CHECKIN_HANDOVER_COMPLETED", "CheckIn", saved.getId(),
             reservation.getFacility().getId(),
@@ -739,16 +747,22 @@ public class CheckInHandoverService {
         }
     }
 
-    private void validateIdentityDocument(Reservation reservation, CompleteCheckInRequest request) {
+    private boolean validateIdentityDocument(Reservation reservation, CompleteCheckInRequest request) {
         String actualIdentity = normalizeIdentityDocument(request.identityDocumentNumber());
         String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
         if (actualIdentity == null) {
             throw ApiExceptions.validation("identityDocumentNumber is required", null);
         }
 
-        if (declaredIdentity == null || !declaredIdentity.equals(actualIdentity)) {
+        if (declaredIdentity == null) {
+            reservation.setIdentityDocumentNumber(actualIdentity);
+            return true;
+        }
+
+        if (!declaredIdentity.equals(actualIdentity)) {
             throw ApiExceptions.conflict("Customer identity does not match the reservation");
         }
+        return false;
     }
 
     private String normalizeIdentityDocument(String value) {
