@@ -34,6 +34,21 @@ class DevelopMigrationHistoryLocationsTests {
         DevelopMigrationHistoryLocations.configure(config);
         assertThat(config.getLocations()).extracting(Object::toString).containsExactly("classpath:db/paymentmigration");verifyNoInteractions(datasource);
     }
+    @Test void legacyReservationSequenceAt1901UsesItsChecksumAndAUniqueRenewalBridge() throws Exception {
+        var datasource=mock(DataSource.class);var connection=mock(Connection.class);var query=mock(PreparedStatement.class);
+        var exists=mock(ResultSet.class);var statement=mock(Statement.class);var rows=mock(ResultSet.class);
+        when(datasource.getConnection()).thenReturn(connection);when(connection.prepareStatement(anyString())).thenReturn(query);
+        when(query.executeQuery()).thenReturn(exists);when(exists.next()).thenReturn(true);when(exists.getInt(1)).thenReturn(1);
+        when(connection.createStatement()).thenReturn(statement);when(statement.executeQuery(anyString())).thenReturn(rows);
+        when(rows.next()).thenReturn(true,false);when(rows.getString("version")).thenReturn("2026101901");
+        when(rows.getString("script")).thenReturn("V2026101901__add_reservation_code_sequence.sql");
+        when(rows.getString("type")).thenReturn("SQL");when(rows.getBoolean("success")).thenReturn(true);
+        var config=Flyway.configure().dataSource(datasource).locations("classpath:db/migration");
+        DevelopMigrationHistoryLocations.configure(config);
+        assertThat(config.getLocations()).extracting(Object::toString)
+            .contains("classpath:db/migration-history/legacy-sequence-1901", "classpath:db/migration-history/bridge-renewal-1901")
+            .doesNotContain("classpath:db/migration-history/develop-renewal-1901", "classpath:db/migration-history/develop-sequence-2003");
+    }
     @Test void unknownScriptAndFailedHistoryStopWithoutDdl() throws Exception {
         for(boolean success:new boolean[]{true,false}){
             var datasource=mock(DataSource.class);var connection=mock(Connection.class);var query=mock(PreparedStatement.class);
