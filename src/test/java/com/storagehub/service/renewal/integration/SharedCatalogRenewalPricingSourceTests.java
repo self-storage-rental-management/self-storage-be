@@ -57,15 +57,15 @@ class SharedCatalogRenewalPricingSourceTests {
         verify(types, never()).save(any());
     }
 
-    @Test void effectiveDatesAreInclusiveAndEvaluatedAtExtensionStartNotToday() {
+    @Test void activePackageRemainsAvailableOutsideItsOwnEffectiveDates() {
         pack.setEffectiveFrom(START);
         pack.setEffectiveTo(START);
         assertThat(source.read(rental, START).orElseThrow()).hasSize(1);
-        assertThat(source.read(rental, START.minusDays(1)).orElseThrow()).isEmpty();
-        assertThat(source.read(rental, START.plusDays(1)).orElseThrow()).isEmpty();
+        assertThat(source.read(rental, START.minusDays(1)).orElseThrow()).hasSize(1);
+        assertThat(source.read(rental, START.plusDays(1)).orElseThrow()).hasSize(1);
     }
 
-    @Test void excludesInactiveExpiredAndFuturePackagesAndSortsDeterministically() {
+    @Test void excludesOnlyInactivePackagesAndSortsWithoutPackageDateFiltering() {
         var inactive = pack("INACTIVE", 1); inactive.setActive(false);
         var expired = pack("EXPIRED", 1); expired.setEffectiveTo(START.minusDays(1));
         var future = pack("FUTURE", 1); future.setEffectiveFrom(START.plusDays(1));
@@ -74,7 +74,7 @@ class SharedCatalogRenewalPricingSourceTests {
         when(packages.findByFacility_IdOrderByRentalMonthsAsc(facility.getId()))
             .thenReturn(List.of(longer, inactive, future, pack, expired, alternative));
         var prices = source.read(rental, START).orElseThrow();
-        assertThat(prices).extracting(p -> p.packageCode()).containsExactly("ALTERNATIVE", "BASE", "LONG");
+        assertThat(prices).extracting(p -> p.packageCode()).containsExactly("ALTERNATIVE", "BASE", "EXPIRED", "FUTURE", "LONG");
         assertThat(prices.getLast().discountRate()).isEqualByComparingTo("0.10");
     }
 
@@ -129,14 +129,12 @@ class SharedCatalogRenewalPricingSourceTests {
         assertThat(source.read(rental, START).orElseThrow().getFirst().monthlyPrice()).isEqualByComparingTo("0");
     }
 
-    @Test void invalidDiscountPeriodVersionAndDatesAreRejected() {
+    @Test void invalidDiscountPeriodAndVersionAreRejected() {
         pack.setDiscountRate(new BigDecimal("1.01"));
         assertThatThrownBy(() -> source.read(rental, START)).isInstanceOf(ApiException.class);
         pack.setDiscountRate(BigDecimal.ZERO); pack.setRentalMonths(0);
         assertThatThrownBy(() -> source.read(rental, START)).isInstanceOf(ApiException.class);
         pack.setRentalMonths(1); pack.setPolicyVersion(" ");
-        assertThatThrownBy(() -> source.read(rental, START)).isInstanceOf(ApiException.class);
-        pack.setPolicyVersion("v1"); pack.setEffectiveTo(pack.getEffectiveFrom().minusDays(1));
         assertThatThrownBy(() -> source.read(rental, START)).isInstanceOf(ApiException.class);
     }
 

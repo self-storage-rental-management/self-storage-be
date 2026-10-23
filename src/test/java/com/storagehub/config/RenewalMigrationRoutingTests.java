@@ -46,6 +46,14 @@ class RenewalMigrationRoutingTests {
     @Test void appliedDevelopVersionsRemainImmutable() throws Exception {
         uniqueVersions(configure("V2026101301__deactivate_duplicate_effective_rental_packages.sql","V2026101302__add_facility_operating_details.sql","SQL"));
     }
+    @Test void legacyReservationSequenceAt1901UsesAUniqueRenewalBridge() throws Exception {
+        var history=Map.of("2026101901",new AppliedHistory("V2026101901__add_reservation_code_sequence.sql","SQL"));
+        var config=configure(null,null,null,history);
+        uniqueVersions(config);
+        assertThat(Arrays.stream(config.getLocations()).map(Object::toString).toList())
+            .contains("classpath:db/migration-history/legacy-sequence-1901", "classpath:db/migration-history/bridge-renewal-1901")
+            .doesNotContain("classpath:db/migration-history/develop-renewal-1901");
+    }
     @Test void legacyCalendarAndGatewayRetainOriginalVersionsAndAllowPendingDevelopMigrations() throws Exception {
         var config=configure("V2026101301__create_staff_renewal_signing_calendar.sql","db.sandboxpaymentmigration.V2026101302__ensure_gateway_ledger_evidence","JDBC");
         assertThat(config.isOutOfOrder()).isTrue();uniqueVersions(config);

@@ -1,5 +1,7 @@
 package com.storagehub.service.overdue;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.overdue.*;
 import com.storagehub.common.api.*;
@@ -23,7 +25,7 @@ import static com.storagehub.service.overdue.OverdueSources.*;
 public class OverdueService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.BusinessRecordCodes displayCodes;
-    private static final ZoneId ZONE=ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final ZoneId ZONE=BusinessTime.ZONE;
     private final EntityManager em;private final ObjectMapper mapper;private final RenewalPersistence store;private final AuditLogService audit;
     private final ObjectProvider<Clock> clocks;private final ObjectProvider<FinancialSource> finances;
     private final ObjectProvider<TermSource> terms;private final ObjectProvider<ReminderSource> reminders;private final ObjectProvider<RecoverySource> recoveries;

@@ -1,5 +1,7 @@
 package com.storagehub.service.renewal.operations;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.renewal.*;
 import com.storagehub.api.renewal.RenewalOperationCommands.*;
@@ -161,9 +163,9 @@ public class RenewalOperationService {
         var c=context(actor,id,Audience.STAFF,Capability.ARRIVAL,key,"d3_arrival",body,body.expectedVersion());var old=replay(c,"d3_arrival",key,body);if(old.isPresent())return old.get();
         var s=signing(c,true);currentAppointment(c,s,body.appointmentRef());
         if(s.getArrivalRef()!=null)throw ApiExceptions.conflict("Arrival already recorded for this appointment");
-        requireUnexpiredAppointment(s);
+        requireAppointmentStart(s);
         evidence(actor,c.renewal(),"ARRIVAL",body.evidenceFileIds());
-        requireUnexpiredAppointment(s);
+        requireAppointmentStart(s);
         var e=event(c,"ARRIVAL",Map.of("appointmentRef",body.appointmentRef(),"evidenceFileIds",body.evidenceFileIds()));s.arrival(e.getId());
         return finish(c,"d3_arrival",key,body,e,201);
     }
@@ -190,9 +192,7 @@ public class RenewalOperationService {
         evidence(actor,c.renewal(),"CASH_RECEIPT",List.of(body.receiptFileId()));
         String method=body.paymentMethod()==null?"CASH":body.paymentMethod().trim().toUpperCase(java.util.Locale.ROOT);
         if(!Set.of("CASH","BANK_TRANSFER").contains(method))throw ApiExceptions.validation("Phương thức thanh toán không hợp lệ.",null);
-        String receiptReference="CASH".equals(method)?"TM-"+UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT)
-            :body.receiptReference()==null?"":body.receiptReference().trim();
-        if(receiptReference.isBlank()||receiptReference.length()>100)throw ApiExceptions.validation("Cần mã giao dịch chuyển khoản hợp lệ.",null);
+        String receiptReference=("CASH".equals(method)?"TM-":"CK-")+UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT);
         var receipt=finance.balance(c.renewal(),body.payableStatementRef(),receiptReference,body.receiptFileId(),method,actor.userId(),key,now());
         if(receipt==null||receipt.reference()==null||!id.equals(receipt.renewalId())||!statement.reference().equals(receipt.statementRef())||receipt.amount()==null||receipt.amount().compareTo(statement.amount())!=0||!statement.currency().equals(receipt.currency())||receipt.receivedAt()==null||receipt.receivedAt().isAfter(now()))throw deferred("Shared CASH receipt is incomplete or inconsistent");
         var eventData=new LinkedHashMap<String,Object>(mapper.convertValue(receipt,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
@@ -344,7 +344,7 @@ public class RenewalOperationService {
         var pageable=PageRequest.of(page,size,Sort.by("appointmentStart").and(Sort.by("id")));if(ids.isEmpty())return PageResponse.from(Page.empty(pageable),correlation);
         String filter=" where s.appointmentRef is not null and s.id in :ids and s.renewal.rental.facility.id in :facilities"+(facilityId==null?"":" and s.renewal.rental.facility.id=:facility")+(phase==null?"":" and s.phase=:phase")+(date==null?"":" and s.appointmentStart>=:start and s.appointmentStart<:end");
         var query=em.createQuery("select s from RenewalOperationState s"+filter+" order by s.appointmentStart,s.id",RenewalOperationState.class);var count=em.createQuery("select count(s) from RenewalOperationState s"+filter,Long.class);
-        for(var q:List.of(query,count)){q.setParameter("ids",ids);q.setParameter("facilities",scopeIds);if(facilityId!=null)q.setParameter("facility",facilityId);if(phase!=null)q.setParameter("phase",RenewalOperationState.Phase.valueOf(phase));if(date!=null){var zone=ZoneId.of("Asia/Ho_Chi_Minh");q.setParameter("start",date.atStartOfDay(zone).toInstant());q.setParameter("end",date.plusDays(1).atStartOfDay(zone).toInstant());}}
+        for(var q:List.of(query,count)){q.setParameter("ids",ids);q.setParameter("facilities",scopeIds);if(facilityId!=null)q.setParameter("facility",facilityId);if(phase!=null)q.setParameter("phase",RenewalOperationState.Phase.valueOf(phase));if(date!=null){var zone=BusinessTime.ZONE;q.setParameter("start",date.atStartOfDay(zone).toInstant());q.setParameter("end",date.plusDays(1).atStartOfDay(zone).toInstant());}}
         var rows=query.setFirstResult(page*size).setMaxResults(size).getResultList().stream().map(s->{auth.require(actor,s.getRenewal(),Capability.READ);return projection(s.getRenewal());}).toList();return PageResponse.from(new PageImpl<>(rows,pageable,count.getSingleResult()),correlation);
     }
     @Transactional(readOnly=true)
@@ -396,10 +396,10 @@ public class RenewalOperationService {
         if(t.renewalDepositAmount()==null||t.renewalDepositAmount().signum()<0||t.remainingRentalAmount()==null||t.remainingRentalAmount().signum()<0||t.renewalDepositAmount().add(t.remainingRentalAmount()).compareTo(t.totalAfterDiscount())!=0||!"VND".equals(t.currency()))throw ApiExceptions.conflict("Accepted period/financial terms inconsistent");
         return t;
     }
-    private void requireUnexpiredAppointment(RenewalOperationState s) {
-        if(s.getAppointmentStart()==null||s.getAppointmentEnd()==null||!s.getAppointmentEnd().isAfter(s.getAppointmentStart()))
-            throw deferred("Appointment period unavailable");
-        if(now().isAfter(s.getAppointmentEnd()))throw ApiExceptions.conflict("Appointment has expired; reschedule or incident review required");
+    private void requireAppointmentStart(RenewalOperationState s) {
+        if(s.getAppointmentStart()==null)throw deferred("Appointment start unavailable");
+        // Calendar slot ends allocate staff capacity; the effective signing deadline governs arrival.
+        beforeOrEqual(now(),s.getEffectiveSigningDeadline());
     }
     private void currentAppointment(Context c,RenewalOperationState s,UUID ref){if(ref==null||!ref.equals(s.getAppointmentRef()))throw ApiExceptions.conflict("Current appointment required");linked(c.renewal(),ref,"APPOINTMENT");}
     private RenewalOperationEvent linked(Renewal n,UUID ref,String kind){var e=ref==null?null:em.find(RenewalOperationEvent.class,ref);if(e==null||!n.getId().equals(e.getRenewal().getId())||!kind.equals(e.getKind()))throw ApiExceptions.notFound("Related event not found");return e;}

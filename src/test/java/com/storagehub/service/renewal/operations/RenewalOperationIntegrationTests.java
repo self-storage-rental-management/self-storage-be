@@ -237,15 +237,15 @@ class RenewalOperationIntegrationTests {
         var hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
         return tx.execute(s->{var file=new FileAsset();file.setUploadedBy(em.find(User.class,uploader));file.setStorageKey(path.toString());file.setOriginalName("test-signed.txt");file.setContentType("text/plain");file.setSizeBytes(bytes.length);file.setChecksumSha256(hash);file.setEntityType(com.storagehub.service.integration.DuongFileEvidence.renewalType(purpose));file.setEntityId(resource);em.persist(file);em.flush();return file.getId();});
     }
-    @Test void missingAppointmentPeriodCannotRecordArrival() {
+    @Test void missingAppointmentStartCannotRecordArrival() {
         var n=scheduled();var state=em.find(RenewalOperationState.class,n.getId());
-        state.appointment(state.getAppointmentRef(),state.getAppointmentStart(),null);em.flush();
+        state.appointment(state.getAppointmentRef(),null,state.getAppointmentEnd());em.flush();
         assertThatThrownBy(()->service.arrival(actor(n,RoleCode.STAFF),n.getId(),new Arrival(state.getAppointmentRef(),List.of(),version(n)),"missing-period"))
-            .hasMessageContaining("Appointment period unavailable");
+            .hasMessageContaining("Appointment start unavailable");
         assertThat(state.getArrivalRef()).isNull();
     }
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
-    void expiredAppointmentRejectsArrivalWithCommittedReadback() throws Exception {
+    void arrivalAfterCalendarSlotEndIsAcceptedBeforeSigningDeadlineWithCommittedReadback() throws Exception {
         var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
         var n=tx.execute(s->scheduled());var staff=actor(n,RoleCode.STAFF);
         var before=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
@@ -255,16 +255,16 @@ class RenewalOperationIntegrationTests {
         var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new StaffRenewalOperationController(actors,service))
             .setControllerAdvice(new GlobalExceptionHandler()).build();
         var mapper=new ObjectMapper().findAndRegisterModules();
-        var rejected=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/staff/renewals/"+n.getId()+"/arrival")
+        var accepted=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/staff/renewals/"+n.getId()+"/arrival")
             .header("Idempotency-Key","expired-slot").contentType("application/json")
             .content(mapper.writeValueAsString(new Arrival(before.appointmentRef(),List.of(),before.expectedVersion())))).andReturn().getResponse();
-        assertThat(rejected.getStatus()).isEqualTo(409);assertThat(rejected.getContentAsString()).contains("Appointment has expired");
+        assertThat(accepted.getStatus()).isEqualTo(201);
         var read=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/staff/renewals/"+n.getId())).andReturn().getResponse();
         assertThat(read.getStatus()).isEqualTo(200);var data=mapper.readTree(read.getContentAsString()).path("data");
-        assertThat(data.path("arrivalRef").isNull()).isTrue();assertThat(data.path("expectedVersion").asLong()).isEqualTo(before.expectedVersion());
+        assertThat(data.path("arrivalRef").isNull()).isFalse();assertThat(data.path("expectedVersion").asLong()).isGreaterThan(before.expectedVersion());
         var after=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
-        assertThat(after.expectedVersion()).isEqualTo(before.expectedVersion());assertThat(after.arrivalRef()).isNull();
-        assertArrivalRows(n.getId(),0);
+        assertThat(after.expectedVersion()).isGreaterThan(before.expectedVersion());assertThat(after.arrivalRef()).isNotNull();
+        assertArrivalRows(n.getId(),1);
     }
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     void arrivalAtSlotEndReplaysAfterExpiryWithoutDuplicateEvent() throws Exception {
@@ -277,6 +277,20 @@ class RenewalOperationIntegrationTests {
         assertThat(service.arrival(staff,n.getId(),body,"slot-end-arrival")).isEqualTo(accepted);
         assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).arrivalRef()).isEqualTo(accepted.state().arrivalRef());
         assertArrivalRows(n.getId(),1);
+    }
+    @Test void arrivalWithoutCalendarSlotEndUsesSigningDeadline() {
+        var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=em.find(RenewalOperationState.class,n.getId());
+        state.appointment(state.getAppointmentRef(),state.getAppointmentStart(),null);em.flush();
+        clock.time=state.getEffectiveSigningDeadline();
+        var result=service.arrival(staff,n.getId(),new Arrival(state.getAppointmentRef(),List.of(),version(n)),"no-slot-end");
+        assertThat(result.state().arrivalRef()).isNotNull();
+    }
+    @Test void arrivalAfterSigningDeadlineStillRejected() {
+        var n=scheduled();var staff=actor(n,RoleCode.STAFF);var before=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
+        clock.time=before.effectiveSigningDeadline().plusSeconds(1);
+        assertThatThrownBy(()->service.arrival(staff,n.getId(),new Arrival(before.appointmentRef(),List.of(),before.expectedVersion()),"late-signing-arrival"))
+            .hasMessageContaining("deadline");
+        assertThat(em.find(RenewalOperationState.class,n.getId()).getArrivalRef()).isNull();
     }
     private void assertArrivalRows(UUID renewalId,long expected) throws Exception {
         try(var connection=datasource.getConnection();var query=connection.prepareStatement("select count(*) from renewal_operation_events where renewal_id=? and kind='ARRIVAL'")) {

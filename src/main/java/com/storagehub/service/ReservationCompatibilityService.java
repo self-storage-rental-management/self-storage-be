@@ -134,6 +134,11 @@ public class ReservationCompatibilityService {
                 "goodsItems[" + index + "] requires customGoodsName and customMaterial for OTHER category", null
             );
         }
+        if (item.getCategory() != GoodsCategory.OTHER && isBlank(item.getMaterialName())) {
+            throw ApiExceptions.validation(
+                "goodsItems[" + index + "] requires materialName for a standard category", null
+            );
+        }
     }
 
     private boolean fitsInsideRack(GoodsItemRequest item, UnitType unitType) {
