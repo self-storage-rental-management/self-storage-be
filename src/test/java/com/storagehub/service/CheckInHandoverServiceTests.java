@@ -180,7 +180,7 @@ class CheckInHandoverServiceTests {
         var response = service.complete(actor, checkIn.getId(), validCompletionRequest());
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.completed);
-        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.COMPLETED);
         assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.COMPLETED);
         assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.assigned);
         assertThat(response.handover()).isNotNull();
@@ -409,7 +409,7 @@ class CheckInHandoverServiceTests {
             ),
             null,
             "Kho sạch, không hư hại", "Hàng nguyên vẹn", 3, "Đồ gia dụng",
-            List.of("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"), List.of("PIN", "Biên nhận"), notes
+            List.of("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"), List.of("Ổ khóa LEGACY-LOCK", "Biên nhận"), notes
         );
     }
 
