@@ -1,5 +1,13 @@
 # D5 — Đặc tả API hỗ trợ
 
+## Widget một luồng và bàn giao không memory AI
+
+Widget Customer giữ một luồng hội thoại khi chuyển AI → Staff. Nút Gặp nhân viên thêm yêu cầu và lời nhắc chọn cơ sở ngay trong chat. Chọn cơ sở tạo ticket; sau khi server xác nhận, giữ các tin AI phía trên, thêm lời xác nhận chờ Staff và tiếp tục dùng ô nhập trong cùng bố cục. Không chuyển sang màn hình chi tiết ticket. Chưa gửi yêu cầu thì có thể quay về trợ lý.
+
+API tạo hỗ trợ nhận thêm `handoffMessages?: {role: "CUSTOMER"|"ASSISTANT", body: string}[]`: tối đa 200 tin, mỗi tin 4.000 ký tự, tổng 200.000 ký tự. Lịch sử được lưu atomically cùng ticket và receipt idempotency trong bảng support_messages hiện có. AuthorRole trả về `USER_CONTEXT`/`AI_CONTEXT`, authorId là Customer gửi snapshot; đây là lịch sử khách cung cấp, chưa xác minh, không phải phản hồi Staff hoặc dữ liệu Gemini có chứng thực. Các tin sau bàn giao vẫn dùng CUSTOMER/STAFF. Tin context PUBLIC chỉ đọc qua quyền sở hữu/phạm vi ticket hiện có; không ảnh hưởng SLA phản hồi Staff. Không tự cắt lịch sử; vượt giới hạn trả lỗi validation.
+
+AI dừng sau bàn giao. Header đổi từ Trợ lý AI sang Đang chờ nhân viên rồi tên Staff khi server xác nhận tiếp nhận. Khách có thể gửi thêm khi chờ; đọc phản hồi bằng polling 5 giây khi panel hoạt động. Lịch sử hỗ trợ mở lại cùng giao diện hội thoại, gồm phần AI đã lưu. Không đưa transcript Staff trở lại Gemini và không tạo memory AI giữa các phiên. Trong lúc gửi/upload/kết quả chưa xác định, giữ payload/idempotency hiện có; không có ràng buộc conversation→ticket riêng xuyên phiên ở DB.
+
 ## API trợ lý Gemini thử nghiệm — 23/10/2026
 
 `POST /api/customer/chat/replies` là API trả lời **stateless** riêng, chưa thay thế các API hội thoại/ticket bên dưới. Widget Customer mới gọi endpoint này; các chủ đề FAQ phía FE chỉ là gợi ý câu hỏi, không còn khớp từ khóa để giả phản hồi Gemini. Không tạo SupportTicket, notification, giao dịch hoặc thay đổi hồ sơ. Chưa lưu hội thoại AI vào DB; migration, lịch sử bền vững và bàn giao transcript vẫn là bước sau.

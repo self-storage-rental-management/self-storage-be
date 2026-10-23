@@ -94,7 +94,8 @@ class BusinessRecordCodesMySqlTests {
         assertThat(codes.find("GH:"+id)).isEqualTo("GH-2610-000001");
         assertThat(codes.find("HT:"+support)).isEqualTo("HT-2610-000001");
         assertThat(codes.find(ref)).isEqualTo("QH-2610-000001");
-        assertThat(tx.<String>execute(s->codes.assign("GH","GH:"+UUID.randomUUID(),at))).isEqualTo("GH-2610-000002");
+        assertThat(tx.<String>execute(s->codes.assign("GH","GH:"+UUID.randomUUID(),at)))
+            .matches("GH-2610-[0-9]{6}").isNotEqualTo("GH-2610-000001");
         assertThat(codes.resource("GH"," gh-2610-000001 ")).isEqualTo("GH:"+id);
         assertThat(tx.<String>execute(s->codes.assign("QH",ref,at.plusSeconds(2678400)))).isEqualTo("QH-2610-000001");
         assertThat(jdbc.queryForObject("SELECT count(*) FROM business_record_codes WHERE resource_key=?",Integer.class,ref)).isEqualTo(1);
@@ -118,8 +119,24 @@ class BusinessRecordCodesMySqlTests {
             assertThat(ready.await(10,TimeUnit.SECONDS)).isTrue();start.countDown();
             var results=new HashSet<String>();
             for(var job:jobs)results.add(job.get(20,TimeUnit.SECONDS));
-            assertThat(results).containsExactly("GH-2610-000001");
+            assertThat(results).hasSize(1);
+            assertThat(results.iterator().next()).matches("GH-2610-[0-9]{6}");
             assertThat(jdbc.queryForObject("SELECT count(*) FROM business_record_codes",Integer.class)).isEqualTo(1);
         }
+    }
+
+    @Test void newRenewalsHaveDistinctStableCodesWithoutConsumingTheSequence() {
+        sourceTables();migrateCodes();
+        Instant at=Instant.parse("2026-10-20T01:00:00Z");
+        var assigned=new HashSet<String>();
+        for(int i=0;i<20;i++) {
+            String key="GH:"+UUID.randomUUID();
+            String code=tx.execute(s->codes.assign("GH",key,at));
+            assertThat(code).matches("GH-2610-[0-9]{6}");
+            assertThat(assigned.add(code)).isTrue();
+            assertThat(tx.<String>execute(s->codes.assign("GH",key,at))).isEqualTo(code);
+            assertThat(codes.resource("GH",code)).isEqualTo(key);
+        }
+        assertThat(jdbc.queryForObject("SELECT serial_value FROM business_record_code_sequences WHERE type_code='GH' AND period='2610'",Long.class)).isEqualTo(1L);
     }
 }

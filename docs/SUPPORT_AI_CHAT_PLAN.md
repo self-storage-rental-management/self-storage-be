@@ -2,6 +2,8 @@
 
 Ngày lập: 23/10/2026. Đây là kế hoạch triển khai, chưa phải xác nhận tính năng đã hoàn tất. Phần chat trực tiếp với Staff đã có thay đổi đang phát triển; lớp AI và cơ chế AI-first dưới đây là công việc tiếp theo.
 
+**Điều chỉnh phạm vi theo người dùng:** không thêm memory/lịch sử AI trong DB. AI giữ trong phiên; lịch sử Staff dùng SupportTicket hiện có. Khi khách xác nhận bàn giao, có thể lưu bản chụp AI trong ticket (xem cập nhật cuối tài liệu). Những yêu cầu migration/persistence AI bên dưới là kế hoạch ban đầu, không còn thuộc phạm vi đã chọn.
+
 ## 1. Mục tiêu và phạm vi
 
 - Bỏ mục Hỗ trợ khách hàng khỏi thanh điều hướng **Customer**, thay bằng một icon chat nổi dùng chung trong khu vực khách hàng.
@@ -323,3 +325,13 @@ Phạm vi lượt triển khai tiếp theo: **chỉ bước 2 — Widget (UI-01/
 - Prompt yêu cầu đáp án hướng dẫn ngắn 2–4 câu, bỏ chào lặp/lời mời gặp nhân viên không cần thiết. Không bỏ điều kiện nghiệp vụ hoặc ép cắt đáp án để lấy tốc độ.
 - Thêm `SupportQuickFaq` ở BE: 10 câu chuẩn hướng dẫn chung, khớp chính xác sau chuẩn hóa; không suy đoán bằng từ khóa. FAQ bỏ qua gọi Google, hiển thị “Hướng dẫn nhanh”; câu khác vẫn dùng Gemini. Response thêm source FAQ/GEMINI; kiểm tra quyền, validation, rate limit và idempotency vẫn giữ.
 - Thêm đo thời gian trả lời theo source, không log dữ liệu khách. Streaming chưa thuộc lượt này. Build FE đạt; không chạy test suite theo yêu cầu.
+
+### Một khung chat AI → Staff, không có memory AI
+
+- Bỏ tab Trợ lý/Nhân viên. Mở vào AI; bấm Gặp nhân viên hiển thị tin Customer “Tôi muốn gặp nhân viên”, tiếp theo là lời nhắc chọn cơ sở cùng các nút cơ sở đang hoạt động lấy từ API, có phân trang. Không mở form xác nhận. Có thể quay về trợ lý trước khi gửi yêu cầu; Lịch sử hỗ trợ mở danh sách ticket đã lưu.
+- Chọn cơ sở là gửi yêu cầu ngay. Mô tả/tin Customer mở đầu chứa lời yêu cầu, tên cơ sở và câu hỏi gần nhất. `handoffMessages` lưu cả trao đổi AI trước đó thành USER_CONTEXT/AI_CONTEXT trong support_messages, atomically với ticket và receipt. Không đổi schema; nguồn được ghi rõ là lịch sử khách chuyển, chưa xác minh. Tối đa 200 tin/200.000 ký tự, mỗi tin 4.000 ký tự; vượt giới hạn báo lỗi, không cắt thầm.
+- Tạo ticket qua API/hook idempotency hiện có; mở đúng ticket sau khi server xác nhận, hiển thị lời nhắn chờ nhân viên. Lỗi tải cơ sở cho phép tải lại; kết quả gửi chưa rõ chỉ thử lại payload/key cũ. Staff vẫn đọc theo quyền/scope hiện có. Không thêm migration, bảng memory hoặc gửi transcript support vào Gemini.
+- Sau tạo thành công, giữ nguyên bố cục và luồng tin nhắn, dừng AI; không mở màn hình chi tiết ticket. Header đổi Đang chờ nhân viên → tên Staff đang hỗ trợ theo dữ liệu server. Khách vẫn nhắn thêm trong lúc chờ; tin Staff được cập nhật qua polling 5 giây khi panel hoạt động. Trong lúc gửi/chưa xác định kết quả hoặc upload, chặn điều hướng để giữ nguyên payload/key cũ. Hỏi AI không tạo ticket; cần đợi request AI xong mới bàn giao để không chen câu trả lời muộn.
+- Ticket/notification/claim và lịch sử Staff giữ cơ chế hiện có. Header hội thoại hiển thị tên Staff khi server có acceptedAt và tên; trước đó hiển thị Chờ tiếp nhận. Reload không khôi phục AI nhưng khách mở lại ticket qua Lịch sử hỗ trợ.
+- Không có unique conversation→ticket riêng ở DB. Lịch sử trước bàn giao chỉ được lưu khi khách chuyển tiếp; không có memory AI giữa các phiên. Chống gửi trùng bằng command lock/idempotency; reload có thể mở lại ticket và lịch sử đã lưu.
+- Build FE/compile BE đạt; chạy riêng hai integration test H2 cho lịch sử theo đúng thứ tự, replay không trùng, đọc theo quyền và validation không tạo dữ liệu dở dang: đều đạt. Typecheck FE chỉ còn lỗi cũ ProfileView.tsx:1062. Không sửa module phân quyền/hoàn tiền ngoài support.
