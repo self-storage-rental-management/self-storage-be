@@ -63,14 +63,14 @@ public class AdminSecurityService {
         UUID userId,
         String correlationId
     ) {
-        authorizationService.require(actor, SystemPermission.VIEW_AUDIT_LOGS);
+        authorizationService.require(actor, SystemPermission.MANAGE_SESSIONS);
         Page<Session> result = sessionRepository.search(userId, pageable(page, size, "createdAt"));
         return PageResponse.from(result.map(this::toSessionResponse), correlationId);
     }
 
     @Transactional
     public AdminSessionResponse revokeSession(ActorPrincipal actor, UUID sessionId) {
-        authorizationService.require(actor, SystemPermission.MANAGE_USERS);
+        authorizationService.require(actor, SystemPermission.MANAGE_SESSIONS);
         Session session = sessionRepository.findByIdAndRevokedAtIsNull(sessionId)
             .orElseThrow(() -> ApiExceptions.notFound("Active session was not found"));
         Instant revokedAt = Instant.now();

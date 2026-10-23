@@ -29,7 +29,7 @@ Ràng buộc: phải có mô tả không chỉ gồm khoảng trắng hoặc ít
 
 - Staff/Manager: GET `/{id}/public-messages` và `/{id}/internal-messages` dưới tiền tố D5 tương ứng. Chỉ nhận page/size; lọc PUBLIC/INTERNAL trước đếm và phân trang. GET `/messages` cũ vẫn giữ tương thích. Customer chỉ có tin PUBLIC.
 - Manager: POST `/api/manager/support-tickets/{id}/messages`, header `Idempotency-Key`, body `{"body":"Hướng dẫn xử lý","visibility":"INTERNAL","evidenceFileIds":[]}`. PUBLIC bị từ chối; không nhận expectedVersion, actor hoặc người nhận do client chọn.
-- Manager cần role đang hoạt động, VIEW_SUPPORT + MANAGE_SUPPORT và phạm vi MANAGE tại cơ sở (kiểm tra token và DB). Hồ sơ phải còn hiệu lực xử lý và có Staff đang nhận. Gửi tin không đổi trạng thái hoặc đồng hồ phản hồi Customer; chỉ thông báo Staff đang phụ trách. Retry cùng key không gửi trùng.
+- Manager cần role đang hoạt động, `support:read` và phạm vi MANAGE tại cơ sở (kiểm tra token và DB). Hồ sơ phải còn hiệu lực xử lý và có Staff đang nhận. Gửi tin không đổi trạng thái hoặc đồng hồ phản hồi Customer; chỉ thông báo Staff đang phụ trách. Retry cùng key không gửi trùng.
 - Staff gửi INTERNAL qua endpoint messages hiện có; thông báo Manager của cơ sở. Hai bên đính kèm `DUONG_SUPPORT_INTERNAL`; Customer không được đọc hoặc tải các tệp này. Manager chỉ upload/attach chứng từ INTERNAL.
 - FE bỏ tab lịch sử nội bộ, thay điều phối bằng trao đổi Staff–Manager; giữ giao diện và composer tương tự cuộc trao đổi với Customer. API lịch sử và escalation vẫn tồn tại để đọc dữ liệu cũ.
 
@@ -48,9 +48,9 @@ Các mô tả Manager chỉ đọc bên dưới phản ánh quy tắc trước c
 
 Mọi đường dẫn sử dụng xác thực Bearer và cấu trúc bao phản hồi hiện có (`ApiResponse`, `PageResponse`, `ApiErrorResponse`, correlation ID).
 
-Kiểm tra trạng thái/role/quyền/phạm vi cơ sở hiện trong DB và token. Customer phải sở hữu ticket và hồ sơ liên kết. Manager đọc chỉ cần `VIEW_SUPPORT` + READ; không có API mutation. Principal có role MANAGER không được dùng role STAFF đồng thời để thực hiện lệnh Support. Staff cần `VIEW_SUPPORT` + `MANAGE_SUPPORT` và OPERATE/MANAGE tại cơ sở để xem hàng đợi an toàn và claim; nội dung/trao đổi sau claim chỉ thuộc Staff hiện đang xử lý.
+Kiểm tra trạng thái/role/quyền/phạm vi cơ sở hiện trong DB và token. Customer phải sở hữu ticket và hồ sơ liên kết. Manager đọc chỉ cần `support:read` + READ; không có API mutation. Principal có role MANAGER không được dùng role STAFF đồng thời để thực hiện lệnh Support. Staff cần `support:read` + `support:update` và OPERATE/MANAGE tại cơ sở để xem hàng đợi an toàn và claim; nội dung/trao đổi sau claim chỉ thuộc Staff hiện đang xử lý.
 
-`RoleDataInitializer` hiện có `VIEW_SUPPORT` và `MANAGE_SUPPORT` trong bộ quyền STAFF mặc định. Quyền đã bị thu hồi/tùy chỉnh và phạm vi cơ sở vẫn được kiểm tra thực tế; thay đổi này không tự cấp lại quyền hay sửa DB. Manager có `MANAGE_SUPPORT` do lịch sử/kế thừa cũng không được thao tác Support.
+`RoleDataInitializer` hiện có `support:read` và `support:update` trong bộ quyền STAFF mặc định. Manager chỉ có `support:read`; không còn kế thừa Staff và không được thao tác Support. Quyền đã bị thu hồi/tùy chỉnh và phạm vi cơ sở vẫn được kiểm tra thực tế.
 
 Ticket cũ không có cơ sở bị loại khỏi danh sách theo phạm vi và trả 404; không ngầm có quyền phân loại/xử lý toàn hệ thống. Ticket cũ có cơ sở trong phạm vi nhưng chưa có metadata workflow đã xác minh được đọc với `workflowReady=false`, không được thay đổi. Không tự bổ sung ngược dữ liệu.
 

@@ -33,15 +33,19 @@ class RolePolicyOwnershipTests {
         var runner = new RoleDataInitializer(roleRepository, permissionRepository).seedSystemRoles();
         runner.run();
         runner.run();
+        assertThat(manager.getParentRole()).isNull();
         assertThat(manager.getPermissions()).extracting(Permission::getCode)
-            .containsExactlyInAnyOrder("storage_units:read", "policies:read");
+            .contains("rentals:update", "payments:confirm", "refunds:approve", "fees:waive")
+            .doesNotContain("checkins:process", "support:update", "policies:update");
         assertThat(roles.get(RoleCode.BUSINESS).getPermissions()).extracting(Permission::getCode)
-            .containsExactlyInAnyOrder("storage_units:read", "policies:read", "policies:update",
-                "returns:read", "rentals:update");
+            .contains("policies:read", "policies:update", "refunds:approve", "fees:waive")
+            .doesNotContain("returns:process", "rentals:update");
         assertThat(roles.get(RoleCode.STAFF).getPermissions()).extracting(Permission::getCode)
-            .containsExactlyInAnyOrder("storage_units:read", "reservations:approve",
-                "rentals:update", "payments:read", "payments:collect");
-        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(10));
+            .contains("reservations:approve", "payments:read", "payments:collect", "renewals:operate")
+            .doesNotContain("rentals:update", "refunds:approve", "fees:waive");
+        assertThat(roles.get(RoleCode.ADMIN).getPermissions()).extracting(Permission::getCode)
+            .contains("dashboard:read", "sessions:manage");
+        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(11));
     }
 
     @Test void newRolesGrantPolicyWritesOnlyToBusinessOperations() throws Exception {
@@ -61,8 +65,9 @@ class RolePolicyOwnershipTests {
                 .as("%s policy ownership", entry.getKey()).isEqualTo(entry.getKey() == RoleCode.BUSINESS);
         }
         assertThat(roles.get(RoleCode.MANAGER).getEffectivePermissions()).extracting(Permission::getCode)
-            .contains("policies:read", "checkins:process");
+            .contains("policies:read", "rentals:update")
+            .doesNotContain("checkins:process");
         assertThat(roles.get(RoleCode.STAFF).getEffectivePermissions()).extracting(Permission::getCode)
-            .contains("payments:read", "payments:collect");
+            .contains("payments:read", "payments:collect", "renewals:operate");
     }
 }

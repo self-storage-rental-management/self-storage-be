@@ -35,13 +35,13 @@ public class RenewalAssignmentSource implements RenewalOperationSources.Authoriz
     public void require(ActorPrincipal actor,Renewal n,RenewalOperationSources.Capability capability) {
         var f=n.getRental().getFacility().getId();
         if(capability==RenewalOperationSources.Capability.EXCEPTION||capability==RenewalOperationSources.Capability.REFUND) {
-            if(capability==RenewalOperationSources.Capability.REFUND)access.require(actor,RoleCode.MANAGER,f,FacilityScopeLevel.MANAGE,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS);
+            if(capability==RenewalOperationSources.Capability.REFUND)access.require(actor,RoleCode.MANAGER,f,FacilityScopeLevel.MANAGE,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS,SystemPermission.APPROVE_REFUNDS);
             else access.require(actor,RoleCode.MANAGER,f,FacilityScopeLevel.MANAGE,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS);
             return;
         }
         if(capability==RenewalOperationSources.Capability.CASH)access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS);
         else if(capability==RenewalOperationSources.Capability.READ)access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS);
-        else access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS);
+        else access.require(actor,RoleCode.STAFF,f,FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.OPERATE_RENEWALS);
 
     }
     public Set<UUID> assignedRenewalIds(ActorPrincipal actor) {
@@ -53,6 +53,6 @@ public class RenewalAssignmentSource implements RenewalOperationSources.Authoriz
             .setParameter("scopes",scopes).getResultList());
     }
     public void requireAssignable(User target,UUID facility) {
-        if(!access.eligible(target,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS)||!access.scope(target.getId(),facility,FacilityScopeLevel.OPERATE))throw ApiExceptions.validation("Staff must be active with Renewal permissions and OPERATE scope",null);
+        if(!access.eligible(target,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.OPERATE_RENEWALS)||!access.scope(target.getId(),facility,FacilityScopeLevel.OPERATE))throw ApiExceptions.validation("Staff must be active with Renewal permissions and OPERATE scope",null);
     }
 }

@@ -200,6 +200,10 @@ public class UnitAssignmentService {
             throw ApiExceptions.conflict("Reservation already has an active unit assignment");
         }
         assertAssignmentCandidate(reservation);
+        if (reservation.getGoodsReviewedBy() != null
+            && reservation.getGoodsReviewedBy().getId().equals(actor.userId())) {
+            throw ApiExceptions.conflict("The goods approver cannot assign a storage unit to the same reservation");
+        }
 
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
