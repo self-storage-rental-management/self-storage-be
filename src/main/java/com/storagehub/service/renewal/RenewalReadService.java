@@ -30,12 +30,6 @@ public class RenewalReadService {
         return repository.findOne(scope(actor,manager).and((r,q,c)->c.equal(r.get("id"),id)))
             .orElseThrow(()->ApiExceptions.notFound("Renewal was not found"));
     }
-    public Renewal findForDecision(ActorPrincipal actor,UUID id) {
-        authorize(actor,true,true);
-        var ids=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.MANAGE)).map(Map.Entry::getKey).toList();
-        return repository.findOne((r,q,c)->c.and(c.equal(r.get("id"),id),r.get("rental").get("facility").get("id").in(ids)))
-            .orElseThrow(()->ApiExceptions.notFound("Renewal was not found"));
-    }
     public static void authorize(ActorPrincipal a,boolean manager,boolean write) {
         if(a==null)throw ApiExceptions.unauthorized("Authentication is required");
         if(!manager){if(!a.hasRole(RoleCode.CUSTOMER))throw ApiExceptions.forbidden("Customer role required");return;}

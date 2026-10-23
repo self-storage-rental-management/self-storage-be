@@ -1,5 +1,29 @@
 # Renewal API contract
 
+## Mốc hẹn ký và hạn hoàn tất — 22/10/2026
+
+- Lịch ký hiển thị một mốc `appointmentStart`: giờ khách dự kiến đến cơ sở.
+- Không dùng `appointmentEnd` để từ chối ghi nhận khách đến hoặc yêu cầu đổi lịch chỉ vì đã qua 30 phút. Staff vẫn được ghi nhận khách đến và hoàn tất gia hạn trong `effectiveSigningDeadline`, với các điều kiện thanh toán, minh chứng và quyền hiện có.
+- `appointmentEnd` và khung 30 phút trong calendar chỉ phục vụ đặt chỗ/phân bổ sức chứa Staff, không phải hạn hoàn tất ký của khách. Không thay đổi schema hay xóa dữ liệu lịch cũ.
+- Hạn hoàn tất ký, cutoff xử lý quá hạn/thu hồi và kiểm tra idempotency vẫn có hiệu lực. Replay một lượt khách đến đã thành công không tạo thêm sự kiện, kể cả sau hạn ký.
+- Mô tả lịch 30 phút ở các phần lịch sử bên dưới được hiểu là khung đặt chỗ nội bộ, không phải thời hạn bắt buộc hoàn tất gia hạn.
+
+## Điều kiện gói gia hạn, 22/10/2026
+
+- Gói phải thuộc đúng cơ sở, đang hoạt động và được chọn trong chính sách gia hạn của cơ sở.
+- Luồng gia hạn không kiểm tra ngày bắt đầu hoặc ngày kết thúc hiệu lực riêng của từng gói. Ngày hiệu lực của chính sách gia hạn cấp cơ sở vẫn được áp dụng.
+
+## Cách tính báo giá hiện hành, 21/10/2026
+
+Mục này thay thế mô tả tỷ lệ cọc 40% và phần còn lại 60% của báo giá mới bên dưới.
+
+- Đơn giá tháng lấy từ `unit_types.monthly_price` của loại gian kho tại đúng cơ sở. Tỷ lệ giảm lấy từ gói thuê đang có hiệu lực.
+- `FULL_TERM`: tạm tính = đơn giá tháng × số tháng, giảm giá = tạm tính × tỷ lệ giảm của gói, tổng phải trả = tạm tính trừ giảm giá. Cọc = 20% tổng sau giảm, phần còn lại khi ký = tổng sau giảm trừ cọc.
+- `MONTHLY`: không áp dụng giảm giá cả kỳ. Cọc = 20% đơn giá tháng, thu phần còn lại của tháng đầu khi ký, các tháng sau theo lịch thanh toán.
+- Tổng tiền và giảm giá làm tròn 2 chữ số thập phân HALF_UP, cọc của phương án thanh toán mới làm tròn đến đồng HALF_UP. Phần còn lại luôn lấy tổng trừ cọc.
+- Ví dụ `FULL_TERM`, 2.000.000 đ/tháng trong 3 tháng, giảm 5%: tạm tính 6.000.000 đ, giảm 300.000 đ, tổng 5.700.000 đ, cọc 1.140.000 đ, còn lại 4.560.000 đ.
+- Không ghi đè báo giá đã chấp nhận hoặc khoản đã thanh toán. Yêu cầu chưa thanh toán cần lấy báo giá mới và xác nhận lại nếu điều khoản thay đổi.
+
 ## Cập nhật mất cọc và xử lý Recovery — 15/10/2026
 
 Quy tắc mới thay thế mô tả disposition theo hạn ký phía dưới: gia hạn không cần Manager duyệt. Chỉ ghi nhận mất cọc khi đến `recoveryStart` ngày quá hạn thứ 8 mà chưa hoàn tất gia hạn, dựa trên tiền cọc đã xác thực và phân bổ; không tự thu thêm tiền và không lấy tiền bảo đảm Rental. API xử lý nhiệm vụ, chứng từ quyết toán và giải phóng kho sau thu hồi được mô tả tại [RECOVERY_TASK_API_CONTRACT.md](RECOVERY_TASK_API_CONTRACT.md). Chưa sửa giao diện.

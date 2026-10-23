@@ -226,8 +226,23 @@ class ReservationEmailVerificationServiceTests {
     }
 
     @Test
+    void resendCodeCannotOutliveReservationHold() {
+        reservation.setHoldExpiresAt(Instant.now().plusSeconds(90));
+        mockOwnedReservation();
+        when(verificationRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(verification));
+        when(jwtService.hash(any())).thenReturn("generated-hash");
+        when(verificationRepository.saveAndFlush(any(ReservationEmailVerification.class)))
+            .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.resend(actor, reservation.getId());
+
+        assertThat(response.getExpiresAt()).isEqualTo(reservation.getHoldExpiresAt());
+    }
+
+    @Test
     void rejectsVerificationWhenReservationDoesNotBelongToCustomer() {
-        when(reservationRepository.findByIdAndCustomer_Id(reservation.getId(), actor.userId()))
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.verify(
@@ -238,7 +253,7 @@ class ReservationEmailVerificationServiceTests {
     }
 
     private void mockOwnedReservation() {
-        when(reservationRepository.findByIdAndCustomer_Id(reservation.getId(), actor.userId()))
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
     }
 }

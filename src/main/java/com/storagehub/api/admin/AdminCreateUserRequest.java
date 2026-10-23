@@ -3,6 +3,8 @@ package com.storagehub.api.admin;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.security.PasswordPolicy;
+import com.storagehub.validation.PhoneNumberPolicy;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -23,4 +25,8 @@ public record AdminCreateUserRequest(
     @NotEmpty Set<@NotNull RoleCode> roles,
     Map<@NotNull UUID, @NotNull FacilityScopeLevel> facilityScopes
 ) {
+    @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
+    public boolean isPhoneValid() {
+        return PhoneNumberPolicy.isOptionalValid(phone);
+    }
 }

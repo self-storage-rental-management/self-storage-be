@@ -1,5 +1,7 @@
 package com.storagehub.service.overdue;
 
+import com.storagehub.time.BusinessTime;
+
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.service.NotificationService;
@@ -17,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CustomerRentalExpiryNotificationService {
-    private static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final ZoneId ZONE = BusinessTime.ZONE;
     private final RentalRepository rentals;
     private final RentalPeriodResolver periods;
     private final NotificationService notifications;

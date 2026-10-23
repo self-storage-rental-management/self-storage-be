@@ -1,6 +1,8 @@
 package com.storagehub.api.reservation;
 
+import com.storagehub.validation.PhoneNumberPolicy;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -20,12 +22,15 @@ public class CreateReservationRequest {
     @Pattern(regexp = "^[0-9A-Za-z][0-9A-Za-z .-]{8,29}$", message = "identityDocumentNumber contains unsupported characters")
     private String identityDocumentNumber;
 
+    @NotBlank
     @Size(max = 40)
     private String customerPhone;
 
+    @NotBlank
     @Size(max = 500)
     private String customerAddress;
 
+    @NotBlank
     @Size(max = 500)
     private String goodsCondition;
 
@@ -34,7 +39,7 @@ public class CreateReservationRequest {
 
     @NotEmpty
     @Valid
-    private List<GoodsItemRequest> goodsItems;
+    private List<@NotNull @Valid GoodsItemRequest> goodsItems;
 
     private Instant appointmentAt;
 
@@ -71,4 +76,9 @@ public class CreateReservationRequest {
     public void setGoodsItems(List<GoodsItemRequest> goodsItems) { this.goodsItems = goodsItems; }
     public Instant getAppointmentAt() { return appointmentAt; }
     public void setAppointmentAt(Instant appointmentAt) { this.appointmentAt = appointmentAt; }
+
+    @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
+    public boolean isCustomerPhoneValid() {
+        return PhoneNumberPolicy.isValid(customerPhone);
+    }
 }

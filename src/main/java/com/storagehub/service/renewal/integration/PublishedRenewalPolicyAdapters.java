@@ -1,5 +1,7 @@
 package com.storagehub.service.renewal.integration;
 
+import com.storagehub.time.BusinessTime;
+
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.service.overdue.OverdueSources;
@@ -35,7 +37,7 @@ public class PublishedRenewalPolicyAdapters implements RenewalSources.PolicySour
     public Optional<OverdueSources.Term> term(Rental r,Instant now) {
         if(r==null||r.getFacility()==null||now==null)return Optional.empty();
         var period=periods.read(r);if(period.isEmpty())return Optional.empty();
-        return policies.read(r.getFacility().getId(),now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate()).filter(s->s.policy().term()!=null).map(s->{
+        return policies.read(r.getFacility().getId(),now.atZone(BusinessTime.ZONE).toLocalDate()).filter(s->s.policy().term()!=null).map(s->{
             var t=s.policy().term();var last=period.get().lastPermittedDate();var zone=ZoneId.of(t.timezone());
             return com.storagehub.service.overdue.RenewalOverdueTimeline.term(s.reference(),s.policy().version(),last,zone);
         });
