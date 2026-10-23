@@ -236,8 +236,8 @@ public class UnitAssignmentService {
     }
 
     private void requireOperator(ActorPrincipal actor) {
-        if (!actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
-            throw ApiExceptions.forbidden("Only operations staff can assign storage units");
+        if (!actor.hasAnyRole(RoleCode.MANAGER)) {
+            throw ApiExceptions.forbidden("Only managers can assign storage units");
         }
     }
 }

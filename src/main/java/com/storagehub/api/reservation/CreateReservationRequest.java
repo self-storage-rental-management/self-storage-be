@@ -1,6 +1,8 @@
 package com.storagehub.api.reservation;
 
+import com.storagehub.validation.PhoneNumberPolicy;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -22,10 +24,6 @@ public class CreateReservationRequest {
 
     @NotBlank
     @Size(max = 40)
-    @Pattern(
-        regexp = "^(?=(?:\\D*\\d){9,15}\\D*$)\\+?[0-9][0-9 .()-]*$",
-        message = "customerPhone must contain 9 to 15 digits and use a supported format"
-    )
     private String customerPhone;
 
     @NotBlank
@@ -78,4 +76,9 @@ public class CreateReservationRequest {
     public void setGoodsItems(List<GoodsItemRequest> goodsItems) { this.goodsItems = goodsItems; }
     public Instant getAppointmentAt() { return appointmentAt; }
     public void setAppointmentAt(Instant appointmentAt) { this.appointmentAt = appointmentAt; }
+
+    @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
+    public boolean isCustomerPhoneValid() {
+        return PhoneNumberPolicy.isValid(customerPhone);
+    }
 }
