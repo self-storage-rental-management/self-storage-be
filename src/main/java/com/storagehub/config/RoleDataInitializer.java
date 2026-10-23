@@ -30,6 +30,7 @@ public class RoleDataInitializer {
     private static final int STAFF_RENEWAL_PAYMENTS_VERSION = 9;
     private static final int MANAGER_UNIT_ASSIGNMENT_VERSION = 10;
     private static final int FINAL_POLICY_VERSION = 11;
+    private static final int SEPARATION_OF_DUTIES_VERSION = 12;
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
@@ -156,6 +157,22 @@ public class RoleDataInitializer {
                     role.setPermissions(defaultPermissions(code, permissions));
                     role.setPermissionsPolicyVersion(FINAL_POLICY_VERSION);
                 }
+                // Manager supervises return disputes but does not perform the
+                // Staff inspection/settlement operation. Business may execute
+                // an approved refund through the existing settlement contract.
+                if (role.getPermissionsPolicyVersion() < SEPARATION_OF_DUTIES_VERSION) {
+                    if (code == RoleCode.MANAGER) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.remove(permissions.get(SystemPermission.PROCESS_RETURNS));
+                        updated.remove(permissions.get(SystemPermission.EXECUTE_REFUNDS));
+                        role.setPermissions(updated);
+                    } else if (code == RoleCode.STAFF || code == RoleCode.BUSINESS) {
+                        var updated = new HashSet<>(role.getPermissions());
+                        updated.add(permissions.get(SystemPermission.EXECUTE_REFUNDS));
+                        role.setPermissions(updated);
+                    }
+                    role.setPermissionsPolicyVersion(SEPARATION_OF_DUTIES_VERSION);
+                }
             });
             roleRepository.saveAll(roles.values());
         };
@@ -186,7 +203,6 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_RENTALS,
                 SystemPermission.MANAGE_RENTALS,
                 SystemPermission.VIEW_RETURNS,
-                SystemPermission.PROCESS_RETURNS,
                 SystemPermission.VIEW_PAYMENTS,
                 SystemPermission.CONFIRM_PAYMENTS,
                 SystemPermission.MANAGE_PAYMENTS,
@@ -212,6 +228,7 @@ public class RoleDataInitializer {
                 SystemPermission.MANAGE_PAYMENTS,
                 SystemPermission.VIEW_RETURNS,
                 SystemPermission.PROCESS_RETURNS,
+                SystemPermission.EXECUTE_REFUNDS,
                 SystemPermission.OPERATE_RENEWALS,
                 SystemPermission.VIEW_SUPPORT,
                 SystemPermission.MANAGE_SUPPORT
@@ -227,6 +244,7 @@ public class RoleDataInitializer {
                 SystemPermission.VIEW_RETURNS,
                 SystemPermission.VIEW_PAYMENTS,
                 SystemPermission.APPROVE_REFUNDS,
+                SystemPermission.EXECUTE_REFUNDS,
                 SystemPermission.WAIVE_FEES,
                 SystemPermission.VIEW_POLICIES,
                 SystemPermission.VIEW_SUPPORT,

@@ -141,7 +141,7 @@ class ReservationCreationServiceTests {
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
-        assertThat(response.getReservationCode()).startsWith("RSV-");
+        assertThat(response.getReservationCode()).matches("SH-[0-9]{6}");
     }
 
     @Test

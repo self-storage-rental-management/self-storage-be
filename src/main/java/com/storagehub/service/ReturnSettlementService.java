@@ -429,11 +429,18 @@ public class ReturnSettlementService {
         UUID returnId,
         StaffCompleteRefundRequest request
     ) {
-        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
+        if (actor.hasRole(RoleCode.MANAGER)) {
+            throw ApiExceptions.forbidden("Manager approves refunds but cannot execute them");
+        }
+        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
         ReturnCase returnCase = returnCaseRepository.findById(returnId)
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
-        facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
+        if (actor.hasRole(RoleCode.STAFF)) {
+            facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
+        } else {
+            facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
+        }
 
         lockRecoveryReturn(returnCase);
         var recoveryGuard=recoveryGuard();
@@ -487,15 +494,19 @@ public class ReturnSettlementService {
 
     @Transactional
     public ReturnCaseResponse recordSettlement(ActorPrincipal actor,UUID returnId,com.storagehub.api.returns.StaffReturnSettlementRequest request) {
-        authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
         if (rc.getStatus() == ReturnCaseStatus.refund_pending) {
-            if (actor.hasRole(RoleCode.STAFF)) {
-                throw ApiExceptions.forbidden("Staff cannot approve or execute refunds");
+            if (actor.hasRole(RoleCode.MANAGER)) {
+                throw ApiExceptions.forbidden("Manager approves refunds but cannot execute them");
             }
-            authorizationService.require(actor,SystemPermission.APPROVE_REFUNDS);
-            facilityScopeService.assertCanManage(actor,rc.getFacility().getId());
+            authorizationService.require(actor,SystemPermission.EXECUTE_REFUNDS);
+            if (actor.hasRole(RoleCode.STAFF)) {
+                facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());
+            } else {
+                facilityScopeService.assertCanManage(actor,rc.getFacility().getId());
+            }
         } else {
+            authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
             authorizationService.require(actor,SystemPermission.MANAGE_PAYMENTS);
             facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());
             if (actor.hasRole(RoleCode.STAFF) && !"CASH".equalsIgnoreCase(request.paymentMethod())) {
