@@ -1,5 +1,70 @@
 # D5 — Đặc tả API hỗ trợ
 
+## API trợ lý Gemini thử nghiệm — 23/10/2026
+
+`POST /api/customer/chat/replies` là API trả lời **stateless** riêng, chưa thay thế các API hội thoại/ticket bên dưới. Widget Customer mới gọi endpoint này; các chủ đề FAQ phía FE chỉ là gợi ý câu hỏi, không còn khớp từ khóa để giả phản hồi Gemini. Không tạo SupportTicket, notification, giao dịch hoặc thay đổi hồ sơ. Chưa lưu hội thoại AI vào DB; migration, lịch sử bền vững và bàn giao transcript vẫn là bước sau.
+
+Headers: JWT `Authorization: Bearer …`, `Content-Type: application/json`, `Idempotency-Key: <UUID>`. Chỉ Customer có tài khoản ACTIVE và vai trò CUSTOMER hiện tại trong DB được gọi; không chỉ dựa vào role trên JWT.
+
+```json
+{
+  "message": "Tôi muốn gia hạn thuê kho thì làm thế nào?",
+  "history": [
+    { "role": "user", "content": "Chào trợ lý" },
+    { "role": "assistant", "content": "Mình có thể giúp bạn tìm hướng dẫn sử dụng StorageHub." }
+  ]
+}
+```
+
+- `message`: bắt buộc, không chỉ khoảng trắng, tối đa 1.000 ký tự. `history`: tùy chọn, tối đa 10 tin, mỗi tin tối đa 1.000 ký tự, role chỉ `user`/`assistant`. Tổng nội dung tối đa 8.000 ký tự; JSON body tối đa 64 KiB. Từ chối field lạ, duplicate JSON field và role system/tool do client truyền.
+- History là ngữ cảnh **không đáng tin do client gửi**, không phải hồ sơ đã được server xác thực. Không nhận customerId, facilityId, file, INTERNAL hoặc định danh hồ sơ để tự tra dữ liệu ở bản này. Không gửi bí mật hoặc thông tin cá nhân không cần thiết trong chat.
+- BE chèn system prompt và FAQ version `support-faq/2026-10-23-v1` từ resource riêng; không dùng FAQ/roster/demo store hoặc prompt bảo tàng. Chỉ gửi text hướng dẫn và câu hỏi/lịch sử client tới Google. Chưa có lọc/redaction tổng quát cho bí mật do khách tự nhập; không bật cho người dùng thật trước khi hoàn tất review dữ liệu và UI gửi dữ liệu.
+- `data` trong envelope `ApiResponse` gồm `requestId`, `authorRole: "AI"`, `source: "FAQ"|"GEMINI"`, `answer`, `model`, `knowledgeVersion`, `generatedAt`, `truncated`. FE hỗ trợ Markdown tối giản (chữ đậm, đoạn, danh sách), không chèn HTML, không tự biến text thành link/image. `truncated=true` nếu provider kết thúc do giới hạn token hoặc text vượt 4.000 ký tự.
+- Giới hạn process hiện tại: 10 yêu cầu mới/Customer/phút, tối đa 8 provider call đồng thời; tối đa 2.000 receipt trong cache. Replay cùng Customer/key và payload đã chuẩn hóa trả cùng kết quả hoặc lỗi trong 10 phút tính từ lần tiếp nhận; payload khác trả 409. Request đồng thời cùng key dùng chung kết quả, không gọi provider lần hai. Không tự retry provider. Timeout có thể đã được Google tính sử dụng; giữ cùng key khi kiểm tra lại.
+- Receipt chỉ ở RAM, không giữ transcript đầu vào (chỉ hash và kết quả); hết hạn được dọn khi có request tiếp theo. Restart hoặc nhiều instance không chia sẻ receipt/rate limit: chưa bảo đảm idempotency xuyên restart/replica, không coi đây là handoff idempotency bền vững.
+
+| HTTP | Mã lỗi | Ý nghĩa |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Header/body/history không hợp lệ hoặc vượt giới hạn |
+| 401 / 403 | `UNAUTHORIZED` / `FORBIDDEN` | Thiếu phiên hợp lệ / không phải Customer active |
+| 409 | `CONFLICT` | Key đã dùng với payload khác hoặc request cùng key vẫn đang xử lý |
+| 429 | `AI_RATE_LIMITED` | Giới hạn local hoặc quota từ Google |
+| 503 | `FEATURE_DISABLED` / `AI_UNAVAILABLE` | Tắt tính năng, thiếu/sai cấu hình hoặc dịch vụ chưa sẵn sàng |
+| 504 | `AI_TIMEOUT` | Quá deadline toàn bộ request/response |
+| 502 | `AI_PROVIDER_ERROR` | Lỗi provider, phản hồi rỗng/bị chặn/sai cấu trúc; không trả raw error Google |
+
+### Cấu hình backend
+
+Properties có mặc định an toàn trong `SupportAiProperties`; file mẫu `application-example.properties` minh họa binding. Khai báo `storagehub.ai.enabled=false` mặc định, `provider=gemini`, `api-key`, `model`, `base-url=https://generativelanguage.googleapis.com/v1beta/openai`, `timeout-ms=15000` (1.000–30.000), `max-output-tokens=768` (128–2.048), `temperature=0.2` (0–1). Không có model fallback tự động. Key không có trong FE, log hoặc cấu hình được commit. Endpoint chỉ chấp nhận host/đường dẫn Google cố định, không follow redirect.
+
+`application.properties` import tùy chọn `application-local.properties` và `.local/gemini.local.properties` (đường dẫn tương đối theo working directory BE). File Gemini trên máy phát triển đã được đặt `enabled=true` theo lượt nối widget; file này được Git-ignore, key không nằm trong source. Khi không có file hoặc biến bật, mặc định vẫn tắt. Biến `STORAGEHUB_AI_ENABLED=false` có thể ghi đè để tắt. Cần khởi động lại backend để nạp code/cấu hình mới. Chưa xác nhận key/model hoạt động, chưa gọi Google trong lượt triển khai này.
+
+### Hành vi widget Customer đã nối API
+
+- FE tạo UUID v4 cho từng câu hỏi, gửi bằng API client dùng JWT hiện tại, kiểm tra response envelope/requestId/authorRole/text/timestamp trước khi hiển thị. Không đưa key Gemini vào bundle.
+- Hiển thị câu hỏi ngay, trạng thái đang trả lời và lỗi an toàn. Không có nút Kiểm tra lại/Gửi câu hỏi khác; khách dùng ô nhập và tab Nhân viên. Sau lỗi ô gửi được mở lại, không tự retry. Nếu khách tự gửi lại đúng câu hỏi có kết quả chưa xác định do mạng/response không hợp lệ, FE giữ cùng key/message/history trong 9 phút, không thêm bubble trùng. Với lỗi server đã xác định (như provider quá tải), lần gửi chủ động tiếp theo dùng key mới. Câu hỏi lỗi không đưa vào history.
+- History chỉ gồm trao đổi thành công, bỏ lời chào UI, tối đa 10 tin và 8.000 ký tự tổng; mỗi nội dung history được giới hạn 1.000 ký tự. Answer được render thành text, không chèn HTML. Nếu `truncated`, hiển thị thông báo đạt giới hạn độ dài.
+- Thu nhỏ/đổi trang giữ component và draft trong phiên; đổi tài khoản hủy state, response về muộn không được áp dụng cho tài khoản mới. Chưa có persistence sau reload hoặc transcript bàn giao. Chọn kênh nhân viên không tự tạo ticket.
+- Tooltip thông báo câu phổ biến dùng hướng dẫn có sẵn, câu khác và lịch sử gần đây gửi Gemini; nhắc không nhập mật khẩu, PIN/OTP hoặc thông tin thẻ. FAQ được ghi rõ “Hướng dẫn nhanh”, không giả phản hồi Gemini.
+
+### FAQ trả nhanh và cách trình bày
+
+Backend `SupportQuickFaq` chứa 10 câu hỏi hướng dẫn chung đã duyệt. Chỉ khớp toàn bộ câu sau chuẩn hóa dấu, khoảng trắng, chữ hoa/thường và dấu câu; không dùng từ khóa rộng để suy đoán câu hỏi về hồ sơ. Những câu gợi ý Chọn kho/Gia hạn/Thanh toán/Trả kho gửi đúng câu chuẩn và nhận kết quả FAQ không gọi Google. Lịch sử vẫn được validate/fingerprint; quyền Customer, rate limit và receipt replay áp dụng như trước. FAQ không cần slot gọi Gemini và vẫn hoạt động khi provider chưa bật/cấu hình; đây là hướng dẫn tĩnh, không chứng nhận dữ liệu hồ sơ hoặc gọi công cụ. `source=FAQ`, `model=faq-v1`; câu khác có `source=GEMINI` và giữ kiểm tra provider.
+
+Prompt Gemini yêu cầu 2–4 câu ngắn khoảng 40–90 từ cho hướng dẫn thông thường; tối đa 3 bước khi cần, không chào lại hoặc thêm lời mời hỗ trợ chung. Giới hạn token vẫn là trần an toàn, không ép cắt đáp án giữa câu để rút ngắn. Log kết quả thành công chỉ ghi `source` và `elapsedMs`, không có chat/key/Customer ID. Chưa triển khai streaming; FAQ tránh lượt gọi provider, nhưng câu hỏi Gemini vẫn phụ thuộc độ trễ mạng/model.
+
+Cập nhật kết nối local 23/10/2026: model `gemini-3.5-flash` trả 503 `UNAVAILABLE` do quá tải trong lần chẩn đoán trực tiếp. Đã chuyển file cấu hình local sang `gemini-3.5-flash-lite`, temperature `0.2`, timeout `25000ms`; adapter Java nhận text thực tế trong khoảng 4,5 giây. Không thay model tự động trong runtime và không gửi lại tự động. Lỗi Google 503 được map `AI_UNAVAILABLE`; log chỉ ghi HTTP status/model hoặc loại lỗi transport, không có raw body/key/chat.
+
+Adapter dùng Java HttpClient, deadline toàn bộ body, tối đa 64 KiB response, không giữ transaction DB khi gọi model. Không thêm Spring AI/PGVector. Endpoint/schema tham chiếu [tài liệu tương thích OpenAI chính thức của Gemini](https://ai.google.dev/gemini-api/docs/openai); đây là giao thức gọi Gemini, không phải chuyển provider sang OpenAI.
+
+## Giao diện hội thoại — 23/10/2026
+
+- FE hiển thị danh sách hội thoại và khung chat trực tiếp cho Customer/Staff/Manager, thay bảng yêu cầu và cửa sổ gửi đơn.
+- Customer chọn cơ sở hoặc hồ sơ liên quan rồi gửi tin nhắn đầu tiên; không nhập tiêu đề riêng. FE dùng bản rút gọn tin đầu làm `subject`, toàn bộ tin làm `description` khi tạo workflow bằng API hiện có.
+- Tạo thành công mở ngay hội thoại được server trả về. Tin nhắn và danh sách tự cập nhật khi trang hiển thị; tạm ngừng cập nhật khi đang gửi hoặc tải tệp. Đây là polling, không phải WebSocket.
+- Staff nhận hội thoại từ hàng chờ thuộc cơ sở được phân công. Giữ quyền, scope, phiên bản, idempotency, tệp PUBLIC/INTERNAL và xác nhận kết quả hiện có; không tự chuyển hội thoại sang cơ sở khác hoặc tự nhận thay Staff.
+- Dữ liệu vẫn dùng SupportTicket/SupportState hiện có để bảo toàn lịch sử; không thay schema hoặc contract payload. Các tên ticket/yêu cầu bên dưới là khái niệm lưu trữ/nghiệp vụ nội bộ.
+
 Nghiệp vụ hiện hành cập nhật 15/10/2026: Customer trao đổi trực tiếp với Staff; Staff tự nhận yêu cầu. Manager theo dõi trong phạm vi cơ sở và trao đổi riêng với Staff qua tin nhắn INTERNAL.
 
 ## Báo kết quả xử lý hỗ trợ
