@@ -1,5 +1,7 @@
 package com.storagehub.service.ledger;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.renewal.*;
@@ -96,7 +98,7 @@ public class RenewalInstallmentService {
         if(c.workflow().getPaymentDeadline()!=null)return schedule(c,account(c));
         var planned=new RenewalQuoteResponse(null,c.renewal().getRental().getId(),c.renewal().getRental().getCustomer().getId(),c.terms(),null,null).paymentSchedule();
         return new Schedule(id,c.terms().paymentPlan(),0,planned.stream().map(p->new Installment(periodId(c,p.sequence()),p.sequence(),p.periodStart(),p.periodEndExclusive(),
-            p.dueDate()==null?null:p.dueDate().atStartOfDay(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant(),p.amount(),BigDecimal.ZERO,p.amount(),"PLANNED")).toList());
+            p.dueDate()==null?null:p.dueDate().atStartOfDay(BusinessTime.ZONE).toInstant(),p.amount(),BigDecimal.ZERO,p.amount(),"PLANNED")).toList());
     }
     private void payable(Context c){
         var rental=c.renewal().getRental();
@@ -254,10 +256,10 @@ public class RenewalInstallmentService {
         var w=em.find(RenewalWorkflow.class,id);if(w==null||w.getAcceptedRevision()==null)return;
         final RenewalQuoteResponse.Terms terms;
         try{terms=mapper.readValue(w.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);}catch(Exception invalid){throw ApiExceptions.conflict("Điều khoản gia hạn không hợp lệ.");}
-        if(!terms.monthly())return;var c=new Context(n,w,terms);var today=LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
+        if(!terms.monthly())return;var c=new Context(n,w,terms);var today=LocalDate.now(BusinessTime.ZONE);
         for(var i:schedule(c,account(c)).installments()){
             if(i.outstandingAmount().signum()<=0)continue;
-            var due=i.dueAt().atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();if(due.isAfter(today.plusDays(3)))continue;
+            var due=i.dueAt().atZone(BusinessTime.ZONE).toLocalDate();if(due.isAfter(today.plusDays(3)))continue;
             String kind=due.isBefore(today)?"OVERDUE":due.equals(today)?"DUE":"DUE_SOON";
             if(jdbc.update("insert ignore into renewal_installment_notices(renewal_id,installment_id,notice_kind) values(?,?,?)",id.toString(),i.id().toString(),kind)==0)continue;
             String title=kind.equals("OVERDUE")?"Kỳ thanh toán gia hạn đã quá hạn":kind.equals("DUE")?"Kỳ thanh toán gia hạn đến hạn hôm nay":"Sắp đến hạn thanh toán kỳ gia hạn";

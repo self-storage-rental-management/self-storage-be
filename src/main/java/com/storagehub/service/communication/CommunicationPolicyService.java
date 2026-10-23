@@ -1,5 +1,7 @@
 package com.storagehub.service.communication;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
@@ -28,7 +30,7 @@ public class CommunicationPolicyService implements SupportSources.ClosePolicySou
         LocalDate effectiveFrom,LocalDate effectiveTo,Integer reminderCooldownMinutes,Integer supportReviewDays,Boolean customerMayClose) {}
     public record Stored(String reference,Policy policy) {}
     private final EntityManager em;private final ObjectMapper mapper;private final DuongResourceAccess access;private final AuditLogService audit;
-    private static final ZoneId ZONE=ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final ZoneId ZONE=BusinessTime.ZONE;
     private String key(UUID facility){return "duongCommunicationPolicy:"+facility;}
     public Optional<Stored> read(UUID facility,Instant now) {
         var q=em.createQuery("select s from SystemSetting s where s.settingKey=:key",SystemSetting.class).setParameter("key",key(facility));
