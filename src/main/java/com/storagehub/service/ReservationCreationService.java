@@ -228,6 +228,20 @@ public class ReservationCreationService {
         BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
         BigDecimal baseEligible = money(subtotal.subtract(discountAmount));
         BigDecimal voucherDiscountAmount = quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO;
+        if (quote.getVoucherCode() != null && !quote.getVoucherCode().isBlank()) {
+            if (discountCodeService == null) {
+                throw ApiExceptions.conflict("Voucher validation is not available");
+            }
+            DiscountCodeService.VoucherApplicationResult currentVoucher =
+                discountCodeService.calculateVoucherDiscount(
+                    quote.getVoucherCode(), quote.getFacility().getId(), policy.getId(), baseEligible
+                );
+            if (currentVoucher == null
+                || !currentVoucher.voucherCode().equalsIgnoreCase(quote.getVoucherCode())
+                || money(currentVoucher.discountAmount()).compareTo(money(voucherDiscountAmount)) != 0) {
+                throw ApiExceptions.conflict("Quote is no longer valid because the voucher has changed");
+            }
+        }
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
         BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
         BigDecimal securityDeposit = money(

@@ -293,6 +293,8 @@ class ReservationCreationServiceTests {
             quote.getId(), "Packed", "Handle with care", List.of(item)
         );
         request.setIdentityDocumentNumber("079203009988");
+        request.setCustomerPhone("0908123456");
+        request.setCustomerAddress("Quận 1, TP. Hồ Chí Minh");
         return request;
     }
 

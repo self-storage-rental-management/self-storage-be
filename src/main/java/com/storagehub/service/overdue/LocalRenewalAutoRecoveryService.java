@@ -1,5 +1,7 @@
 package com.storagehub.service.overdue;
 
+import com.storagehub.time.BusinessTime;
+
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.service.AuditLogService;
@@ -22,7 +24,7 @@ import org.springframework.transaction.annotation.*;
 @ConditionalOnProperty(name={"storagehub.integration.renewal-auto-recovery.enabled",
     "storagehub.integration.recovery-tasks.enabled"},havingValue="true")
 public class LocalRenewalAutoRecoveryService {
-    private static final ZoneId ZONE=ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final ZoneId ZONE=BusinessTime.ZONE;
     private final EntityManager em;
     private final RentalPeriodResolver periods;
     private final ObjectProvider<OverdueSources.TermSource> terms;

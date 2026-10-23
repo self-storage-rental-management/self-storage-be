@@ -39,9 +39,9 @@ class RolePolicyOwnershipTests {
             .containsExactlyInAnyOrder("storage_units:read", "policies:read", "policies:update",
                 "returns:read", "rentals:update");
         assertThat(roles.get(RoleCode.STAFF).getPermissions()).extracting(Permission::getCode)
-            .containsExactlyInAnyOrder("storage_units:read", "reservations:approve", "storage_units:assign",
+            .containsExactlyInAnyOrder("storage_units:read", "reservations:approve",
                 "rentals:update", "payments:read", "payments:collect");
-        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(9));
+        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(10));
     }
 
     @Test void newRolesGrantPolicyWritesOnlyToBusinessOperations() throws Exception {
