@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -58,6 +59,17 @@ public class UnitAssignmentController {
     ) {
         return new ApiResponse<>(
             service.assign(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PutMapping("/{reservationId}/change")
+    public ApiResponse<UnitAssignmentResponse> change(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody ChangeUnitAssignmentRequest request
+    ) {
+        return new ApiResponse<>(
+            service.change(actorContext.required(), reservationId, request),
             CorrelationIdContext.current()
         );
     }
