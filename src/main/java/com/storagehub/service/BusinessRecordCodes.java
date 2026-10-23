@@ -1,11 +1,14 @@
 package com.storagehub.service;
 
 import com.storagehub.common.api.ApiExceptions;
-import java.time.*;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.security.SecureRandom;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
 
@@ -13,7 +16,11 @@ import org.springframework.transaction.annotation.*;
 @Service @RequiredArgsConstructor
 public class BusinessRecordCodes {
     private final JdbcTemplate jdbc;
+    private static final int CODE_MIN=100_000;
+    private static final int CODE_RANGE=900_000;
+    private static final int MAX_ATTEMPTS=25;
     private static final DateTimeFormatter PERIOD=DateTimeFormatter.ofPattern("yyMM").withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
+    private static final SecureRandom SECURE_RANDOM=new SecureRandom();
     @Transactional(readOnly=true)
     public String find(String key) {
         return jdbc.query("select display_code from business_record_codes where resource_key=?",(rs,i)->rs.getString(1),key)
@@ -31,15 +38,17 @@ public class BusinessRecordCodes {
             throw ApiExceptions.conflict("Thông tin cấp mã hồ sơ không hợp lệ.");
         String old=find(key);if(old!=null)return old;
         String period=PERIOD.format(recordedAt);
-        // Lock order is always sequence then registry; both writes commit with the business transaction.
-        jdbc.update("insert into business_record_code_sequences(type_code,period,serial_value) values(?,?,1) on duplicate key update serial_value=least(serial_value+1,1000000)",type,period);
-        long serial=jdbc.queryForObject("select serial_value from business_record_code_sequences where type_code=? and period=? for update",Long.class,type,period);
-        old=jdbc.query("select display_code from business_record_codes where resource_key=? for update",(rs,i)->rs.getString(1),key).stream().findFirst().orElse(null);
-        if(old!=null)return old;
-        if(serial>999999)throw ApiExceptions.conflict("Đã hết dải mã hồ sơ trong tháng.");
-        String code=type+"-"+period+"-"+String.format(Locale.ROOT,"%06d",serial);
-        jdbc.update("insert into business_record_codes(resource_key,type_code,period,display_code,recorded_at) values(?,?,?,?,?)",
-            key,type,period,code,java.sql.Timestamp.from(recordedAt));
-        return code;
+        for(int attempt=0;attempt<MAX_ATTEMPTS;attempt++) {
+            String code=String.format(Locale.ROOT,"SH-%06d",CODE_MIN+SECURE_RANDOM.nextInt(CODE_RANGE));
+            try {
+                jdbc.update("insert into business_record_codes(resource_key,type_code,period,display_code,recorded_at) values(?,?,?,?,?)",
+                    key,type,period,code,java.sql.Timestamp.from(recordedAt));
+                return code;
+            } catch(DuplicateKeyException duplicate) {
+                // A concurrent assignment for the same resource wins; a display-code collision gets another random candidate.
+                old=find(key);if(old!=null)return old;
+            }
+        }
+        throw ApiExceptions.conflict("Không thể cấp mã hồ sơ duy nhất.");
     }
 }
