@@ -36,16 +36,16 @@ class RolePolicyOwnershipTests {
         assertThat(manager.getParentRole()).isNull();
         assertThat(manager.getPermissions()).extracting(Permission::getCode)
             .contains("rentals:update", "payments:confirm", "refunds:approve", "fees:waive")
-            .doesNotContain("checkins:process", "support:update", "policies:update");
+            .doesNotContain("checkins:process", "returns:process", "refunds:execute", "support:update", "policies:update");
         assertThat(roles.get(RoleCode.BUSINESS).getPermissions()).extracting(Permission::getCode)
-            .contains("policies:read", "policies:update", "refunds:approve", "fees:waive")
+            .contains("policies:read", "policies:update", "refunds:approve", "refunds:execute", "fees:waive")
             .doesNotContain("returns:process", "rentals:update");
         assertThat(roles.get(RoleCode.STAFF).getPermissions()).extracting(Permission::getCode)
-            .contains("reservations:approve", "payments:read", "payments:collect", "renewals:operate")
+            .contains("reservations:approve", "payments:read", "payments:collect", "refunds:execute", "renewals:operate")
             .doesNotContain("rentals:update", "refunds:approve", "fees:waive");
         assertThat(roles.get(RoleCode.ADMIN).getPermissions()).extracting(Permission::getCode)
             .contains("dashboard:read", "sessions:manage");
-        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(11));
+        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(12));
     }
 
     @Test void newRolesGrantPolicyWritesOnlyToBusinessOperations() throws Exception {

@@ -8,7 +8,7 @@ Active Rental
   → Staff nghiệm thu hiện trạng & lập biên bản (status: awaiting_customer_confirmation, rental: return_inspection)
   → Khách hàng xem biên bản & quyết toán:
       ├── Đồng ý (accepted):
-      │     ├── netRefundAmount > 0 → status: refund_pending → Staff hoàn cọc → status: completed
+      │     ├── netRefundAmount > 0 → status: refund_pending → Staff/Business hoàn cọc → status: completed
       │     ├── amountDueFromCustomer > 0 → status: payment_due → Khách thanh toán → status: completed
       │     └── Cọc = Khấu trừ (0 VND) → status: completed
       └── Khiếu nại (disputed):
@@ -40,10 +40,10 @@ Bám sát chuẩn tính toán từ Frontend và quy định tài chính:
 | Khách yêu cầu trả kho | `CUSTOMER` | N/A (User sở hữu Rental) | N/A |
 | Khách xác nhận/khiếu nại | `CUSTOMER` | N/A (User sở hữu ReturnCase) | N/A |
 | Khách nộp phí quyết toán | `CUSTOMER` | N/A (User sở hữu ReturnCase) | N/A |
-| Staff lập biên bản nghiệm thu | `STAFF`, `MANAGER`, `ADMIN` | `PROCESS_RETURNS` | `OPERATE` |
-| Staff hoàn cọc cho khách | `STAFF`, `MANAGER`, `ADMIN` | `PROCESS_RETURNS` | `OPERATE` |
-| Manager xử lý khiếu nại | `MANAGER`, `ADMIN` | `MANAGE_RENTALS` | `MANAGE` |
-| Xem danh sách / chi tiết | `STAFF`, `MANAGER`, `ADMIN` | `VIEW_RETURNS` | `READ` |
+| Staff lập biên bản nghiệm thu | `STAFF`, `ADMIN` | `PROCESS_RETURNS` | `OPERATE` |
+| Staff/Business thực hiện hoàn cọc | `STAFF`, `BUSINESS`, `ADMIN` | `EXECUTE_REFUNDS` | `OPERATE` với Staff; `MANAGE` với Business/Admin |
+| Manager xử lý khiếu nại | `MANAGER`, `ADMIN` | `MANAGE_RENTALS`, `WAIVE_FEES`, `APPROVE_REFUNDS` | `MANAGE` |
+| Xem danh sách / chi tiết | `STAFF`, `MANAGER`, `BUSINESS`, `ADMIN` | `VIEW_RETURNS` | Theo facility scope |
 
 ---
 
@@ -133,7 +133,7 @@ Lưu biên bản nghiệm thu hiện trạng và tính toán quyết toán sơ b
 - **Response**: `ApiResponse<ReturnCaseResponse>` (status: `awaiting_customer_confirmation`)
 
 #### `POST /api/staff/returns/{returnId}/complete-refund`
-Ghi nhận chuyển tiền hoàn cọc cho khách hàng (khi status là `refund_pending`).
+Ghi nhận chuyển tiền hoàn cọc cho khách hàng khi status là `refund_pending`. Endpoint giữ nguyên để tương thích; Staff hoặc Business có thể gọi theo `EXECUTE_REFUNDS`, còn Manager bị từ chối.
 - **Request Body**:
   ```json
   {
@@ -164,6 +164,10 @@ Manager ra quyết định giải quyết khiếu nại, có thể điều chỉ
   }
   ```
 - **Response**: `ApiResponse<ReturnCaseResponse>` (tái quyết toán và chuyển sang `refund_pending`, `payment_due`, hoặc `completed`)
+
+### 3.4. Dành cho Business Operations
+
+Business dùng `GET /api/staff/returns` và `GET /api/staff/returns/{returnId}` để xem hồ sơ trong facility scope, sau đó dùng `POST /api/staff/returns/{returnId}/complete-refund` để thực hiện hoàn cọc đã được Manager duyệt. Business không được gọi endpoint nghiệm thu, xác nhận quyết toán hoặc xử lý khiếu nại.
 
 ---
 

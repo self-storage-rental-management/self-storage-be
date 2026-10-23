@@ -457,7 +457,9 @@ public class AdminUserService {
     }
 
     private void validateFacilityAssignment(Set<RoleCode> targetRoles, Map<UUID, FacilityScopeLevel> scopes) {
-        boolean hasFacilityRole = targetRoles.contains(RoleCode.STAFF) || targetRoles.contains(RoleCode.MANAGER);
+        boolean hasFacilityRole = targetRoles.contains(RoleCode.STAFF)
+            || targetRoles.contains(RoleCode.MANAGER)
+            || targetRoles.contains(RoleCode.BUSINESS);
         boolean hasCustomerRole = targetRoles.contains(RoleCode.CUSTOMER);
         if (!scopes.isEmpty() && (!hasFacilityRole || hasCustomerRole)) {
             throw ApiExceptions.validation("Only Staff or Manager accounts can have facility scopes", null);

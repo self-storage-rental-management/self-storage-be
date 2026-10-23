@@ -51,17 +51,12 @@ class ReservationConcurrencyIntegrationTests {
     @Autowired private RentalPackagePolicyRepository policyRepository;
     @Autowired private ReservationQuoteRepository quoteRepository;
     @Autowired private ReservationRepository reservationRepository;
-    @Autowired private com.storagehub.domain.repo.ReservationCodeSequenceRepository sequenceRepository;
 
     @Test
     void onlyOneOfTwoConcurrentRequestsCanReserveTheLastCapacity() throws Exception {
         LocalDate startDate = ReservationCheckInPolicy.plannedWindow(Instant.now(), false)
             .availableAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         LocalDate endDate = startDate.plusMonths(3);
-        var sequence = new com.storagehub.domain.model.ReservationCodeSequence();
-        sequence.setId(1);
-        sequence.setNextValue(1);
-        sequenceRepository.saveAndFlush(sequence);
         Facility facility = facilityRepository.saveAndFlush(facility());
         UnitType unitType = unitTypeRepository.saveAndFlush(unitType(facility));
         storageUnitRepository.saveAndFlush(storageUnit(facility, unitType));
