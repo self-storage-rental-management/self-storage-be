@@ -272,9 +272,13 @@ public class CustomerReservationService {
             reservationId, actor.userId()
         ).orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
 
+        // A completed reservation is already finalized. Treat a repeated customer
+        // confirmation as an idempotent read so it cannot create another rental,
+        // reopen a ledger account, or emit duplicate handover side effects.
         if (reservation.getStatus() == ReservationStatus.COMPLETED) {
             return toDetailResponse(reservation);
         }
+
         if (reservation.getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT) {
             throw ApiExceptions.conflict("Reservation is not waiting for customer receipt confirmation");
         }
