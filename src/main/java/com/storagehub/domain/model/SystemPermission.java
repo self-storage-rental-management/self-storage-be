@@ -18,6 +18,7 @@ public enum SystemPermission {
     VIEW_PAYMENTS("payments:read"),
     CONFIRM_PAYMENTS("payments:confirm"),
     APPROVE_REFUNDS("refunds:approve"),
+    EXECUTE_REFUNDS("refunds:execute"),
     WAIVE_FEES("fees:waive"),
     VIEW_POLICIES("policies:read"),
     MANAGE_PAYMENTS("payments:collect"),

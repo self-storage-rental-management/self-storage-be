@@ -11,14 +11,12 @@ import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Reservation;
-import com.storagehub.domain.model.ReservationCodeSequence;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
-import com.storagehub.domain.repo.ReservationCodeSequenceRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationQuoteRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -28,6 +26,7 @@ import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -44,6 +43,9 @@ import com.storagehub.domain.repo.DiscountCodeRepository;
 public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
+    private static final int RESERVATION_CODE_MIN = 100_000;
+    private static final int RESERVATION_CODE_RANGE = 900_000;
+    private static final int RESERVATION_CODE_MAX_ATTEMPTS = 25;
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -53,9 +55,9 @@ public class ReservationCreationService {
     private final ReservationCompatibilityService compatibilityService;
     private final AuditLogService auditLogService;
     private final ReservationCapacityService capacityService;
-    private final ReservationCodeSequenceRepository reservationCodeSequenceRepository;
     private final DiscountCodeRepository discountCodeRepository;
     private final DiscountCodeService discountCodeService;
+    private final SecureRandom secureRandom = new SecureRandom();
 
     @org.springframework.beans.factory.annotation.Autowired
     public ReservationCreationService(
@@ -67,7 +69,6 @@ public class ReservationCreationService {
         ReservationCompatibilityService compatibilityService,
         AuditLogService auditLogService,
         ReservationCapacityService capacityService,
-        ReservationCodeSequenceRepository reservationCodeSequenceRepository,
         DiscountCodeRepository discountCodeRepository,
         DiscountCodeService discountCodeService
     ) {
@@ -79,7 +80,6 @@ public class ReservationCreationService {
         this.compatibilityService = compatibilityService;
         this.auditLogService = auditLogService;
         this.capacityService = capacityService;
-        this.reservationCodeSequenceRepository = reservationCodeSequenceRepository;
         this.discountCodeRepository = discountCodeRepository;
         this.discountCodeService = discountCodeService;
     }
@@ -96,8 +96,7 @@ public class ReservationCreationService {
     ) {
         this(
             reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
-            policyRepository, compatibilityService, auditLogService, capacityService, null,
-            null, null
+            policyRepository, compatibilityService, auditLogService, capacityService, null, null
         );
     }
 
@@ -351,18 +350,14 @@ public class ReservationCreationService {
     }
 
     private String generateReservationCode() {
-        if (reservationCodeSequenceRepository == null) {
-            return "RSV-000001";
+        for (int attempt = 0; attempt < RESERVATION_CODE_MAX_ATTEMPTS; attempt++) {
+            int number = RESERVATION_CODE_MIN + secureRandom.nextInt(RESERVATION_CODE_RANGE);
+            String candidate = String.format(Locale.ROOT, "SH-%06d", number);
+            if (!reservationRepository.existsByReservationCode(candidate)) {
+                return candidate;
+            }
         }
-        ReservationCodeSequence sequence = reservationCodeSequenceRepository.findPrimaryForUpdate()
-            .orElseThrow(() -> ApiExceptions.conflict("Reservation code sequence is not configured"));
-        long value = sequence.getNextValue();
-        if (value > 999999) {
-            throw ApiExceptions.conflict("Reservation code sequence has reached its limit");
-        }
-        sequence.setNextValue(value + 1);
-        reservationCodeSequenceRepository.save(sequence);
-        return String.format(Locale.ROOT, "RSV-%06d", value);
+        throw ApiExceptions.conflict("Could not allocate a unique reservation code");
     }
 
     private BigDecimal money(BigDecimal value) {
