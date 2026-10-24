@@ -399,7 +399,6 @@ public class CustomerReservationService {
                 "Check-in appointment must be within the permitted seven-day window", null
             );
         }
-        FacilityAppointmentHours.validate(request.appointmentAt(), reservation.getFacility().getAccessHours());
         Instant previousAppointmentAt = reservation.getAppointmentAt();
         reservation.setAppointmentAt(request.appointmentAt());
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
@@ -654,6 +653,12 @@ public class CustomerReservationService {
     private ReservationGoodsItemResponse toGoodsItemResponse(ReservationGoodsItem item) {
         ReservationGoodsItemResponse response = new ReservationGoodsItemResponse();
         response.setId(item.getId());
+        response.setGoodsCode(item.getGoodsCode());
+        response.setCatalogCategoryId(item.getCatalogCategoryId());
+        response.setCatalogMaterialId(item.getCatalogMaterialId());
+        response.setCategoryCode(item.getCategoryCode());
+        response.setCategoryName(GoodsCatalogService.historicalCategoryName(item));
+        response.setMaterialCode(item.getMaterialCode());
         response.setCategory(item.getCategory());
         response.setCustomGoodsName(item.getCustomGoodsName());
         response.setMaterialName(item.getMaterialName());

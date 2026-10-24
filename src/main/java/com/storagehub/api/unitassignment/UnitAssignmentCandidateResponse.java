@@ -22,6 +22,7 @@ public record UnitAssignmentCandidateResponse(
     LocalDate startDate,
     LocalDate endDate,
     Instant confirmedAt,
+    Instant assignmentDueAt,
     BigDecimal totalGoodsVolumeM3,
     BigDecimal totalGoodsWeightKg,
     UUID assignedStorageUnitId,
