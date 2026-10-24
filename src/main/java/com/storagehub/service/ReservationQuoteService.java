@@ -168,6 +168,25 @@ public class ReservationQuoteService {
 
         ReservationQuote quote = new ReservationQuote();
         quote.setCustomer(customer);
+        quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(request.getGoodsItems()));
+        quote.setUnitTypeRevision(unitType.getPublishedRevision());
+        var unitSnapshot = new java.util.LinkedHashMap<String, Object>();
+        unitSnapshot.put("code", unitType.getCode());
+        unitSnapshot.put("name", unitType.getName());
+        unitSnapshot.put("description", unitType.getDescription());
+        unitSnapshot.put("lengthM", unitType.getLengthM());
+        unitSnapshot.put("widthM", unitType.getWidthM());
+        unitSnapshot.put("heightM", unitType.getHeightM());
+        unitSnapshot.put("maxLoadKg", unitType.getMaxLoadKg());
+        unitSnapshot.put("rackCount", unitType.getRackCount());
+        unitSnapshot.put("rackLengthM", unitType.getRackLengthM());
+        unitSnapshot.put("rackWidthM", unitType.getRackWidthM());
+        unitSnapshot.put("rackHeightM", unitType.getRackHeightM());
+        unitSnapshot.put("monthlyPrice", unitType.getMonthlyPrice());
+        unitSnapshot.put("securityDepositAmount", unitType.getSecurityDepositAmount());
+        unitSnapshot.put("publishedRevision", unitType.getPublishedRevision());
+        unitSnapshot.put("acceptedGoodsJson", unitType.getAcceptedGoodsJson());
+        quote.setUnitTypeSnapshotJson(GoodsSnapshotCodec.encodeObject(unitSnapshot));
         quote.setFacility(policy.getFacility());
         quote.setUnitType(unitType);
         quote.setPricingPackageCode(policy.getCode());
