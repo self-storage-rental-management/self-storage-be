@@ -19,6 +19,7 @@ class RentalBookingEvidenceJpaTests {
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.storagehub.service.renewal.RenewalWorkflowService renewalWorkflow;
     @org.springframework.boot.test.context.TestConfiguration static class JsonConfig {
+        @org.springframework.context.annotation.Bean com.storagehub.service.FacilityScopeService facilityScopes(){return new com.storagehub.service.FacilityScopeService();}
         @org.springframework.context.annotation.Bean(destroyMethod="close") java.sql.Connection ledgerTestSchema(javax.sql.DataSource datasource)throws Exception {
             var connection=datasource.getConnection();
             // H2 CHECK optimization retains the DDL session comparator. Keep that TEST session open until context close.
