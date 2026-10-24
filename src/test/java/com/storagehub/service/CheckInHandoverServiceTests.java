@@ -180,7 +180,7 @@ class CheckInHandoverServiceTests {
         var response = service.complete(actor, checkIn.getId(), validCompletionRequest());
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.completed);
-        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.COMPLETED);
+        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.COMPLETED);
         assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.assigned);
         assertThat(response.handover()).isNotNull();
