@@ -152,7 +152,7 @@ class RenewalOperationIntegrationTests {
         var assigned=tx.execute(s->{
             var role=em.createQuery("select r from Role r where r.code=:code",com.storagehub.domain.model.Role.class).setParameter("code",RoleCode.STAFF).getResultStream().findFirst().orElse(null);
             if(role==null){role=new com.storagehub.domain.model.Role();role.setCode(RoleCode.STAFF);role.setName("TEST Staff");em.persist(role);}
-            for(var code:List.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code())){
+            for(var code:List.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.OPERATE_RENEWALS.code())){
                 var permission=em.createQuery("select p from Permission p where p.code=:code",Permission.class).setParameter("code",code).getResultStream().findFirst().orElse(null);
                 if(permission==null){permission=new Permission();permission.setCode(code);permission.setName(code);em.persist(permission);}role.getPermissions().add(permission);
             }
@@ -165,7 +165,7 @@ class RenewalOperationIntegrationTests {
             var proof=new com.storagehub.service.renewal.integration.RenewalAssignmentSource.Assignment(n.getId(),current.getRental().getFacility().getId(),staff.getId(),w.getAcceptedRevision().getQuote().getId(),w.getVersion());
             em.persist(new RenewalOperationEvent(current,"STAFF_ASSIGNMENT",NOW,staff.getId(),store.canonical(proof)));em.flush();return staff.getId();
         });
-        var staff=new ActorPrincipal(assigned,UUID.randomUUID(),Set.of(RoleCode.STAFF),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.MANAGE_RENTALS.code()),Map.of(n.getRental().getFacility().getId(),FacilityScopeLevel.OPERATE));
+        var staff=new ActorPrincipal(assigned,UUID.randomUUID(),Set.of(RoleCode.STAFF),Set.of(SystemPermission.VIEW_RENTALS.code(),SystemPermission.OPERATE_RENEWALS.code()),Map.of(n.getRental().getFacility().getId(),FacilityScopeLevel.OPERATE));
         var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
         var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),state.expectedVersion()),"real-file-arrival");
         var access=new com.storagehub.service.integration.DuongResourceAccess(em);
