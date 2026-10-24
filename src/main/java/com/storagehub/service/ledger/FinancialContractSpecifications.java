@@ -100,6 +100,10 @@ public final class FinancialContractSpecifications {
             return List.of(new Specification(r.getId(), n.getId(), LedgerStore.Kind.RENEWAL_REMAINDER,
                 t.totalAfterDiscount(), ref + ":FULL_RENT"));
         }
+        if (t.remainingRentalAmount().signum() == 0) {
+            return List.of(new Specification(r.getId(), n.getId(), LedgerStore.Kind.RENEWAL_DEPOSIT,
+                t.totalAfterDiscount(), ref + ":DEPOSIT"));
+        }
         // Immutable quote: preserve its accepted deposit/remainder split.
         return List.of(new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_DEPOSIT,t.renewalDepositAmount(),ref+":DEPOSIT"),
             new Specification(r.getId(),n.getId(),LedgerStore.Kind.RENEWAL_REMAINDER,t.remainingRentalAmount(),ref+":REMAINDER"));
