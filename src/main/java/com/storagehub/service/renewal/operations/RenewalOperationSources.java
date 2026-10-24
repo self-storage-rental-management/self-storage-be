@@ -10,7 +10,7 @@ import java.util.*;
 /** Owner-supplied integration contracts. No runtime mocks/default BO policy are installed. */
 public final class RenewalOperationSources {
     private RenewalOperationSources() {}
-    public enum Capability { READ, ARRIVAL, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND }
+    public enum Capability { READ, ARRIVAL, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND, REFUND_EXECUTION }
     public interface AuthorizationSource {
         /** Checks current permission, facility scope and evidence visibility, not just role. */
         void require(ActorPrincipal actor, Renewal renewal, Capability capability);
