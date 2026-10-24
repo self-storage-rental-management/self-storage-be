@@ -58,7 +58,7 @@ public class RenewalDepositObligationWriter {
             if(!existing.isEmpty()) {
                 if(existing.size()!=1 || !renewal.getId().equals(existing.getFirst().renewalId())
                     || existing.getFirst().kind()!=spec.kind() || existing.getFirst().amount().compareTo(spec.amount())!=0
-                    || !existing.getFirst().dueAt().equals(spec.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt())))
+                    || Math.abs(existing.getFirst().dueAt().toEpochMilli() - spec.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt()).toEpochMilli()) > 2000)
                     throw ApiExceptions.conflict("Khoản thanh toán gia hạn đã thay đổi. Cần đối soát lại trước khi tiếp tục.");
                 continue;
             }

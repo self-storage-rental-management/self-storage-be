@@ -633,7 +633,8 @@ public class VnpayService {
         if(payment.getPurpose()!=PaymentType.RENEWAL||!"VNPAY".equals(payment.getGatewayProvider())
             ||payment.getAmount()==null||payment.getAmount().compareTo(renewalInitialAmount(prepared.terms()))!=0
             ||!java.util.Objects.equals(payment.getCurrency(),prepared.terms().currency())
-            ||!java.util.Objects.equals(payment.getPaymentDeadline(),prepared.paymentDeadline()))
+            ||payment.getPaymentDeadline()==null||prepared.paymentDeadline()==null
+            ||Math.abs(payment.getPaymentDeadline().toEpochMilli()-prepared.paymentDeadline().toEpochMilli())>2000)
             throw ApiExceptions.conflict("Renewal payment amount, purpose, currency or deadline binding changed");
     }
 

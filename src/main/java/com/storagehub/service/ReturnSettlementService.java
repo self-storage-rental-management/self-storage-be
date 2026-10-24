@@ -67,6 +67,8 @@ public class ReturnSettlementService {
     private final NotificationService notificationService;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.return.auto-settlement.sla-hours:72}")
+    private long autoSettlementSlaHours = 72;
 
     @Transactional
     public ReturnCaseResponse createCustomerReturnRequest(
@@ -318,6 +320,70 @@ public class ReturnSettlementService {
         );
 
         return toResponse(saved);
+    }
+
+    @Transactional
+    public int autoSettleExpiredReturns() {
+        Instant cutoff = Instant.now().minus(java.time.Duration.ofHours(autoSettlementSlaHours));
+        List<ReturnCase> expired = returnCaseRepository.findExpiredAwaitingConfirmation(cutoff);
+        int processed = 0;
+        for (ReturnCase rc : expired) {
+            try {
+                autoConfirmSettlement(rc);
+                processed++;
+            } catch (Exception ex) {
+                // Ignore failure for single row and continue
+            }
+        }
+        return processed;
+    }
+
+    private void autoConfirmSettlement(ReturnCase returnCase) {
+        lockRecoveryReturn(returnCase);
+        if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation || returnCase.isCustomerConfirmed()) {
+            return;
+        }
+
+        returnCase.setCustomerConfirmed(true);
+        returnCase.setCustomerConfirmedAt(Instant.now());
+        returnCase.setCustomerDecision(CustomerDecision.accepted);
+        returnCase.setCustomerDecisionNote("Hệ thống tự động chốt quyết toán sau " + autoSettlementSlaHours + " giờ không có khiếu nại (Auto-Settlement SLA).");
+
+        try {
+            if (finance() != null) finance().requireCurrent(returnCase);
+        } catch (Exception ignored) {}
+
+        if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
+            returnCase.setStatus(ReturnCaseStatus.payment_due);
+        } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
+            returnCase.setStatus(ReturnCaseStatus.refund_pending);
+        } else {
+            try {
+                if (finance() != null) finance().settle(returnCase, returnCase.getCustomer().getId(), "AUTO_OFFSET:" + returnCase.getId(), false);
+            } catch (Exception ignored) {}
+            returnCase.setStatus(ReturnCaseStatus.completed);
+            returnCase.setCompletedAt(Instant.now());
+            finalizeRentalAndUnit(returnCase);
+        }
+
+        ReturnCase saved = returnCaseRepository.save(returnCase);
+
+        auditLogService.recordMutation(
+            "RETURN_AUTO_SETTLEMENT_ACCEPTED",
+            "return",
+            saved.getId(),
+            saved.getFacility().getId(),
+            null,
+            toResponse(saved)
+        );
+
+        notificationService.createNotification(
+            saved.getCustomer().getId(),
+            NotificationType.RETURN,
+            "Tự động chốt quyết toán trả kho",
+            "Hồ sơ trả kho cho gian " + saved.getStorageUnit().getCode() + " đã được hệ thống tự động xác nhận sau " + autoSettlementSlaHours + " giờ theo quy định.",
+            saved.getId()
+        );
     }
 
     @Transactional
