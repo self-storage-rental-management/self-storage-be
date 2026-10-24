@@ -122,6 +122,8 @@ public class DuongFileEvidence implements RenewalOperationSources.EvidenceSource
         }else assignments.require(actor,n,write?(purpose.equals("INCIDENT")?RenewalOperationSources.Capability.INCIDENT:purpose.equals("CASH_RECEIPT")?RenewalOperationSources.Capability.CASH:RenewalOperationSources.Capability.COMPLETE):RenewalOperationSources.Capability.READ);
     }
     private void supportAccess(ActorPrincipal actor,SupportTicket t,Visibility visibility,boolean write) {
+        var retention=em.find(com.storagehub.service.support.SupportState.class,t.getId());
+        if(retention!=null&&retention.conversationExpired(java.time.Instant.now()))throw unavailable();
         if(visibility==null)throw ApiExceptions.validation("Explicit evidence visibility required",null);
         if(write&&actor!=null&&actor.hasRole(RoleCode.MANAGER)&&visibility!=Visibility.INTERNAL)throw ApiExceptions.forbidden("Manager may only attach internal Support evidence");
         if(actor!=null&&actor.hasRole(RoleCode.CUSTOMER)) {

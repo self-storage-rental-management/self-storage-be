@@ -328,6 +328,8 @@ Phạm vi lượt triển khai tiếp theo: **chỉ bước 2 — Widget (UI-01/
 
 ### Một khung chat AI → Staff, không có memory AI
 
+**Thời hạn đã chọn ngày 24/10/2026:** hội thoại đã chuyển tiếp tự xóa nội dung sau 10 ngày từ tin nhắn cuối cùng. Tin mới gia hạn; xem/tiếp nhận không gia hạn. Lịch sử hết hạn bị loại khỏi API và dọn bằng scheduler mỗi phút, có tombstone chống replay. Chính sách áp dụng cả hội thoại AI chuyển tiếp cũ qua migration; không áp dụng ticket tạo trực tiếp không có handoffMessages. Xem SUPPORT_API_CONTRACT.md để biết phạm vi dọn và metadata kỹ thuật còn giữ.
+
 - Bỏ tab Trợ lý/Nhân viên. Mở vào AI; bấm Gặp nhân viên hiển thị tin Customer “Tôi muốn gặp nhân viên”, tiếp theo là lời nhắc chọn cơ sở cùng các nút cơ sở đang hoạt động lấy từ API, có phân trang. Không mở form xác nhận. Có thể quay về trợ lý trước khi gửi yêu cầu; Lịch sử hỗ trợ mở danh sách ticket đã lưu.
 - Chọn cơ sở là gửi yêu cầu ngay. Mô tả/tin Customer mở đầu chứa lời yêu cầu, tên cơ sở và câu hỏi gần nhất. `handoffMessages` lưu cả trao đổi AI trước đó thành USER_CONTEXT/AI_CONTEXT trong support_messages, atomically với ticket và receipt. Không đổi schema; nguồn được ghi rõ là lịch sử khách chuyển, chưa xác minh. Tối đa 200 tin/200.000 ký tự, mỗi tin 4.000 ký tự; vượt giới hạn báo lỗi, không cắt thầm.
 - Tạo ticket qua API/hook idempotency hiện có; mở đúng ticket sau khi server xác nhận, hiển thị lời nhắn chờ nhân viên. Lỗi tải cơ sở cho phép tải lại; kết quả gửi chưa rõ chỉ thử lại payload/key cũ. Staff vẫn đọc theo quyền/scope hiện có. Không thêm migration, bảng memory hoặc gửi transcript support vào Gemini.
