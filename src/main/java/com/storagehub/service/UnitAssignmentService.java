@@ -313,7 +313,8 @@ public class UnitAssignmentService {
             reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), reservation.getUnitType().getId(),
             reservation.getUnitType().getName(), reservation.getStartDate(), reservation.getEndDate(),
-            reservation.getConfirmedAt(), reservation.getTotalGoodsVolumeM3(),
+            reservation.getConfirmedAt(), ReservationCheckInPolicy.managerAssignmentDueAt(reservation.getConfirmedAt()),
+            reservation.getTotalGoodsVolumeM3(),
             reservation.getTotalGoodsWeightKg(),
             reservation.getAssignedUnit() == null ? null : reservation.getAssignedUnit().getId(),
             reservation.getAssignedUnit() == null ? null : reservation.getAssignedUnit().getCode(),
@@ -326,7 +327,11 @@ public class UnitAssignmentService {
 
     private AssignableUnitResponse toUnitResponse(StorageUnit unit) {
         return new AssignableUnitResponse(
-            unit.getId(), unit.getCode(), unit.getFloor(), unit.getZone(), unit.getStatus()
+            unit.getId(), unit.getCode(), unit.getFloor(), unit.getZone(), unit.getStatus(),
+            unit.getUnitType().getName(), unit.getUnitType().getLengthM(),
+            unit.getUnitType().getWidthM(), unit.getUnitType().getHeightM(),
+            unit.getUnitType().getAreaM2(), unit.getUnitType().getVolumeM3(),
+            unit.getUnitType().getMaxLoadKg()
         );
     }
 

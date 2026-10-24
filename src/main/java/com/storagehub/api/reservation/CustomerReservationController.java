@@ -44,6 +44,12 @@ public class CustomerReservationController {
     private final ReservationEmailVerificationService emailVerificationService;
     private final VnpayService vnpayService;
     private final PaymentComplaintService paymentComplaintService;
+    private final com.storagehub.service.GoodsCatalogService goodsCatalogService;
+
+    @GetMapping("/goods-catalog")
+    public ApiResponse<GoodsCatalogResponse> goodsCatalog() {
+        return new ApiResponse<>(goodsCatalogService.catalog(), CorrelationIdContext.current());
+    }
 
     @PostMapping("/compatibility-check")
     public ApiResponse<CompatibilityCheckResponse> checkCompatibility(

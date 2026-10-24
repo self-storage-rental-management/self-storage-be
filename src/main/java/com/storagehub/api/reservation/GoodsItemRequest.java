@@ -11,8 +11,23 @@ import java.math.BigDecimal;
 public class GoodsItemRequest {
 
     @NotNull private GoodsCategory category;
+    private java.util.UUID catalogCategoryId;
+    public java.util.UUID getCatalogCategoryId() { return catalogCategoryId; }
+    public void setCatalogCategoryId(java.util.UUID value) { this.catalogCategoryId = value; }
+    private java.util.UUID catalogMaterialId;
+    public java.util.UUID getCatalogMaterialId() { return catalogMaterialId; }
+    public void setCatalogMaterialId(java.util.UUID value) { this.catalogMaterialId = value; }
+    private String categoryCode;
+    public String getCategoryCode() { return categoryCode; }
+    public void setCategoryCode(String value) { this.categoryCode = value; }
+    private String categoryName;
+    public String getCategoryName() { return categoryName; }
+    public void setCategoryName(String value) { this.categoryName = value; }
+    private String materialCode;
+    public String getMaterialCode() { return materialCode; }
+    public void setMaterialCode(String value) { this.materialCode = value; }
     @Size(max = 160) private String customGoodsName;
-    @Size(max = 120) private String materialName;
+    @Size(max = 160) private String materialName;
     @Size(max = 120) private String customMaterial;
     @NotBlank @Size(max = 1000) private String description;
     @Size(max = 1000) private String customerNote;
