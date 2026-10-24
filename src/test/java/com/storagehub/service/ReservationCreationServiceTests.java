@@ -81,7 +81,7 @@ class ReservationCreationServiceTests {
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()
         );
 
-        quote = new ReservationQuote();
+        quote = com.storagehub.testing.LegacyReservationQuoteFixture.create();
         ReflectionTestUtils.setField(quote, "id", UUID.randomUUID());
         quote.setCustomer(customer);
         quote.setFacility(facility);
@@ -141,7 +141,7 @@ class ReservationCreationServiceTests {
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
-        assertThat(response.getReservationCode()).matches("SH-[0-9]{6}");
+        assertThat(response.getReservationCode()).matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
     }
 
     @Test

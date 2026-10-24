@@ -30,7 +30,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class Reservation extends BaseEntity {
 
-    @Column(nullable = false, unique = true, length = 32)
+    @Column(nullable = false, updatable = false, unique = true, length = 32)
     private String reservationCode;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

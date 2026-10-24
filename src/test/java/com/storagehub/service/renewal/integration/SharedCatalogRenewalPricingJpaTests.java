@@ -147,7 +147,7 @@ class SharedCatalogRenewalPricingJpaTests {
         t.setMonthlyPrice(new BigDecimal("5500000.00")); t.setMaxLoadKg(BigDecimal.ONE);
         t.setRackLengthM(BigDecimal.ONE); t.setRackWidthM(BigDecimal.ONE); t.setRackHeightM(BigDecimal.ONE); em.persist(t);
         var unit = new StorageUnit(); unit.setFacility(f); unit.setUnitType(t); unit.setCode("H2-TEST-1"); em.persist(unit);
-        var q = new ReservationQuote(); q.setCustomer(u); q.setFacility(f); q.setUnitType(t);
+        var q = com.storagehub.testing.LegacyReservationQuoteFixture.create(); q.setCustomer(u); q.setFacility(f); q.setUnitType(t);
         q.setPricingPackageCode("TEST"); q.setPolicyVersion("test-only"); q.setStartDate(START.minusMonths(1));
         q.setEndDate(START); q.setRentalMonths(1); q.setMonthlyPrice(new BigDecimal("100.00"));
         q.setSubtotal(new BigDecimal("100.00")); q.setDiscountRate(BigDecimal.ZERO); q.setDiscountAmount(BigDecimal.ZERO);

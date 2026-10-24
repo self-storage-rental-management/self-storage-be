@@ -133,6 +133,33 @@ class ReservationCompatibilityServiceTests {
         assertThat(response.getResult()).isEqualTo(CompatibilityResult.COMPATIBLE);
     }
 
+    @Test
+    void multipliesQuantityBeforeRoundingSmallPackageVolume() {
+        stubAvailableUnitType(1);
+        GoodsItemRequest item = goodsItem(GoodsCategory.FURNITURE, "Small items", 3,
+            new BigDecimal("1.1"), new BigDecimal("1.1"), new BigDecimal("1.1"));
+        var request = new CompatibilityCheckRequest(
+            facility.getId(), unitType.getId(), LocalDate.now().plusDays(1),
+            LocalDate.now().plusMonths(3), "Packed", List.of(item)
+        );
+        assertThat(service.check(customer, request).getTotalGoodsVolumeM3()).isEqualByComparingTo("0.000004");
+    }
+
+    @Test
+    void calculatesTenCustomerPackagesAsOneCubicMeterAnd240Kg() {
+        stubAvailableUnitType(1);
+        GoodsItemRequest item = goodsItem(GoodsCategory.FURNITURE, "Packed goods", 10,
+            new BigDecimal("40"), new BigDecimal("50"), new BigDecimal("50"));
+        item.setWeightPerItemKg(new BigDecimal("24"));
+        var request = new CompatibilityCheckRequest(
+            facility.getId(), unitType.getId(), LocalDate.now().plusDays(1),
+            LocalDate.now().plusMonths(3), "Packed", List.of(item)
+        );
+        var response = service.check(customer, request);
+        assertThat(response.getTotalGoodsVolumeM3()).isEqualByComparingTo("1.000000");
+        assertThat(response.getTotalGoodsWeightKg()).isEqualByComparingTo("240.00");
+    }
+
     private void stubAvailableUnitType(long availableCount) {
         when(facilityRepository.findById(facility.getId())).thenReturn(Optional.of(facility));
         when(unitTypeRepository.findById(unitType.getId())).thenReturn(Optional.of(unitType));
