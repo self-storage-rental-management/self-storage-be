@@ -100,4 +100,7 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
     );
 
     List<ReturnCase> findByStatusIn(Collection<ReturnCaseStatus> statuses);
+
+    @Query("select r from ReturnCase r where r.status = com.storagehub.domain.model.ReturnCaseStatus.awaiting_customer_confirmation and r.customerConfirmed = false and r.inspectedAt is not null and r.inspectedAt <= :cutoff")
+    List<ReturnCase> findExpiredAwaitingConfirmation(@Param("cutoff") java.time.Instant cutoff);
 }
