@@ -248,14 +248,19 @@ class RenewalPaymentTransactionTests {
             assertThat(n.getStatus()).isEqualTo(RenewalStatus.cancelled);assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
             return reserved.reference();});
         assertThat(read(payment).getRefundedAmount()).isZero();
+        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();
+            source.execute(p.getRenewal(),refund,UUID.randomUUID(),"same-proposer",p.getInitiatedBy().getId(),now.plusSeconds(1));}))
+            .hasMessageContaining("proposer cannot execute");
+        UUID executor=tx.execute(s->{var user=new User();user.setEmail(UUID.randomUUID()+"@test.invalid");
+            user.setFullName("TEST refund executor");user.setPasswordHash("TEST-ONLY");em.persist(user);em.flush();return user.getId();});
         assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var account=ledger.read(p.getRenewal().getRental().getId()).orElseThrow();
             ledger.executeRefund(account.rentalId(),account.refunds().getFirst().id(),"production-payout",p.getInitiatedBy().getId(),"forbidden-production-payout",account.revision());})).hasMessageContaining("Sandbox refund");
-        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var done=source.execute(p.getRenewal(),refund,UUID.randomUUID(),"sandbox-refund-"+refund,p.getInitiatedBy().getId(),now.plusSeconds(1));
+        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var done=source.execute(p.getRenewal(),refund,UUID.randomUUID(),"sandbox-refund-"+refund,executor,now.plusSeconds(1));
             assertThat(done.environment()).isEqualTo("SANDBOX");assertThat(done.amount()).isEqualByComparingTo("40");
             assertThat(source.read(p.getRenewal().getId()).status()).isEqualTo("REFUNDED");});
         assertThat(read(payment).getRefundedAmount()).isEqualByComparingTo("40");
         tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();assertThat(ledger.read(p.getRenewal().getRental().getId()).orElseThrow().knownOutstanding()).isZero();});
-        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();source.execute(p.getRenewal(),refund,UUID.randomUUID(),"duplicate",p.getInitiatedBy().getId(),now.plusSeconds(2));})).hasMessageContaining("awaiting execution");
+        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();source.execute(p.getRenewal(),refund,UUID.randomUUID(),"duplicate",executor,now.plusSeconds(2));})).hasMessageContaining("awaiting execution");
     }
     @Test void dailyFeesUseActualAllocationsAndASecondDayCanBePaidWithoutPayingRentAgain() throws Exception {
         UUID payment=paidDeposit(true);Instant first=NOW.plusSeconds(3600),second=NOW.plus(Duration.ofDays(1));
