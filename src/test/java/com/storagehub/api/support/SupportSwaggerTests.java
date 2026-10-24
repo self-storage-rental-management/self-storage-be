@@ -21,7 +21,7 @@ class SupportSwaggerTests {
     @Test void swaggerPublishesD5SecurityStateGatesAndSeparateRoleResponsibilities() throws Exception {
         var base="http://127.0.0.1:"+environment.getProperty("local.server.port");var client=HttpClient.newHttpClient();
         var response=client.send(HttpRequest.newBuilder(URI.create(base+"/v3/api-docs")).GET().build(),HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).isEqualTo(200);var paths=mapper.readTree(response.body()).path("paths");
+        assertThat(response.statusCode()).isEqualTo(200);var document=mapper.readTree(response.body());var paths=document.path("paths");
         for(String role:new String[]{"customer","manager","staff"}){
             var list=paths.path(workflowPath(role)).path("get");
             assertThat(list.isMissingNode()).isFalse();assertThat(list.path("security").toString()).contains("bearerAuth");
@@ -40,6 +40,13 @@ class SupportSwaggerTests {
                 assertThat(entry.getValue().fieldNames()).toIterable().noneMatch(method->java.util.Set.of("post","put","patch","delete").contains(method));
         });
         assertThat(paths.has("/api/manager/support-tickets/{id}/resolution")).isFalse();
+        for(String path:new String[]{"/api/staff/support-workflows/inbox","/api/customer/chat/session"}) {
+            assertThat(paths.path(path).path("get").isMissingNode()).as(path).isFalse();
+            var operation=paths.path(path).path("get");
+            assertThat((operation.has("security")?operation.path("security"):document.path("security")).toString()).contains("bearerAuth");
+            var unauthorized=client.send(HttpRequest.newBuilder(URI.create(base+path)).GET().build(),HttpResponse.BodyHandlers.ofString());
+            assertThat(unauthorized.statusCode()).as(path).isEqualTo(401);
+        }
         assertThat(paths.has("/api/customer/support-workflows/{id}/events")).isFalse();
         assertThat(paths.has("/api/customer/support-tickets/{id}/close")).isFalse();
         assertThat(paths.has("/api/staff/support-tickets/{id}/accept")).isFalse();

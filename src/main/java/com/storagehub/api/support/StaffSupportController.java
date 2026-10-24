@@ -23,6 +23,25 @@ import static com.storagehub.service.support.SupportService.Audience.STAFF;
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409",description="Assignment not accepted/stale version/state or DEFERRED_SOURCE")})
 public class StaffSupportController {
     private final ActorContext actors;private final SupportService service;
+    @GetMapping("/inbox") @Operation(summary="Grouped active Customer conversations, one row per Customer and Facility")
+    public SupportInboxResponse inbox(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> values) {
+        var q=new org.springframework.util.LinkedMultiValueMap<String,String>(values);
+        if(q.containsKey("view")&&q.get("view").size()!=1)throw ApiExceptions.validation("Invalid inbox view",null);
+        SupportInboxResponse.View view;
+        try {view=SupportInboxResponse.View.valueOf(q.getFirst("view")==null?"mine":q.getFirst("view"));}catch(IllegalArgumentException e){throw ApiExceptions.validation("Invalid inbox view",null);}
+        q.remove("view");var paging=SupportQuery.parse(q,false,true);
+        return service.inbox(actors.required(),new SupportQuery(paging.page(),paging.size(),null,null,null,"","updatedAt",true),view,CorrelationIdContext.current());
+    }
+    @GetMapping("/{id}/related") @Operation(summary="Read my retained conversations with the same Customer at this Facility")
+    public PageResponse<SupportResponse> related(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q) {
+        var paging=SupportQuery.parse(q,false,true);
+        return service.relatedStaffHistory(actors.required(),id,new SupportQuery(paging.page(),paging.size(),null,null,null,"","updatedAt",true),CorrelationIdContext.current());
+    }
+    @GetMapping("/read-status")
+    public ApiResponse<java.util.List<SupportResponse.ReadStatus>> readStatus(@RequestParam java.util.List<UUID> ticketIds){return response(service.readStatus(actors.required(),STAFF,ticketIds));}
+    @PutMapping("/{id}/read")
+    public ApiResponse<SupportResponse.ReadStatus> markRead(@PathVariable UUID id,@Valid @RequestBody SupportCommands.ReadMessages body){return response(service.markRead(actors.required(),STAFF,id,body.messageIds()));}
+
     @GetMapping @Operation(summary="Read my assigned Support tickets",description="page,size,status,search,sort. Scope and current assignee before pagination.")
     @Parameters({@Parameter(name="page"),@Parameter(name="size"),@Parameter(name="status"),@Parameter(name="search"),@Parameter(name="sort")})
     public PageResponse<SupportResponse> list(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> q){return service.list(actors.required(),STAFF,SupportQuery.parse(q,false,false),CorrelationIdContext.current());}
