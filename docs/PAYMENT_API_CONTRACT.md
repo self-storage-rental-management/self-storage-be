@@ -32,7 +32,7 @@ Base path `/api`, envelope và lỗi theo [quy ước chung](BE-00_API_CONTRACT.
 | GET `/api/public/payments/vnpay/return` | Xác minh callback rồi chuyển về frontend |
 | GET `/api/public/payments/vnpay/ipn` | Xác minh callback và trả mã phản hồi VNPay |
 | POST `/api/manager/payments/{paymentId}/vnpay/query` | Đối soát trạng thái gateway theo quyền và scope |
-| POST `/api/manager/payments/{paymentId}/vnpay/refund` | Yêu cầu hoàn tiền theo quyền, scope và điều kiện Payment |
+| POST `/api/manager/payments/{paymentId}/vnpay/refund` | Business Operations thực hiện hoàn tiền theo `refunds:execute`, scope `MANAGE` và điều kiện Payment; Manager chỉ duyệt, không gọi bước chi tiền |
 
 Hai API tạo URL yêu cầu Bearer và `Idempotency-Key`. Server quyết định số tiền, tiền tệ và transaction reference; client không gửi số tiền thay thế. Hợp đồng yêu cầu/revision, thời hạn, ký và kích hoạt Renewal được định nghĩa duy nhất tại [Renewal contract](RENEWAL_API_CONTRACT.md).
 
@@ -42,7 +42,7 @@ Renewal yêu cầu Customer chọn lịch ký trước khi mở intent trả c�
 
 Return/IPN dùng cùng bước xác minh merchant, checksum, amount, transaction reference và thời điểm thanh toán. Callback lặp không được tạo thêm khoản thanh toán hoặc ghi đè metadata của giao dịch đã xác minh. Payment gia hạn ràng buộc với đúng Renewal và accepted revision; tiền đã nhận được lưu trước bước phân bổ Ledger và chuẩn bị ký. Lỗi các bước sau phải giữ bằng chứng nhận tiền và chuyển sang đối soát.
 
-Body yêu cầu refund gồm `amount` và `reason`; không tự suy ra quyền hoàn tiền từ trạng thái Renewal.
+Body yêu cầu refund gồm `amount` và `reason`. Manager không được thực hiện endpoint này vì đây là bước chi tiền; quyền duyệt (`refunds:approve`) và quyền thực hiện (`refunds:execute`) phải tách biệt. Không tự suy ra quyền hoàn tiền từ trạng thái Renewal.
 
 ## Cấu hình local dùng chung
 
