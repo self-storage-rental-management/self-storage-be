@@ -15,8 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** Payment rows are the persistent work queue. Each stage commits independently. */
 @Service
-@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled",
-    "storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled"},havingValue="true")
 public class RenewalPaymentReconciler {
     public record Verified(UUID paymentId) {}
     private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(RenewalPaymentReconciler.class);
@@ -59,7 +58,7 @@ public class RenewalPaymentReconciler {
             });
         } catch(RuntimeException unavailable) {
             LOG.warn("Renewal payment {} requires reconciliation; verified funds remain committed",id);
-            LOG.debug("Renewal payment reconciliation failure",unavailable);
+            LOG.error("Renewal payment reconciliation failure: {}", unavailable.getMessage(), unavailable);
             try {
                 transaction.executeWithoutResult(status->{
                     var payment=payments.findByIdForUpdate(id).orElse(null);

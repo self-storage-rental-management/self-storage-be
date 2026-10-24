@@ -79,4 +79,10 @@ public class ManagerReturnController {
             CorrelationIdContext.current()
         );
     }
+
+    @PostMapping("/scan-auto-settlement")
+    public ApiResponse<java.util.Map<String, Object>> scanAutoSettlement() {
+        int processed = returnSettlementService.autoSettleExpiredReturns();
+        return new ApiResponse<>(java.util.Map.of("processed", processed, "timestamp", java.time.Instant.now()), CorrelationIdContext.current());
+    }
 }
