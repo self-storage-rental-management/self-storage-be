@@ -169,7 +169,7 @@ class ReservationConcurrencyIntegrationTests {
 
     private ReservationQuote quote(User customer, Facility facility, UnitType unitType,
                                    LocalDate startDate, LocalDate endDate) {
-        ReservationQuote quote = new ReservationQuote();
+        ReservationQuote quote = com.storagehub.testing.LegacyReservationQuoteFixture.create();
         quote.setCustomer(customer);
         quote.setFacility(facility);
         quote.setUnitType(unitType);
@@ -190,6 +190,8 @@ class ReservationConcurrencyIntegrationTests {
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
+        // The race tests capacity for an already-accepted declaration, not live catalog setup.
+        quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(request(quote).getGoodsItems()));
         return quote;
     }
 

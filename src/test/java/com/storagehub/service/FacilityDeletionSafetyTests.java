@@ -25,6 +25,8 @@ class FacilityDeletionSafetyTests {
     @Mock NotificationService notifications;
     @Mock UnitTypeChangeRequestRepository changes;
     @Mock UserRepository users;
+    @Mock GoodsTypeCatalogRepository goodsTypes;
+    @Mock GoodsMaterialCatalogRepository goodsMaterials;
     @Mock org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Spy com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
     @InjectMocks FacilityLifecycleService service;
@@ -34,27 +36,36 @@ class FacilityDeletionSafetyTests {
         Set.of(RoleCode.BUSINESS), Set.of(SystemPermission.MANAGE_POLICIES.code()), Map.of());
 
     @Test void preservesFacilityWithReservationHistory() {
-        when(facilities.findById(id)).thenReturn(Optional.of(new Facility()));
-        when(reservations.existsByFacility_Id(id)).thenReturn(true);
-        assertThatThrownBy(() -> service.deleteFacility(actor, id)).hasMessageContaining("hồ sơ");
+        Facility facility = new Facility();
+        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        service.deleteFacility(actor, id);
+        assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
+        verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
+        verifyNoInteractions(reservations);
     }
 
-    @Test void allowsDeletingFacilityWithPhysicalUnitsWhenNoReservations() {
+    @Test void archivesFacilityAndTypesWithoutDeletingPhysicalUnits() {
         Facility facility = new Facility();
         when(facilities.findById(id)).thenReturn(Optional.of(facility));
-        when(reservations.existsByFacility_Id(id)).thenReturn(false);
+        UnitType type = new UnitType();
+        type.setStatus(UnitTypeStatus.active);
+        when(unitTypes.findByFacility_IdOrderByCodeAsc(id)).thenReturn(List.of(type));
         service.deleteFacility(actor, id);
-        verify(facilities).delete(facility);
-        verify(facilities).flush();
+        verify(facilities).saveAndFlush(facility);
+        verify(facilities, never()).delete(any());
+        assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
+        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.archived);
+        verify(units, never()).deleteAll(anyList());
     }
 
-    @Test void allowsDeletingEmptyFacility() {
+    @Test void archivesEmptyFacilityWithoutPhysicalDeletion() {
         Facility facility = new Facility();
         when(facilities.findById(id)).thenReturn(Optional.of(facility));
         service.deleteFacility(actor, id);
-        verify(facilities).delete(facility);
-        verify(facilities).flush();
+        verify(facilities).saveAndFlush(facility);
+        verify(facilities, never()).delete(any());
+        assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
     }
 
     @Test void rejectsCustomerDeletion() {
@@ -77,24 +88,23 @@ class FacilityDeletionSafetyTests {
         return type;
     }
 
-    @Test void managerCannotDeleteTypeWithBookingHistory() {
-        mockType();
-        when(reservations.existsByUnitType_Id(id)).thenReturn(true);
-        assertThatThrownBy(() -> service.deleteUnitType(manager(), id)).hasMessageContaining("hồ sơ");
+    @Test void managerArchivesTypeWithoutDeletingBookingHistory() {
+        UnitType type = mockType();
+        when(unitTypes.saveAndFlush(type)).thenReturn(type);
+        service.deleteUnitType(manager(), id);
+        verify(type).setStatus(UnitTypeStatus.archived);
         verify(unitTypes, never()).delete(any());
         verify(units, never()).deleteAll(anyList());
+        verifyNoInteractions(reservations);
     }
 
-    @Test void managerCannotDeleteNonEmptyType() {
+    @Test void archivingTypeDoesNotChangeReservedPhysicalUnits() {
         UnitType type = mockType();
-        when(type.getId()).thenReturn(id);
-        StorageUnit unit = mock(StorageUnit.class);
-        when(unit.getId()).thenReturn(id);
-        when(unit.getUnitType()).thenReturn(type);
-        when(unit.getStatus()).thenReturn(StorageUnitStatus.reserved);
-        when(units.findByFacility_Id(id)).thenReturn(List.of(unit));
-        when(units.findByIdForUpdate(id)).thenReturn(Optional.of(unit));
-        assertThatThrownBy(() -> service.deleteUnitType(manager(), id)).hasMessageContaining("trống");
+        when(unitTypes.saveAndFlush(type)).thenReturn(type);
+        service.deleteUnitType(manager(), id);
+        verify(type).setStatus(UnitTypeStatus.archived);
+        verify(units, never()).save(any());
+        verify(units, never()).deleteAll(anyList());
         verify(unitTypes, never()).delete(any());
     }
 
@@ -194,16 +204,15 @@ class FacilityDeletionSafetyTests {
         verify(unitTypes, never()).save(any());
     }
 
-    @Test void technicalApprovalRechecksNewBookingHistory() {
+    @Test void technicalApprovalRequiresExplicitPriceConfirmation() {
         UnitType type = editableType();
         service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("5")));
         var captor = ArgumentCaptor.forClass(UnitTypeChangeRequest.class);
         verify(changes).saveAndFlush(captor.capture());
         UnitTypeChangeRequest request = captor.getValue();
         when(changes.findLockedById(request.getId())).thenReturn(Optional.of(request));
-        when(reservations.existsByUnitType_Id(id)).thenReturn(true);
         assertThatThrownBy(() -> service.reviewUnitTypeChange(actor, request.getId(), true, null))
-            .hasMessageContaining("hồ sơ đặt/thuê");
+            .hasMessageContaining("phải xác nhận giá thuê");
         assertThat(type.getLengthM()).isEqualByComparingTo("4");
         assertThat(request.getStatus()).isEqualTo("PENDING");
     }
