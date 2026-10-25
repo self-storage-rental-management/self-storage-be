@@ -17,9 +17,10 @@ public final class RenewalTermCalculator {
             throw ApiExceptions.conflict("Shared renewal pricing or period data is invalid");
         try {
             LocalDate start = oldEnd.plusDays(1), end = start.plusMonths(packageMonths);
-            BigDecimal subtotal = money(price.multiply(BigDecimal.valueOf(packageMonths)));
-            BigDecimal discount = money(subtotal.multiply(discountRate));
-            BigDecimal net = money(subtotal.subtract(discount));
+            var rent = RenewalRentCalculation.calculate(price, packageMonths, discountRate);
+            BigDecimal subtotal = rent.subtotal();
+            BigDecimal discount = rent.discount();
+            BigDecimal net = rent.netRent();
             BigDecimal deposit = money(net.multiply(depositRate));
             return new Terms(start,end,end.minusDays(1),subtotal,discount,net,deposit,money(net.subtract(deposit)));
         } catch (DateTimeException | ArithmeticException e) {

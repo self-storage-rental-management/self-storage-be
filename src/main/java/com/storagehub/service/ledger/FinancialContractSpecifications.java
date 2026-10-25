@@ -56,9 +56,10 @@ public final class FinancialContractSpecifications {
             || t.renewalPolicyRef()==null || t.renewalPolicyRef().isBlank() || t.renewalPolicyVersion()==null || t.renewalPolicyVersion().isBlank()) fail("Renewal pricing identity incomplete");
         for(var v:Arrays.asList(t.monthlyPrice(),t.subtotal(),t.discountAmount(),t.totalAfterDiscount(),t.renewalDepositAmount(),t.remainingRentalAmount()))money(v);
         rate(t.discountRate());
-        equal(t.monthlyPrice().multiply(BigDecimal.valueOf(t.rentalMonths())),t.subtotal());
-        equal(t.subtotal().multiply(t.discountRate()).setScale(2,RoundingMode.HALF_UP),t.discountAmount());
-        equal(t.subtotal().subtract(t.discountAmount()),t.totalAfterDiscount());
+        var rent = com.storagehub.service.renewal.RenewalRentCalculation.calculate(t.monthlyPrice(), t.rentalMonths(), t.discountRate());
+        equal(rent.subtotal(), t.subtotal());
+        equal(rent.discount(), t.discountAmount());
+        equal(rent.netRent(), t.totalAfterDiscount());
         equal(t.renewalDepositAmount().add(t.remainingRentalAmount()),t.totalAfterDiscount());
         if(t.paymentPlan()!=null) {
             if(t.monthly()) {

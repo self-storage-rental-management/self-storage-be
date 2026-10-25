@@ -217,7 +217,7 @@ public class RenewalVnpaySettlementService {
         payment.setRenewalSigningPreparedAt(now);
         payment.setFailureCode(null);payment.setFailureReason(null);payment.setRenewalNextRetryAt(null);
         notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
-            deposit?"Đã nhận thanh toán cọc gia hạn":"Đã nhận thanh toán gia hạn",
+            deposit?"Đã nhận thanh toán tiền thuê gia hạn trả trước":"Đã nhận thanh toán gia hạn",
             "Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" cho hồ sơ thuê "+renewal.getRental().getId()
                 +" đã được xác nhận. Tiếp tục theo dõi lịch ký gia hạn trong hồ sơ.",renewal.getId());
         return new Result(true,payment.getRenewalLedgerReceiptRef(),null);

@@ -26,6 +26,13 @@ public class LedgerStore {
         String sourceRef,BigDecimal allocated,BigDecimal refunded,BigDecimal outstanding) {}
     public record Receipt(UUID id,Method method,BigDecimal amount,String evidenceRef,UUID evidenceFileId,Instant receivedAt) {}
     public record Refund(UUID id,UUID receiptId,UUID obligationId,BigDecimal amount,String status,String decisionRef,String payoutRef) {}
+    public record Allocation(UUID receiptId,UUID obligationId,BigDecimal amount) {}
+    /** Read allocations only for this renewal, including its posted overdue fees. */
+    public List<Allocation> renewalAllocations(UUID rental,UUID renewal) {
+        required(rental);required(renewal);
+        return jdbc.query("select a.receipt_id,a.obligation_id,a.amount from rental_ledger_allocations a join rental_ledger_obligations o on o.id=a.obligation_id join rental_ledger_receipts p on p.id=a.receipt_id where a.rental_id=? and o.rental_id=? and (o.renewal_id=? or o.source_ref like ?) and p.method<>'SIMULATED'",
+            (r,i)->new Allocation(uuid(r.getString("receipt_id")),uuid(r.getString("obligation_id")),r.getBigDecimal("amount")),s(rental),s(rental),s(renewal),"rental-overdue:"+rental+":%");
+    }
     public record Snapshot(UUID rentalId,UUID customerId,UUID facilityId,long revision,List<Obligation> obligations,List<Receipt> receipts,List<Refund> refunds) {
         public BigDecimal knownOutstanding(){return obligations.stream().map(Obligation::outstanding).reduce(BigDecimal.ZERO,BigDecimal::add);}
     }
