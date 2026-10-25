@@ -95,7 +95,7 @@ Error response dùng contract chung:
 ```json
 {
   "reservationId": "uuid",
-  "reservationCode": "RSV-20261002-001",
+  "reservationCode": "SH-483921",
   "reservationStatus": "CANCELLED",
   "cancelledAt": "2026-10-02T03:15:00Z",
   "cancelReason": "Khách thay đổi kế hoạch",
@@ -164,7 +164,7 @@ Ví dụ case bị chặn:
 {
   "data": {
     "reservationId": "uuid",
-    "reservationCode": "RSV-20261002-001",
+    "reservationCode": "SH-274106",
     "reservationStatus": "CANCELLED",
     "assignment": {
       "assignmentId": "uuid",

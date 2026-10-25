@@ -195,7 +195,8 @@ public class ReportingService {
         if (targetFacilityId != null) {
             facilityScopeService.assertCanRead(actor, targetFacilityId);
         } else if (facilityScopeService.isFacilityScoped(actor)) {
-            targetFacilityId = actor.facilityScopes().keySet().stream().findFirst().orElse(null);
+            targetFacilityId = actor.facilityScopes().keySet().stream().findFirst()
+                .orElseThrow(() -> ApiExceptions.notFound("No facility accessible for actor"));
         }
 
         if (page < 0 || size < 1 || size > 100) {

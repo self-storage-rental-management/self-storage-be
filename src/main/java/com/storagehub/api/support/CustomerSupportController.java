@@ -24,6 +24,13 @@ import static com.storagehub.service.support.SupportService.Audience.CUSTOMER;
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409",description="State/version/key conflict or DEFERRED_SOURCE")})
 public class CustomerSupportController {
     private final ActorContext actors;private final SupportService service;
+    @DeleteMapping("/{id}/history")
+    public ApiResponse<SupportResponse.HiddenHistory> hideHistory(@PathVariable UUID id){return response(service.hideCustomerHistory(actors.required(),id));}
+    @GetMapping("/read-status")
+    public ApiResponse<java.util.List<SupportResponse.ReadStatus>> readStatus(@RequestParam java.util.List<UUID> ticketIds){return response(service.readStatus(actors.required(),CUSTOMER,ticketIds));}
+    @PutMapping("/{id}/read")
+    public ApiResponse<SupportResponse.ReadStatus> markRead(@PathVariable UUID id,@Valid @RequestBody SupportCommands.ReadMessages body){return response(service.markRead(actors.required(),CUSTOMER,id,body.messageIds()));}
+
     @PostMapping @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary="Create owned Support ticket",description="Subject1–200, description1–4000, max10 distinct evidence UUIDs. Facility required without owned link. Evidence source missing rejects attachments, not text-only tickets. Customer cannot choose priority/internal visibility.")
     public ApiResponse<SupportResponse> create(@Valid @RequestBody SupportCommands.Create body,@RequestHeader("Idempotency-Key") String key){return response(service.create(actors.required(),body,key));}

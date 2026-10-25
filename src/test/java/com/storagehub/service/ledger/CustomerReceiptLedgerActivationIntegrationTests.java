@@ -308,7 +308,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         type.setRackHeightM(BigDecimal.ZERO);
         em.persist(type);
 
-        ReservationQuote quote = new ReservationQuote();
+        ReservationQuote quote = com.storagehub.testing.LegacyReservationQuoteFixture.create();
         quote.setCustomer(customer);
         quote.setFacility(facility);
         quote.setUnitType(type);

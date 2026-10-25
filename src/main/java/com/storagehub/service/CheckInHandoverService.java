@@ -484,7 +484,7 @@ public class CheckInHandoverService {
         rentalRepository.saveAndFlush(rental);
         checkIn.setChecklistJson(writeHandover(request));
         assignment.setStatus(UnitAssignmentStatus.COMPLETED);
-        reservation.setStatus(ReservationStatus.COMPLETED);
+        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         unit.setStatus(StorageUnitStatus.assigned);
 
         storageUnitRepository.saveAndFlush(unit);
@@ -510,7 +510,7 @@ public class CheckInHandoverService {
             ),
             Map.of(
                 "checkInStatus", CheckInStatus.completed,
-                "reservationStatus", ReservationStatus.COMPLETED,
+                "reservationStatus", ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
                 "assignmentStatus", UnitAssignmentStatus.COMPLETED,
                 "storageUnitStatus", StorageUnitStatus.assigned
             )
@@ -526,7 +526,7 @@ public class CheckInHandoverService {
             reservation.getFacility().getId(), NotificationType.CHECKIN,
             "Bàn giao đã hoàn tất",
             "Đơn " + reservation.getReservationCode()
-                + " đã bàn giao gian kho và được chuyển sang trạng thái COMPLETED.",
+                + " đã bàn giao gian kho và đang chờ khách xác nhận nhận kho.",
             reservation.getId()
         );
         return toResponse(reservation, saved, assignment);
@@ -540,6 +540,10 @@ public class CheckInHandoverService {
     ) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        authorizationService.require(actor, SystemPermission.MANAGE_PAYMENTS);
+        if (actor.hasRole(RoleCode.STAFF) && !"CASH".equalsIgnoreCase(request.paymentMethod())) {
+            throw ApiExceptions.forbidden("Staff may collect only cash payments during an active collection session");
+        }
         CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
             .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
         Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
@@ -1142,8 +1146,8 @@ public class CheckInHandoverService {
     }
 
     private void requireOperator(ActorPrincipal actor) {
-        if (!actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
-            throw ApiExceptions.forbidden("Only operations staff can process check-in and handover");
+        if (!actor.hasRole(RoleCode.STAFF)) {
+            throw ApiExceptions.forbidden("Only Staff can process check-in and handover");
         }
     }
 }
