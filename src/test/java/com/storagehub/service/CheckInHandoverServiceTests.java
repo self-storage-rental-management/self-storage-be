@@ -14,12 +14,14 @@ import com.storagehub.api.checkin.CompleteCheckInRequest;
 import com.storagehub.api.checkin.MarkNoShowRequest;
 import com.storagehub.api.checkin.RejectCheckInRequest;
 import com.storagehub.api.checkin.ScheduleCheckInRequest;
+import com.storagehub.api.checkin.VerifyCheckInIdentityRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FileAsset;
+import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
@@ -188,6 +190,36 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void persistsIdentityVerificationAsTheFirstWorkflowStep() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
+            .thenReturn(Optional.of(assignment));
+
+        var response = service.verifyIdentity(
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("0792 0300 9988", "Đã xem giấy tờ gốc")
+        );
+
+        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("079203009988");
+        assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
+    }
+
+    @Test
+    void preventsInventoryVerificationBeforeCustomerSetupIsCompleted() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("setup must be completed");
+    }
+
+    @Test
     void rejectsMismatchedIdentityWithoutVerificationNote() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
@@ -197,7 +229,7 @@ class CheckInHandoverServiceTests {
         assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), request))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("identity does not match");
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
     }
 
     @Test
@@ -210,7 +242,7 @@ class CheckInHandoverServiceTests {
         ))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("identity does not match");
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
     }
 
     @Test
@@ -222,7 +254,7 @@ class CheckInHandoverServiceTests {
         assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("identity does not match");
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
     }
 
     @Test
@@ -246,7 +278,7 @@ class CheckInHandoverServiceTests {
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("weight exceeds");
 
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
     }
 
@@ -344,6 +376,7 @@ class CheckInHandoverServiceTests {
     void rejectsCheckInAndReleasesUnitWithoutCreatingRental() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
+        checkIn.setStatus(CheckInStatus.scheduled);
         UUID evidenceId = UUID.fromString("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0");
         FileAsset evidence = entityWithId(new FileAsset());
         ReflectionTestUtils.setField(evidence, "id", evidenceId);
@@ -371,6 +404,8 @@ class CheckInHandoverServiceTests {
     }
 
     private void mockCompletionChecks(boolean includeMutationStubs) {
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setLockReference("LEGACY-LOCK");
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
@@ -378,10 +413,16 @@ class CheckInHandoverServiceTests {
             reservation.getId(), UnitAssignmentStatus.ACTIVE
         )).thenReturn(Optional.of(assignment));
         when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
-        when(rentalRepository.existsActiveRental(
-            reservation.getId(), unit.getId(), RentalStatus.active
-        )).thenReturn(false);
         if (includeMutationStubs) {
+            Rental rental = entityWithId(new Rental());
+            rental.setReservation(reservation);
+            rental.setCustomer(reservation.getCustomer());
+            rental.setFacility(reservation.getFacility());
+            rental.setStorageUnit(unit);
+            rental.setStatus(RentalStatus.setup);
+            checkIn.setRental(rental);
+            when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+            when(rentalRepository.saveAndFlush(rental)).thenReturn(rental);
             UUID evidenceId = UUID.fromString(validCompletionRequest().evidenceReferences().getFirst());
             FileAsset evidence = entityWithId(new FileAsset());
             ReflectionTestUtils.setField(evidence, "id", evidenceId);

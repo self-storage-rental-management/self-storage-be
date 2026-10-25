@@ -47,6 +47,9 @@ public class ReservationQuote extends BaseEntity {
     @Column(nullable = false)
     private int rentalMonths;
 
+    @Column(nullable = false)
+    private int freeSetupDays;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal monthlyPrice;
 

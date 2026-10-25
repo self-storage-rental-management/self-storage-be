@@ -80,9 +80,9 @@ public class AccessCredentialService {
         Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
-        if (checkIn.getStatus() != CheckInStatus.scheduled
+        if (checkIn.getStatus() != CheckInStatus.payment_collected
             || reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
-            throw ApiExceptions.conflict("Credentials can only be issued during a scheduled handover");
+            throw ApiExceptions.conflict("Credentials can only be activated after payment and before setup");
         }
         if (request.type() != AccessCredentialType.LOCK) {
             throw ApiExceptions.validation("Only a lock credential can be handed over during check-in", null);
@@ -94,7 +94,8 @@ public class AccessCredentialService {
         if (unit.getStatus() != StorageUnitStatus.reserved) {
             throw ApiExceptions.conflict("Storage unit is not reserved for handover");
         }
-        if (rentalRepository.existsActiveRental(reservation.getId(), unit.getId(), RentalStatus.active)) {
+        var existingRental = rentalRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        if (existingRental != null && existingRental.getSetupStartedAt() == null) {
             throw ApiExceptions.conflict("Reservation or storage unit already has an active rental");
         }
         var existing = credentialRepository.findByReservation_IdAndStatus(
@@ -117,7 +118,13 @@ public class AccessCredentialService {
         credential.setSecretHash(null);
         credential.setIssuedBy(staff);
         credential.setIssuedAt(Instant.now());
-        credential.setNote(clean(request.note()));
+        String accessHours = clean(reservation.getFacility().getAccessHours());
+        String accessPolicy = accessHours == null
+            ? "Truy cập theo giờ mở cửa cơ sở; thời điểm kích hoạt và thu hồi được ghi nhận trong nhật ký vận hành"
+            : "Truy cập trong giờ mở cửa cơ sở (" + accessHours
+                + "); thời điểm kích hoạt và thu hồi được ghi nhận trong nhật ký vận hành";
+        String requestNote = clean(request.note());
+        credential.setNote(requestNote == null ? accessPolicy : requestNote + ". " + accessPolicy);
         AccessCredential saved = credentialRepository.saveAndFlush(credential);
         auditLogService.recordMutation(
             staff, "ACCESS_CREDENTIAL_ISSUED", "AccessCredential", saved.getId(),

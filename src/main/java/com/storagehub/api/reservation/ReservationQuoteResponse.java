@@ -13,6 +13,7 @@ public class ReservationQuoteResponse {
     private LocalDate startDate;
     private LocalDate endDate;
     private int rentalMonths;
+    private int freeSetupDays;
     private BigDecimal monthlyPrice;
     private BigDecimal subtotal;
     private String pricingPackageCode;
@@ -102,6 +103,8 @@ public class ReservationQuoteResponse {
     public LocalDate getStartDate() { return startDate; }
     public LocalDate getEndDate() { return endDate; }
     public int getRentalMonths() { return rentalMonths; }
+    public int getFreeSetupDays() { return freeSetupDays; }
+    public void setFreeSetupDays(int freeSetupDays) { this.freeSetupDays = freeSetupDays; }
     public BigDecimal getMonthlyPrice() { return monthlyPrice; }
     public BigDecimal getSubtotal() { return subtotal; }
     public String getPricingPackageCode() { return pricingPackageCode; }
