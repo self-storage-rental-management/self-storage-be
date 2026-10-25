@@ -349,6 +349,7 @@ public class ReservationCreationService {
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
         response.setFreeSetupDays(snapshot.getFreeSetupDays());
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
