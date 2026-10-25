@@ -13,6 +13,8 @@ if defined JAVA_HOME (
     set "PATH=C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot\bin;%ProgramFiles%\Java\jdk-21\bin;%PATH%"
 )
 set "MAVEN_OPTS=-Xms64m -Xmx512m"
+REM Keep Java socket paths short on Windows (long sandbox TEMP paths break NIO).
+set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% -Djdk.net.unixdomain.tmpdir=%~dp0"
 
 set "STORAGEHUB_DB_URL=jdbc:mysql://localhost:3306/storagehub_local?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
 set "STORAGEHUB_DB_USERNAME=root"

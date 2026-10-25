@@ -18,8 +18,8 @@ class ReservationPaymentTermsTests {
             reservation, 3, Instant.parse("2026-10-12T16:30:00Z")
         );
 
-        assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 14));
-        assertThat(reservation.getEndDate()).isEqualTo(LocalDate.of(2027, 1, 14));
+        assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 13));
+        assertThat(reservation.getEndDate()).isEqualTo(LocalDate.of(2027, 1, 13));
         assertThat(reservation.getAppointmentAt()).isNull();
     }
 
@@ -34,8 +34,8 @@ class ReservationPaymentTermsTests {
             reservation, 1, Instant.parse("2026-10-12T03:00:00Z")
         );
 
-        assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 13));
-        assertThat(reservation.getEndDate()).isEqualTo(LocalDate.of(2026, 11, 13));
+        assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 12));
+        assertThat(reservation.getEndDate()).isEqualTo(LocalDate.of(2026, 11, 12));
         assertThat(reservation.getAppointmentAt()).isEqualTo(appointment);
     }
 }

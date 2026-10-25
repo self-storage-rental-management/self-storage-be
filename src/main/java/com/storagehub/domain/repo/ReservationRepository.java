@@ -16,10 +16,10 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
+    boolean existsByReservationCode(String reservationCode);
     boolean existsByFacility_Id(UUID facilityId);
     boolean existsByUnitType_Id(UUID unitTypeId);
     Optional<Reservation> findByReservationCode(String reservationCode);
-    boolean existsByReservationCode(String reservationCode);
     Optional<Reservation> findByIdAndCustomer_Id(UUID id, UUID customerId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -153,7 +153,9 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         where (
             (:statusFilter = false and reservation.status in (
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
-                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN
+                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN,
+                com.storagehub.domain.model.ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+                com.storagehub.domain.model.ReservationStatus.COMPLETED
             ))
             or (:statusFilter = true and reservation.status in (
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
