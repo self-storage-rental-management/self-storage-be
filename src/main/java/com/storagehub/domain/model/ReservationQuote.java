@@ -20,6 +20,15 @@ import lombok.Setter;
 @NoArgsConstructor
 public class ReservationQuote extends BaseEntity {
 
+    @Column(name = "goods_snapshot_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String goodsSnapshotJson;
+
+    @Column(name = "unit_type_snapshot_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String unitTypeSnapshotJson;
+
+    @Column(name = "unit_type_revision", nullable = false)
+    private long unitTypeRevision;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false)
     private User customer;
@@ -47,6 +56,9 @@ public class ReservationQuote extends BaseEntity {
     @Column(nullable = false)
     private int rentalMonths;
 
+    @Column(nullable = false)
+    private int freeSetupDays;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal monthlyPrice;
 
@@ -67,6 +79,9 @@ public class ReservationQuote extends BaseEntity {
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal totalAfterDiscount;
+
+    @Column(name = "reservation_deposit_rate", nullable = false, precision = 5, scale = 4)
+    private BigDecimal reservationDepositRate = new BigDecimal("0.2000");
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal reservationDepositAmount;

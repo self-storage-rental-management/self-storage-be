@@ -19,6 +19,19 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class ReservationGoodsItem extends BaseEntity {
+    @Column(updatable = false)
+    private java.util.UUID catalogCategoryId;
+    @Column(updatable = false)
+    private java.util.UUID catalogMaterialId;
+    @Column(updatable = false, length = 40)
+    private String categoryCode;
+    @Column(updatable = false, length = 160)
+    private String categoryName;
+    @Column(updatable = false, length = 40)
+    private String materialCode;
+
+    @Column(nullable = false, updatable = false, unique = true, length = 24)
+    private String goodsCode;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "reservation_id", nullable = false)
@@ -31,7 +44,7 @@ public class ReservationGoodsItem extends BaseEntity {
     @Column(length = 160)
     private String customGoodsName;
 
-    @Column(length = 120)
+    @Column(length = 160)
     private String materialName;
 
     @Column(length = 120)

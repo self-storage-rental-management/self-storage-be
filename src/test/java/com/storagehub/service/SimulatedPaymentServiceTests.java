@@ -110,7 +110,7 @@ class SimulatedPaymentServiceTests {
         assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.CONFIRMED);
         assertThat(reservation.getDepositPaidAt()).isNotNull();
         assertThat(reservation.getStartDate()).isEqualTo(
-            java.time.LocalDate.of(2026, 10, 13)
+            java.time.LocalDate.of(2026, 10, 12)
         );
         assertThat(reservation.getEndDate()).isEqualTo(reservation.getStartDate().plusMonths(3));
         verify(reservationRepository).saveAndFlush(reservation);
