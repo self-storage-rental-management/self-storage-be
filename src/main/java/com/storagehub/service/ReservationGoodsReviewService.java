@@ -228,6 +228,12 @@ public class ReservationGoodsReviewService {
     private ReservationGoodsItemResponse toItemResponse(ReservationGoodsItem item) {
         ReservationGoodsItemResponse response = new ReservationGoodsItemResponse();
         response.setId(item.getId());
+        response.setGoodsCode(item.getGoodsCode());
+        response.setCatalogCategoryId(item.getCatalogCategoryId());
+        response.setCatalogMaterialId(item.getCatalogMaterialId());
+        response.setCategoryCode(item.getCategoryCode());
+        response.setCategoryName(GoodsCatalogService.historicalCategoryName(item));
+        response.setMaterialCode(item.getMaterialCode());
         response.setCategory(item.getCategory());
         response.setCustomGoodsName(item.getCustomGoodsName());
         response.setMaterialName(item.getMaterialName());

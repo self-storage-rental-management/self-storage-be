@@ -4,5 +4,6 @@ public enum UnitTypeStatus {
     draft,
     awaiting_pricing,
     active,
-    inactive
+    inactive,
+    archived
 }

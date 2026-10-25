@@ -323,6 +323,7 @@ public class PaymentComplaintService {
     private ReservationGoodsItemResponse toGoodsItemResponse(ReservationGoodsItem item) {
         ReservationGoodsItemResponse response = new ReservationGoodsItemResponse();
         response.setId(item.getId());
+        response.setGoodsCode(item.getGoodsCode());
         response.setCategory(item.getCategory());
         response.setCustomGoodsName(item.getCustomGoodsName());
         response.setMaterialName(item.getMaterialName());

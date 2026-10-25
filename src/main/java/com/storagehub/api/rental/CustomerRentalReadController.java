@@ -39,7 +39,7 @@ public class CustomerRentalReadController {
     @Parameters({
         @Parameter(name="page", in=ParameterIn.QUERY, schema=@Schema(type="integer", defaultValue="0", minimum="0")),
         @Parameter(name="size", in=ParameterIn.QUERY, schema=@Schema(type="integer", defaultValue="20", minimum="1", maximum="100")),
-        @Parameter(name="status", in=ParameterIn.QUERY, schema=@Schema(allowableValues={"active","return_requested","return_inspection","closing","completed"})),
+        @Parameter(name="status", in=ParameterIn.QUERY, schema=@Schema(allowableValues={"setup","active","return_requested","return_inspection","closing","completed"})),
         @Parameter(name="search", in=ParameterIn.QUERY, description="Exact Rental UUID or literal unit-code substring; max 200 characters"),
         @Parameter(name="endFrom", in=ParameterIn.QUERY, schema=@Schema(type="string", format="date")),
         @Parameter(name="endTo", in=ParameterIn.QUERY, schema=@Schema(type="string", format="date")),

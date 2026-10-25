@@ -45,7 +45,9 @@ public class RentalQueryService {
         return new RentalDetailResponse(s.id(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
-            financial(r), access(r), s.dateSemantics(), bookingEvidence(actor,r,manager));
+            financial(r), access(r), s.dateSemantics(), bookingEvidence(actor,r,manager),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.getMoveInCompletedAt(), r.isSetupExitReviewRequired());
     }
 
     private RentalBookingEvidence bookingEvidence(ActorPrincipal actor,Rental rental,boolean manager) {
@@ -159,7 +161,9 @@ public class RentalQueryService {
             new RentalSummaryResponse.UnitType(type.getId(), type.getCode(), type.getName()),
             r.getStatus(), r.getStartDate(), r.getContractEndDate(), r.getMonthlyPrice(), "VND", warnings,
             period.map(p -> new RentalSummaryResponse.DateSemantics("COMPLETE",p.convention().name(),p.lastPermittedDate(),p.endExclusive()))
-                .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)));
+                .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.getMoveInCompletedAt(), r.isSetupExitReviewRequired());
     }
     private void integrity(Rental r) {
         boolean valid = r.getCustomer() != null && r.getFacility() != null && r.getStorageUnit() != null
