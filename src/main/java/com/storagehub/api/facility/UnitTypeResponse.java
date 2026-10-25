@@ -4,6 +4,7 @@ import com.storagehub.domain.model.UnitTypeStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.List;
 
 public record UnitTypeResponse(
     UUID id,
@@ -34,6 +35,9 @@ public record UnitTypeResponse(
     long occupiedCount,
     Instant createdAt,
     Instant updatedAt,
-    String detailImageUrl
+    String detailImageUrl,
+    long publishedRevision,
+    List<UUID> acceptedGoodsCategoryIds,
+    List<UUID> acceptedGoodsMaterialIds
 ) {
 }

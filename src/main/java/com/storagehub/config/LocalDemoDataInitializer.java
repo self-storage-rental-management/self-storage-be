@@ -158,6 +158,7 @@ public class LocalDemoDataInitializer {
                 policy.setCode(definition.code());
                 policy.setName(definition.name());
                 policy.setRentalMonths(definition.rentalMonths());
+                policy.setFreeSetupDays(com.storagehub.service.ReservationQuoteService.defaultFreeSetupDays(definition.rentalMonths()));
                 policy.setDiscountRate(definition.discountRate());
                 policy.setPolicyVersion("demo-v1");
                 policy.setActive(true);

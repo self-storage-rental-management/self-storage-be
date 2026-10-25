@@ -81,6 +81,10 @@ public class ReturnSettlementService {
         if (!rental.getCustomer().getId().equals(actor.userId()))
             throw ApiExceptions.notFound("Rental was not found for this customer");
 
+        boolean setupExit = rental.getStatus() == RentalStatus.setup;
+        if (!setupExit && rental.getStatus() != RentalStatus.active) {
+            throw ApiExceptions.conflict("Only setup or active rentals can request return");
+        }
         var recoveryGuard=recoveryGuard();
         if(recoveryGuard!=null) {
             try { recoveryGuard.requireNoActiveRecovery(rental); } catch (Exception ignored) {}
@@ -112,6 +116,17 @@ public class ReturnSettlementService {
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
 
+        if (setupExit) {
+            rental.setSetupExitReviewRequired(true);
+            notificationService.createBusinessNotifications(
+                NotificationType.RETURN,
+                "Cần quyết định trả kho trong thời gian setup",
+                "Đơn " + rental.getReservation().getReservationCode()
+                    + " yêu cầu trả kho khi đang setup. Không tự động hoàn tiền; "
+                    + "nếu hàng đã chuyển vào, Staff phải kiểm tra trả kho trước khi quyết toán.",
+                saved.getId()
+            );
+        }
         rental.setStatus(RentalStatus.return_requested);
         rentalRepository.save(rental);
 

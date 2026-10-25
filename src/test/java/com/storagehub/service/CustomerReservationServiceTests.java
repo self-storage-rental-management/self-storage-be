@@ -89,7 +89,7 @@ class CustomerReservationServiceTests {
 
         Facility facility = entityWithId(new Facility());
         UnitType unitType = entityWithId(new UnitType());
-        ReservationQuote quote = entityWithId(new ReservationQuote());
+        ReservationQuote quote = entityWithId(com.storagehub.testing.LegacyReservationQuoteFixture.create());
 
         reservation = entityWithId(new Reservation());
         ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
