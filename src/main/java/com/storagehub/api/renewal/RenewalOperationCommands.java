@@ -13,13 +13,21 @@ public final class RenewalOperationCommands {
     public record Arrival(@NotNull UUID appointmentRef,@NotNull @Size(max=10) List<@NotNull UUID> evidenceFileIds,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
     public record Incident(@NotNull UUID appointmentRef,@NotBlank @Size(max=2000) String reason,@NotNull @Size(max=10) List<@NotNull UUID> evidenceFileIds,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
     public record Cash(@NotNull UUID payableStatementRef,@Size(max=100) String receiptReference,@NotNull @AssertTrue Boolean received,@NotNull @PositiveOrZero Long expectedVersion,@NotNull UUID receiptFileId,@Size(max=32) String paymentMethod) { public Cash(UUID statement,String receipt,Boolean received,Long version){this(statement,receipt,received,version,null,"CASH");} @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
-    public record Completion(@NotNull @PositiveOrZero Long expectedVersion,@AssertTrue Boolean identityVerified,@NotNull UUID arrivalRef,UUID signedDocumentFileId,@Size(max=2000) String completionNote) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
+    public record Completion(@NotNull @PositiveOrZero Long expectedVersion,@AssertTrue Boolean identityVerified,@NotNull UUID arrivalRef,UUID signedDocumentFileId,@Size(max=2000) String completionNote,@NotNull java.time.LocalDate expectedEffectiveStartDate) {
+        public Completion(Long expectedVersion,Boolean identityVerified,UUID arrivalRef,UUID signedDocumentFileId,String completionNote) {this(expectedVersion,identityVerified,arrivalRef,signedDocumentFileId,completionNote,null);}
+        @JsonAnySetter public void unknown(String k,Object v){reject(k);}
+    }
     public enum ExceptionAction { APPROVE_RESCHEDULE_BEFORE_CUTOFF, REQUEST_POST_CUTOFF_REVIEW, REJECT }
     public record ExceptionDecision(@NotNull UUID incidentId,@NotNull ExceptionAction action,Instant appointmentAt,Instant revisedDeadline,@NotBlank @Size(max=2000) String reason,@NotNull @Size(max=10) List<@NotNull UUID> evidenceFileIds,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
     public record Confirmation(@NotNull UUID decisionRef,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
     public record RefundDecision(@NotNull UUID incidentId,@NotNull RenewalCommands.DecisionType decision,@NotBlank @Size(max=2000) String reason,@NotNull @Size(max=10) List<@NotNull UUID> evidenceFileIds,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
     public record RefundExecution(@NotNull UUID refundId,@NotNull UUID receiptFileId,@NotBlank @Size(max=100) String transactionReference,
         @NotNull @AssertTrue Boolean transferred,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
+    public enum PreparationAction { RETRY, REFUND }
+    public record PreparationResolution(@NotNull UUID paymentId,@NotNull PreparationAction action,
+        @NotNull Boolean serviceUnavailable,@NotBlank @Size(max=2000) String reason,
+        @NotNull @Size(min=1,max=10) List<@NotNull UUID> evidenceFileIds,
+        @NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
     public record StaffAssignment(@NotNull UUID assignedStaffId,@NotBlank @Size(max=2000) String reason,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
     public record FaultReview(@NotNull UUID incidentId,@NotNull Boolean facilityFault,@NotBlank @Size(max=2000) String reason,@NotNull @Size(max=10) List<@NotNull UUID> evidenceFileIds,@NotNull @PositiveOrZero Long expectedVersion) { @JsonAnySetter public void unknown(String k,Object v){reject(k);} }
 }
