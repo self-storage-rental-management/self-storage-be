@@ -134,9 +134,12 @@ public class RenewalOperationService {
         String op=edit?"d3_reschedule":"d3_appointment";
         var c=context(actor,id,Audience.CUSTOMER,Capability.READ,key,op,body,body.expectedVersion());var old=replay(c,op,key,body);if(old.isPresent())return old.get();
         if(c.renewal().getStatus()==RenewalStatus.accepted&&(state(c.renewal())==null||!state(c.renewal()).hasVerifiedPayment())) {
+            if(!appointmentPayments.findAllByRenewal_IdOrderByCreatedAtAsc(id).isEmpty())throw ApiExceptions.conflict("Payment has started; reconcile it before changing the selected signing appointment");
             var window=appointmentWindow(actor,id,Audience.CUSTOMER);var existing=state(c.renewal());
-            Instant deadlineLimit = window[1] != null ? window[1] : (window[0] != null ? window[0] : now().plus(Duration.ofDays(7)));
-            var selected=slot(c.renewal(),body.appointmentAt(),deadlineLimit);
+            if(c.workflow().getPaymentDeadline()!=null)throw ApiExceptions.conflict("Payment readiness is already fixed; reconcile before changing the signing selection");
+            if(edit&&(existing==null||existing.getAppointmentRef()==null))throw ApiExceptions.validation("Cần có lịch ký đã chọn trước khi đổi lịch.",null);
+            if(!edit&&existing!=null&&existing.getAppointmentRef()!=null)throw ApiExceptions.conflict("Signing appointment already selected; use reschedule");
+            var selected=slot(c.renewal(),body.appointmentAt(),window[0]);
             boolean fresh=existing==null;
             if(fresh)existing=new RenewalOperationState(c.renewal());
             existing.awaitingPayment(window[0],window[1],"RENEWAL_PENDING_PAYMENT_WINDOW","2");
@@ -145,10 +148,10 @@ public class RenewalOperationService {
             if(fresh)em.persist(existing);
             return finish(c,op,key,body,event,200);
         }
-        var s=signing(c,true);
+        var s=signing(c,true);if(edit&&s.getAppointmentRef()==null)throw ApiExceptions.validation("Cần có lịch ký đã lưu trước khi đổi lịch.",null);
+        if(!edit&&s.getAppointmentRef()!=null)throw ApiExceptions.conflict("Appointment already exists; use reschedule");
         if(s.getArrivalRef()!=null)throw ApiExceptions.conflict("Arrival recorded; facility incident review is required to reschedule");
-        Instant sDeadline = s.getRecoveryCutoff() != null ? s.getRecoveryCutoff() : (s.getEffectiveSigningDeadline() != null ? s.getEffectiveSigningDeadline() : now().plus(Duration.ofDays(7)));
-        var slot=slot(c.renewal(),body.appointmentAt(),sDeadline);
+        var slot=slot(c.renewal(),body.appointmentAt(),s.getEffectiveSigningDeadline());
         calendar().reserve(c.renewal(),slot,now());
         // Calendar reservation joins this transaction; a slow source must not commit a past slot.
         if(now().isAfter(slot.start()))throw ApiExceptions.conflict("Appointment expired during reservation");

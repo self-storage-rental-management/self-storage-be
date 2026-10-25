@@ -155,6 +155,7 @@ public class ReturnSettlementService {
         if (!actor.hasRole(com.storagehub.domain.model.RoleCode.CUSTOMER)) throw ApiExceptions.forbidden("Chỉ khách hàng được sửa yêu cầu trả kho.");
         ReturnCase record = returnCaseRepository.findOwnedForUpdate(returnId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
+        if (record.getStatus() != ReturnCaseStatus.requested) throw ApiExceptions.conflict("Yêu cầu đã được nhân viên xử lý, không thể đổi ngày hoặc lý do.");
         if (request.scheduledDate().isBefore(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")))) throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
         if (request.notes() == null || request.notes().isBlank()) throw ApiExceptions.validation("Vui lòng nhập lý do trả kho.", null);
         var before = toResponse(record);
@@ -681,9 +682,7 @@ public class ReturnSettlementService {
     }
 
     private BigDecimal securityDeposit(Rental rental) {
-        try {
-            if (finance() != null) return finance().deposit(rental);
-        } catch (Exception ignored) {}
+        if (finance() != null) return finance().deposit(rental);
         return rental != null && rental.getMonthlyPrice() != null ? rental.getMonthlyPrice() : BigDecimal.ZERO;
     }
     private boolean isRecovery(ReturnCase rc) {var guard=recoveryGuard();return guard!=null&&guard.linked(rc);}
