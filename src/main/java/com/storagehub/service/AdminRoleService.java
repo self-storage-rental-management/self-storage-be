@@ -9,14 +9,17 @@ import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.repo.PermissionRepository;
 import com.storagehub.domain.repo.RoleRepository;
+import com.storagehub.domain.repo.SessionRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,8 +29,26 @@ public class AdminRoleService {
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
     private final UserRepository userRepository;
+    private final SessionRepository sessionRepository;
     private final AdminAuthorizationService authorizationService;
     private final AuditLogService auditLogService;
+
+    @Autowired
+    public AdminRoleService(
+        RoleRepository roleRepository,
+        PermissionRepository permissionRepository,
+        UserRepository userRepository,
+        AdminAuthorizationService authorizationService,
+        AuditLogService auditLogService,
+        SessionRepository sessionRepository
+    ) {
+        this.roleRepository = roleRepository;
+        this.permissionRepository = permissionRepository;
+        this.userRepository = userRepository;
+        this.sessionRepository = sessionRepository;
+        this.authorizationService = authorizationService;
+        this.auditLogService = auditLogService;
+    }
 
     public AdminRoleService(
         RoleRepository roleRepository,
@@ -36,11 +57,7 @@ public class AdminRoleService {
         AdminAuthorizationService authorizationService,
         AuditLogService auditLogService
     ) {
-        this.roleRepository = roleRepository;
-        this.permissionRepository = permissionRepository;
-        this.userRepository = userRepository;
-        this.authorizationService = authorizationService;
-        this.auditLogService = auditLogService;
+        this(roleRepository, permissionRepository, userRepository, authorizationService, auditLogService, null);
     }
 
     @Transactional(readOnly = true)
@@ -68,6 +85,7 @@ public class AdminRoleService {
         AdminRoleResponse before = toResponse(role);
         role.setPermissions(resolvePermissions(permissionCodes));
         Role saved = roleRepository.saveAndFlush(role);
+        revokeRoleSessions(roleCode);
         AdminRoleResponse after = toResponse(saved);
         auditLogService.recordMutation("ADMIN_ROLE_PERMISSIONS_UPDATED", "Role", saved.getId(), null, before, after);
         return after;
@@ -125,10 +143,12 @@ public class AdminRoleService {
         }
 
         Set<String> adminOnly = Set.of(
+            SystemPermission.VIEW_DASHBOARD.code(),
             SystemPermission.MANAGE_USERS.code(),
             SystemPermission.MANAGE_ROLES.code(),
             SystemPermission.MANAGE_SETTINGS.code(),
-            SystemPermission.VIEW_AUDIT_LOGS.code()
+            SystemPermission.VIEW_AUDIT_LOGS.code(),
+            SystemPermission.MANAGE_SESSIONS.code()
         );
         if (roleCode == RoleCode.ADMIN && !permissions.equals(adminOnly)) {
             throw ApiExceptions.conflict("Admin permissions are limited to account, role, system and audit administration");
@@ -137,7 +157,14 @@ public class AdminRoleService {
         if (roleCode == RoleCode.MANAGER) {
             Set<String> required = Set.of(
                 SystemPermission.APPROVE_RESERVATIONS.code(),
+                SystemPermission.ASSIGN_UNITS.code(),
+                SystemPermission.MANAGE_RENTALS.code(),
                 SystemPermission.VIEW_POLICIES.code(),
+                SystemPermission.VIEW_PAYMENTS.code(),
+                SystemPermission.MANAGE_PAYMENTS.code(),
+                SystemPermission.CONFIRM_PAYMENTS.code(),
+                SystemPermission.APPROVE_REFUNDS.code(),
+                SystemPermission.WAIVE_FEES.code(),
                 SystemPermission.MANAGE_STAFF_TASKS.code(),
                 SystemPermission.VIEW_REPORTS.code()
             );
@@ -147,30 +174,74 @@ public class AdminRoleService {
             if (permissions.contains(SystemPermission.MANAGE_POLICIES.code())) {
                 throw ApiExceptions.conflict("Manager may read policies; only Business Operations may edit them");
             }
+            if (intersects(permissions, Set.of(
+                SystemPermission.PERFORM_CHECKIN.code(),
+                SystemPermission.PROCESS_RETURNS.code(),
+                SystemPermission.EXECUTE_REFUNDS.code(),
+                SystemPermission.MANAGE_SUPPORT.code(),
+                SystemPermission.OPERATE_RENEWALS.code()
+            ))) {
+                throw ApiExceptions.conflict("Manager cannot perform Staff-only check-in, renewal operation or support updates");
+            }
         }
 
-        if (roleCode == RoleCode.STAFF && intersects(permissions, Set.of(
-            SystemPermission.MANAGE_POLICIES.code(),
-            SystemPermission.MANAGE_STAFF_TASKS.code()
+        if (roleCode == RoleCode.STAFF && !permissions.containsAll(Set.of(
+            SystemPermission.APPROVE_RESERVATIONS.code(),
+            SystemPermission.PERFORM_CHECKIN.code(),
+            SystemPermission.PROCESS_RETURNS.code(),
+            SystemPermission.EXECUTE_REFUNDS.code(),
+            SystemPermission.VIEW_PAYMENTS.code(),
+            SystemPermission.MANAGE_PAYMENTS.code(),
+            SystemPermission.OPERATE_RENEWALS.code(),
+            SystemPermission.VIEW_SUPPORT.code(),
+            SystemPermission.MANAGE_SUPPORT.code()
         ))) {
-            throw ApiExceptions.conflict("Staff cannot edit policies or coordinate staff tasks");
+            throw ApiExceptions.conflict("Staff must retain check-in, return, renewal, payment and support permissions");
+        }
+        if (roleCode == RoleCode.STAFF && intersects(permissions, Set.of(
+            SystemPermission.ASSIGN_UNITS.code(),
+            SystemPermission.MANAGE_RENTALS.code(),
+            SystemPermission.MANAGE_POLICIES.code(),
+            SystemPermission.MANAGE_STAFF_TASKS.code(),
+            SystemPermission.CONFIRM_PAYMENTS.code(),
+            SystemPermission.APPROVE_REFUNDS.code(),
+            SystemPermission.WAIVE_FEES.code()
+        ))) {
+            throw ApiExceptions.conflict("Staff cannot assign units, edit rentals, confirm payments, approve refunds or waive fees");
         }
 
         if (roleCode == RoleCode.BUSINESS && !permissions.containsAll(Set.of(
-            SystemPermission.VIEW_POLICIES.code(), SystemPermission.MANAGE_POLICIES.code()
+            SystemPermission.VIEW_POLICIES.code(), SystemPermission.MANAGE_POLICIES.code(),
+            SystemPermission.APPROVE_REFUNDS.code(), SystemPermission.EXECUTE_REFUNDS.code(),
+            SystemPermission.WAIVE_FEES.code()
         ))) {
-            throw ApiExceptions.conflict("Business Operations must retain policy read and edit permissions");
+            throw ApiExceptions.conflict("Business Operations must retain policy and over-limit approval permissions");
         }
         if (roleCode == RoleCode.BUSINESS && intersects(permissions, Set.of(
             SystemPermission.MANAGE_SETTINGS.code(),
             SystemPermission.MANAGE_PAYMENTS.code(),
-            SystemPermission.APPROVE_RESERVATIONS.code()
+            SystemPermission.APPROVE_RESERVATIONS.code(),
+            SystemPermission.PROCESS_RETURNS.code(),
+            SystemPermission.MANAGE_RENTALS.code(),
+            SystemPermission.PERFORM_CHECKIN.code(),
+            SystemPermission.ASSIGN_UNITS.code(),
+            SystemPermission.MANAGE_SUPPORT.code()
         ))) {
-            throw ApiExceptions.conflict("Business Operations cannot manage system settings, collect payments or approve reservations");
+            throw ApiExceptions.conflict("Business Operations cannot perform field operations, collect payments or approve reservations");
         }
     }
 
     private boolean intersects(Set<String> actual, Set<String> forbidden) {
         return actual.stream().anyMatch(forbidden::contains);
+    }
+
+    private void revokeRoleSessions(RoleCode roleCode) {
+        if (sessionRepository == null) {
+            return;
+        }
+        userRepository.findDistinctByRoles_CodeAndStatus(
+                roleCode, com.storagehub.domain.model.UserStatus.ACTIVE
+            )
+            .forEach(user -> sessionRepository.revokeActiveByUserId(user.getId(), Instant.now()));
     }
 }

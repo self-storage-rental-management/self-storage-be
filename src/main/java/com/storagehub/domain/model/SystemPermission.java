@@ -16,8 +16,13 @@ public enum SystemPermission {
     VIEW_RETURNS("returns:read"),
     PROCESS_RETURNS("returns:process"),
     VIEW_PAYMENTS("payments:read"),
+    CONFIRM_PAYMENTS("payments:confirm"),
+    APPROVE_REFUNDS("refunds:approve"),
+    EXECUTE_REFUNDS("refunds:execute"),
+    WAIVE_FEES("fees:waive"),
     VIEW_POLICIES("policies:read"),
     MANAGE_PAYMENTS("payments:collect"),
+    OPERATE_RENEWALS("renewals:operate"),
     VIEW_SUPPORT("support:read"),
     MANAGE_SUPPORT("support:update"),
     MANAGE_INVENTORY("inventory:update"),
@@ -27,7 +32,8 @@ public enum SystemPermission {
     VIEW_AUDIT_LOGS("audit_logs:read"),
     MANAGE_USERS("users:manage"),
     MANAGE_ROLES("roles:manage"),
-    MANAGE_SETTINGS("settings:manage");
+    MANAGE_SETTINGS("settings:manage"),
+    MANAGE_SESSIONS("sessions:manage");
 
     private final String code;
 
