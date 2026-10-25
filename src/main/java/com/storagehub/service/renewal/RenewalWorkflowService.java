@@ -1,4 +1,4 @@
-﻿package com.storagehub.service.renewal;
+package com.storagehub.service.renewal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.renewal.*;
@@ -129,52 +129,6 @@ public class RenewalWorkflowService {
         var accepted=decode(revision.getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
         Instant now=now();var gate=gate(rental,now);requireSnapshot(rental,accepted);requireCurrentTerms(rental,gate,accepted);
         var selection=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,id,LockModeType.PESSIMISTIC_WRITE);
-        if(selection!=null&&selection.getAppointmentStart()!=null&&selection.getAppointmentEnd()!=null) {
-            var selectedCalendar=calendars.getIfAvailable();
-            if(selectedCalendar!=null&&selectedCalendar.atomic()) {
-                try {
-                    var candidateSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart());
-                    if(candidateSlot.isPresent())selectedCalendar.reserve(renewal,candidateSlot.get(),now);
-                } catch(Exception ignored){}
-            }
-            workflow.signingBalanceDue(selection.getAppointmentEnd());
-        }
-        var specifications=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(revision,accepted);
-        if(accepted.totalAfterDiscount().signum()<=0||specifications.isEmpty()||specifications.getFirst().amount().signum()<=0)
-            throw ApiExceptions.conflict("Renewal initial payment must be positive");
-
-        Instant deadline=workflow.getPaymentDeadline();
-        if(deadline==null) {
-            Instant candidate = (selection!=null&&selection.getAppointmentStart()!=null)
-                ? selection.getAppointmentStart().minusSeconds(1)
-                : now.plus(RENEWAL_PAYMENT_WINDOW);
-            Instant cutoff = gate != null && gate.eligibility() != null ? gate.eligibility().recoveryCutoff() : null;
-            if (cutoff != null && candidate.isAfter(cutoff)) candidate = cutoff;
-            deadline = min(candidate, now.plus(RENEWAL_PAYMENT_WINDOW)).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
-            if(!deadline.isAfter(now)) deadline = now.plus(RENEWAL_PAYMENT_WINDOW).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
-            workflow.paymentReady(deadline);
-        }
-
-        var simple=localPaymentChecks==null?null:localPaymentChecks.getIfAvailable();
-        if(simple!=null) {
-            try {
-                simple.requireRental(rental);
-                simple.requireKnownFinance(rental,id,now);
-            } catch(Exception ignored){}
-        }
-        var ledger=ledgers.getIfAvailable();
-        if(ledger!=null) {
-            try { ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId()); } catch(Exception ignored){}
-        }
-        var writer=depositWriters.getIfAvailable();if(writer==null)throw deferred("Full-rent obligation writer unavailable");
-            writer.paymentIntentAvailable(workflow,accepted,user.getId());em.flush();
-            return new PreparedPayment(renewal,workflow,revision,accepted,deadline);
->>>>>>> Stashed changes
-        }
-        var ledger=ledgers.getIfAvailable();
-        if(ledger!=null) {
-            try { ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId()); } catch(Exception ignored){}
-        }
         if(selection!=null&&selection.getAppointmentStart()!=null&&selection.getAppointmentEnd()!=null) {
             var selectedCalendar=calendars.getIfAvailable();
             if(selectedCalendar!=null&&selectedCalendar.atomic()) {

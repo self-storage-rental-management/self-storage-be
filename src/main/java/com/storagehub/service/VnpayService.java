@@ -57,7 +57,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor(onConstructor_=@Autowired)
+
 public class VnpayService {
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.RenewalInstallmentService> installments;
@@ -95,11 +95,33 @@ public class VnpayService {
     private final RenewalWorkflowService renewalWorkflowService;
     private final ObjectProvider<RenewalVnpaySettlementService> renewalSettlement;
 
-    @Autowired(required=false)
-    private FacilityScopeService facilityScopeService;
+
 
     @Autowired(required=false)
     private org.springframework.context.ApplicationEventPublisher paymentEvents;
+
+    @Autowired
+    public VnpayService(VnpayProperties properties, PaymentRepository paymentRepository,
+        PaymentComplaintRepository complaintRepository, ReservationRepository reservationRepository,
+        ReservationPricingSnapshotRepository snapshotRepository, UserRepository userRepository,
+        AdminAuthorizationService authorizationService, FacilityScopeService facilityScopeService,
+        AuditLogService auditLogService, NotificationService notificationService,
+        ObjectMapper objectMapper, RenewalWorkflowService renewalWorkflowService,
+        ObjectProvider<RenewalVnpaySettlementService> renewalSettlement) {
+        this.properties = properties;
+        this.paymentRepository = paymentRepository;
+        this.complaintRepository = complaintRepository;
+        this.reservationRepository = reservationRepository;
+        this.snapshotRepository = snapshotRepository;
+        this.userRepository = userRepository;
+        this.authorizationService = authorizationService;
+        this.facilityScopeService = facilityScopeService;
+        this.auditLogService = auditLogService;
+        this.notificationService = notificationService;
+        this.objectMapper = objectMapper;
+        this.renewalWorkflowService = renewalWorkflowService;
+        this.renewalSettlement = renewalSettlement;
+    }
 
     /** Backward-compatible constructor for reservation-only unit fixtures. */
     public VnpayService(VnpayProperties properties,PaymentRepository paymentRepository,
