@@ -79,7 +79,7 @@ public class StaffReservationQueryService {
             reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
             reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), reservation.getUnitType().getId(),
-            reservation.getUnitType().getName(), unit == null ? null : unit.getId(),
+            ReservationSnapshotView.unitTypeName(reservation), unit == null ? null : unit.getId(),
             unit == null ? null : unit.getCode(), reservation.getStatus(),
             reservation.getGoodsReviewStatus(), reservation.getStartDate(), reservation.getEndDate(),
             reservation.getAppointmentAt(), reservation.getHoldExpiresAt(),

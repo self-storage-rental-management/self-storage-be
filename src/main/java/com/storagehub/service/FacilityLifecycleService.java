@@ -133,7 +133,8 @@ public class FacilityLifecycleService {
         }
         ManagerUnitTypeRequest before = technicalSnapshot(type);
         ManagerUnitTypeRequest after = normalizedChange(request);
-        long currentCount = units.countByFacility_IdAndUnitType_Id(facilityId, unitTypeId);
+        long currentCount = units.countByFacility_IdAndUnitType_IdAndStatusIn(
+            facilityId, unitTypeId, StorageUnitStatus.operationalStatuses());
         int requestedCount = request.physicalUnitCount();
         boolean quantityChanged = requestedCount > 0 && requestedCount != currentCount;
 
@@ -152,8 +153,12 @@ public class FacilityLifecycleService {
                     long inUse = currentCount - availableUnits.size();
                     throw ApiExceptions.conflict("Không thể giảm xuống " + requestedCount + " gian kho vì hiện có " + inUse + " gian đang được thuê hoặc giữ chỗ.");
                 }
-                var unitsToDelete = availableUnits.subList(0, toRemove);
-                units.deleteAll(unitsToDelete);
+                var unitsToArchive = availableUnits.subList(0, toRemove);
+                unitsToArchive.forEach(unit -> {
+                    unit.setStatus(StorageUnitStatus.archived);
+                    unit.setAvailableFrom(null);
+                });
+                units.saveAll(unitsToArchive);
                 units.flush();
             }
         }
@@ -518,7 +523,7 @@ public class FacilityLifecycleService {
             t.getAreaM2(), t.getVolumeM3(), t.getMonthlyPrice(), t.getSecurityDepositAmount(), t.getImageUrl(), t.getMaxLoadKg(),
             t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getAisleWidthM(), t.getTrolleyType(),
             t.getSmallBoxCapacity(), t.getLargeBoxCapacity(), t.getStatus(),
-            units.countByFacility_IdAndUnitType_Id(t.getFacility().getId(), t.getId()), available,
+            units.countByFacility_IdAndUnitType_IdAndStatusIn(t.getFacility().getId(), t.getId(), StorageUnitStatus.operationalStatuses()), available,
             units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt(), t.getDetailImageUrl(),
             t.getPublishedRevision(), goodsScope(t).categoryIds(), goodsScope(t).materialIds());
     }
