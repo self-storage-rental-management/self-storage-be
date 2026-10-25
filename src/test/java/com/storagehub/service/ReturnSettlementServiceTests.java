@@ -154,7 +154,7 @@ class ReturnSettlementServiceTests {
         );
 
         when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
-        when(returnCaseRepository.existsByRental_IdAndStatusNotIn(eq(rental.getId()), any())).thenReturn(false);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
         when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
         when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
             ReturnCase rc = invocation.getArgument(0);

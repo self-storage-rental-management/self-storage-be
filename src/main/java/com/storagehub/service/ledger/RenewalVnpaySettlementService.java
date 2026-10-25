@@ -24,9 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 /** Converts an authenticated Renewal VNPay callback into one exact FULL_RENT subledger receipt. */
 @Service @RequiredArgsConstructor
-@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled"},havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled","storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
 public class RenewalVnpaySettlementService {
-    private final ObjectProvider<RenewalInstallmentService> installments;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<RenewalInstallmentService> installments;
     public record Result(boolean allocated,UUID receiptId,String reason) {}
     private final EntityManager em;
     private final LedgerStore ledger;
@@ -38,10 +39,12 @@ public class RenewalVnpaySettlementService {
     private final ObjectProvider<Clock> clocks;
     private final com.storagehub.service.PaymentProvenance provenance;
     private final com.storagehub.service.NotificationService notifications;
-    private final ObjectProvider<com.storagehub.service.renewal.RenewalSources.ExtensionHoldSource> extensionHolds;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.renewal.RenewalSources.ExtensionHoldSource> extensionHolds;
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.renewal-simple-payment.enabled:false}")
     private boolean simplePayment;
-    private final ObjectProvider<com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks> localPaymentChecks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.renewal.integration.RenewalLocalPaymentChecks> localPaymentChecks;
 
     @Transactional(propagation=Propagation.MANDATORY)
     public Result settle(Payment payment,UUID evidenceLogId) {
@@ -72,8 +75,8 @@ public class RenewalVnpaySettlementService {
         if(specifications.isEmpty()||payment.getPurpose()!=PaymentType.RENEWAL||payment.getStatus()!=PaymentStatus.PAID
             ||!"VNPAY".equals(payment.getGatewayProvider())||!"VND".equals(payment.getCurrency())
             ||payment.getGatewayTransactionNo()==null||payment.getGatewayTransactionNo().isBlank()
-            ||payment.getPaidAt()==null||payment.getPaymentDeadline()==null||workflow.getPaymentDeadline()==null
-            ||Math.abs(payment.getPaymentDeadline().toEpochMilli()-workflow.getPaymentDeadline().toEpochMilli())>2000
+            ||payment.getPaidAt()==null||payment.getPaymentDeadline()==null
+            ||!payment.getPaymentDeadline().equals(workflow.getPaymentDeadline())
             ||payment.getPaidAt().isAfter(payment.getPaymentDeadline())
             ||payment.getAmount()==null
             ||payment.getAmount().compareTo(specifications.getFirst().amount())!=0)
@@ -134,37 +137,40 @@ public class RenewalVnpaySettlementService {
         try { terms=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class); }
         catch(Exception invalid) { return new Result(false,null,"Accepted terms are invalid"); }
         var now=now();
+        var safety=safetySources.getIfAvailable();var policySource=policies.getIfAvailable();var calendar=calendars.getIfAvailable();
+        if(safety==null||!safety.atomic()||calendar==null||!calendar.atomic())
+            return new Result(false,null,"Atomic signing and Recovery sources are unavailable");
         var chosen=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         boolean selected=chosen!=null&&chosen.getAppointmentRef()!=null&&chosen.getAppointmentStart()!=null&&chosen.getAppointmentEnd()!=null;
+        Instant selectedDeadline=payment.getPaidAt().plus(com.storagehub.service.renewal.RenewalSigningDeadline.WINDOW);
         String deadlineRef=com.storagehub.service.renewal.RenewalSigningDeadline.REFERENCE;
         String deadlineVersion=com.storagehub.service.renewal.RenewalSigningDeadline.VERSION;
         UUID hold=workflow.getExtensionHoldRef();
-        var safety=safetySources.getIfAvailable();var calendar=calendars.getIfAvailable();
-        Instant cutoff;
-        if(simplePayment) {
+        if(hold==null&&simplePayment) {
+            var holdSource=extensionHolds==null?null:extensionHolds.getIfAvailable();
+            if(holdSource==null||!holdSource.participatesInTransaction())return new Result(false,null,"Signing extension hold is unavailable");
             var local=localPaymentChecks==null?null:localPaymentChecks.getIfAvailable();
-            cutoff = local!=null?local.cutoff(renewal.getRental(),now):renewal.getRental().getContractEndDate().plusDays(7).atTime(23,59,59).atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
-        } else {
-            if(safety==null||!safety.atomic())
-                return new Result(false,null,"Atomic Recovery sources are unavailable");
-            cutoff=safety.check(renewal,terms,hold,now);
+            if(local==null)return new Result(false,null,"Published signing cutoff is unavailable");
+            Instant prospectiveDeadline=min(selectedDeadline,local.cutoff(renewal.getRental(),now));
+            if(!prospectiveDeadline.isAfter(now))return new Result(false,null,"Signing deadline has passed");
+            hold=holdSource.acquire(renewal.getRental(),renewal.getId(),terms.extensionStartDate(),terms.extensionEndExclusive(),prospectiveDeadline);
+            if(hold==null)return new Result(false,null,"Signing extension hold did not return a reference");
+            workflow.signingHold(hold);
         }
+        Instant cutoff=safety.check(renewal,terms,hold,now);
         // Callback arrival time does not decide whether the customer paid before the deadline.
         if(cutoff==null||payment.getPaidAt().isAfter(payment.getPaymentDeadline())||payment.getPaymentDeadline().isAfter(cutoff))
             return new Result(false,null,"Extension rights require reconciliation");
         Instant signingDeadline=com.storagehub.service.renewal.RenewalSigningDeadline.calculate(payment.getPaidAt(),cutoff);
-        if(!simplePayment) {
-            if(selected&&chosen!=null&&(chosen.getAppointmentStart().isBefore(payment.getPaidAt())||chosen.getAppointmentEnd().isAfter(signingDeadline)))
-                return new Result(false,null,"Selected signing appointment is outside the paid signing window");
-            boolean missedAppointment=selected&&chosen!=null&&!chosen.getAppointmentEnd().isAfter(now);
-            boolean calendarReady=true;
-            if(selected&&chosen!=null&&!missedAppointment&&calendar!=null&&calendar.atomic()) {
-                var selectedSlot=calendar.slot(renewal,chosen.getAppointmentStart()).orElse(null);
-                calendarReady=selectedSlot!=null&&selectedSlot.end().equals(chosen.getAppointmentEnd());
-            }
-            if(!signingDeadline.isAfter(now)||!calendarReady)
-                return new Result(false,null,"No signing slot is available before the Recovery cutoff");
-        }
+        if(selected&&(chosen.getAppointmentStart().isBefore(payment.getPaidAt())||chosen.getAppointmentEnd().isAfter(signingDeadline)))
+            return new Result(false,null,"Selected signing appointment is outside the paid signing window");
+        boolean missedAppointment=selected&&!chosen.getAppointmentEnd().isAfter(now);
+        var selectedSlot=selected&&!missedAppointment?calendar.slot(renewal,chosen.getAppointmentStart()).orElse(null):null;
+        boolean calendarReady=selected
+            ? missedAppointment||selectedSlot!=null&&selectedSlot.end().equals(chosen.getAppointmentEnd())
+            : calendar.feasible(renewal,now,signingDeadline);
+        if(!signingDeadline.isAfter(now)||!calendarReady)
+            return new Result(false,null,"No signing slot is available before the Recovery cutoff");
         var financial=financialSources.getIfAvailable();
         var financialState=financial==null?null:financial.read(renewal.getRental()).orElse(null);
         var remainderIds=new java.util.HashSet<UUID>();
@@ -190,32 +196,20 @@ public class RenewalVnpaySettlementService {
         var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         if(state!=null&&state.hasVerifiedPayment())
             return new Result(false,null,"Renewal already has a different verified payment state");
-        if(safety!=null)safety.retain(renewal,hold,signingDeadline);
+        safety.retain(renewal,hold,signingDeadline);
 
         boolean newState=state==null;
         if(newState)state=new RenewalOperationState(renewal);
         boolean deposit=terms.renewalDepositAmount().signum()>0;
-        if(state!=null) {
-            if(deposit)state.deposit(payment.getId(),payment.getPaidAt(),signingDeadline,cutoff,deadlineRef,deadlineVersion);
-            else state.fullRent(payment.getId(),payment.getPaidAt(),signingDeadline,cutoff,deadlineRef,deadlineVersion);
-        }
+        if(deposit)state.deposit(payment.getId(),payment.getPaidAt(),signingDeadline,cutoff,deadlineRef,deadlineVersion);
+        else state.fullRent(payment.getId(),payment.getPaidAt(),signingDeadline,cutoff,deadlineRef,deadlineVersion);
         if(newState)em.persist(state);
-        // Online-First Renewal: Extend contract directly upon verified payment
-        if (terms.newEndDate() != null) {
-            renewal.getRental().setContractEndDate(terms.newEndDate());
-        }
-        renewal.setStatus(RenewalStatus.completed);
-        state.completed(renewal.getRental().getCustomer().getId(), now);
-        var cal = calendars.getIfAvailable();
-        if (cal != null) {
-            try { cal.release(renewal, now); } catch (Exception ignored) {}
-        }
+        renewal.setStatus(state.getAppointmentRef()!=null?RenewalStatus.appointment_scheduled:deposit?RenewalStatus.deposit_paid:RenewalStatus.full_rent_paid);
         em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         var eventData=Map.of("paymentRef",payment.getId(),"renewalId",renewal.getId(),"amount",payment.getAmount(),"currency",payment.getCurrency(),
-            "paidAt",payment.getPaidAt(),"paymentDeadline",payment.getPaymentDeadline(),"receiptId",payment.getRenewalLedgerReceiptRef(),"outcome","SUCCESS",
-            "extendedEndDate", terms.newEndDate().toString());
+            "paidAt",payment.getPaidAt(),"paymentDeadline",payment.getPaymentDeadline(),"receiptId",payment.getRenewalLedgerReceiptRef(),"outcome","SUCCESS");
         try {
-            em.persist(new RenewalOperationEvent(renewal,"COMPLETION",payment.getPaidAt(),null,mapper.writeValueAsString(eventData)));
+            em.persist(new RenewalOperationEvent(renewal,deposit?"DEPOSIT":"FULL_RENT_PAYMENT",payment.getPaidAt(),null,mapper.writeValueAsString(eventData)));
         } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
             throw new IllegalStateException("Could not store Renewal payment event",invalid);
         }
@@ -223,9 +217,9 @@ public class RenewalVnpaySettlementService {
         payment.setRenewalSigningPreparedAt(now);
         payment.setFailureCode(null);payment.setFailureReason(null);payment.setRenewalNextRetryAt(null);
         notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
-            "Gia hạn hợp đồng thành công",
-            "Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" cho gian "+renewal.getRental().getStorageUnit().getCode()
-                +" đã được xác nhận. Hợp đồng của bạn đã được gia hạn trực tuyến thành công đến ngày "+terms.newEndDate()+".",renewal.getId());
+            deposit?"Đã nhận thanh toán cọc gia hạn":"Đã nhận thanh toán gia hạn",
+            "Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" cho hồ sơ thuê "+renewal.getRental().getId()
+                +" đã được xác nhận. Tiếp tục theo dõi lịch ký gia hạn trong hồ sơ.",renewal.getId());
         return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
     }
 
