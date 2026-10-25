@@ -39,6 +39,10 @@ public class RentalPackagePolicy extends BaseEntity {
     @Column(nullable = false)
     private int rentalMonths;
 
+    /** Free calendar days granted once, only for the initial move-in setup. */
+    @Column(nullable = false)
+    private int freeSetupDays;
+
     @Column(nullable = false, precision = 5, scale = 4)
     private BigDecimal discountRate = BigDecimal.ZERO;
 

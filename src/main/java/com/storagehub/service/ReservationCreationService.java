@@ -180,6 +180,7 @@ public class ReservationCreationService {
             .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         reservation.setStartDate(rentalStartDate);
         reservation.setEndDate(rentalStartDate.plusMonths(quote.getRentalMonths()));
+        reservation.setSetupDaysSnapshot(quote.getFreeSetupDays());
         reservation.setAppointmentAt(request.getAppointmentAt());
         reservation.setAmount(quote.getTotalAfterDiscount());
         reservation.setGoodsCondition(clean(request.getGoodsCondition()));
@@ -253,6 +254,7 @@ public class ReservationCreationService {
         boolean policyInvalid = !policy.isActive()
             || !policy.getPolicyVersion().equals(quote.getPolicyVersion())
             || policy.getRentalMonths() != quote.getRentalMonths()
+            || policy.getFreeSetupDays() != quote.getFreeSetupDays()
             || policy.getEffectiveFrom().isAfter(quote.getStartDate())
             || (policy.getEffectiveTo() != null && policy.getEffectiveTo().isBefore(quote.getStartDate()));
         boolean priceChanged = currentMonthlyPrice.compareTo(quote.getMonthlyPrice()) != 0
@@ -294,6 +296,7 @@ public class ReservationCreationService {
         snapshot.setPricingPackageCode(quote.getPricingPackageCode());
         snapshot.setPricingPolicyVersion(quote.getPolicyVersion());
         snapshot.setRentalMonths(quote.getRentalMonths());
+        snapshot.setFreeSetupDays(quote.getFreeSetupDays());
         snapshot.setMonthlyPrice(quote.getMonthlyPrice());
         snapshot.setGrossRentalAmount(quote.getSubtotal());
         snapshot.setDiscountRate(quote.getDiscountRate());
@@ -331,6 +334,7 @@ public class ReservationCreationService {
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setFreeSetupDays(snapshot.getFreeSetupDays());
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setCustomerName(reservation.getCustomer().getFullName());

@@ -128,6 +128,17 @@ public class CustomerReservationController {
         );
     }
 
+    @PostMapping("/{reservationId}/setup-goods")
+    public ApiResponse<ReservationDetailResponse> updateSetupGoods(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody UpdateSetupGoodsRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.updateSetupGoods(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/check-in-appointment")
     public ApiResponse<ReservationResponse> setCheckInAppointment(
         @PathVariable UUID reservationId,

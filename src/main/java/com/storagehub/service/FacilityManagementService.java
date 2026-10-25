@@ -207,6 +207,7 @@ public class FacilityManagementService {
         p.setCode(code);
         p.setName(name);
         p.setRentalMonths(months);
+        p.setFreeSetupDays(ReservationQuoteService.defaultFreeSetupDays(months));
         p.setDiscountRate(discountRate);
         p.setPolicyVersion("v1.0");
         p.setActive(true);
