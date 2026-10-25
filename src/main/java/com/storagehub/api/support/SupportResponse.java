@@ -25,4 +25,6 @@ public record SupportResponse(UUID id,UUID customerId,UUID facilityId,UUID assig
     public record Escalation(UUID id,UUID ticketId,String targetModule,String status,String reason,String decisionReason,
         UUID receiverRef,String receiverStatus,UUID resultRef,String resultCompleteness,Instant requestedAt,Instant decidedAt) {}
     public record StaffOption(UUID id,String fullName) {}
+    public record ReadStatus(UUID ticketId,long unreadCount,Instant lastMessageAt) {}
+    public record HiddenHistory(UUID ticketId,boolean hidden) {}
 }

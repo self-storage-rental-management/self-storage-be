@@ -20,12 +20,11 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@RequiredArgsConstructor
 public class ReservationCompatibilityService {
 
     private static final BigDecimal CUBIC_CENTIMETERS_PER_CUBIC_METER = new BigDecimal("1000000");
@@ -34,9 +33,41 @@ public class ReservationCompatibilityService {
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
     private final ReservationCapacityService capacityService;
+    private final GoodsCatalogService goodsCatalogService;
+
+    @Autowired
+    public ReservationCompatibilityService(
+        FacilityRepository facilityRepository,
+        UnitTypeRepository unitTypeRepository,
+        ReservationCapacityService capacityService,
+        GoodsCatalogService goodsCatalogService
+    ) {
+        this.facilityRepository = facilityRepository;
+        this.unitTypeRepository = unitTypeRepository;
+        this.capacityService = capacityService;
+        this.goodsCatalogService = goodsCatalogService;
+    }
+
+    // Kept for focused unit tests; production always injects the database-backed catalog.
+    ReservationCompatibilityService(
+        FacilityRepository facilityRepository,
+        UnitTypeRepository unitTypeRepository,
+        ReservationCapacityService capacityService
+    ) {
+        this(facilityRepository, unitTypeRepository, capacityService, null);
+    }
 
     @Transactional(readOnly = true)
     public CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request) {
+        return check(actor, request, true);
+    }
+
+    @Transactional(readOnly = true)
+    public CompatibilityCheckResponse checkQuotedSnapshot(ActorPrincipal actor, CompatibilityCheckRequest request) {
+        return check(actor, request, false);
+    }
+
+    private CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request, boolean validateCurrentCatalog) {
         if (!actor.hasRole(RoleCode.CUSTOMER)) {
             throw ApiExceptions.forbidden("Only customers can check reservation compatibility");
         }
@@ -67,19 +98,22 @@ public class ReservationCompatibilityService {
 
         for (int index = 0; index < request.getGoodsItems().size(); index++) {
             GoodsItemRequest item = request.getGoodsItems().get(index);
-            validateOtherItem(item, index);
+            if (validateCurrentCatalog && goodsCatalogService != null) {
+                goodsCatalogService.validateForUnitType(unitType, item, index);
+            }
+            validateOtherItem(item, index, validateCurrentCatalog);
             BigDecimal quantity = BigDecimal.valueOf(item.getQuantity());
             BigDecimal itemVolume = item.getLengthCm()
                 .multiply(item.getWidthCm())
                 .multiply(item.getHeightCm())
-                .divide(CUBIC_CENTIMETERS_PER_CUBIC_METER, 6, RoundingMode.HALF_UP)
-                .multiply(quantity);
+                .multiply(quantity)
+                .divide(CUBIC_CENTIMETERS_PER_CUBIC_METER);
             totalVolume = totalVolume.add(itemVolume);
             totalWeight = totalWeight.add(item.getWeightPerItemKg().multiply(quantity));
             if (!fitsInsideRack(item, unitType)) {
                 issues.add("goodsItems[" + index + "] does not fit inside one rack in any orientation");
             }
-            reviewRequired = reviewRequired || item.getCategory() == GoodsCategory.OTHER;
+            reviewRequired = reviewRequired || isOther(item);
         }
 
         BigDecimal unitVolume = unitType.getVolumeM3();
@@ -127,18 +161,24 @@ public class ReservationCompatibilityService {
         }
     }
 
-    private void validateOtherItem(GoodsItemRequest item, int index) {
-        if (item.getCategory() == GoodsCategory.OTHER
+    static boolean isOther(GoodsItemRequest item) {
+        return item.getCategoryCode() == null ? item.getCategory() == GoodsCategory.OTHER
+            : "OTHER".equals(item.getCategoryCode());
+    }
+
+    private void validateOtherItem(GoodsItemRequest item, int index, boolean validateCurrentCatalog) {
+        if (isOther(item)
             && (isBlank(item.getCustomGoodsName()) || isBlank(item.getCustomMaterial()))) {
             throw ApiExceptions.validation(
                 "goodsItems[" + index + "] requires customGoodsName and customMaterial for OTHER category", null
             );
         }
-        if (item.getCategory() != GoodsCategory.OTHER && isBlank(item.getMaterialName())) {
+        if (!isOther(item) && isBlank(item.getMaterialName())) {
             throw ApiExceptions.validation(
                 "goodsItems[" + index + "] requires materialName for a standard category", null
             );
         }
+        // The database-backed catalog and per-unit-type scope are validated together by the caller.
     }
 
     private boolean fitsInsideRack(GoodsItemRequest item, UnitType unitType) {

@@ -55,17 +55,24 @@ class FacilityScopeServiceTests {
     }
 
     @Test
-    void adminAndBusinessHaveGlobalFacilityAccess() {
-        for (RoleCode role : Set.of(RoleCode.ADMIN, RoleCode.BUSINESS)) {
-            ActorPrincipal actor = actor(role, Map.of());
-            assertThatCode(() -> service.assertCanManage(actor, facilityId)).doesNotThrowAnyException();
-        }
+    void adminHasGlobalFacilityAccess() {
+        assertThatCode(() -> service.assertCanManage(actor(RoleCode.ADMIN, Map.of()), facilityId))
+            .doesNotThrowAnyException();
     }
 
     @Test
-    void onlyStaffAndManagerAreReportedAsFacilityScoped() {
+    void businessRequiresAssignedFacilityScope() {
+        assertForbidden(() -> service.assertCanManage(actor(RoleCode.BUSINESS, Map.of()), facilityId));
+        var business = actor(RoleCode.BUSINESS, Map.of(facilityId, FacilityScopeLevel.MANAGE));
+        assertThatCode(() -> service.assertCanManage(business, facilityId)).doesNotThrowAnyException();
+        assertForbidden(() -> service.assertCanManage(business, otherFacilityId));
+    }
+
+    @Test
+    void staffManagerAndBusinessAreReportedAsFacilityScoped() {
         assertThat(service.isFacilityScoped(actor(RoleCode.STAFF, Map.of()))).isTrue();
         assertThat(service.isFacilityScoped(actor(RoleCode.MANAGER, Map.of()))).isTrue();
+        assertThat(service.isFacilityScoped(actor(RoleCode.BUSINESS, Map.of()))).isTrue();
         assertThat(service.isFacilityScoped(actor(RoleCode.CUSTOMER, Map.of()))).isFalse();
         assertThat(service.isFacilityScoped(actor(RoleCode.ADMIN, Map.of()))).isFalse();
     }
