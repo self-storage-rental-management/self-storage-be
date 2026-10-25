@@ -133,25 +133,57 @@ public class FacilityLifecycleService {
         }
         ManagerUnitTypeRequest before = technicalSnapshot(type);
         ManagerUnitTypeRequest after = normalizedChange(request);
-        if (!requiresRepricing && java.util.Objects.equals(type.getName(), after.name())
-            && java.util.Objects.equals(type.getDescription(), after.description())
-            && java.util.Objects.equals(type.getImageUrl(), after.imageUrl())
-            && java.util.Objects.equals(type.getDetailImageUrl(), after.detailImageUrl())) {
+        long currentCount = units.countByFacility_IdAndUnitType_Id(facilityId, unitTypeId);
+        int requestedCount = request.physicalUnitCount();
+        boolean quantityChanged = requestedCount > 0 && requestedCount != currentCount;
+
+        if (quantityChanged) {
+            if (requestedCount > currentCount) {
+                int toAdd = (int) (requestedCount - currentCount);
+                createPhysicalUnits(type, toAdd, request.floor(), request.zone());
+            } else {
+                int toRemove = (int) (currentCount - requestedCount);
+                var availableUnits = units.findByFacility_Id(facilityId).stream()
+                    .filter(u -> u.getUnitType().getId().equals(unitTypeId))
+                    .filter(u -> u.getStatus() == StorageUnitStatus.available)
+                    .sorted((a, b) -> b.getCode().compareTo(a.getCode()))
+                    .toList();
+                if (availableUnits.size() < toRemove) {
+                    long inUse = currentCount - availableUnits.size();
+                    throw ApiExceptions.conflict("Không thể giảm xuống " + requestedCount + " gian kho vì hiện có " + inUse + " gian đang được thuê hoặc giữ chỗ.");
+                }
+                var unitsToDelete = availableUnits.subList(0, toRemove);
+                units.deleteAll(unitsToDelete);
+                units.flush();
+            }
+        }
+
+        boolean metadataChanged = !java.util.Objects.equals(type.getName(), after.name())
+            || !java.util.Objects.equals(type.getDescription(), after.description())
+            || !java.util.Objects.equals(type.getImageUrl(), after.imageUrl())
+            || !java.util.Objects.equals(type.getDetailImageUrl(), after.detailImageUrl());
+
+        if (!requiresRepricing && !metadataChanged && !quantityChanged) {
             throw ApiExceptions.conflict("Thông tin loại kho chưa có thay đổi.");
         }
-        var change = new com.storagehub.domain.model.UnitTypeChangeRequest();
-        change.setUnitTypeId(unitTypeId);
-        change.setFacilityId(facilityId);
-        change.setFacilityName(type.getFacility().getName());
-        change.setUnitTypeCode(type.getCode());
-        change.setRequestedBy(actor.userId());
-        change.setRequesterName(users.findById(actor.userId()).map(com.storagehub.domain.model.User::getFullName).orElse("Manager"));
-        change.setBeforeJson(json(before));
-        change.setAfterJson(json(after));
-        change.setRequiresRepricing(requiresRepricing);
-        change = changes.saveAndFlush(change);
-        audit.recordMutation("UNIT_TYPE_CHANGE_REQUESTED", "UnitTypeChangeRequest", change.getId(), facilityId, before, after);
-        notifications.notifyBusinessOfUnitTypeReview(type, change.getId());
+
+        if (requiresRepricing || metadataChanged) {
+            var change = new com.storagehub.domain.model.UnitTypeChangeRequest();
+            change.setUnitTypeId(unitTypeId);
+            change.setFacilityId(facilityId);
+            change.setFacilityName(type.getFacility().getName());
+            change.setUnitTypeCode(type.getCode());
+            change.setRequestedBy(actor.userId());
+            change.setRequesterName(users.findById(actor.userId()).map(com.storagehub.domain.model.User::getFullName).orElse("Manager"));
+            change.setBeforeJson(json(before));
+            change.setAfterJson(json(after));
+            change.setRequiresRepricing(requiresRepricing);
+            change = changes.saveAndFlush(change);
+            audit.recordMutation("UNIT_TYPE_CHANGE_REQUESTED", "UnitTypeChangeRequest", change.getId(), facilityId, before, after);
+            notifications.notifyBusinessOfUnitTypeReview(type, change.getId());
+        } else if (quantityChanged) {
+            audit.recordMutation("UNIT_TYPE_QUANTITY_UPDATED", "UnitType", type.getId(), facilityId, before, unitTypeResponse(type));
+        }
         return unitTypeResponse(type);
     }
 
@@ -360,7 +392,7 @@ public class FacilityLifecycleService {
         boolean hasEffectivePackage = packages
             .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(facilityId, LocalDate.now())
             .stream().anyMatch(p -> p.getEffectiveTo() == null || !p.getEffectiveTo().isBefore(LocalDate.now()));
-        if (!hasEffectivePackage) throw ApiExceptions.conflict("Chưa thể công bố: cơ sở chưa được gán gói thuê đang áp dụng và còn hiệu lực. Vào Chính sách thuê để thêm cơ sở vào gói thuê.");
+        if (!hasEffectivePackage) throw ApiExceptions.conflict("Chưa thể công bố: cơ sở chưa được gán gói thuê đang áp dụng và còn hiệu lực. Vào Gói thuê để thêm cơ sở vào gói thuê.");
 
         candidates.forEach(type -> type.setStatus(UnitTypeStatus.active));
         candidates.forEach(type -> { if (type.getPublishedRevision() == 0) type.setPublishedRevision(1); });
@@ -388,16 +420,49 @@ public class FacilityLifecycleService {
         type.setDetailImageUrl(clean(request.detailImageUrl()));
     }
 
+    private String extractZonePrefix(String zone) {
+        if (zone == null || zone.isBlank()) return "A";
+        String clean = java.text.Normalizer.normalize(zone.trim(), java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "")
+            .replace('đ', 'd')
+            .replace('Đ', 'D');
+        String stripped = clean.replaceAll("(?i)^(khu\\s*vuc|khu|zone)\\s*", "").trim();
+        if (!stripped.isEmpty()) {
+            String alphanumeric = stripped.replaceAll("[^a-zA-Z0-9]", "");
+            if (!alphanumeric.isEmpty()) {
+                return alphanumeric.toUpperCase();
+            }
+        }
+        return clean.substring(0, Math.min(2, clean.length())).toUpperCase();
+    }
+
+    private String extractFloorNumber(String floor) {
+        if (floor == null || floor.isBlank()) return "1";
+        String digits = floor.replaceAll("[^0-9]", "").trim();
+        if (!digits.isEmpty()) return digits;
+        return floor.trim().toUpperCase();
+    }
+
     private void createPhysicalUnits(UnitType type, int count, String floor, String zone) {
-        for (int index = 1; index <= count; index++) {
-            StorageUnit unit = new StorageUnit();
-            unit.setFacility(type.getFacility());
-            unit.setUnitType(type);
-            unit.setCode("%s-%s-%03d".formatted(type.getFacility().getCode(), type.getCode(), index));
-            unit.setFloor(floor);
-            unit.setZone(zone);
-            unit.setStatus(StorageUnitStatus.available);
-            units.save(unit);
+        String zonePrefix = extractZonePrefix(zone);
+        String floorNum = extractFloorNumber(floor);
+        int createdCount = 0;
+        int index = 1;
+        while (createdCount < count) {
+            String candidateCode = "%s-%s%02d".formatted(zonePrefix, floorNum, index);
+            if (!units.existsByCode(candidateCode)) {
+                StorageUnit unit = new StorageUnit();
+                unit.setFacility(type.getFacility());
+                unit.setUnitType(type);
+                unit.setCode(candidateCode);
+                unit.setFloor(floor);
+                unit.setZone(zone);
+                unit.setStatus(StorageUnitStatus.available);
+                units.save(unit);
+                createdCount++;
+            }
+            index++;
+            if (index > 999) break;
         }
     }
 
