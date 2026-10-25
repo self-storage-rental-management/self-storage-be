@@ -17,6 +17,10 @@ public class NotificationOutbox {
         String kind,String content,String status,UUID notificationId,Instant acknowledgedAt,long attempts,Instant retryAt) {}
     private final JdbcTemplate jdbc;
     public NotificationOutbox(JdbcTemplate jdbc){this.jdbc=jdbc;}
+    public void purgeSupportConversation(UUID resource) {
+        transaction();
+        jdbc.update("delete from notification_outbox where resource_id=? and kind='SUPPORT_REVIEW'",resource.toString());
+    }
     public UUID enqueue(UUID recipient,UUID resource,String kind,UUID resolutionEvent,String policyRef,String policyVersion,String content,String key,Instant now){
         transaction();if(recipient==null||resource==null||now==null||kind==null||!Set.of("OVERDUE","SUPPORT_REVIEW").contains(kind)||content==null||content.isBlank()||content.length()>2000||key==null||key.isBlank()||key.length()>128||policyRef==null||policyRef.isBlank()||policyRef.length()>100||policyVersion==null||policyVersion.isBlank()||policyVersion.length()>100||kind.equals("SUPPORT_REVIEW")&&resolutionEvent==null)throw ApiExceptions.validation("Incomplete notification request",null);
         var fingerprint=hash(canonical(recipient.toString(),resource.toString(),kind,Objects.toString(resolutionEvent,""),policyRef,policyVersion,content));

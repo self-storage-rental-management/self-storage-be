@@ -18,7 +18,7 @@ Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Sel
    - Backend sử dụng 100% CSDL quan hệ MySQL 8 được đồng bộ chuẩn hóa qua 23 tệp migration Flyway (`V2026100200` đến `V2026101504`).
    - Frontend cấu hình `VITE_ENABLE_DEMO_DATA=false`, thực hiện gọi API trực tiếp tới Backend qua tầng `apiClient.ts` và các service module chuyên biệt. Hệ thống FE vẫn giữ lại các logic mock/fallback nội bộ trong `StorageHubContext.tsx` khi mất kết nối mạng hoặc trong chế độ demo offline.
 3. **Phân hệ nghiệp vụ cốt lõi đã hiện thực đầy đủ (Implemented & Verified)**:
-   - **Xác thực & Phân quyền (RBAC + Facility Scope)**: Quản lý 5 Role (`CUSTOMER`, `STAFF`, `MANAGER`, `BUSINESS`, `ADMIN`), 27 quyền hạt nhân (`SystemPermission`), và phân quyền theo phạm vi cơ sở kho (`FacilityScopeLevel`: `READ`, `OPERATE`, `MANAGE`).
+   - **Xác thực & Phân quyền (RBAC + Facility Scope)**: Quản lý 5 Role (`CUSTOMER`, `STAFF`, `MANAGER`, `BUSINESS`, `ADMIN`), 32 quyền canonical (`SystemPermission`), và phân quyền theo phạm vi cơ sở kho (`FacilityScopeLevel`: `READ`, `OPERATE`, `MANAGE`).
    - **Đặt giữ kho (Reservation Lifecycle)**: Từ báo giá tức thời (Quote tính cọc 20% + quy đổi kích thước theo hệ số 5000), xác thực OTP qua email, thanh toán cọc VNPay / Mô phỏng, duyệt hàng hóa đặc biệt, gán kho vật lý, đến tạo biên bản check-in.
    - **Nhận kho & Bàn giao (Check-in & Handover)**: Nghiệm thu kích thước thực tế, thu tiền còn lại và tiền cọc an ninh (1 tháng tiền thuê), cấp phát mã định danh mở cửa (`AccessCredential`), và khách hàng ký duyệt hợp đồng điện tử (`Contract`).
    - **Quản lý Hợp đồng & Nhắc nợ (Rental Lifecycle & Overdue Handling)**: Theo dõi kỳ thanh toán, thông báo D-14, D-3, D+1, D+3 (ân hạn grace period), D+7 (escalation thu hồi), phát sinh phí phạt trả chậm 1 lần duy nhất cho mỗi kỳ.
@@ -92,7 +92,7 @@ Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Sel
 
 ### 2.3 Bản đồ thư mục Frontend (`self-storage-FE/src/`)
 - `main.tsx`, `App.tsx`: Điểm khởi chạy ứng dụng, phân luồng route theo domain/subdomain và URL path.
-- `auth/`: `rbac.ts` (định nghĩa 27 permissions, vai trò và hàm chuẩn hóa quyền `normalizeRolePermissions`).
+- `auth/`: `rbac.ts` (định nghĩa 32 permissions, vai trò và hàm chuẩn hóa quyền `normalizeRolePermissions`).
 - `domain/`: Chứa các quy tắc nghiệp vụ thuần túy (pure business logic) phía client:
   - `businessRules.ts`: Quy tắc tạo mã cơ sở, giới hạn phân bổ kho, kiểm tra an toàn khi xóa kho.
   - `managerRules.ts`: Quy tắc tính ngày kết thúc tháng lịch, chu kỳ quá hạn, kiểm tra xung đột phân bổ kho, công thức quyết toán trả kho.
@@ -143,7 +143,7 @@ Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Sel
 | **F-027** | Gửi ticket hỗ trợ khách hàng (Customer Support Ticket) | Customer | UI: `/portal/support`<br>API: `POST /api/support/tickets` | Khách hàng đã đăng nhập | 1. Chọn loại vấn đề (Hợp đồng, Thanh toán, Gian kho, Kỹ thuật), nhập tiêu đề và nội dung.<br>2. Hệ thống sinh mã ticket `TICK-XXXX`.<br>3. Trạng thái khởi tạo `OPEN`. | Nội dung trống: `400 BAD_REQUEST`. | Mỗi ticket gắn với `customerId` và có thể gắn với `rentalId`. | **C**: `support_tickets`, `support_ticket_messages` | Implemented | `SupportTicketController.java`<br>`SupportService.java` |
 | **F-028** | Nhân viên phản hồi & Đóng ticket hỗ trợ (Staff Resolve Support Ticket) | Staff, Manager | UI: `/staff/support`<br>API: `POST /api/support/tickets/{id}/messages`, `PUT /api/support/tickets/{id}/status` | Nhân viên hỗ trợ | 1. Nhân viên xem nội dung, gửi tin nhắn phản hồi tới khách hàng.<br>2. Cập nhật trạng thái `IN_PROGRESS` -> `RESOLVED` -> `CLOSED`.<br>3. Hệ thống tự động đóng ticket nếu không có phản hồi mới sau 72h. | Khách hàng gửi tin nhắn mới khi ticket đang `RESOLVED`: tự động mở lại `OPEN`. | Tin nhắn hiển thị kèm vai trò người gửi và mốc thời gian. | **C**: `support_ticket_messages`<br>**U**: `support_tickets.status` | Implemented | `SupportMessageController.java`<br>`SupportAutoCloseCoordinatorTests` |
 | **F-029** | Khiếu nại giao dịch thanh toán (Payment Complaint Management) | Customer, Manager | UI: `/portal/payments/complaint`<br>API: `POST /api/payments/{id}/complaint`, `PUT /api/manager/payments/complaint/{id}` | Giao dịch thanh toán bị lỗi hoặc trừ tiền sai | 1. Khách hàng gửi khiếu nại trong vòng 7 ngày kể từ khi phát sinh giao dịch.<br>2. Manager tra soát mã giao dịch với ngân hàng/VNPay.<br>3. Nếu khiếu nại đúng: kích hoạt hoàn tiền và cập nhật hợp đồng.<br>4. Nếu khiếu nại sai: từ chối kèm lý do. | Quá 7 ngày kể từ ngày giao dịch: từ chối tiếp nhận khiếu nại. | Thời hạn khiếu nại tối đa 7 ngày (`COMPLAINT_WINDOW_DAYS = 7`). | **C/U**: `payment_complaints`, `payments` | Implemented | `PaymentComplaintController.java`<br>`PaymentComplaintDeadlineServiceTests` |
-| **F-030** | Báo cáo doanh thu & Hiệu suất lấp đầy (Business & Operational Reporting) | Business, Manager | UI: `/business/reports`, `/manager/reports`<br>API: `GET /api/reports/revenue`, `GET /api/reports/occupancy` | Role `BUSINESS`, `ADMIN` hoặc `MANAGER` (trong phạm vi kho) | 1. Chọn khoảng ngày và cơ sở kho.<br>2. Hệ thống tính tổng doanh thu từ các khoản thanh toán thực tế (`payments.status = 'PAID'`).<br>3. Tính tỷ lệ lấp đầy: `OccupiedUnits / TotalActiveUnits * 100%`.<br>4. Xuất file Excel `.xlsx` hoặc hiển thị biểu đồ Recharts. | Manager chỉ xem được cơ sở của mình; Business/Admin xem toàn hệ thống. | Doanh thu chỉ tính từ giao dịch đã hoàn tất đối soát (`PAID`). | **R**: `payments`, `storage_units`, `rentals`, `facilities` | Implemented | `ReportingController.java`<br>`ReportingService.java` |
+| **F-030** | Báo cáo doanh thu & Hiệu suất lấp đầy (Business & Operational Reporting) | Business, Manager | UI: `/business/reports`, `/manager/reports`<br>API: `GET /api/reports/revenue`, `GET /api/reports/occupancy` | Role `BUSINESS`, `ADMIN` hoặc `MANAGER` (trong phạm vi kho) | 1. Chọn khoảng ngày và cơ sở kho.<br>2. Hệ thống tính tổng doanh thu từ các khoản thanh toán thực tế (`payments.status = 'PAID'`).<br>3. Tính tỷ lệ lấp đầy: `OccupiedUnits / TotalActiveUnits * 100%`.<br>4. Xuất file Excel `.xlsx` hoặc hiển thị biểu đồ Recharts. | Manager và Business chỉ xem được cơ sở có scope; Admin xem toàn hệ thống. | Doanh thu chỉ tính từ giao dịch đã hoàn tất đối soát (`PAID`). | **R**: `payments`, `storage_units`, `rentals`, `facilities` | Implemented | `ReportingController.java`<br>`ReportingService.java` |
 | **F-031** | Quản lý người dùng nội bộ (Admin User Management) | Admin | UI: `/admin/users`<br>API: `POST /api/admin/users`, `PUT /api/admin/users/{id}`, `PUT /api/admin/users/{id}/status` | Role `ADMIN` | 1. Tạo tài khoản nhân viên (Staff, Manager, Business).<br>2. Gán vai trò (`roles`).<br>3. Khóa (`SUSPENDED`) hoặc kích hoạt tài khoản (`ACTIVE`). | Không thể tự khóa tài khoản của chính mình. | Email phải là duy nhất trên toàn hệ thống. | **C/U**: `users`, `user_roles` | Implemented | `AdminUserController.java`<br>`AdminUserService.java` |
 | **F-032** | Phân quyền & Quản lý vai trò (Admin RBAC Permission Matrix) | Admin | UI: `/admin/roles`<br>API: `GET /api/admin/roles`, `PUT /api/admin/roles/{id}/permissions` | Role `ADMIN` | 1. Xem danh sách quyền theo từng vai trò.<br>2. Bật/Tắt các quyền hệ thống (`SystemPermission`).<br>3. Cập nhật phiên bản chính sách quyền (`policy_version`). | Cấm rút quyền quản trị cốt lõi của role `ADMIN`. | Bảo toàn quyền sở hữu chính sách (Policy Ownership) của BO. | **R/U**: `roles`, `role_permissions` | Implemented | `AdminRoleController.java`<br>`V2026100906...sql` |
 | **F-033** | Phân bổ phạm vi cơ sở kho cho nhân viên (Admin Facility Scope Assignment) | Admin | UI: `/admin/scopes`<br>API: `POST /api/admin/users/{id}/facility-scopes` | Role `ADMIN` | 1. Chọn nhân viên (Staff/Manager).<br>2. Chọn cơ sở kho (`facilityId`) và cấp độ quyền (`READ`, `OPERATE`, `MANAGE`).<br>3. Lưu cấu hình vào `user_facility_scopes`. | Gán trùng cơ sở: cập nhật lại cấp độ scope thay vì thêm mới. | Staff/Manager chỉ được thao tác tại cơ sở đã được gán scope. | **C/U/D**: `user_facility_scopes` | Implemented | `UserFacilityScopeController.java`<br>`FacilityScopeEvaluator.java` |
@@ -167,72 +167,53 @@ Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Sel
 Mã vai trò chuẩn hóa trong CSDL (`roles.code`):
 - `CUSTOMER`: Vai trò người dùng bên ngoài.
 - `STAFF`: Vai trò nhân viên vận hành cơ sở.
-- `MANAGER`: Vai trò cấp quản lý cơ sở (có quyền cao hơn Staff tại cơ sở được gán).
+- `MANAGER`: Vai trò cấp quản lý cơ sở tại cơ sở được gán; không kế thừa permission của Staff.
 - `BUSINESS`: Vai trò quản trị kinh doanh và chính sách toàn cục.
 - `ADMIN`: Vai trò quản trị kỹ thuật cao nhất (Superuser).
 
 ### 4.3 Ma trận Quyền Hệ Thống (System Permissions Matrix)
-Hệ thống định nghĩa 27 quyền nguyên tử (`SystemPermission`):
-1. `facilities:read`
-2. `facilities:manage`
-3. `units:read`
-4. `units:manage`
-5. `policies:read`
-6. `policies:update`
-7. `reservations:read`
-8. `reservations:approve`
-9. `reservations:assign`
-10. `checkins:read`
-11. `checkins:process`
-12. `rentals:read`
-13. `rentals:manage`
-14. `returns:read`
-15. `returns:inspect`
-16. `returns:settle`
-17. `overdue:read`
-18. `overdue:manage`
-19. `maintenance:read`
-20. `maintenance:manage`
-21. `support:read`
-22. `support:manage`
-23. `reports:read`
-24. `payments:read`
-25. `users:manage`
-26. `roles:manage`
-27. `settings:manage`
 
-#### Bảng phân bổ quyền mặc định theo vai trò:
-| System Permission | Customer | Staff | Manager | Business | Admin |
+Backend và frontend dùng cùng quy ước canonical `resource:action`. Đây là ma trận mặc định cuối cùng; scope, ownership và trạng thái resource vẫn được service kiểm tra thêm.
+
+| Permission | Customer | Staff | Manager | Business | Admin |
 |---|:---:|:---:|:---:|:---:|:---:|
-| `facilities:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `facilities:manage` | ✗ | ✗ | ✗ | ✓ | ✓ |
-| `units:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `units:manage` | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `policies:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `policies:update` | ✗ | ✗ | ✗ | ✓ | ✓ |
-| `reservations:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `reservations:approve` | ✗ | ✓ (Scoped) | ✗ | ✗ | ✓ |
-| `reservations:assign` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `checkins:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `checkins:process` | ✗ | ✓ (Scoped) | ✗ | ✗ | ✓ |
-| `rentals:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `rentals:manage` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `returns:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `returns:inspect` | ✗ | ✓ (Scoped) | ✗ | ✗ | ✓ |
-| `returns:settle` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `overdue:read` | Own | ✗ | ✓ (Scoped) | ✓ | ✓ |
-| `overdue:manage` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `maintenance:read` | ✗ | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `maintenance:manage` | ✗ | ✗ | ✓ (Scoped) | ✗ | ✓ |
-| `support:read` | Own | ✓ | ✓ | ✓ | ✓ |
-| `support:manage` | ✗ | ✓ | ✓ | ✗ | ✓ |
-| `reports:read` | ✗ | ✗ | ✓ (Scoped) | ✓ | ✓ |
-| `payments:read` | Own | ✓ (Scoped) | ✓ (Scoped) | ✓ | ✓ |
-| `users:manage` | ✗ | ✗ | ✗ | ✗ | ✓ |
-| `roles:manage` | ✗ | ✗ | ✗ | ✗ | ✓ |
-| `settings:manage` | ✗ | ✗ | ✗ | ✗ | ✓ |
+| `dashboard:read` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `facilities:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `storage_units:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `reservations:create` | ✓ |  |  |  |  |
+| `reservations:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `reservations:approve` |  | ✓ | ✓ |  |  |
+| `storage_units:assign` |  |  | ✓ |  |  |
+| `contracts:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `checkins:read` |  | ✓ | ✓ |  |  |
+| `checkins:process` |  | ✓ |  |  |  |
+| `rentals:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `rentals:update` |  |  | ✓ |  |  |
+| `renewals:operate` |  | ✓ |  |  |  |
+| `returns:read` |  | ✓ | ✓ | ✓ |  |
+| `returns:process` |  | ✓ |  |  |  |
+| `payments:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `payments:collect` |  | ✓ | ✓ |  |  |
+| `payments:confirm` |  |  | ✓ |  |  |
+| `refunds:approve` |  |  | ✓ | ✓ |  |
+| `refunds:execute` |  | ✓ |  | ✓ |  |
+| `fees:waive` |  |  | ✓ | ✓ |  |
+| `policies:read` | ✓ |  | ✓ | ✓ |  |
+| `policies:update` |  |  |  | ✓ |  |
+| `support:read` | ✓ | ✓ | ✓ | ✓ |  |
+| `support:update` |  | ✓ |  |  |  |
+| `inventory:update` |  |  | ✓ |  |  |
+| `staff_tasks:update` |  |  | ✓ |  |  |
+| `reports:read` |  |  | ✓ | ✓ |  |
+| `audit_logs:read` |  |  |  |  | ✓ |
+| `users:manage` |  |  |  |  | ✓ |
+| `roles:manage` |  |  |  |  | ✓ |
+| `settings:manage` |  |  |  |  | ✓ |
+| `sessions:manage` |  |  |  |  | ✓ |
 
-*(Ghi chú: `Own`: Chỉ xem được dữ liệu do chính tài khoản sở hữu; `Scoped`: Bị ràng buộc bởi cơ sở kho được gán trong `user_facility_scopes`).*
+Staff chỉ thu tiền mặt trong phiên thu và chỉ thực thi refund sau khi hồ sơ đã được duyệt; Manager chỉ duyệt, không thực thi refund; Business Operations thực thi refund/fee theo nghiệp vụ return trong scope MANAGE và không thao tác hiện trường. Customer còn bị ràng buộc ownership. `ADMIN` và `CUSTOMER` là role loại trừ; Manager không kế thừa Staff.
+
+Hạn mức Manager tự duyệt refund/miễn giảm chưa có giá trị chốt từ Business nên chưa hard-code; service đã tách capability `refunds:approve` và `fees:waive` để gắn policy khi có tham số chính thức.
 
 ### 4.4 Cơ chế Phân quyền theo Phạm vi Cơ sở (Facility Scoping Mechanism)
 - Bảng CSDL: `user_facility_scopes(user_id, facility_id, scope_level)`.
@@ -241,7 +222,8 @@ Hệ thống định nghĩa 27 quyền nguyên tử (`SystemPermission`):
   - `OPERATE`: Thực hiện các tác vụ vận hành hiện trường (thẩm định hàng, check-in, kiểm tra trả kho). Áp dụng cho `STAFF`.
   - `MANAGE`: Thực hiện điều phối, gán kho, quyết toán tiền cọc, giải quyết tranh chấp, khóa kho nợ. Áp dụng cho `MANAGER`.
 - **Ngoại lệ phân quyền**:
-  - `ADMIN` và `BUSINESS` có quyền toàn cục đối với tất cả cơ sở kho mà không cần cấu hình trong bảng `user_facility_scopes`.
+  - Chỉ `ADMIN` có quyền toàn cục đối với tất cả cơ sở kho. `BUSINESS` vẫn phải có `user_facility_scopes`; quyền hoàn tiền của Business chỉ áp dụng cho hồ sơ đã được duyệt trong scope `MANAGE`.
+  - Scope rỗng không có nghĩa là toàn hệ thống: truy vấn trả về rỗng hoặc request bị từ chối tùy API.
   - Lớp `FacilityScopeEvaluator.java` tại Backend tự động chặn request và trả về `403 FORBIDDEN` nếu `ActorPrincipal` không có scope tương ứng với `facilityId` trong payload.
 
 ---
@@ -1150,7 +1132,7 @@ Kiến trúc định tuyến FE phân tách độc lập hai cổng dựa trên 
 ### 18.3 CSDL & Flyway Migrations
 - `V2026100200__create_initial_schema.sql`: Khởi tạo bảng người dùng, vai trò, cơ sở, loại kho, gian kho, đơn đặt chỗ, thanh toán.
 - `V2026100701__complete_checkin_handover_schema.sql`: Hoàn thiện bảng `check_ins` và trường hợp đồng.
-- `V2026100902__normalize_permissions_and_role_hierarchy.sql`: Chuẩn hóa 27 quyền hệ thống và phân bổ vai trò.
+- `V2026100902__normalize_permissions_and_role_hierarchy.sql`: Migration lịch sử chuẩn hóa permission; ma trận hiện hành gồm 32 quyền canonical và được bổ sung qua RoleDataInitializer.
 - `V2026100904__create_overdue_renewal_support_persistence.sql`: Bổ sung bảng nợ, gia hạn, và ticket hỗ trợ.
 - `V2026100905__align_return_case_settlement_columns.sql`: Cập nhật cấu trúc bảng `return_cases` phục vụ quyết toán bù trừ cọc.
 - `V2026101201__create_access_credentials.sql`: Tạo bảng mã PIN mở cửa `access_credentials`.

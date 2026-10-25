@@ -94,6 +94,14 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false, length = 16)
     private UnitTypeStatus status = UnitTypeStatus.active;
 
+    /** Immutable publication number copied into every quote. */
+    @Column(name = "published_revision", nullable = false)
+    private long publishedRevision;
+
+    /** Approved category/material identifiers. Kept as JSON so a change request remains atomic. */
+    @Column(name = "accepted_goods_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String acceptedGoodsJson = "{\"categoryIds\":[],\"materialIds\":[]}";
+
     @Version
     private long version;
 

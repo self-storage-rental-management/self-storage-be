@@ -248,14 +248,19 @@ class RenewalPaymentTransactionTests {
             assertThat(n.getStatus()).isEqualTo(RenewalStatus.cancelled);assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
             return reserved.reference();});
         assertThat(read(payment).getRefundedAmount()).isZero();
+        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();
+            source.execute(p.getRenewal(),refund,UUID.randomUUID(),"same-proposer",p.getInitiatedBy().getId(),now.plusSeconds(1));}))
+            .hasMessageContaining("proposer cannot execute");
+        UUID executor=tx.execute(s->{var user=new User();user.setEmail(UUID.randomUUID()+"@test.invalid");
+            user.setFullName("TEST refund executor");user.setPasswordHash("TEST-ONLY");em.persist(user);em.flush();return user.getId();});
         assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var account=ledger.read(p.getRenewal().getRental().getId()).orElseThrow();
             ledger.executeRefund(account.rentalId(),account.refunds().getFirst().id(),"production-payout",p.getInitiatedBy().getId(),"forbidden-production-payout",account.revision());})).hasMessageContaining("Sandbox refund");
-        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var done=source.execute(p.getRenewal(),refund,UUID.randomUUID(),"sandbox-refund-"+refund,p.getInitiatedBy().getId(),now.plusSeconds(1));
+        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var done=source.execute(p.getRenewal(),refund,UUID.randomUUID(),"sandbox-refund-"+refund,executor,now.plusSeconds(1));
             assertThat(done.environment()).isEqualTo("SANDBOX");assertThat(done.amount()).isEqualByComparingTo("40");
             assertThat(source.read(p.getRenewal().getId()).status()).isEqualTo("REFUNDED");});
         assertThat(read(payment).getRefundedAmount()).isEqualByComparingTo("40");
         tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();assertThat(ledger.read(p.getRenewal().getRental().getId()).orElseThrow().knownOutstanding()).isZero();});
-        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();source.execute(p.getRenewal(),refund,UUID.randomUUID(),"duplicate",p.getInitiatedBy().getId(),now.plusSeconds(2));})).hasMessageContaining("awaiting execution");
+        assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();source.execute(p.getRenewal(),refund,UUID.randomUUID(),"duplicate",executor,now.plusSeconds(2));})).hasMessageContaining("awaiting execution");
     }
     @Test void dailyFeesUseActualAllocationsAndASecondDayCanBePaidWithoutPayingRentAgain() throws Exception {
         UUID payment=paidDeposit(true);Instant first=NOW.plusSeconds(3600),second=NOW.plus(Duration.ofDays(1));
@@ -373,7 +378,7 @@ class RenewalPaymentTransactionTests {
         User u=new User();u.setEmail(fixtureKey+"@test.invalid");u.setFullName("Test Customer");u.setPasswordHash("test-only");em.persist(u);
         UnitType t=new UnitType();t.setFacility(f);t.setCode("M");t.setName("Medium");t.setLengthM(BigDecimal.ONE);t.setWidthM(BigDecimal.ONE);t.setHeightM(BigDecimal.ONE);t.setMonthlyPrice(new BigDecimal("100"));t.setMaxLoadKg(BigDecimal.ONE);t.setRackLengthM(BigDecimal.ONE);t.setRackWidthM(BigDecimal.ONE);t.setRackHeightM(BigDecimal.ONE);em.persist(t);
         StorageUnit unit=new StorageUnit();unit.setFacility(f);unit.setUnitType(t);unit.setCode("TEST-"+fixtureKey);em.persist(unit);
-        ReservationQuote q=new ReservationQuote();q.setCustomer(u);q.setFacility(f);q.setUnitType(t);q.setPricingPackageCode("TEST");q.setPolicyVersion("test-only");q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,11,1));q.setRentalMonths(1);q.setMonthlyPrice(new BigDecimal("100"));q.setSubtotal(new BigDecimal("100"));q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(new BigDecimal("100"));q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(new BigDecimal("100"));q.setDueAtCheckIn(new BigDecimal("100"));q.setTotalInitialObligation(new BigDecimal("100"));q.setQuotedAt(NOW);q.setExpiresAt(NOW.plusSeconds(1800));em.persist(q);
+        ReservationQuote q=com.storagehub.testing.LegacyReservationQuoteFixture.create();q.setCustomer(u);q.setFacility(f);q.setUnitType(t);q.setPricingPackageCode("TEST");q.setPolicyVersion("test-only");q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,11,1));q.setRentalMonths(1);q.setMonthlyPrice(new BigDecimal("100"));q.setSubtotal(new BigDecimal("100"));q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(new BigDecimal("100"));q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(new BigDecimal("100"));q.setDueAtCheckIn(new BigDecimal("100"));q.setTotalInitialObligation(new BigDecimal("100"));q.setQuotedAt(NOW);q.setExpiresAt(NOW.plusSeconds(1800));em.persist(q);
         Reservation res=new Reservation();res.setReservationCode("TEST-"+fixtureKey);res.setCustomer(u);res.setSourceQuote(q);res.setIdempotencyKey("TEST-"+fixtureKey);res.setFacility(f);res.setUnitType(t);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());em.persist(res);
         Rental r=new Rental();r.setCustomer(u);r.setFacility(f);r.setStorageUnit(unit);r.setReservation(res);r.setStartDate(q.getStartDate());r.setContractEndDate(LocalDate.of(2026,10,31));r.setMonthlyPrice(new BigDecimal("100"));em.persist(r);em.flush();return r;
     }

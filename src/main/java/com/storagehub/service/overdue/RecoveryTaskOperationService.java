@@ -99,7 +99,6 @@ public class RecoveryTaskOperationService {
 
     public View settle(ActorPrincipal actor,RoleCode role,UUID id,Settlement body,String key) {
         var c=context(actor,role,id);
-        access.require(actor,role,c.task().facilityId(),FacilityScopeLevel.OPERATE,SystemPermission.MANAGE_PAYMENTS);
         var replay=replay(c,key,"SETTLEMENT",body);if(replay.isPresent())return replay.get();
         var s=version(id,body.expectedVersion());inProgress(c,s);var rc=returnCase(c,s);
         if(!Boolean.TRUE.equals(body.confirmed())||body.paymentMethod()==null)
@@ -110,6 +109,16 @@ public class RecoveryTaskOperationService {
             throw ApiExceptions.validation("Cần nhập mã giao dịch chuyển khoản hợp lệ, tối đa 64 ký tự.",null);
         String direction=rc.getStatus()==ReturnCaseStatus.payment_due?"COLLECTION":rc.getStatus()==ReturnCaseStatus.refund_pending?"REFUND":null;
         if(direction==null)throw ApiExceptions.conflict("Settlement must first be confirmed or the dispute resolved");
+        if ("REFUND".equals(direction)) {
+            if (actor.hasRole(RoleCode.MANAGER)) throw ApiExceptions.forbidden("Manager approves refunds but cannot execute them");
+            access.require(actor,role,c.task().facilityId(),FacilityScopeLevel.OPERATE,SystemPermission.PROCESS_RETURNS,
+                SystemPermission.MANAGE_PAYMENTS,SystemPermission.EXECUTE_REFUNDS);
+        } else {
+            access.require(actor,role,c.task().facilityId(),FacilityScopeLevel.OPERATE,SystemPermission.MANAGE_PAYMENTS);
+            if (actor.hasRole(RoleCode.STAFF) && body.paymentMethod()!=PaymentMethod.CASH) {
+                throw ApiExceptions.forbidden("Staff may collect only cash payments during an active collection session");
+            }
+        }
         var amount=direction.equals("COLLECTION")?rc.getAmountDueFromCustomer():rc.getNetRefundAmount();
         if(amount==null||amount.signum()<=0)throw ApiExceptions.conflict("No amount to settle");
         evidence.require(actor,id,"SETTLEMENT",Collections.singletonList(body.receiptFileId()));

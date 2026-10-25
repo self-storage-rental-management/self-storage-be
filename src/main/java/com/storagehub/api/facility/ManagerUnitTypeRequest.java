@@ -6,9 +6,11 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.UUID;
 
 public record ManagerUnitTypeRequest(
-    @NotBlank @Size(max = 20) String code,
+    @Size(max = 20) String code,
     @NotBlank @Size(max = 100) String name,
     @Size(max = 500) String description,
     @NotNull @DecimalMin("0.01") BigDecimal lengthM,
@@ -27,5 +29,17 @@ public record ManagerUnitTypeRequest(
     @Min(0) int physicalUnitCount,
     @Size(max = 32) String floor,
     @Size(max = 32) String zone,
-    @Size(max = 2800000, message = "Ảnh chi tiết quá lớn; vui lòng chọn ảnh không quá 2 MB.") String detailImageUrl
-) {}
+    @Size(max = 2800000, message = "Ảnh chi tiết quá lớn; vui lòng chọn ảnh không quá 2 MB.") String detailImageUrl,
+    List<UUID> acceptedGoodsCategoryIds,
+    List<UUID> acceptedGoodsMaterialIds
+) {
+    public ManagerUnitTypeRequest(String code, String name, String description, BigDecimal lengthM,
+        BigDecimal widthM, BigDecimal heightM, BigDecimal maxLoadKg, int rackCount,
+        BigDecimal rackLengthM, BigDecimal rackWidthM, BigDecimal rackHeightM, BigDecimal aisleWidthM,
+        String trolleyType, int smallBoxCapacity, int largeBoxCapacity, String imageUrl,
+        int physicalUnitCount, String floor, String zone, String detailImageUrl) {
+        this(code, name, description, lengthM, widthM, heightM, maxLoadKg, rackCount,
+            rackLengthM, rackWidthM, rackHeightM, aisleWidthM, trolleyType, smallBoxCapacity,
+            largeBoxCapacity, imageUrl, physicalUnitCount, floor, zone, detailImageUrl, List.of(), List.of());
+    }
+}

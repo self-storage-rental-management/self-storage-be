@@ -23,4 +23,5 @@ public class UnitTypeChangeRequest extends BaseEntity {
     private UUID reviewedBy;
     private Instant reviewedAt;
     @Column(length = 500) private String rejectionReason;
+    @Column(nullable = false) private boolean requiresRepricing;
 }
