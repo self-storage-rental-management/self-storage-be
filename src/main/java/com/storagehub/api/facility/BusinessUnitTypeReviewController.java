@@ -23,10 +23,12 @@ public class BusinessUnitTypeReviewController {
     public ApiResponse<UnitTypeChangeResponse> detail(@PathVariable UUID id) {
         return new ApiResponse<>(lifecycle.getUnitTypeChange(actors.required(), id), CorrelationIdContext.current());
     }
-    public record Decision(@NotNull Boolean approved, @Size(max = 500) String reason) {}
+    public record Decision(@NotNull Boolean approved, @Size(max = 500) String reason,
+        @PositiveOrZero java.math.BigDecimal monthlyPrice,
+        @PositiveOrZero java.math.BigDecimal securityDepositAmount) {}
     @PostMapping("/{id}/review")
     public ApiResponse<UnitTypeChangeResponse> review(@PathVariable UUID id, @Valid @RequestBody Decision decision) {
         return new ApiResponse<>(lifecycle.reviewUnitTypeChange(actors.required(), id,
-            decision.approved(), decision.reason()), CorrelationIdContext.current());
+            decision.approved(), decision.reason(), decision.monthlyPrice(), decision.securityDepositAmount()), CorrelationIdContext.current());
     }
 }

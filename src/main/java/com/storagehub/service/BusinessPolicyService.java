@@ -183,6 +183,7 @@ public class BusinessPolicyService {
         policy.setCode(request.code().trim());
         policy.setName(request.name().trim());
         policy.setRentalMonths(months);
+        policy.setFreeSetupDays(ReservationQuoteService.defaultFreeSetupDays(months));
         policy.setRentalYears(years);
         policy.setDescription(request.description());
         policy.setDiscountRate(request.discountRate());
@@ -241,6 +242,7 @@ public class BusinessPolicyService {
 
         policy.setName(request.name().trim());
         policy.setRentalMonths(months);
+        policy.setFreeSetupDays(ReservationQuoteService.defaultFreeSetupDays(months));
         policy.setRentalYears(years);
         policy.setDescription(request.description());
         policy.setDiscountRate(request.discountRate());

@@ -43,6 +43,9 @@ public class ReservationResponse {
     // Snapshot discount fields (bảo toàn lịch sử mã giảm giá trên hóa đơn / đơn đặt)
     private String pricingPackageCode;
     private int rentalMonths;
+    private int freeSetupDays;
+    private boolean setupExitReviewRequired;
+    private java.time.Instant setupGoodsRevisionUsedAt;
     private BigDecimal monthlyPrice;
     private BigDecimal grossRentalAmount;
     private BigDecimal discountRate;
@@ -166,6 +169,12 @@ public class ReservationResponse {
 
     public String getPricingPackageCode() { return pricingPackageCode; }
     public int getRentalMonths() { return rentalMonths; }
+    public int getFreeSetupDays() { return freeSetupDays; }
+    public void setFreeSetupDays(int freeSetupDays) { this.freeSetupDays = freeSetupDays; }
+    public boolean isSetupExitReviewRequired() { return setupExitReviewRequired; }
+    public void setSetupExitReviewRequired(boolean setupExitReviewRequired) { this.setupExitReviewRequired = setupExitReviewRequired; }
+    public java.time.Instant getSetupGoodsRevisionUsedAt() { return setupGoodsRevisionUsedAt; }
+    public void setSetupGoodsRevisionUsedAt(java.time.Instant value) { this.setupGoodsRevisionUsedAt = value; }
     public BigDecimal getMonthlyPrice() { return monthlyPrice; }
     public void setMonthlyPrice(BigDecimal monthlyPrice) { this.monthlyPrice = monthlyPrice; }
     public BigDecimal getGrossRentalAmount() { return grossRentalAmount; }
