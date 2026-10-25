@@ -8,6 +8,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.config.FileProperties;
+import com.storagehub.domain.model.CheckIn;
+import com.storagehub.domain.model.CheckInStatus;
+import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.RoleCode;
@@ -118,6 +121,42 @@ class FileStorageServiceTests {
 
         assertThatThrownBy(() -> service.store(actor, file, "RESERVATION_GOODS_ITEM", goodsItem.getId()))
             .hasMessageContaining("at most 10 images");
+        verify(fileAssetRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void allowsCheckInEvidenceThroughoutTheActiveWorkflow() {
+        Facility facility = entity(new Facility());
+        Reservation reservation = entity(new Reservation());
+        reservation.setFacility(facility);
+        CheckIn checkIn = entity(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setStatus(CheckInStatus.identity_verified);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(fileAssetRepository.saveAndFlush(any())).thenAnswer(invocation -> entity(invocation.getArgument(0)));
+
+        var file = new MockMultipartFile("file", "hop-dong-da-ky.pdf", "application/pdf", "%PDF".getBytes());
+
+        var stored = service.store(actor, file, "CHECK_IN", checkIn.getId());
+
+        assertThat(stored.entityType()).isEqualTo("CHECK_IN");
+        assertThat(stored.entityId()).isEqualTo(checkIn.getId());
+    }
+
+    @Test
+    void rejectsCheckInEvidenceAfterTheWorkflowIsClosed() {
+        Facility facility = entity(new Facility());
+        Reservation reservation = entity(new Reservation());
+        reservation.setFacility(facility);
+        CheckIn checkIn = entity(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setStatus(CheckInStatus.completed);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+
+        var file = new MockMultipartFile("file", "late.pdf", "application/pdf", "%PDF".getBytes());
+
+        assertThatThrownBy(() -> service.store(actor, file, "CHECK_IN", checkIn.getId()))
+            .hasMessageContaining("workflow is active");
         verify(fileAssetRepository, never()).saveAndFlush(any());
     }
 

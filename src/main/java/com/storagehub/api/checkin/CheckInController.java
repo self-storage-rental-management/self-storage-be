@@ -64,6 +64,61 @@ public class CheckInController {
         );
     }
 
+    @PostMapping("/{checkInId}/identity-verification")
+    public ApiResponse<CheckInResponse> verifyIdentity(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody VerifyCheckInIdentityRequest request
+    ) {
+        return new ApiResponse<>(
+            service.verifyIdentity(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/contract-signing")
+    public ApiResponse<CheckInResponse> signContract(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody SignCheckInContractRequest request
+    ) {
+        return new ApiResponse<>(
+            service.signContract(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/payment-confirmation")
+    public ApiResponse<CheckInResponse> confirmNoRemainingPayment(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody ConfirmCheckInPaymentRequest request
+    ) {
+        return new ApiResponse<>(
+            service.confirmNoRemainingPayment(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/setup/start")
+    public ApiResponse<CheckInResponse> startSetup(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody StartCheckInSetupRequest request
+    ) {
+        return new ApiResponse<>(
+            service.startSetup(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/setup/complete")
+    public ApiResponse<CheckInResponse> completeSetup(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody CompleteCheckInSetupRequest request
+    ) {
+        return new ApiResponse<>(
+            service.completeSetup(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{checkInId}/remaining-payment")
     public ApiResponse<CheckInPaymentResponse> recordRemainingPayment(
         @PathVariable UUID checkInId,

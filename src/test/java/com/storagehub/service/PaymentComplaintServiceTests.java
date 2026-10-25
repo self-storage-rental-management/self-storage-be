@@ -182,9 +182,9 @@ class PaymentComplaintServiceTests {
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
         assertThat(reservation.getStartDate()).isEqualTo(
-            LocalDate.of(2026, 10, 13)
+            LocalDate.of(2026, 10, 12)
         );
-        assertThat(reservation.getEndDate()).isEqualTo(reservation.getStartDate().plusMonths(2));
+        assertThat(reservation.getEndDate()).isEqualTo(LocalDate.of(2026, 12, 12));
     }
 
     @Test

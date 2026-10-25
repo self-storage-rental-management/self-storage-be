@@ -50,6 +50,39 @@ public class CheckIn extends BaseEntity {
     @Column
     private Instant checkedInAt;
 
+    @Column
+    private Instant identityVerifiedAt;
+
+    @Column(length = 30)
+    private String verifiedIdentityDocument;
+
+    @Column(length = 1000)
+    private String identityVerificationNote;
+
+    @Column
+    private Instant contractSignedAt;
+
+    @Column(length = 36)
+    private String contractEvidenceReference;
+
+    @Column
+    private Instant paymentCollectedAt;
+
+    @Column
+    private Instant setupStartedAt;
+
+    @Column
+    private Instant setupDueAt;
+
+    @Column
+    private Instant setupCompletedAt;
+
+    @Column
+    private Instant inventoryVerifiedAt;
+
+    @Column(length = 160)
+    private String lockReference;
+
     @Column(length = 8000)
     private String checklistJson;
 
