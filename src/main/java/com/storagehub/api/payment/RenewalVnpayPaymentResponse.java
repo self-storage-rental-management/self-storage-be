@@ -18,5 +18,7 @@ public record RenewalVnpayPaymentResponse(
     boolean reconciliationRequired,
     String message,
     String paymentUrl,
-    String settlementStage
+    String settlementStage,
+    String transactionStatus,
+    boolean receiptAvailable
 ) {}

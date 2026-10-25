@@ -40,8 +40,44 @@ import org.springframework.transaction.support.TransactionTemplate;
     "logging.level.com.storagehub.service.ledger.RenewalPaymentReconciler=DEBUG"})
 @ActiveProfiles("test") @Transactional(propagation=Propagation.NOT_SUPPORTED)
 @Import({AuditLogService.class,PaymentProvenance.class,RenewalVnpaySettlementService.class,RenewalPaymentReconciler.class,
+    com.storagehub.service.renewal.RenewalStatusProjection.class,com.storagehub.service.renewal.RenewalTransactionReader.class,
+    com.storagehub.service.renewal.RenewalReadService.class,
     RenewalPaymentTransactionTests.Sources.class})
 class RenewalPaymentTransactionTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean BusinessRecordCodes displayCodes;
+    @Autowired com.storagehub.service.renewal.RenewalReadService renewalReads;
+    @Autowired com.storagehub.service.renewal.RenewalStatusProjection statusProjection;
+
+    @Test void getDecoratesCommittedDataButReadsInsideCommandsKeepTheirOwnTransaction() throws Exception {
+        UUID paymentId=fixture();
+        var owner=tx.execute(s->{var n=payments.findById(paymentId).orElseThrow().getRenewal();
+            return new com.storagehub.security.ActorPrincipal(n.getRequestedBy().getId(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());});
+        UUID renewalId=tx.execute(s->payments.findById(paymentId).orElseThrow().getRenewal().getId());
+        var detail=renewalReads.detail(owner,renewalId,false);
+        assertThat(detail.statusSummary()).isNotNull();
+        assertThat(detail.statusSummary().invoice().status()).isEqualTo("UNPAID");
+        tx.executeWithoutResult(s->{
+            var within=renewalReads.detail(owner,renewalId,false);
+            assertThat(within.statusSummary()).isNull();
+            assertThat(s.isRollbackOnly()).isFalse();
+        });
+    }
+
+    @Test void statusReadDistinguishesCommittedGatewayFundsFromAllocationAndSigning() throws Exception {
+        UUID id=fixture();
+        var callback=callback(id,Map.of());
+        tx.executeWithoutResult(s->gateway.processCallback(callback));
+        var before=tx.execute(s->statusProjection.project(payments.findById(id).orElseThrow().getRenewal(),NOW.plusSeconds(3600)));
+        assertThat(before.workflowStatus()).isEqualTo("AWAITING_RECONCILIATION");
+        assertThat(before.invoice().status()).isEqualTo("UNPAID");
+        assertThat(before.transactions().getFirst().status()).isEqualTo("RECONCILIATION_REQUIRED");
+        assertThat(before.transactions().getFirst().receiptAvailable()).isFalse();
+        worker.reconcile(id);
+        var after=tx.execute(s->statusProjection.project(payments.findById(id).orElseThrow().getRenewal(),NOW.plusSeconds(3600)));
+        assertThat(after.invoice().status()).isEqualTo("PAID");
+        assertThat(after.workflowStatus()).isEqualTo("AWAITING_RECONCILIATION");
+        assertThat(after.transactions().getFirst().receiptAvailable()).isFalse();
+    }
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.storagehub.service.NotificationService workflowNotifications;
     static final Instant NOW=Instant.parse("2026-10-11T01:00:00Z");

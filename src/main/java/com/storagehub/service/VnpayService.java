@@ -59,6 +59,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor(onConstructor_=@Autowired)
 public class VnpayService {
+    @Autowired
+    private ObjectProvider<com.storagehub.service.renewal.RenewalTransactionReader> renewalTransactionReaders;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.RenewalInstallmentService> installments;
 
@@ -636,11 +638,15 @@ public class VnpayService {
     }
 
     private RenewalVnpayPaymentResponse renewalPaymentResponse(Payment payment,String message,String url) {
+        var reader=renewalTransactionReaders==null?null:renewalTransactionReaders.getIfAvailable();
+        var transaction=reader==null?null:reader.read(payment,Instant.now());
         return new RenewalVnpayPaymentResponse(payment.getId(),payment.getRenewal().getId(),
             payment.getRenewalRevision()==null?null:payment.getRenewalRevision().getId(),payment.getGatewayIntentId(),
             payment.getAmount(),payment.getCurrency(),payment.getStatus(),payment.getPaymentDeadline(),payment.getPaidAt(),
             payment.getStatus()==PaymentStatus.PAID&&(payment.getFailureCode()!=null
-                ||"RECONCILIATION_REQUIRED".equals(renewalSettlementStage(payment))),message,url,renewalSettlementStage(payment));
+                ||"RECONCILIATION_REQUIRED".equals(renewalSettlementStage(payment))),message,url,renewalSettlementStage(payment),
+            transaction==null?com.storagehub.service.renewal.RenewalTransactionStatus.resolve(payment,false,BigDecimal.ZERO,Instant.now()):transaction.status(),
+            transaction!=null&&transaction.receiptAvailable());
     }
 
     private String renewalSettlementStage(Payment payment) {

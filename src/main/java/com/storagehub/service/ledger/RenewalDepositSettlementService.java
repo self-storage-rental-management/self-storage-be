@@ -92,7 +92,7 @@ public class RenewalDepositSettlementService implements RefundSource {
             if(events(n,"DEPOSIT_REVIEW_REQUIRED").isEmpty()) {
                 em.persist(new RenewalOperationEvent(n,"DEPOSIT_REVIEW_REQUIRED",now(),null,store.canonical(Map.of("status",holdReason))));
                 notifications.createFacilityOperationsNotifications(n.getRental().getFacility().getId(),NotificationType.RENEWAL,
-                    "Cọc gia hạn cần được đối soát trách nhiệm","Có sự cố từ cơ sở hoặc trách nhiệm chưa được xác minh; chưa ghi nhận mất cọc.",id);
+                    "Tiền thuê gia hạn trả trước cần được đối soát trách nhiệm","Có sự cố từ cơ sở hoặc trách nhiệm chưa được xác minh; chưa quyết định khoản trả trước không được hoàn.",id);
             }
             return false;
         }
@@ -115,7 +115,7 @@ public class RenewalDepositSettlementService implements RefundSource {
         em.lock(p.workflow(),LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         audit.recordMutation((User)null,"RENEWAL_DEPOSIT_DISPOSITION","Renewal",id,n.getRental().getFacility().getId(),null,data);
         if(status.equals("FORFEITED"))notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.PAYMENT,
-            "Đã ghi nhận mất cọc gia hạn","Hợp đồng đã sang ngày quá hạn thứ 8 và gia hạn chưa hoàn tất. Cọc gia hạn được ghi nhận không hoàn lại.",id);
+            "Tiền thuê gia hạn trả trước không được hoàn","Hợp đồng đã sang ngày quá hạn thứ 8 và gia hạn chưa hoàn tất. Tiền thuê gia hạn trả trước được ghi nhận không hoàn lại.",id);
         return true;
     }
     @Override @Transactional(propagation=Propagation.MANDATORY)
@@ -169,8 +169,8 @@ public class RenewalDepositSettlementService implements RefundSource {
         var deposit=after.obligations().stream().filter(o->o.id().equals(p.obligation().id())).findFirst().orElseThrow();
         credits().cancelOutstanding(after,deposit,refund.getAmount(),"refund-deposit:"+id,"CANCELLED_RENEWAL_DEPOSIT_REFUND");
         refund.setStatus(RefundStatus.COMPLETED);refund.setGatewayRefundId(reference);p.payment().setRefundedAmount(p.payment().getRefundedAmount().add(refund.getAmount()));
-        notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.PAYMENT,"Đã ghi nhận hoàn cọc gia hạn",
-            p.environment().equals("SANDBOX")?"Đã ghi nhận chứng từ hoàn cọc trong môi trường Sandbox.":"Cơ sở đã xác nhận hoàn cọc gia hạn và lưu chứng từ thanh toán.",n.getId());
+        notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.PAYMENT,"Đã ghi nhận hoàn tiền thuê gia hạn trả trước",
+            p.environment().equals("SANDBOX")?"Đã ghi nhận chứng từ hoàn tiền thuê gia hạn trả trước trong môi trường Sandbox.":"Cơ sở đã xác nhận hoàn tiền thuê gia hạn trả trước và lưu chứng từ thanh toán.",n.getId());
         return new ExecutedRefund(id,n.getId(),refund.getAmount(),"VND",now,p.environment());
     }
     private Proof proof(Renewal n,boolean write) {
