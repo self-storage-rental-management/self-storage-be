@@ -5,6 +5,7 @@ import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.api.reservation.ReservationDetailResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationResponse;
+import com.storagehub.api.reservation.UpdateSetupGoodsRequest;
 import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
 import com.storagehub.common.api.ApiExceptions;
@@ -12,6 +13,8 @@ import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
+import com.storagehub.domain.model.GoodsCategory;
+import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
@@ -38,10 +41,12 @@ import com.storagehub.domain.repo.UnitAssignmentRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.ledger.LedgerStore;
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.math.RoundingMode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
@@ -69,6 +74,12 @@ public class CustomerReservationService {
     private final ObjectProvider<LedgerStore> ledgerStores;
     private final AccessCredentialService accessCredentialService;
     private final com.storagehub.domain.repo.ContractRepository contractRepository;
+
+    private static String clean(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
 
     @Autowired
     public CustomerReservationService(
@@ -236,6 +247,81 @@ public class CustomerReservationService {
     @Transactional(readOnly = true)
     public ReservationDetailResponse getDetail(ActorPrincipal actor, UUID reservationId) {
         Reservation reservation = findOwnedReservation(actor, reservationId);
+        return toDetailResponse(reservation);
+    }
+
+    @Transactional
+    public ReservationDetailResponse updateSetupGoods(
+        ActorPrincipal actor, UUID reservationId, UpdateSetupGoodsRequest request
+    ) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customers can update setup goods");
+        }
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        Rental rental = rentalRepository.findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Setup rental was not found"));
+        Instant now = Instant.now();
+        if (rental.getSetupStartedAt() == null || !rental.getSetupStartedAt().isBefore(now)
+            || rental.getSetupEndsAt() == null || !rental.getSetupEndsAt().isAfter(now)) {
+            throw ApiExceptions.conflict("Goods can only be amended during the setup period");
+        }
+        if (rental.getInventoryVerifiedAt() != null || reservation.getSetupGoodsRevisionUsedAt() != null) {
+            throw ApiExceptions.conflict("The setup goods declaration has already been locked or amended");
+        }
+
+        BigDecimal totalVolume = BigDecimal.ZERO;
+        BigDecimal totalWeight = BigDecimal.ZERO;
+        List<ReservationGoodsItem> replacement = new java.util.ArrayList<>();
+        for (var input : request.goodsItems()) {
+            BigDecimal itemVolume = input.getLengthCm().multiply(input.getWidthCm())
+                .multiply(input.getHeightCm()).divide(BigDecimal.valueOf(1_000_000), 12, RoundingMode.HALF_UP);
+            totalVolume = totalVolume.add(itemVolume.multiply(BigDecimal.valueOf(input.getQuantity())));
+            totalWeight = totalWeight.add(input.getWeightPerItemKg().multiply(BigDecimal.valueOf(input.getQuantity())));
+            ReservationGoodsItem item = new ReservationGoodsItem();
+            item.setReservation(reservation);
+            item.setCategory(input.getCategory());
+            item.setCustomGoodsName(clean(input.getCustomGoodsName()));
+            item.setMaterialName(clean(input.getMaterialName()));
+            item.setCustomMaterial(clean(input.getCustomMaterial()));
+            item.setDescription(clean(input.getDescription()));
+            item.setQuantity(input.getQuantity());
+            item.setLengthCm(input.getLengthCm());
+            item.setWidthCm(input.getWidthCm());
+            item.setHeightCm(input.getHeightCm());
+            item.setWeightKg(input.getWeightPerItemKg());
+            item.setFragile(input.isFragile());
+            item.setCustomerNote(clean(input.getCustomerNote()));
+            item.setRequiresStaffReview(input.getCategory() == GoodsCategory.OTHER);
+            item.setReviewStatus(item.isRequiresStaffReview() ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
+            replacement.add(item);
+        }
+        if (reservation.getUnitType().getVolumeM3() != null
+            && totalVolume.compareTo(reservation.getUnitType().getVolumeM3()) > 0) {
+            throw ApiExceptions.conflict("Goods volume exceeds the storage unit capacity");
+        }
+        if (reservation.getUnitType().getMaxLoadKg() != null
+            && totalWeight.compareTo(reservation.getUnitType().getMaxLoadKg()) > 0) {
+            throw ApiExceptions.conflict("Goods weight exceeds the storage unit capacity");
+        }
+        goodsItemRepository.deleteAll(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId));
+        goodsItemRepository.saveAll(replacement);
+        reservation.setTotalGoodsVolumeM3(totalVolume.setScale(6, RoundingMode.HALF_UP));
+        reservation.setTotalGoodsWeightKg(totalWeight.setScale(2, RoundingMode.HALF_UP));
+        reservation.setGoodsCondition(clean(request.goodsCondition()));
+        reservation.setSetupGoodsRevisionUsedAt(now);
+        reservationRepository.saveAndFlush(reservation);
+        auditLogService.recordMutation(
+            reservation.getCustomer(), "SETUP_GOODS_DECLARATION_AMENDED", "Reservation", reservation.getId(),
+            reservation.getFacility().getId(), null,
+            Map.of("revisionUsedAt", now, "itemCount", replacement.size())
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Khách đã cập nhật khai báo hàng trong setup",
+            "Đơn " + reservation.getReservationCode() + " đã dùng lần sửa khai báo duy nhất trước kiểm kê.",
+            reservation.getId()
+        );
         return toDetailResponse(reservation);
     }
 
@@ -464,6 +550,37 @@ public class CustomerReservationService {
             );
         }
 
+        Rental setupRental = rentalRepository == null ? null
+            : rentalRepository.findByReservation_Id(reservationId)
+                .filter(rental -> rental.getStatus() == RentalStatus.setup)
+                .orElse(null);
+        if (setupRental != null) {
+            if (!setupRental.isSetupExitReviewRequired()) {
+                setupRental.setSetupExitReviewRequired(true);
+                rentalRepository.saveAndFlush(setupRental);
+                String handling = setupRental.getMoveInCompletedAt() == null
+                    ? "Hàng chưa được xác nhận đã chuyển vào: xử lý như hủy sau check-in."
+                    : "Hàng đã chuyển vào: phải dọn kho và kiểm tra trả kho trước khi quyết toán.";
+                notificationService.createBusinessNotifications(
+                    NotificationType.RESERVATION, "Yêu cầu quyết định hoàn tiền trong thời gian setup",
+                    "Đơn " + reservation.getReservationCode() + ". " + handling
+                        + " Không tự động hoàn tiền giữ chỗ hoặc tiền thuê.", reservation.getId()
+                );
+                notificationService.createNotification(
+                    reservation.getCustomer().getId(), NotificationType.RESERVATION,
+                    "Yêu cầu hủy/trả kho đang chờ quyết định",
+                    "Business sẽ quyết định số tiền hoàn. Hệ thống chưa tự động hoàn bất kỳ khoản nào.",
+                    reservation.getId()
+                );
+                auditLogService.recordMutation(
+                    reservation.getCustomer(), "SETUP_EXIT_REVIEW_REQUESTED", "Rental", setupRental.getId(),
+                    reservation.getFacility().getId(), null,
+                    Map.of("setupExitReviewRequired", true, "goodsMovedIn", setupRental.getMoveInCompletedAt() != null)
+                );
+            }
+            return toDetailResponse(reservation);
+        }
+
         List<Payment> payments = paymentRepository.findReservationPaymentsForUpdate(
             reservationId, PaymentType.RESERVATION_DEPOSIT
         );
@@ -596,6 +713,12 @@ public class CustomerReservationService {
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setFreeSetupDays(snapshot.getFreeSetupDays());
+        response.setSetupGoodsRevisionUsedAt(reservation.getSetupGoodsRevisionUsedAt());
+        if (rentalRepository != null) {
+            response.setSetupExitReviewRequired(rentalRepository.findByReservation_Id(reservation.getId())
+                .map(Rental::isSetupExitReviewRequired).orElse(false));
+        }
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setCustomerName(reservation.getCustomer().getFullName());
