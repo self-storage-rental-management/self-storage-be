@@ -181,6 +181,10 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             require(value, value.script());
             return "classpath:db/migration-history/legacy-checkin-2401";
         }
+        if ("2026102401".equals(version) && "V2026102401__add_rental_package_deposit_rate.sql".equals(value.script())) {
+            require(value, value.script());
+            return "classpath:db/migration-history/legacy-deposit-rate-2401";
+        }
         if ("2026102402".equals(version) && "V2026102402__snapshot_free_setup_and_rental_timeline.sql".equals(value.script())) {
             require(value, value.script());
             return "classpath:db/migration-history/legacy-checkin-2402";

@@ -16,6 +16,7 @@ public record RentalPackagePolicyResponse(
     Integer rentalYears,
     String description,
     BigDecimal discountRate,
+    BigDecimal depositRate,
     String policyVersion,
     PublicationStatus publicationStatus,
     String runtimeStatus,
@@ -42,7 +43,7 @@ public record RentalPackagePolicyResponse(
     ) {
         this(
             id, facilityId, facilityName, code, name, rentalMonths,
-            null, null, discountRate, policyVersion,
+            null, null, discountRate, new BigDecimal("0.20"), policyVersion,
             active ? PublicationStatus.PUBLISHED : PublicationStatus.INACTIVE,
             active ? "ACTIVE" : "INACTIVE",
             active, effectiveFrom, effectiveTo, createdAt, updatedAt
