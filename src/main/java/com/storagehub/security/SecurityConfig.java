@@ -70,6 +70,7 @@ public class SecurityConfig {
                     HttpMethod.GET,
                     "/api/public/facilities",
                     "/api/public/unit-types",
+                    "/api/public/support/knowledge",
                     "/api/public/payments/vnpay/return",
                     "/api/public/payments/vnpay/ipn"
                 ).permitAll()

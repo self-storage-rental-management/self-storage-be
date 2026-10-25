@@ -13,7 +13,7 @@ public final class RenewalTransactionStatus {
             if(!reconciled||p.getRefundedAmount()!=null&&p.getRefundedAmount().compareTo(executedRefund)>0)
                 return "RECONCILIATION_REQUIRED";
             if(executedRefund.signum()>0)return executedRefund.compareTo(p.getAmount())>=0?"REFUNDED":"PARTIALLY_REFUNDED";
-            if(p.getFailureCode()!=null)return "RECONCILIATION_REQUIRED";
+            if(p.getFailureCode()!=null&&!RenewalPreparationResolution.BLOCKED.equals(p.getFailureCode()))return "RECONCILIATION_REQUIRED";
             return "SUCCEEDED";
         }
         if(p.getStatus()==PaymentStatus.CANCELLED)return "CANCELLED";

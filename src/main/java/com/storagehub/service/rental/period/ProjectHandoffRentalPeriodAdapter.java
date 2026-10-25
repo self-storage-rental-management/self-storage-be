@@ -100,24 +100,30 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
         var rev = wf.getAcceptedRevision();
         if (rev == null || rev.getQuote() == null || !same(n.getId(), rev.getRenewal()) || !same(r.getId(), rev.getQuote().getRental())
             || !same(r.getCustomer().getId(), rev.getQuote().getCustomer())
-            || !"RENEWAL_COMPLETION_PERIOD_V1".equals(d.path("schema").asText())
+            || !java.util.Set.of("RENEWAL_COMPLETION_PERIOD_V1","RENEWAL_COMPLETION_PERIOD_V2").contains(d.path("schema").asText())
             || d.path("previousProof").asText().isBlank() || !id(d, "acceptedQuoteId", rev.getQuote().getId())) return Optional.empty();
         try {
             var t = mapper.readValue(rev.getQuote().getTermsJson(), RenewalQuoteResponse.Terms.class);
             if (t == null) return Optional.empty();
             var p = evidence(r, d, "completion:" + event.getId());
-            if (p.isEmpty() || !Objects.equals(n.getNewEndDate(), p.get().lastPermittedDate())
-                || !Objects.equals(t.newEndDate(), p.get().lastPermittedDate())
+            boolean effective="RENEWAL_COMPLETION_PERIOD_V2".equals(d.path("schema").asText());
+            if (p.isEmpty() || !Objects.equals(n.getNewEndDate(), t.newEndDate())
+                || !effective && !Objects.equals(t.newEndDate(), p.get().lastPermittedDate())
                 || !Objects.equals(t.oldEndDate(), date(d, "oldStoredEndDate"))
-                || !Objects.equals(t.extensionEndExclusive(), p.get().endExclusive())
+                || !effective && !Objects.equals(t.extensionEndExclusive(), p.get().endExclusive())
                 || !Objects.equals(t.storageUnitId(), r.getStorageUnit().getId())
                 || !Objects.equals(t.facilityId(), r.getFacility().getId())) return Optional.empty();
             var previous = RentalPeriod.verified(r.getId(), r.getStartDate(), t.oldEndDate(),
                 p.get().convention(), d.path("previousProof").asText());
-            if (previous.isEmpty() || !Objects.equals(previous.get().endExclusive(), t.extensionStartDate())
-                || t.rentalMonths() < 1 || !previous.get().endExclusive().plusMonths(t.rentalMonths()).equals(p.get().endExclusive()))
-                return Optional.empty();
+            if (previous.isEmpty()) return Optional.empty();
             RenewalPeriodCompatibility.require(previous.get(), t);
+            if(effective) {
+                var interval=RenewalEffectivePeriod.at(previous.get(),t,event.getOccurredAt());
+                if(!interval.startDate().equals(date(d,"effectiveExtensionStartDate"))
+                    ||!interval.endExclusive().equals(date(d,"effectiveExtensionEndExclusive"))
+                    ||!interval.endExclusive().equals(p.get().endExclusive()))return Optional.empty();
+            } else if(!Objects.equals(previous.get().endExclusive(),t.extensionStartDate())
+                ||!t.extensionEndExclusive().equals(p.get().endExclusive()))return Optional.empty();
             return p;
         } catch (JsonProcessingException | DateTimeException | com.storagehub.common.api.ApiException e) { return Optional.empty(); }
     }
