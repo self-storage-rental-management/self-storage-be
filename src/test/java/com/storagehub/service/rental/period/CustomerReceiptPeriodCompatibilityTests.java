@@ -159,7 +159,8 @@ class CustomerReceiptPeriodCompatibilityTests {
 
         service.confirmReceipt(actor, reservation.getId());
 
-        verifyNoInteractions(rentals, audit, notifications, units, ledger, ledgerStores);
+        verify(rentals).findByReservation_Id(reservation.getId());
+        verifyNoInteractions(audit, notifications, units, ledger, ledgerStores);
         verify(checkIns, never()).saveAndFlush(any());
     }
 

@@ -32,6 +32,10 @@ public class ReservationPricingSnapshot extends BaseEntity {
     @Column(nullable = false)
     private int rentalMonths;
 
+    /** Immutable setup benefit captured when the reservation is created. */
+    @Column(nullable = false)
+    private int freeSetupDays;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal monthlyPrice;
 

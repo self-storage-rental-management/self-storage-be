@@ -102,6 +102,7 @@ public class ReservationQuoteService {
                 policy.getCode(),
                 policy.getName(),
                 policy.getRentalMonths(),
+                policy.getFreeSetupDays(),
                 policy.getDiscountRate(),
                 policy.getPolicyVersion()
             ))
@@ -194,6 +195,7 @@ public class ReservationQuoteService {
         quote.setStartDate(request.getStartDate());
         quote.setEndDate(request.getEndDate());
         quote.setRentalMonths(rentalMonths);
+        quote.setFreeSetupDays(policy.getFreeSetupDays());
         quote.setMonthlyPrice(monthlyPrice);
         quote.setSubtotal(subtotal);
         quote.setDiscountRate(policy.getDiscountRate());
@@ -241,6 +243,7 @@ public class ReservationQuoteService {
         policy.setCode("CUSTOM-" + rentalMonths + "M");
         policy.setName("Gói " + rentalMonths + " tháng tiêu chuẩn");
         policy.setRentalMonths(rentalMonths);
+        policy.setFreeSetupDays(defaultFreeSetupDays(rentalMonths));
         policy.setDiscountRate(BigDecimal.ZERO);
         policy.setPolicyVersion("STANDARD-1.0");
         policy.setActive(true);
@@ -264,7 +267,7 @@ public class ReservationQuoteService {
     }
 
     private ReservationQuoteResponse toResponse(ReservationQuote quote) {
-        return new ReservationQuoteResponse(
+        ReservationQuoteResponse response = new ReservationQuoteResponse(
             quote.getId(), quote.getFacility().getId(), quote.getUnitType().getId(),
             quote.getStartDate(), quote.getEndDate(), quote.getRentalMonths(),
             quote.getMonthlyPrice(), quote.getSubtotal(), quote.getPricingPackageCode(),
@@ -276,5 +279,17 @@ public class ReservationQuoteService {
             quote.getTotalInitialObligation(),
             quote.getPolicyVersion(), quote.getQuotedAt(), quote.getExpiresAt()
         );
+        response.setFreeSetupDays(quote.getFreeSetupDays());
+        return response;
+    }
+
+    public static int defaultFreeSetupDays(int rentalMonths) {
+        return switch (rentalMonths) {
+            case 3 -> 3;
+            case 6 -> 7;
+            case 12 -> 15;
+            case 24 -> 30;
+            default -> 0;
+        };
     }
 }

@@ -104,6 +104,14 @@ public class Reservation extends BaseEntity {
     @Column(nullable = false)
     private LocalDate endDate;
 
+    /** Free setup benefit captured from the accepted quote. Never recalculate from a later policy. */
+    @Column(nullable = false)
+    private int setupDaysSnapshot;
+
+    /** The customer may amend the goods declaration once during setup, before inventory is locked. */
+    @Column
+    private Instant setupGoodsRevisionUsedAt;
+
     /** Customer-selected arrival time for storage handover. Staff can only consume this value. */
     @Column
     private Instant appointmentAt;
