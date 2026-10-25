@@ -40,6 +40,14 @@ import org.springframework.web.multipart.MultipartFile;
 public class FileStorageService {
 
     private static final Set<String> ALLOWED_TYPES = Set.of("image/jpeg", "image/png", "image/webp", "application/pdf");
+    private static final Set<CheckInStatus> ACTIVE_CHECK_IN_EVIDENCE_STATUSES = Set.of(
+        CheckInStatus.scheduled,
+        CheckInStatus.identity_verified,
+        CheckInStatus.contract_signed,
+        CheckInStatus.payment_collected,
+        CheckInStatus.setup_in_progress,
+        CheckInStatus.setup_completed
+    );
     private static final Map<String, String> EXTENSIONS = Map.of(
         "image/jpeg", ".jpg",
         "image/png", ".png",
@@ -255,8 +263,8 @@ public class FileStorageService {
             var checkIn = checkInRepository.findById(entityId)
                 .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
             facilityScopeService.assertCanOperate(actor, checkIn.getReservation().getFacility().getId());
-            if (checkIn.getStatus() != CheckInStatus.scheduled) {
-                throw ApiExceptions.conflict("Evidence can only be uploaded for a scheduled check-in");
+            if (!ACTIVE_CHECK_IN_EVIDENCE_STATUSES.contains(checkIn.getStatus())) {
+                throw ApiExceptions.conflict("Evidence can only be uploaded while the check-in workflow is active");
             }
             return;
         }

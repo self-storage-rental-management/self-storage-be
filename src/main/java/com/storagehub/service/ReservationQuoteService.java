@@ -102,8 +102,10 @@ public class ReservationQuoteService {
                 policy.getCode(),
                 policy.getName(),
                 policy.getRentalMonths(),
+                policy.getFreeSetupDays(),
                 policy.getDiscountRate(),
-                policy.getPolicyVersion()
+                policy.getPolicyVersion(),
+                policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE
             ))
             .toList();
     }
@@ -123,6 +125,9 @@ public class ReservationQuoteService {
 
         UnitType unitType = unitTypeRepository.findById(request.getUnitTypeId())
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (!unitType.getFacility().getId().equals(request.getFacilityId())) {
+            throw ApiExceptions.validation("Unit type does not belong to the selected facility", null);
+        }
         User customer = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
 
@@ -155,7 +160,8 @@ public class ReservationQuoteService {
         }
 
         BigDecimal totalAfterDiscount = money(baseEligibleAmount.subtract(voucherDiscountAmount));
-        BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
+        BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
+        BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(depositRate));
         BigDecimal securityDepositAmount = money(
             (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
                 ? monthlyPrice
@@ -168,6 +174,25 @@ public class ReservationQuoteService {
 
         ReservationQuote quote = new ReservationQuote();
         quote.setCustomer(customer);
+        quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(request.getGoodsItems()));
+        quote.setUnitTypeRevision(unitType.getPublishedRevision());
+        var unitSnapshot = new java.util.LinkedHashMap<String, Object>();
+        unitSnapshot.put("code", unitType.getCode());
+        unitSnapshot.put("name", unitType.getName());
+        unitSnapshot.put("description", unitType.getDescription());
+        unitSnapshot.put("lengthM", unitType.getLengthM());
+        unitSnapshot.put("widthM", unitType.getWidthM());
+        unitSnapshot.put("heightM", unitType.getHeightM());
+        unitSnapshot.put("maxLoadKg", unitType.getMaxLoadKg());
+        unitSnapshot.put("rackCount", unitType.getRackCount());
+        unitSnapshot.put("rackLengthM", unitType.getRackLengthM());
+        unitSnapshot.put("rackWidthM", unitType.getRackWidthM());
+        unitSnapshot.put("rackHeightM", unitType.getRackHeightM());
+        unitSnapshot.put("monthlyPrice", unitType.getMonthlyPrice());
+        unitSnapshot.put("securityDepositAmount", unitType.getSecurityDepositAmount());
+        unitSnapshot.put("publishedRevision", unitType.getPublishedRevision());
+        unitSnapshot.put("acceptedGoodsJson", unitType.getAcceptedGoodsJson());
+        quote.setUnitTypeSnapshotJson(GoodsSnapshotCodec.encodeObject(unitSnapshot));
         quote.setFacility(policy.getFacility());
         quote.setUnitType(unitType);
         quote.setPricingPackageCode(policy.getCode());
@@ -175,6 +200,7 @@ public class ReservationQuoteService {
         quote.setStartDate(request.getStartDate());
         quote.setEndDate(request.getEndDate());
         quote.setRentalMonths(rentalMonths);
+        quote.setFreeSetupDays(policy.getFreeSetupDays());
         quote.setMonthlyPrice(monthlyPrice);
         quote.setSubtotal(subtotal);
         quote.setDiscountRate(policy.getDiscountRate());
@@ -182,6 +208,7 @@ public class ReservationQuoteService {
         quote.setVoucherCode(appliedVoucherCode);
         quote.setVoucherDiscountAmount(voucherDiscountAmount);
         quote.setTotalAfterDiscount(totalAfterDiscount);
+        quote.setReservationDepositRate(depositRate);
         quote.setReservationDepositAmount(reservationDepositAmount);
         quote.setSecurityDepositAmount(securityDepositAmount);
         quote.setRemainingRentalAmount(remainingRentalAmount);
@@ -222,7 +249,9 @@ public class ReservationQuoteService {
         policy.setCode("CUSTOM-" + rentalMonths + "M");
         policy.setName("Gói " + rentalMonths + " tháng tiêu chuẩn");
         policy.setRentalMonths(rentalMonths);
+        policy.setFreeSetupDays(defaultFreeSetupDays(rentalMonths));
         policy.setDiscountRate(BigDecimal.ZERO);
+        policy.setDepositRate(RESERVATION_DEPOSIT_RATE);
         policy.setPolicyVersion("STANDARD-1.0");
         policy.setActive(true);
         policy.setEffectiveFrom(LocalDate.of(2020, 1, 1));
@@ -245,8 +274,10 @@ public class ReservationQuoteService {
     }
 
     private ReservationQuoteResponse toResponse(ReservationQuote quote) {
-        return new ReservationQuoteResponse(
-            quote.getId(), quote.getFacility().getId(), quote.getUnitType().getId(),
+        ReservationQuoteResponse response = new ReservationQuoteResponse(
+            quote.getId(),
+            quote.getFacility().getId(), quote.getFacility().getName(),
+            quote.getUnitType().getId(), quote.getUnitType().getName(),
             quote.getStartDate(), quote.getEndDate(), quote.getRentalMonths(),
             quote.getMonthlyPrice(), quote.getSubtotal(), quote.getPricingPackageCode(),
             quote.getDiscountRate(), quote.getDiscountAmount(),
@@ -257,5 +288,20 @@ public class ReservationQuoteService {
             quote.getTotalInitialObligation(),
             quote.getPolicyVersion(), quote.getQuotedAt(), quote.getExpiresAt()
         );
+        response.setReservationDepositRate(
+            quote.getReservationDepositRate() != null ? quote.getReservationDepositRate() : RESERVATION_DEPOSIT_RATE
+        );
+        response.setFreeSetupDays(quote.getFreeSetupDays());
+        return response;
+    }
+
+    public static int defaultFreeSetupDays(int rentalMonths) {
+        return switch (rentalMonths) {
+            case 3 -> 3;
+            case 6 -> 7;
+            case 12 -> 15;
+            case 24 -> 30;
+            default -> 0;
+        };
     }
 }

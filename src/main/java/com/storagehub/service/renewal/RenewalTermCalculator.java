@@ -12,7 +12,11 @@ public final class RenewalTermCalculator {
         BigDecimal depositAmount, BigDecimal remainder) {}
     public static Terms calculate(LocalDate oldEnd, int packageMonths, BigDecimal price,
         BigDecimal discountRate, BigDecimal depositRate) {
-        if (oldEnd == null || packageMonths < 1 || price == null || price.signum() < 0
+        return calculate(null, oldEnd, packageMonths, price, discountRate, depositRate);
+    }
+    public static Terms calculate(LocalDate start, LocalDate oldEnd, int packageMonths, BigDecimal price,
+        BigDecimal discountRate, BigDecimal depositRate) {
+        if ((start == null && oldEnd == null) || packageMonths < 1 || price == null || price.signum() < 0
             || !rate(discountRate) || !rate(depositRate))
             throw ApiExceptions.conflict("Shared renewal pricing or period data is invalid");
         try {
@@ -22,7 +26,7 @@ public final class RenewalTermCalculator {
             BigDecimal discount = rent.discount();
             BigDecimal net = rent.netRent();
             BigDecimal deposit = money(net.multiply(depositRate));
-            return new Terms(start,end,end.minusDays(1),subtotal,discount,net,deposit,money(net.subtract(deposit)));
+            return new Terms(startDate,end,end.minusDays(1),subtotal,discount,net,deposit,money(net.subtract(deposit)));
         } catch (DateTimeException | ArithmeticException e) {
             throw ApiExceptions.conflict("Shared renewal period is outside supported date or money bounds");
         }

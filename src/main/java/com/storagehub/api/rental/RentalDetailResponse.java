@@ -15,7 +15,9 @@ public record RentalDetailResponse(UUID id, RentalSummaryResponse.Customer custo
     LocalDate contractEndDate, BigDecimal monthlyPrice, String currency,
     List<RentalSummaryResponse.Warning> dataWarnings, UUID reservationId,
     Instant actualReturnedAt, Instant completedAt, Financial financialSummary, Access access,
-    RentalSummaryResponse.DateSemantics dateSemantics, RentalBookingEvidence bookingEvidence) {
+    RentalSummaryResponse.DateSemantics dateSemantics, RentalBookingEvidence bookingEvidence,
+    boolean inventoryPending, Instant inventoryDueAt, Instant setupStartedAt, Instant setupEndsAt,
+    Instant moveInCompletedAt, boolean setupExitReviewRequired) {
     @Schema(description = "COMPLETE includes verified security deposit; PARTIAL has verified balances/billing but unknown deposit; UNKNOWN has no verified financial projection.")
     public record Financial(@Schema(allowableValues = {"COMPLETE", "PARTIAL", "UNKNOWN"}) String completeness, String currency, BigDecimal outstandingAmount,
         BigDecimal overdueAmount, LocalDate nextDueDate, String reason,

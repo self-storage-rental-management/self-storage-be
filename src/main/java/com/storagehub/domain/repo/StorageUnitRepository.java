@@ -40,6 +40,10 @@ public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> 
 
     long countByStatus(StorageUnitStatus status);
 
+    boolean existsByCode(String code);
+
+    java.util.Optional<StorageUnit> findByCode(String code);
+
     @Query("""
         select u from StorageUnit u
         where (:facilityId is null or u.facility.id = :facilityId)

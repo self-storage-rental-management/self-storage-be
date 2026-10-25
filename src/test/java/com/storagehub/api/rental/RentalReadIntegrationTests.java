@@ -108,7 +108,7 @@ class RentalReadIntegrationTests {
         t.setMonthlyPrice(new BigDecimal("15000000")); t.setMaxLoadKg(BigDecimal.ONE);
         t.setRackLengthM(BigDecimal.ONE); t.setRackWidthM(BigDecimal.ONE); t.setRackHeightM(BigDecimal.ONE); em.persist(t);
         StorageUnit unit=new StorageUnit(); unit.setFacility(f); unit.setUnitType(t); unit.setCode(unitCode); em.persist(unit);
-        ReservationQuote quote=new ReservationQuote(); quote.setCustomer(u); quote.setFacility(f); quote.setUnitType(t);
+        ReservationQuote quote=com.storagehub.testing.LegacyReservationQuoteFixture.create(); quote.setCustomer(u); quote.setFacility(f); quote.setUnitType(t);
         quote.setPricingPackageCode("TEST"); quote.setPolicyVersion("test-fixture"); quote.setStartDate(LocalDate.of(2026,10,1));
         quote.setEndDate(end.plusDays(1)); quote.setRentalMonths(1); quote.setMonthlyPrice(new BigDecimal("9500000"));
         quote.setSubtotal(new BigDecimal("9500000")); quote.setDiscountRate(BigDecimal.ZERO); quote.setDiscountAmount(BigDecimal.ZERO);

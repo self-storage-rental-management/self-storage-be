@@ -164,6 +164,14 @@ public class NotificationService {
     }
 
     @Transactional
+    public void createBusinessNotifications(
+        NotificationType type, String title, String content, UUID relatedEntityId
+    ) {
+        userRepository.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE)
+            .forEach(user -> createNotification(user.getId(), type, title, content, relatedEntityId));
+    }
+
+    @Transactional
     public void notifyStaffOfCheckInAppointmentChange(Reservation reservation, Instant previousAppointmentAt) {
         createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.CHECKIN,

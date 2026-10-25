@@ -63,7 +63,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         reservation.setFacility(facility);
         reservation.setAssignedUnit(unit);
         reservation.setUnitType(id(new UnitType()));
-        reservation.setSourceQuote(id(new ReservationQuote()));
+        reservation.setSourceQuote(id(com.storagehub.testing.LegacyReservationQuoteFixture.create()));
         reservation.setStartDate(LocalDate.of(2026, 10, 1));
         reservation.setEndDate(LocalDate.of(2026, 11, 1));
         reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
@@ -159,7 +159,8 @@ class CustomerReceiptPeriodCompatibilityTests {
 
         service.confirmReceipt(actor, reservation.getId());
 
-        verifyNoInteractions(rentals, audit, notifications, units, ledger, ledgerStores);
+        verify(rentals).findByReservation_Id(reservation.getId());
+        verifyNoInteractions(audit, notifications, units, ledger, ledgerStores);
         verify(checkIns, never()).saveAndFlush(any());
     }
 

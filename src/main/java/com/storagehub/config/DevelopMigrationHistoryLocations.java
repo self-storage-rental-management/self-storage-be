@@ -28,7 +28,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                 query.setString(1, history);
                 try (var result = query.executeQuery()) {
                     if (result.next() && result.getInt(1) > 0) {
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003')")) {
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402')")) {
                             while (rows.next()) {
                                 var value = new Applied(rows.getString("script"),rows.getString("type"),rows.getBoolean("success"));
                                 if (applied.put(rows.getString("version"), value) != null) throw new IllegalStateException("Duplicate version in applied migration history; no repair performed");
@@ -39,6 +39,11 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             }
         } catch (SQLException error) { throw new IllegalStateException("Cannot inspect actual Flyway history; no migration performed", error); }
         var selected = new ArrayList<>(locations.stream().filter(location -> !location.startsWith("classpath:db/migration-history/")).toList());
+        selected.add(select(applied, "2026102401", "V2026102401__support_handoff_retention.sql", "develop-support-2401",
+            "V2026102401__snapshot_goods_catalog_identity.sql", "legacy-goods-2401"));
+        selected.add(select(applied, "2026102402", "V2026102402__customer_chat_sessions.sql", "develop-support-2402",
+            "V2026102402__support_catalog_material_names.sql", "legacy-goods-2402"));
+        if (applied.containsKey("2026102401") || applied.containsKey("2026102402")) configuration.outOfOrder(true);
         // Develop renumbered these scripts after local databases had already applied them.
         // Resolve their original checksums without repeating the same DDL at the new version.
         selectRenumbered(selected, applied, "2026101900", "2026102002",
@@ -172,6 +177,18 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
     private static String select(Map<String,Applied> applied,String version,String developScript,String developFolder,String legacyScript,String legacyFolder) {
         var value=applied.get(version);
         if(value==null)return "classpath:db/migration-history/"+developFolder;
+        if ("2026102401".equals(version) && "V2026102401__add_checkin_workflow_phases.sql".equals(value.script())) {
+            require(value, value.script());
+            return "classpath:db/migration-history/legacy-checkin-2401";
+        }
+        if ("2026102401".equals(version) && "V2026102401__add_rental_package_deposit_rate.sql".equals(value.script())) {
+            require(value, value.script());
+            return "classpath:db/migration-history/legacy-deposit-rate-2401";
+        }
+        if ("2026102402".equals(version) && "V2026102402__snapshot_free_setup_and_rental_timeline.sql".equals(value.script())) {
+            require(value, value.script());
+            return "classpath:db/migration-history/legacy-checkin-2402";
+        }
         if(developScript.equals(value.script())) {require(value,developScript);return "classpath:db/migration-history/"+developFolder;}
         require(value,legacyScript);return "classpath:db/migration-history/"+legacyFolder;
     }

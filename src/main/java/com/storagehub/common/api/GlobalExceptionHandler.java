@@ -37,12 +37,12 @@ public class GlobalExceptionHandler {
         Map<String, String> details = new LinkedHashMap<>();
         exception.getBindingResult().getFieldErrors()
             .forEach(error -> details.putIfAbsent(error.getField(), error.getDefaultMessage()));
-        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "Request validation failed", details);
+        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "Thông tin gửi lên chưa hợp lệ", details);
     }
 
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ApiErrorResponse> handleConstraintViolation(ConstraintViolationException exception) {
-        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "Request validation failed", exception.getMessage());
+        return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "Thông tin gửi lên chưa hợp lệ", exception.getMessage());
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
