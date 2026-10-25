@@ -153,7 +153,9 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         where (
             (:statusFilter = false and reservation.status in (
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
-                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN
+                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN,
+                com.storagehub.domain.model.ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+                com.storagehub.domain.model.ReservationStatus.COMPLETED
             ))
             or (:statusFilter = true and reservation.status in (
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
