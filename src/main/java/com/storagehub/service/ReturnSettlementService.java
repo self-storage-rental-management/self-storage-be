@@ -17,6 +17,7 @@ import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
+import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.SystemPermission;
@@ -26,6 +27,7 @@ import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.time.BusinessTime;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -84,7 +86,7 @@ public class ReturnSettlementService {
         var recoveryGuard=recoveryGuard();
         if(recoveryGuard!=null)recoveryGuard.requireNoActiveRecovery(rental);
 
-        if (request.scheduledDate().isBefore(LocalDate.now())) {
+        if (request.scheduledDate().isBefore(LocalDate.now(BusinessTime.ZONE))) {
             throw ApiExceptions.validation("scheduledDate cannot be in the past", null);
         }
 
@@ -345,6 +347,8 @@ public class ReturnSettlementService {
         ManagerReviewDisputeRequest request
     ) {
         authorizationService.require(actor, SystemPermission.MANAGE_RENTALS);
+        authorizationService.require(actor, SystemPermission.WAIVE_FEES);
+        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
         ReturnCase returnCase = returnCaseRepository.findById(returnId)
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
@@ -357,6 +361,10 @@ public class ReturnSettlementService {
 
         User manager = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Manager user not found"));
+        if (returnCase.getInspectedBy() != null
+            && returnCase.getInspectedBy().getId().equals(manager.getId())) {
+            throw ApiExceptions.conflict("The Staff who entered return deductions cannot approve the same refund");
+        }
 
         BigDecimal safeDamage = safeFee(request.damageFee());
         BigDecimal safeCleaning = safeFee(request.cleaningFee());
@@ -434,11 +442,18 @@ public class ReturnSettlementService {
         UUID returnId,
         StaffCompleteRefundRequest request
     ) {
-        authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
+        if (actor.hasRole(RoleCode.MANAGER)) {
+            throw ApiExceptions.forbidden("Manager approves refunds but cannot execute them");
+        }
+        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
         ReturnCase returnCase = returnCaseRepository.findById(returnId)
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
-        facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
+        if (actor.hasRole(RoleCode.STAFF)) {
+            facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
+        } else {
+            facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
+        }
 
         lockRecoveryReturn(returnCase);
         var recoveryGuard=recoveryGuard();
@@ -446,7 +461,10 @@ public class ReturnSettlementService {
         if (returnCase.getStatus() != ReturnCaseStatus.refund_pending) {
             throw ApiExceptions.conflict("Return case is not pending refund");
         }
-        authorizationService.require(actor,SystemPermission.MANAGE_PAYMENTS);
+        if (returnCase.getInspectedBy() != null
+            && returnCase.getInspectedBy().getId().equals(actor.userId())) {
+            throw ApiExceptions.conflict("The Staff who entered return deductions cannot approve the same refund");
+        }
         finance().receipt(actor,returnCase,request.paymentMethod(),request.transactionReference(),request.receiptFileId());
         finance().settle(returnCase,actor.userId(),request.transactionReference(),true);
 
@@ -489,10 +507,26 @@ public class ReturnSettlementService {
 
     @Transactional
     public ReturnCaseResponse recordSettlement(ActorPrincipal actor,UUID returnId,com.storagehub.api.returns.StaffReturnSettlementRequest request) {
-        authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
-        authorizationService.require(actor,SystemPermission.MANAGE_PAYMENTS);
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
-        facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
+        if (rc.getStatus() == ReturnCaseStatus.refund_pending) {
+            if (actor.hasRole(RoleCode.MANAGER)) {
+                throw ApiExceptions.forbidden("Manager approves refunds but cannot execute them");
+            }
+            authorizationService.require(actor,SystemPermission.EXECUTE_REFUNDS);
+            if (actor.hasRole(RoleCode.STAFF)) {
+                facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());
+            } else {
+                facilityScopeService.assertCanManage(actor,rc.getFacility().getId());
+            }
+        } else {
+            authorizationService.require(actor,SystemPermission.PROCESS_RETURNS);
+            authorizationService.require(actor,SystemPermission.MANAGE_PAYMENTS);
+            facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());
+            if (actor.hasRole(RoleCode.STAFF) && !"CASH".equalsIgnoreCase(request.paymentMethod())) {
+                throw ApiExceptions.forbidden("Staff may collect only cash payments during an active collection session");
+            }
+        }
+        lockRecoveryReturn(rc);
         var guard=recoveryGuard();if(guard!=null)guard.requireManualSettlement(rc);
         if(!Boolean.TRUE.equals(request.confirmed()))throw ApiExceptions.validation("Cần xác nhận đã thực thu hoặc thực hoàn tiền.",null);
         var receiptAmount = rc.getAmountDueFromCustomer() != null && rc.getAmountDueFromCustomer().signum() > 0

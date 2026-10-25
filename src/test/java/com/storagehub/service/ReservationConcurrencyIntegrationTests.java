@@ -51,17 +51,12 @@ class ReservationConcurrencyIntegrationTests {
     @Autowired private RentalPackagePolicyRepository policyRepository;
     @Autowired private ReservationQuoteRepository quoteRepository;
     @Autowired private ReservationRepository reservationRepository;
-    @Autowired private com.storagehub.domain.repo.ReservationCodeSequenceRepository sequenceRepository;
 
     @Test
     void onlyOneOfTwoConcurrentRequestsCanReserveTheLastCapacity() throws Exception {
         LocalDate startDate = ReservationCheckInPolicy.plannedWindow(Instant.now(), false)
             .availableAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         LocalDate endDate = startDate.plusMonths(3);
-        var sequence = new com.storagehub.domain.model.ReservationCodeSequence();
-        sequence.setId(1);
-        sequence.setNextValue(1);
-        sequenceRepository.saveAndFlush(sequence);
         Facility facility = facilityRepository.saveAndFlush(facility());
         UnitType unitType = unitTypeRepository.saveAndFlush(unitType(facility));
         storageUnitRepository.saveAndFlush(storageUnit(facility, unitType));
@@ -174,7 +169,7 @@ class ReservationConcurrencyIntegrationTests {
 
     private ReservationQuote quote(User customer, Facility facility, UnitType unitType,
                                    LocalDate startDate, LocalDate endDate) {
-        ReservationQuote quote = new ReservationQuote();
+        ReservationQuote quote = com.storagehub.testing.LegacyReservationQuoteFixture.create();
         quote.setCustomer(customer);
         quote.setFacility(facility);
         quote.setUnitType(unitType);
@@ -195,6 +190,8 @@ class ReservationConcurrencyIntegrationTests {
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
+        // The race tests capacity for an already-accepted declaration, not live catalog setup.
+        quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(request(quote).getGoodsItems()));
         return quote;
     }
 

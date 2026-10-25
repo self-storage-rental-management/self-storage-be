@@ -155,6 +155,8 @@ public class RenewalDepositSettlementService implements RefundSource {
         var p=proof(n,true);requireReconciled(n);
         var refund=em.find(Refund.class,id,LockModeType.PESSIMISTIC_WRITE);
         if(refund==null||!refund.getPayment().getId().equals(p.payment().getId()))throw ApiExceptions.notFound("Refund not found for this Renewal");
+        if(refund.getRequestedBy()!=null&&refund.getRequestedBy().getId().equals(actor))
+            throw ApiExceptions.conflict("The refund proposer cannot execute the same refund");
         if(refund.getStatus()!=RefundStatus.PENDING)throw ApiExceptions.conflict("Refund is not awaiting execution");
         var reservations=events(n,"REFUND_RESERVATION").stream().filter(e->id.toString().equals(json(e).path("refundId").asText())).toList();
         if(reservations.size()!=1)throw ApiExceptions.conflict("Refund reservation binding invalid");

@@ -129,7 +129,7 @@ class ReturnSettlementServiceTests {
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Collections.emptySet(), Collections.emptyMap()
         );
         staffActor = new ActorPrincipal(
-            staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of("returns:process", "returns:read"),
+            staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of("returns:process", "returns:read", "refunds:execute"),
             Map.of(facility.getId(), com.storagehub.domain.model.FacilityScopeLevel.OPERATE)
         );
         managerActor = new ActorPrincipal(

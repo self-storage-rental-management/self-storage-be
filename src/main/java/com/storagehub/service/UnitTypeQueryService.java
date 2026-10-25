@@ -16,6 +16,7 @@ import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.UUID;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -133,8 +134,22 @@ public class UnitTypeQueryService {
             storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(unitType.getFacility().getId(), unitType.getId(), StorageUnitStatus.occupied),
             unitType.getCreatedAt(),
             unitType.getUpdatedAt(),
-            unitType.getDetailImageUrl()
+            unitType.getDetailImageUrl(),
+            unitType.getPublishedRevision(),
+            goodsScope(unitType, "categoryIds"),
+            goodsScope(unitType, "materialIds")
         );
+    }
+
+    private List<UUID> goodsScope(UnitType unitType, String field) {
+        try {
+            var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(unitType.getAcceptedGoodsJson()).path(field);
+            List<UUID> result = new java.util.ArrayList<>();
+            node.forEach(value -> result.add(UUID.fromString(value.asText())));
+            return result;
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     private void validateDateRange(LocalDate startDate, LocalDate endDate) {

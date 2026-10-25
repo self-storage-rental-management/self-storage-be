@@ -28,6 +28,12 @@ public class SupportState {
     private UUID linkedId;
     private Instant changedAt;
     private long changeSequence;
+    private Instant conversationExpiresAt;
+    private Instant conversationPurgedAt;
+    public void retainConversation(Instant at) { conversationExpiresAt=at.plus(java.time.Duration.ofDays(10)); }
+    public void retainNewMessage(Instant at) { if(conversationExpiresAt!=null)retainConversation(at); }
+    public boolean conversationExpired(Instant at) { return conversationPurgedAt!=null || conversationExpiresAt!=null&&!at.isBefore(conversationExpiresAt); }
+    public void purgeConversation(Instant at) { conversationPurgedAt=at;close(at); }
     public SupportState(SupportTicket ticket, String linkedType, UUID linkedId, UUID parent, Instant now) {
         this.ticket=ticket;this.linkedType=linkedType;this.linkedId=linkedId;parentTicketId=parent;changedAt=now;
     }

@@ -11,14 +11,12 @@ import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Reservation;
-import com.storagehub.domain.model.ReservationCodeSequence;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
-import com.storagehub.domain.repo.ReservationCodeSequenceRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationQuoteRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -33,8 +31,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Locale;
-import lombok.RequiredArgsConstructor;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,6 +41,8 @@ import com.storagehub.domain.repo.DiscountCodeRepository;
 public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
+    private static final java.security.SecureRandom PUBLIC_CODE_RANDOM = new java.security.SecureRandom();
+    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -53,7 +52,6 @@ public class ReservationCreationService {
     private final ReservationCompatibilityService compatibilityService;
     private final AuditLogService auditLogService;
     private final ReservationCapacityService capacityService;
-    private final ReservationCodeSequenceRepository reservationCodeSequenceRepository;
     private final DiscountCodeRepository discountCodeRepository;
     private final DiscountCodeService discountCodeService;
 
@@ -67,7 +65,6 @@ public class ReservationCreationService {
         ReservationCompatibilityService compatibilityService,
         AuditLogService auditLogService,
         ReservationCapacityService capacityService,
-        ReservationCodeSequenceRepository reservationCodeSequenceRepository,
         DiscountCodeRepository discountCodeRepository,
         DiscountCodeService discountCodeService
     ) {
@@ -79,7 +76,6 @@ public class ReservationCreationService {
         this.compatibilityService = compatibilityService;
         this.auditLogService = auditLogService;
         this.capacityService = capacityService;
-        this.reservationCodeSequenceRepository = reservationCodeSequenceRepository;
         this.discountCodeRepository = discountCodeRepository;
         this.discountCodeService = discountCodeService;
     }
@@ -96,7 +92,7 @@ public class ReservationCreationService {
     ) {
         this(
             reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
-            policyRepository, compatibilityService, auditLogService, capacityService, null,
+            policyRepository, compatibilityService, auditLogService, capacityService,
             null, null
         );
     }
@@ -131,11 +127,22 @@ public class ReservationCreationService {
             throw ApiExceptions.conflict("Quote has expired");
         }
 
+        boolean legacyQuoteWithoutGoodsSnapshot = quote.getGoodsSnapshotJson() == null
+            || quote.getGoodsSnapshotJson().isBlank() || "[]".equals(quote.getGoodsSnapshotJson());
+        List<GoodsItemRequest> quotedGoodsItems = legacyQuoteWithoutGoodsSnapshot
+            ? request.getGoodsItems() : GoodsSnapshotCodec.decode(quote.getGoodsSnapshotJson());
+        if (!legacyQuoteWithoutGoodsSnapshot
+            && !GoodsSnapshotCodec.sameDeclaration(quotedGoodsItems, request.getGoodsItems())) {
+            throw ApiExceptions.conflict("Goods declaration changed after quote creation; please create a new quote");
+        }
+
         CompatibilityCheckRequest compatibilityRequest = new CompatibilityCheckRequest(
             quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
-            quote.getEndDate(), request.getGoodsCondition(), request.getGoodsItems()
+            quote.getEndDate(), request.getGoodsCondition(), quotedGoodsItems
         );
-        CompatibilityCheckResponse compatibility = compatibilityService.check(actor, compatibilityRequest);
+        CompatibilityCheckResponse compatibility = legacyQuoteWithoutGoodsSnapshot
+            ? compatibilityService.check(actor, compatibilityRequest)
+            : compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
         if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
             throw ApiExceptions.conflict("Goods are not compatible with the selected unit type");
         }
@@ -148,7 +155,8 @@ public class ReservationCreationService {
         Instant now = Instant.now();
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
-        reservation.setReservationCode(generateReservationCode());
+        reservation.setReservationCode(uniqueReservationCode(reservationRepository,
+            ReservationCreationService::generateReservationCode));
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
         reservation.setIdentityDocumentNumber(clean(request.getIdentityDocumentNumber()));
@@ -193,7 +201,7 @@ public class ReservationCreationService {
         Reservation saved = reservationRepository.saveAndFlush(reservation);
 
         List<ReservationGoodsItem> goodsItems = new ArrayList<>();
-        for (GoodsItemRequest itemRequest : request.getGoodsItems()) {
+        for (GoodsItemRequest itemRequest : quotedGoodsItems) {
             goodsItems.add(toGoodsItem(saved, itemRequest));
         }
         goodsItemRepository.saveAll(goodsItems);
@@ -270,10 +278,16 @@ public class ReservationCreationService {
     }
 
     private ReservationGoodsItem toGoodsItem(Reservation reservation, GoodsItemRequest request) {
-        boolean reviewRequired = request.getCategory() == GoodsCategory.OTHER;
+        boolean reviewRequired = ReservationCompatibilityService.isOther(request);
         ReservationGoodsItem item = new ReservationGoodsItem();
+        item.setGoodsCode("GDS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase());
         item.setReservation(reservation);
         item.setCategory(request.getCategory());
+        item.setCatalogCategoryId(request.getCatalogCategoryId());
+        item.setCatalogMaterialId(request.getCatalogMaterialId());
+        item.setCategoryCode(request.getCategoryCode());
+        item.setCategoryName(request.getCategoryName());
+        item.setMaterialCode(request.getMaterialCode());
         item.setCustomGoodsName(clean(request.getCustomGoodsName()));
         item.setMaterialName(clean(request.getMaterialName()));
         item.setCustomMaterial(clean(request.getCustomMaterial()));
@@ -354,19 +368,23 @@ public class ReservationCreationService {
         return value.trim();
     }
 
-    private String generateReservationCode() {
-        if (reservationCodeSequenceRepository == null) {
-            return "RSV-000001";
+    static String generateReservationCode() {
+        StringBuilder code = new StringBuilder("RSV-");
+        for (int index = 0; index < 12; index++) {
+            if (index > 0 && index % 4 == 0) code.append('-');
+            code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
         }
-        ReservationCodeSequence sequence = reservationCodeSequenceRepository.findPrimaryForUpdate()
-            .orElseThrow(() -> ApiExceptions.conflict("Reservation code sequence is not configured"));
-        long value = sequence.getNextValue();
-        if (value > 999999) {
-            throw ApiExceptions.conflict("Reservation code sequence has reached its limit");
+        return code.toString();
+    }
+
+    static String uniqueReservationCode(ReservationRepository repository,
+                                        java.util.function.Supplier<String> generator) {
+        for (int attempt = 0; attempt < 20; attempt++) {
+            String code = generator.get();
+            if (!repository.existsByReservationCode(code)) return code;
         }
-        sequence.setNextValue(value + 1);
-        reservationCodeSequenceRepository.save(sequence);
-        return String.format(Locale.ROOT, "RSV-%06d", value);
+        // The database unique constraint remains the final guard for concurrent inserts.
+        throw ApiExceptions.conflict("Chưa thể cấp mã đặt kho. Vui lòng thử lại.");
     }
 
     private BigDecimal money(BigDecimal value) {
@@ -392,6 +410,10 @@ public class ReservationCreationService {
         append(canonical, items == null ? null : items.size());
         if (items != null) {
             for (GoodsItemRequest item : items) {
+                if (item.getCatalogCategoryId() != null) {
+                    append(canonical, item.getCatalogCategoryId());
+                    append(canonical, item.getCatalogMaterialId());
+                }
                 append(canonical, item.getCategory());
                 append(canonical, cleanValue(item.getCustomGoodsName()));
                 append(canonical, cleanValue(item.getMaterialName()));
@@ -422,6 +444,10 @@ public class ReservationCreationService {
         }
         append(canonical, items.size());
         for (ReservationGoodsItem item : items) {
+            if (item.getCatalogCategoryId() != null) {
+                append(canonical, item.getCatalogCategoryId());
+                append(canonical, item.getCatalogMaterialId());
+            }
             append(canonical, item.getCategory());
             append(canonical, cleanValue(item.getCustomGoodsName()));
             append(canonical, cleanValue(item.getMaterialName()));

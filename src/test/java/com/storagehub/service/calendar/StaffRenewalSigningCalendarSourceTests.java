@@ -28,7 +28,7 @@ class StaffRenewalSigningCalendarSourceTests {
         when(em.createQuery(anyString(),eq(User.class))).thenReturn(staffQuery);
         when(staffQuery.setParameter(anyString(),any())).thenReturn(staffQuery);
         when(staffQuery.getResultList()).thenReturn(List.of(user));
-        when(access.eligible(user,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS)).thenReturn(true);
+        when(access.eligible(user,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.OPERATE_RENEWALS)).thenReturn(true);
         var workflow=mock(com.storagehub.service.renewal.persistence.RenewalWorkflow.class);
         var revision=mock(com.storagehub.service.renewal.persistence.RenewalAcceptedRevision.class);
         var acceptedQuote=mock(com.storagehub.service.renewal.persistence.RenewalQuote.class);

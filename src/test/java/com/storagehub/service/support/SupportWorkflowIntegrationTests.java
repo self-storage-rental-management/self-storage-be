@@ -27,7 +27,7 @@ import org.springframework.util.LinkedMultiValueMap;
 
 /** All records/policy/receiver fixtures exist only in the rollback-only H2 test context. */
 @DataJpaTest(showSql=false) @ActiveProfiles("test")
-@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,SupportService.class,SupportPersistence.class,SupportWorkflowIntegrationTests.Sources.class})
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,SupportService.class,SupportPersistence.class,SupportConversationRetention.class,CustomerChatSessionService.class,SupportWorkflowIntegrationTests.Sources.class})
 class SupportWorkflowIntegrationTests {
     static final Instant NOW=Instant.parse("2026-10-08T03:00:00Z");
     @TestConfiguration static class Sources {
@@ -78,6 +78,8 @@ class SupportWorkflowIntegrationTests {
         }
     }
     @Autowired EntityManager em;
+    @Autowired SupportConversationRetention retention;
+    @Autowired CustomerChatSessionService chatSessions;
     @Autowired SupportService service;
     @Autowired SupportPersistence receipts;
     @Autowired NotificationService notifications;
@@ -92,6 +94,60 @@ class SupportWorkflowIntegrationTests {
     User customer,otherCustomer,manager,staff,otherStaff,foreignStaff;
     ActorPrincipal c,m,s,s2;
     SupportQuery query=SupportQuery.parse(new LinkedMultiValueMap<>(),false,false);
+
+    @Test void staffInboxGroupsBeforePagingAndKeepsResolvedChatInRelatedHistory() {
+        var first=service.create(c,new Create("Older","Older question",facility.getId(),null,List.of()),"group-old");
+        var accepted=service.claim(s,first.id(),new Version(first.version()),"group-old-claim");
+        service.resolve(s,first.id(),new Resolution("",List.of(),accepted.version(),true),"group-old-done");
+        clock.time=NOW.plusSeconds(1);
+        var active=service.create(c,new Create("Active","Current question",facility.getId(),null,List.of()),"group-active");
+        service.claim(s,active.id(),new Version(active.version()),"group-active-claim");
+        var another=service.create(c,new Create("Another legacy chat","Other question",facility.getId(),null,List.of()),"group-duplicate");
+        service.claim(s,another.id(),new Version(another.version()),"group-duplicate-claim");
+        var other=actor(otherCustomer,RoleCode.CUSTOMER,null);
+        var second=service.create(other,new Create("Second customer","Question",facility.getId(),null,List.of()),"group-second");
+        service.claim(s,second.id(),new Version(second.version()),"group-second-claim");
+        var one=new SupportQuery(0,1,null,null,null,"","updatedAt",true);
+        var page0=service.inbox(s,one,SupportInboxResponse.View.mine,"test");
+        var page1=service.inbox(s,new SupportQuery(1,1,null,null,null,"","updatedAt",true),SupportInboxResponse.View.mine,"test");
+        assertThat(page0.pagination().totalItems()).isEqualTo(2);
+        assertThat(page0.counts().mine()).isEqualTo(2);
+        assertThat(page1.data().getFirst().ticket().customerId()).isNotEqualTo(page0.data().getFirst().ticket().customerId());
+        var grouped=service.inbox(s,query,SupportInboxResponse.View.mine,"test").data().stream().filter(row->row.ticket().customerId().equals(customer.getId())).findFirst().orElseThrow();
+        assertThat(grouped.ticket().status()).isEqualTo(SupportTicketStatus.in_progress);
+        assertThat(grouped.historyCount()).isEqualTo(2);
+        assertThat(service.inbox(s,query,SupportInboxResponse.View.history,"test").data()).extracting(row->row.ticket().id()).containsExactly(first.id());
+        assertThat(service.relatedStaffHistory(s,grouped.ticket().id(),query,"test").data()).extracting(SupportResponse::id).containsExactlyInAnyOrder(first.id(),active.id(),another.id());
+        assertThatThrownBy(()->service.relatedStaffHistory(s2,active.id(),query,"test")).isInstanceOf(ApiException.class);
+    }
+
+    @Test void staffInboxDeduplicatesQueueAndAllWithoutExposingUnclaimedChat() {
+        var first=service.create(c,new Create("First","Private text",facility.getId(),null,List.of()),"inbox-queue-one");
+        clock.time=NOW.plusSeconds(1);
+        var second=service.create(c,new Create("Second","Private text two",facility.getId(),null,List.of()),"inbox-queue-two");
+        var queued=service.inbox(s,query,SupportInboxResponse.View.queue,"test");
+        assertThat(queued.data()).hasSize(1);assertThat(queued.counts().queue()).isEqualTo(1);
+        assertThat(queued.data().getFirst().ticket()).isNull();assertThat(queued.data().getFirst().queued().id()).isEqualTo(second.id());
+        service.claim(s,first.id(),new Version(first.version()),"inbox-claim");
+        var all=service.inbox(s,query,SupportInboxResponse.View.all,"test");
+        assertThat(all.data()).hasSize(1);assertThat(all.counts().all()).isEqualTo(1);
+        assertThat(all.data().getFirst().ticket().id()).isEqualTo(first.id());
+        assertThat(service.inbox(actor(foreignStaff,RoleCode.STAFF,otherFacility),query,SupportInboxResponse.View.all,"test").data()).isEmpty();
+        assertThatThrownBy(()->service.relatedStaffHistory(s,second.id(),query,"test")).isInstanceOf(ApiException.class);
+    }
+
+    @Test void repeatHandoffPrefersAnActiveConversationOverANewerResolvedLegacyConversation() {
+        var handoff=new Create("Active chat","Help",facility.getId(),null,List.of(),List.of());
+        var active=service.create(c,handoff,"prefer-active");
+        var accepted=service.claim(s,active.id(),new Version(active.version()),"prefer-claim");
+        clock.time=NOW.plusSeconds(5);
+        var legacy=service.create(c,new Create("Legacy","Other chat",facility.getId(),null,List.of()),"prefer-legacy");
+        var otherAccepted=service.claim(s,legacy.id(),new Version(legacy.version()),"prefer-legacy-claim");
+        service.resolve(s,legacy.id(),new Resolution("",List.of(),otherAccepted.version(),true),"prefer-done");
+        em.find(SupportState.class,legacy.id()).retainConversation(clock.time);em.flush();
+        assertThat(service.create(c,handoff,"prefer-resume").id()).isEqualTo(accepted.id());
+        assertThat(count("SupportTicket")).isEqualTo(2);
+    }
 
     @BeforeEach void fixture(){
         if(!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()){
@@ -162,6 +218,231 @@ class SupportWorkflowIntegrationTests {
         assertThat(service.create(c,body,"create").id()).isEqualTo(t.id());
         assertThat(count("SupportTicket")).isEqualTo(1);assertThat(count("SupportMessage")).isEqualTo(1);
         assertThatThrownBy(()->service.create(c,new Create("Changed","Please help",facility.getId(),null,List.of()),"create")).isInstanceOf(ApiException.class).hasMessageContaining("key");
+    }
+    @Test void handoffHistoryIsOrderedDurableAndReplayedOnlyOnce(){
+        var history=List.of(new HandoffMessage(ContextRole.CUSTOMER,"Tôi cần gia hạn"),new HandoffMessage(ContextRole.ASSISTANT,"Bạn mở hồ sơ thuê để gửi yêu cầu."));
+        var body=new Create("Gặp nhân viên","Tôi muốn gặp nhân viên.",facility.getId(),null,List.of(),history);
+        var created=service.create(c,body,"handoff-create");
+        assertThat(service.create(c,body,"handoff-create").id()).isEqualTo(created.id());
+        em.flush();em.clear();
+        var timeline=service.messages(c,CUSTOMER,created.id(),query,"test").data();
+        assertThat(timeline).extracting(SupportResponse.Message::authorRole).containsExactly("USER_CONTEXT","AI_CONTEXT","CUSTOMER");
+        assertThat(timeline).extracting(SupportResponse.Message::body).containsExactly("Tôi cần gia hạn","Bạn mở hồ sơ thuê để gửi yêu cầu.","Tôi muốn gặp nhân viên.");
+        assertThat(timeline).allMatch(message->message.authorId().equals(c.userId())&&message.visibility().equals("PUBLIC"));
+        var claimed=service.claim(s,created.id(),new SupportCommands.Version(created.version()),"handoff-claim");
+        assertThat(claimed.acceptedAt()).isNotNull();
+        assertThat(service.messages(s,STAFF,created.id(),query,"test",Visibility.PUBLIC).data()).hasSize(3);
+        assertThatThrownBy(()->service.messages(actor(otherCustomer,RoleCode.CUSTOMER,null),CUSTOMER,created.id(),query,"test"))
+            .isInstanceOf(ApiException.class);
+    }
+    @Test void statusOnlyResolutionAndRepeatHandoffReuseHistoryAndReturnToSharedQueue(){
+        var body=new Create("First question","Gặp nhân viên",facility.getId(),null,List.of(),List.of(new HandoffMessage(ContextRole.CUSTOMER,"First context")));
+        var created=service.create(c,body,"repeat-create");
+        var accepted=service.claim(s,created.id(),new SupportCommands.Version(created.version()),"repeat-claim");
+        assertThat(service.create(c,body,"active-repeat").id()).isEqualTo(created.id());
+        var before=count("SupportMessage");
+        var expiry=em.find(SupportState.class,created.id()).getConversationExpiresAt();
+        clock.time=NOW.plusSeconds(5);
+        var done=service.resolve(s,created.id(),new Resolution("",List.of(),accepted.version(),true),"status-only");
+        assertThat(done.status()).isEqualTo(SupportTicketStatus.resolved);
+        assertThat(count("SupportMessage")).isEqualTo(before);
+        assertThat(em.find(SupportState.class,created.id()).getConversationExpiresAt()).isEqualTo(expiry);
+        assertThatThrownBy(()->service.staffMessage(s,created.id(),new StaffMessage("Late reply",List.of(),Visibility.PUBLIC),"late-reply")).isInstanceOf(ApiException.class);
+        clock.time=NOW.plusSeconds(10);
+        var again=new Create("Second question","Hỗ trợ lần nữa",facility.getId(),null,List.of(),List.of(new HandoffMessage(ContextRole.ASSISTANT,"Second context")));
+        var queued=service.create(c,again,"repeat-new-request");
+        assertThat(queued.id()).isEqualTo(created.id());assertThat(queued.displayCode()).isEqualTo(created.displayCode());
+        assertThat(queued.status()).isEqualTo(SupportTicketStatus.open);assertThat(queued.assignedStaffId()).isNull();assertThat(queued.acceptedAt()).isNull();
+        assertThat(queued.resolvedAt()).isNull();assertThat(count("SupportTicket")).isEqualTo(1);
+        assertThat(service.queue(s2,query,"test").data()).extracting(SupportQueueItem::id).contains(created.id());
+        assertThatThrownBy(()->service.detail(s,STAFF,created.id())).isInstanceOf(ApiException.class);
+        assertThat(service.create(c,again,"repeat-new-request").id()).isEqualTo(created.id());
+        assertThat(count("SupportMessage")).isEqualTo(before+2);
+        var reclaimed=service.claim(s2,queued.id(),new SupportCommands.Version(queued.version()),"repeat-other-staff");
+        assertThat(reclaimed.assignedStaffId()).isEqualTo(s2.userId());
+        assertThat(service.messages(s2,STAFF,created.id(),query,"test",Visibility.PUBLIC).data()).extracting(SupportResponse.Message::body)
+            .contains("First context","Gặp nhân viên","Second context","Hỗ trợ lần nữa");
+        assertThatThrownBy(()->service.claim(s,queued.id(),new SupportCommands.Version(queued.version()),"double-claim")).isInstanceOf(ApiException.class);
+    }
+    @Test void handoffReuseIsBoundToCustomerFacilityAndRetention(){
+        var body=new Create("Question","Gặp nhân viên",facility.getId(),null,List.of(),List.of());
+        var first=service.create(c,body,"scope-first");
+        var other=service.create(c,new Create("Other facility","Help",otherFacility.getId(),null,List.of(),List.of()),"scope-facility");
+        assertThat(other.id()).isNotEqualTo(first.id());
+        var foreign=service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),body,"scope-customer");
+        assertThat(foreign.id()).isNotEqualTo(first.id());
+        clock.time=NOW.plus(Duration.ofDays(10));
+        assertThat(service.create(c,body,"scope-expired").id()).isNotEqualTo(first.id());
+    }
+    @Test void closedRetainedHandoffCanBeRequestedAgain(){
+        var body=new Create("Question","Help",facility.getId(),null,List.of(),List.of());
+        var created=service.create(c,body,"closed-create");
+        var accepted=service.claim(s,created.id(),new SupportCommands.Version(created.version()),"closed-claim");
+        var done=service.resolve(s,created.id(),new Resolution("",List.of(),accepted.version(),true),"closed-done");
+        close.available=true;
+        service.close(c,created.id(),new Close(done.version(),null),"closed-close");
+        var again=service.create(c,body,"closed-again");
+        assertThat(again.id()).isEqualTo(created.id());assertThat(again.closedAt()).isNull();assertThat(again.assignedStaffId()).isNull();
+    }
+    @Test void savedCustomerChatSurvivesLoginAndRejectsOtherActorsAndStaleTabs(){
+        var message=new CustomerChatSessionController.Message(1,"customer","Saved question",null,null,null);
+        var snapshot=new CustomerChatSessionController.Snapshot(List.of(message),null,false);
+        assertThat(chatSessions.read(c).snapshot().messages()).isEmpty();
+        UUID mutation=UUID.randomUUID();
+        var saved=chatSessions.save(c,new CustomerChatSessionController.Save(0L,mutation,snapshot));
+        em.flush();em.clear();
+        var login=new ActorPrincipal(c.userId(),UUID.randomUUID(),c.roles(),c.permissions(),c.facilityScopes());
+        assertThat(chatSessions.read(login).snapshot().messages()).containsExactly(message);
+        assertThat(chatSessions.save(login,new CustomerChatSessionController.Save(0L,mutation,snapshot)).version()).isEqualTo(saved.version());
+        assertThat(chatSessions.read(actor(otherCustomer,RoleCode.CUSTOMER,null)).snapshot().messages()).isEmpty();
+        assertThatThrownBy(()->chatSessions.read(s)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->chatSessions.save(login,new CustomerChatSessionController.Save(0L,UUID.randomUUID(),snapshot))).isInstanceOf(ApiException.class);
+    }
+    @Test void savedChatRestoresActiveStaffAndReturnsToAiWhenResolvedDuringLogout(){
+        var created=service.create(c,new Create("Saved Staff","Help",facility.getId(),null,List.of(),List.of()),"session-ticket");
+        assertThat(chatSessions.read(c).snapshot().ticketId()).isEqualTo(created.id());
+        var messages=List.of(new CustomerChatSessionController.Message(1,"assistant","Saved AI",null,null,"FAQ"));
+        var snapshot=new CustomerChatSessionController.Snapshot(messages,created.id(),true);
+        chatSessions.save(c,new CustomerChatSessionController.Save(0L,UUID.randomUUID(),snapshot));
+        em.flush();em.clear();
+        assertThat(chatSessions.read(c).snapshot()).isEqualTo(snapshot);
+        assertThatThrownBy(()->chatSessions.save(actor(otherCustomer,RoleCode.CUSTOMER,null),new CustomerChatSessionController.Save(0L,UUID.randomUUID(),snapshot))).isInstanceOf(ApiException.class);
+        var accepted=service.claim(s,created.id(),new SupportCommands.Version(created.version()),"session-claim");
+        service.resolve(s,created.id(),new Resolution("",List.of(),accepted.version(),true),"session-done");
+        assertThat(chatSessions.read(c).snapshot().ticketId()).isEqualTo(created.id());assertThat(chatSessions.read(c).snapshot().messages()).isEmpty();
+        assertThat(chatSessions.read(c).snapshot().autoReturn()).isFalse();
+        // Continuing with AI keeps the same Staff transcript attached after the next login.
+        chatSessions.save(c,new CustomerChatSessionController.Save(1L,UUID.randomUUID(),new CustomerChatSessionController.Snapshot(messages,created.id(),false)));
+        assertThat(chatSessions.read(c).snapshot().ticketId()).isEqualTo(created.id());
+    }
+    @Test void returningToAiPreservesStaffAssignmentAndResumesTheSameConversation() {
+        var body=new Create("Need help","Staff request",facility.getId(),null,List.of(),List.of());
+        var created=service.create(c,body,"return-ai-create");
+        var accepted=service.claim(s,created.id(),new Version(created.version()),"return-ai-claim");
+        var expiry=em.find(SupportState.class,created.id()).getConversationExpiresAt();
+        var before=count("SupportMessage");
+        var ai=new CustomerChatSessionController.Message(1,"customer","Continue with AI",null,null,null);
+        var snapshot=new CustomerChatSessionController.Snapshot(List.of(ai),created.id(),false);
+        chatSessions.save(c,new CustomerChatSessionController.Save(0L,UUID.randomUUID(),snapshot));
+        em.flush();em.clear();
+        var login=actor(customer,RoleCode.CUSTOMER,null);
+        assertThat(chatSessions.read(login).snapshot()).isEqualTo(snapshot);
+        var staffView=service.detail(s,STAFF,created.id());
+        assertThat(staffView.status()).isEqualTo(SupportTicketStatus.in_progress);
+        assertThat(staffView.assignedStaffId()).isEqualTo(staff.getId());
+        assertThat(staffView.version()).isEqualTo(accepted.version());
+        assertThat(em.find(SupportState.class,created.id()).getConversationExpiresAt()).isEqualTo(expiry);
+        assertThat(count("SupportMessage")).isEqualTo(before);
+        assertThat(service.create(login,body,"return-ai-resume").id()).isEqualTo(created.id());
+        assertThat(count("SupportTicket")).isEqualTo(1);
+    }
+    @Test void aiSessionExpiresWithoutReadsExtendingItsLifetime(){
+        var snapshot=new CustomerChatSessionController.Snapshot(List.of(new CustomerChatSessionController.Message(1,"customer","AI only",null,null,null)),null,false);
+        chatSessions.save(c,new CustomerChatSessionController.Save(0L,UUID.randomUUID(),snapshot));
+        clock.time=NOW.plus(Duration.ofDays(9));assertThat(chatSessions.read(c).snapshot().messages()).hasSize(1);
+        clock.time=NOW.plus(Duration.ofDays(10));assertThat(chatSessions.read(c).snapshot().messages()).isEmpty();
+        chatSessions.sweep();assertThat(em.createQuery("select count(s) from CustomerChatSession s",Long.class).getSingleResult()).isZero();
+    }
+    @Test void fileOnlyMessagesArePersistedWithoutInventedTextAndStillRequireAuthorizedEvidence(){
+        var t=active();var proof=List.of(UUID.randomUUID());
+        when(evidence.atomic()).thenReturn(true);when(evidence.supportsFiles(proof)).thenReturn(true);
+        var customerFile=service.customerMessage(c,t.id(),new CustomerMessage("",proof,t.version()),"file-only-customer");
+        var staffFile=service.staffMessage(s,t.id(),new StaffMessage("  ",proof,Visibility.PUBLIC),"file-only-staff");
+        assertThat(customerFile.body()).isEmpty();assertThat(staffFile.body()).isEmpty();
+        assertThat(customerFile.evidenceFileIds()).containsExactlyElementsOf(proof);
+        verify(evidence).requireAttach(eq(c),any(),eq(Visibility.PUBLIC),eq(proof));
+        verify(evidence).requireAttach(eq(s),any(),eq(Visibility.PUBLIC),eq(proof));
+        assertThatThrownBy(()->service.customerMessage(c,t.id(),new CustomerMessage(" ",List.of(),null),"empty-message")).isInstanceOf(ApiException.class);
+    }
+    @Test void unreadUsesOnlyIncomingPublicMessagesAndMarksOnlyDisplayedIdsEvenAtTheSameTimestamp(){
+        var t=active();
+        var initial=service.messages(s,STAFF,t.id(),query,"test",Visibility.PUBLIC).data();
+        assertThat(service.readStatus(s,STAFF,List.of(t.id())).get(0).unreadCount()).isEqualTo(1);
+        var expiry=em.find(SupportState.class,t.id()).getConversationExpiresAt();
+        service.markRead(s,STAFF,t.id(),initial.stream().map(SupportResponse.Message::id).toList());
+        assertThat(service.readStatus(s,STAFF,List.of(t.id())).get(0).unreadCount()).isZero();
+        var first=service.customerMessage(c,t.id(),new CustomerMessage("First",List.of(),null),"unread-first");
+        var second=service.customerMessage(c,t.id(),new CustomerMessage("Second",List.of(),null),"unread-second");
+        assertThat(first.sentAt()).isEqualTo(second.sentAt());
+        assertThat(service.markRead(s,STAFF,t.id(),List.of(first.id())).unreadCount()).isEqualTo(1);
+        assertThat(service.markRead(s,STAFF,t.id(),List.of(first.id())).unreadCount()).isEqualTo(1);
+        service.staffMessage(s,t.id(),new StaffMessage("Internal only",List.of(),Visibility.INTERNAL),"unread-internal");
+        assertThat(service.readStatus(c,CUSTOMER,List.of(t.id())).get(0).unreadCount()).isZero();
+        var reply=service.staffMessage(s,t.id(),new StaffMessage("Public reply",List.of(),Visibility.PUBLIC),"unread-reply");
+        assertThat(service.readStatus(c,CUSTOMER,List.of(t.id())).get(0).unreadCount()).isEqualTo(1);
+        assertThat(service.markRead(c,CUSTOMER,t.id(),List.of(reply.id())).unreadCount()).isZero();
+        assertThat(em.find(SupportState.class,t.id()).getConversationExpiresAt()).isEqualTo(expiry);
+        em.flush();em.clear();
+        assertThat(service.readStatus(s,STAFF,List.of(t.id())).get(0).unreadCount()).isEqualTo(1);
+        assertThatThrownBy(()->service.readStatus(s2,STAFF,List.of(t.id()))).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.markRead(actor(otherCustomer,RoleCode.CUSTOMER,null),CUSTOMER,t.id(),List.of(reply.id()))).isInstanceOf(ApiException.class);
+    }
+    @Test void customerCanHideHistoryWithoutChangingStaffWorkflowMessagesOrVersion(){
+        var t=active();var before=count("SupportMessage");
+        var expiry=em.find(SupportState.class,t.id()).getConversationExpiresAt();
+        chatSessions.save(c,new CustomerChatSessionController.Save(0L,UUID.randomUUID(),new CustomerChatSessionController.Snapshot(List.of(),t.id(),true)));
+        assertThat(service.hideCustomerHistory(c,t.id()).hidden()).isTrue();
+        assertThat(service.hideCustomerHistory(c,t.id()).ticketId()).isEqualTo(t.id());
+        em.flush();em.clear();
+        assertThat(service.list(c,CUSTOMER,query,"test").pagination().totalItems()).isZero();
+        assertThat(service.list(s,STAFF,query,"test").data()).extracting(SupportResponse::id).containsExactly(t.id());
+        var staffRead=service.detail(s,STAFF,t.id());
+        assertThat(staffRead.status()).isEqualTo(t.status());assertThat(staffRead.version()).isEqualTo(t.version());
+        assertThat(count("SupportMessage")).isEqualTo(before);assertThat(count("SupportHiddenHistory")).isEqualTo(1);
+        assertThat(em.find(SupportState.class,t.id()).getConversationExpiresAt()).isEqualTo(expiry);
+        assertThat(chatSessions.read(c).snapshot().ticketId()).isNull();
+        service.staffMessage(s,t.id(),new StaffMessage("Internal coordination",List.of(),Visibility.INTERNAL),"hidden-internal");
+        assertThat(service.list(c,CUSTOMER,query,"test").pagination().totalItems()).isZero();
+        service.staffMessage(s,t.id(),new StaffMessage("Public reply after hide",List.of(),Visibility.PUBLIC),"hidden-public");
+        assertThat(service.list(c,CUSTOMER,query,"test").data()).extracting(SupportResponse::id).containsExactly(t.id());
+        assertThat(service.messages(c,CUSTOMER,t.id(),query,"test").data()).hasSize((int)before+1);
+        assertThatThrownBy(()->service.hideCustomerHistory(actor(otherCustomer,RoleCode.CUSTOMER,null),t.id())).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.hideCustomerHistory(s,t.id())).isInstanceOf(ApiException.class);
+    }
+    @Test void hiddenActiveHandoffIsNotAutoRestoredButCanBeExplicitlyRequestedAgain(){
+        var body=new Create("Retained conversation","Help",facility.getId(),null,List.of(),List.of());
+        var created=service.create(c,body,"hidden-handoff");
+        service.hideCustomerHistory(c,created.id());
+        assertThat(chatSessions.read(c).snapshot().ticketId()).isNull();
+        assertThat(service.create(c,body,"explicit-resume").id()).isEqualTo(created.id());
+        assertThat(service.list(c,CUSTOMER,query,"test").data()).extracting(SupportResponse::id).containsExactly(created.id());
+    }
+    @Test void oversizedHandoffDoesNotCreatePartialTicket(){
+        var history=Collections.nCopies(51,new HandoffMessage(ContextRole.ASSISTANT,"x".repeat(4000)));
+        assertThatThrownBy(()->service.create(c,new Create("Gặp nhân viên","Hỗ trợ",facility.getId(),null,List.of(),history),"oversized-handoff"))
+            .isInstanceOf(ApiException.class);
+        assertThat(count("SupportTicket")).isZero();assertThat(count("SupportMessage")).isZero();
+    }
+    @Test void handoffExpiresTenDaysAfterLastMessageAndPurgesCachedResponses(){
+        var body=new Create("Retained chat","Gặp nhân viên",facility.getId(),null,List.of(),List.of(new HandoffMessage(ContextRole.ASSISTANT,"AI history")));
+        var ticket=service.create(c,body,"retained-create");
+        assertThat(em.find(SupportState.class,ticket.id()).getConversationExpiresAt()).isEqualTo(NOW.plus(Duration.ofDays(10)));
+        clock.time=NOW.plus(Duration.ofDays(9));
+        var claimed=service.claim(s,ticket.id(),new SupportCommands.Version(ticket.version()),"retained-claim");
+        // Merely accepting/reading does not extend retention.
+        assertThat(em.find(SupportState.class,ticket.id()).getConversationExpiresAt()).isEqualTo(NOW.plus(Duration.ofDays(10)));
+        service.staffMessage(s,ticket.id(),new StaffMessage("Staff reply",List.of(),Visibility.PUBLIC),"retained-reply");
+        assertThat(em.find(SupportState.class,ticket.id()).getConversationExpiresAt()).isEqualTo(clock.time.plus(Duration.ofDays(10)));
+        clock.time=NOW.plus(Duration.ofDays(18));retention.sweep();
+        assertThat(service.messages(c,CUSTOMER,ticket.id(),query,"test").data()).hasSize(3);
+        service.customerMessage(c,ticket.id(),new CustomerMessage("Customer follow-up",List.of(),null),"retained-followup");
+        clock.time=clock.time.plus(Duration.ofDays(10));
+        assertThat(service.list(c,CUSTOMER,query,"test").data()).isEmpty();
+        assertThat(service.summary(m,facility.getId()).counts().values()).allMatch(value->value==0L);
+        assertThatThrownBy(()->service.detail(c,CUSTOMER,ticket.id())).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.create(c,body,"retained-create")).isInstanceOf(ApiException.class);
+    }
+    @Test void sweepErasesOnlyExpiredHandoffConversationsAndCannotReplayThem(){
+        var body=new Create("Retained chat","Conversation body",facility.getId(),null,List.of(),List.of(new HandoffMessage(ContextRole.ASSISTANT,"Private AI text")));
+        var expired=service.create(c,body,"purge-create");var ordinary=create();
+        clock.time=NOW.plus(Duration.ofDays(10));retention.sweep();em.flush();em.clear();
+        assertThat(em.createQuery("select count(m) from SupportMessage m where m.ticket.id=:id",Long.class).setParameter("id",expired.id()).getSingleResult()).isZero();
+        assertThat(em.find(SupportState.class,expired.id()).getConversationPurgedAt()).isEqualTo(clock.time);
+        assertThat(em.find(SupportTicket.class,expired.id()).getDescription()).doesNotContain("Conversation body");
+        assertThatThrownBy(()->service.create(c,body,"purge-create")).isInstanceOf(ApiException.class);
+        assertThat(service.detail(c,CUSTOMER,ordinary.id()).id()).isEqualTo(ordinary.id());
+        assertThat(service.messages(c,CUSTOMER,ordinary.id(),query,"test").data()).hasSize(1);
+        retention.sweep(); // Idempotent when called again.
     }
     @Test void facilityIsRequiredWithoutOwnedLink(){
         assertThatThrownBy(()->service.create(c,new Create("Question","Help",null,null,List.of()),"missing")).isInstanceOf(ApiException.class).hasMessageContaining("Facility required");
@@ -706,7 +987,7 @@ class SupportWorkflowIntegrationTests {
         var one=java.math.BigDecimal.ONE;var zero=java.math.BigDecimal.ZERO;
         var type=new UnitType();type.setFacility(facility);type.setCode("TEST");type.setName("Test-only");type.setLengthM(one);type.setWidthM(one);type.setHeightM(one);type.setMonthlyPrice(one);type.setMaxLoadKg(one);type.setRackLengthM(one);type.setRackWidthM(one);type.setRackHeightM(one);em.persist(type);
         var unit=new StorageUnit();unit.setFacility(facility);unit.setUnitType(type);unit.setCode("TEST-UNIT");em.persist(unit);
-        var quote=new ReservationQuote();quote.setCustomer(customer);quote.setFacility(facility);quote.setUnitType(type);quote.setPricingPackageCode("TEST");quote.setPolicyVersion("test-only");quote.setStartDate(LocalDate.of(2026,10,1));quote.setEndDate(LocalDate.of(2026,11,1));quote.setRentalMonths(1);quote.setMonthlyPrice(one);quote.setSubtotal(one);quote.setDiscountRate(zero);quote.setDiscountAmount(zero);quote.setTotalAfterDiscount(one);quote.setReservationDepositAmount(zero);quote.setSecurityDepositAmount(zero);quote.setRemainingRentalAmount(one);quote.setDueAtCheckIn(one);quote.setTotalInitialObligation(one);quote.setQuotedAt(NOW);quote.setExpiresAt(NOW.plusSeconds(1800));em.persist(quote);
+        var quote=com.storagehub.testing.LegacyReservationQuoteFixture.create();quote.setCustomer(customer);quote.setFacility(facility);quote.setUnitType(type);quote.setPricingPackageCode("TEST");quote.setPolicyVersion("test-only");quote.setStartDate(LocalDate.of(2026,10,1));quote.setEndDate(LocalDate.of(2026,11,1));quote.setRentalMonths(1);quote.setMonthlyPrice(one);quote.setSubtotal(one);quote.setDiscountRate(zero);quote.setDiscountAmount(zero);quote.setTotalAfterDiscount(one);quote.setReservationDepositAmount(zero);quote.setSecurityDepositAmount(zero);quote.setRemainingRentalAmount(one);quote.setDueAtCheckIn(one);quote.setTotalInitialObligation(one);quote.setQuotedAt(NOW);quote.setExpiresAt(NOW.plusSeconds(1800));em.persist(quote);
         var reservation=new Reservation();reservation.setReservationCode("TEST-RES");reservation.setCustomer(customer);reservation.setSourceQuote(quote);reservation.setIdempotencyKey("test");reservation.setFacility(facility);reservation.setUnitType(type);reservation.setStartDate(quote.getStartDate());reservation.setEndDate(quote.getEndDate());em.persist(reservation);
         var rental=new Rental();rental.setCustomer(customer);rental.setFacility(facility);rental.setStorageUnit(unit);rental.setReservation(reservation);rental.setStartDate(quote.getStartDate());rental.setContractEndDate(LocalDate.of(2026,10,31));rental.setMonthlyPrice(one);em.persist(rental);em.flush();return rental;
     }

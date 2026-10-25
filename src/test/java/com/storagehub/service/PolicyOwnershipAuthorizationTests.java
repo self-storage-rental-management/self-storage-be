@@ -45,12 +45,12 @@ class PolicyOwnershipAuthorizationTests {
         }
         var service = new AdminRoleService(roles, permissions, mock(UserRepository.class),
             new AdminAuthorizationService(), audit);
-        var managerReads = Set.of("reservations:approve", "policies:read", "staff_tasks:update", "reports:read");
+        var managerReads = managerPermissions();
         var illegalManager = new HashSet<>(managerReads); illegalManager.add("policies:update");
         assertConflict(() -> service.updatePermissions(actor(RoleCode.ADMIN), RoleCode.MANAGER,
             new AdminUpdateRolePermissionsRequest(illegalManager)));
         assertConflict(() -> service.updatePermissions(actor(RoleCode.ADMIN), RoleCode.BUSINESS,
-            new AdminUpdateRolePermissionsRequest(Set.of("policies:read"))));
+            new AdminUpdateRolePermissionsRequest(Set.of("policies:read", "refunds:approve", "refunds:execute", "fees:waive"))));
         verifyNoInteractions(permissions, audit);
         verify(roles, never()).saveAndFlush(any());
     }
@@ -68,8 +68,8 @@ class PolicyOwnershipAuthorizationTests {
             var role = new Role(); role.setCode(code);
             when(roles.findByCode(code)).thenReturn(Optional.of(role));
             Set<String> grants = code == RoleCode.MANAGER
-                ? Set.of("reservations:approve", "policies:read", "staff_tasks:update", "reports:read")
-                : Set.of("policies:read", "policies:update");
+                ? managerPermissions()
+                : Set.of("policies:read", "policies:update", "refunds:approve", "refunds:execute", "fees:waive");
             var response = service.updatePermissions(actor(RoleCode.ADMIN), code, new AdminUpdateRolePermissionsRequest(grants));
             assertThat(response.permissions()).containsExactlyInAnyOrderElementsOf(grants);
         }
@@ -86,13 +86,20 @@ class PolicyOwnershipAuthorizationTests {
         when(roles.findByCode(RoleCode.STAFF)).thenReturn(Optional.of(staff));
         var service = new AdminRoleService(roles, permissions, mock(UserRepository.class),
             new AdminAuthorizationService(), mock(AuditLogService.class));
-        var grants = Set.of("rentals:read", "rentals:update", "payments:read", "payments:collect");
+        var grants = Set.of("rentals:read", "reservations:approve", "checkins:process", "returns:process",
+            "refunds:execute", "payments:read", "payments:collect", "renewals:operate", "support:read", "support:update");
         assertThat(service.updatePermissions(actor(RoleCode.ADMIN), RoleCode.STAFF,
             new AdminUpdateRolePermissionsRequest(grants)).permissions())
             .containsExactlyInAnyOrderElementsOf(grants);
         var forbidden = new HashSet<>(grants); forbidden.add("policies:update");
         assertConflict(() -> service.updatePermissions(actor(RoleCode.ADMIN), RoleCode.STAFF,
             new AdminUpdateRolePermissionsRequest(forbidden)));
+    }
+
+    private Set<String> managerPermissions() {
+        return Set.of("reservations:approve", "storage_units:assign", "rentals:update", "policies:read",
+            "payments:read", "payments:collect", "payments:confirm", "refunds:approve", "fees:waive",
+            "staff_tasks:update", "reports:read");
     }
 
     private void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
