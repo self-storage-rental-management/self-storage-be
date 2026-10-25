@@ -220,7 +220,7 @@ public class BookingDocumentService {
         drawLabelValue(graphics, "Mã đơn giữ kho", reservation.getReservationCode(), 105, 490, regular, medium, muted, ink);
         drawLabelValue(graphics, "Khách hàng", reservation.getCustomer().getFullName(), 640, 490, regular, medium, muted, ink);
         drawLabelValue(graphics, "Cơ sở", reservation.getFacility().getName(), 105, 585, regular, medium, muted, ink);
-        drawLabelValue(graphics, "Loại kho giữ chỗ", reservation.getUnitType().getName(), 640, 585, regular, medium, muted, ink);
+        drawLabelValue(graphics, "Loại kho giữ chỗ", ReservationSnapshotView.unitTypeName(reservation), 640, 585, regular, medium, muted, ink);
         String rentalPeriod = date(reservation.getStartDate()) + " - " + date(reservation.getEndDate());
         drawLabelValue(graphics, "Kỳ thuê dự kiến", rentalPeriod, 105, 680, regular, medium, muted, ink);
         String rentalMonths = snapshot.getRentalMonths() > 0 ? snapshot.getRentalMonths() + " tháng" : "-";
