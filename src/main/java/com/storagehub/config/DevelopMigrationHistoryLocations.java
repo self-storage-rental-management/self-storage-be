@@ -177,6 +177,14 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
     private static String select(Map<String,Applied> applied,String version,String developScript,String developFolder,String legacyScript,String legacyFolder) {
         var value=applied.get(version);
         if(value==null)return "classpath:db/migration-history/"+developFolder;
+        if ("2026102401".equals(version) && "V2026102401__add_checkin_workflow_phases.sql".equals(value.script())) {
+            require(value, value.script());
+            return "classpath:db/migration-history/legacy-checkin-2401";
+        }
+        if ("2026102402".equals(version) && "V2026102402__snapshot_free_setup_and_rental_timeline.sql".equals(value.script())) {
+            require(value, value.script());
+            return "classpath:db/migration-history/legacy-checkin-2402";
+        }
         if(developScript.equals(value.script())) {require(value,developScript);return "classpath:db/migration-history/"+developFolder;}
         require(value,legacyScript);return "classpath:db/migration-history/"+legacyFolder;
     }
