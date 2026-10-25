@@ -64,7 +64,9 @@ public class RenewalStatusProjection {
         }else financial=financial(id,now);
         var state=em.find(RenewalOperationState.class,n.getId());
         var workflow=em.find(RenewalWorkflow.class,n.getId());
-        return new RenewalStatusSummary(workflow(n,state,workflow,financial.transactions(),now),financial.invoice(),financial.transactions(),now);
+        boolean preparationBlocked=n.getStatus()==RenewalStatus.accepted
+            &&payments.findAllByRenewal_IdOrderByCreatedAtAsc(id).stream().anyMatch(RenewalPreparationResolution::blocked);
+        return new RenewalStatusSummary(preparationBlocked?"ON_HOLD":workflow(n,state,workflow,financial.transactions(),now),financial.invoice(),financial.transactions(),now);
     }
     private Financial financial(UUID id,Instant now) {
         var n=em.find(Renewal.class,id);

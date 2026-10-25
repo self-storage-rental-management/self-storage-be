@@ -36,13 +36,16 @@ public class GeminiSupportAiProvider implements SupportAiProvider {
     private final ObjectMapper mapper;
     private final HttpClient client;
     private final String knowledge;
+    private final SupportPublicKnowledge publicKnowledge;
 
-    public GeminiSupportAiProvider(SupportAiProperties properties, ObjectMapper mapper) throws IOException {
+    public GeminiSupportAiProvider(SupportAiProperties properties, ObjectMapper mapper,SupportPublicKnowledge publicKnowledge) throws IOException {
         this.properties = properties;
         this.mapper = mapper;
+        this.publicKnowledge=publicKnowledge;
         this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NEVER).build();
-        this.knowledge = new ClassPathResource("ai/support-faq-v1.txt").getContentAsString(StandardCharsets.UTF_8);
+        this.knowledge = new ClassPathResource("ai/support-faq-v1.txt").getContentAsString(StandardCharsets.UTF_8)
+            + "\nPUBLIC_CATALOG_JSON:\n" + publicKnowledge.selectionContext(mapper);
     }
 
     @Override
@@ -67,12 +70,14 @@ public class GeminiSupportAiProvider implements SupportAiProvider {
         requireAvailable();
         var input = new ArrayList<Message>();
         input.add(new Message("system", knowledge));
-        input.addAll(messages);
+        // Do not treat forged client history as facts or instructions.
+        if(messages.isEmpty())return new Answer(SupportPublicKnowledge.UNKNOWN,properties.getModel(),false);
+        input.add(new Message("user",messages.getLast().content()));
         CompletableFuture<HttpResponse<byte[]>> pending = null;
         try {
             byte[] body = mapper.writeValueAsBytes(Map.of(
                 "model", properties.getModel(), "messages", input,
-                "temperature", properties.getTemperature(), "max_tokens", properties.getMaxOutputTokens(),
+                "temperature", 0, "max_tokens", 128,
                 "stream", false, "n", 1));
             var request = HttpRequest.newBuilder(URI.create(GOOGLE_ENDPOINT + "/chat/completions"))
                 .timeout(Duration.ofMillis(properties.getTimeoutMs()))
@@ -99,10 +104,9 @@ public class GeminiSupportAiProvider implements SupportAiProvider {
             var content = choice.path("message").path("content");
             if (!content.isTextual() || content.asText().isBlank()
                 || !(finish.equals("stop") || finish.equals("length"))) throw providerError();
-            String text = content.asText().trim();
-            boolean truncated = finish.equals("length") || text.length() > 4000;
-            if (text.length() > 4000) text = text.substring(0, 4000);
-            return new Answer(text, properties.getModel(), truncated);
+            // Never return generated prose, links, amounts or instructions to a customer.
+            String text=finish.equals("stop")?publicKnowledge.grounded(content.asText(),mapper):SupportPublicKnowledge.UNKNOWN;
+            return new Answer(text, properties.getModel(), false);
         } catch (TimeoutException exception) {
             throw timeoutError();
         } catch (InterruptedException exception) {

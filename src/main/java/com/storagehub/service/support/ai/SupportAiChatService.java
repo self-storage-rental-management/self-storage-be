@@ -36,12 +36,13 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 @Slf4j
 public class SupportAiChatService {
-    public static final String KNOWLEDGE_VERSION = "support-faq/2026-10-23-v1";
+    public static final String KNOWLEDGE_VERSION = SupportPublicKnowledge.VERSION;
     private static final long REPLAY_TTL_MS = 600_000;
     private final EntityManager em;
     private final ObjectMapper mapper;
     private final SupportAiProvider provider;
     private final SupportQuickFaq quickFaq;
+    private final SupportPublicKnowledge publicKnowledge;
     private final Semaphore slots = new Semaphore(8);
     private final Map<RequestKey, Attempt> attempts = new HashMap<>();
     private final Map<UUID, Window> windows = new HashMap<>();
@@ -83,10 +84,10 @@ public class SupportAiChatService {
             long started = System.nanoTime();
             try {
                 var answer = quickAnswer.isPresent()
-                    ? new SupportAiProvider.Answer(quickAnswer.get(), "faq-v1", false)
+                    ? new SupportAiProvider.Answer(quickAnswer.get(), "public-guidance-v2", false)
                     : provider.answer(messages);
                 String source = quickAnswer.isPresent() ? "FAQ" : "GEMINI";
-                attempt.result().complete(new SupportAiReplyResponse(requestId, "AI", source, answer.text(), answer.model(),
+                attempt.result().complete(new SupportAiReplyResponse(requestId, "AI", source, publicKnowledge.approved(answer.text()), answer.model(),
                     KNOWLEDGE_VERSION, Instant.now(), answer.truncated()));
                 log.info("Support assistant reply: source={}, elapsedMs={}", source, (System.nanoTime() - started) / 1_000_000);
             } catch (ApiException exception) {

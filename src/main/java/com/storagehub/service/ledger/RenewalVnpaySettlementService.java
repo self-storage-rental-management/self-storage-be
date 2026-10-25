@@ -223,6 +223,30 @@ public class RenewalVnpaySettlementService {
         return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
     }
 
+    @Transactional(propagation=Propagation.MANDATORY)
+    public void holdForPreparationResolution(Payment payment) {
+        if(payment==null||payment.getRenewal()==null||payment.getStatus()!=PaymentStatus.PAID
+            ||com.storagehub.service.renewal.RenewalPreparationResolution.blocked(payment)
+            ||payment.getPurpose()!=PaymentType.RENEWAL||payment.getRenewalAllocatedAt()==null
+            ||payment.getRenewalLedgerReceiptRef()==null||payment.getRenewalSigningPreparedAt()!=null)return;
+        var state=em.find(RenewalOperationState.class,payment.getRenewal().getId());
+        var deadline=com.storagehub.service.renewal.RenewalPreparationResolution.deadline(payment,state);
+        if(payment.getRenewalReconciliationAttempts()<com.storagehub.service.renewal.RenewalPreparationResolution.MAX_AUTOMATIC_ATTEMPTS
+            &&deadline!=null&&now().isBefore(deadline))return;
+        payment.setFailureCode(com.storagehub.service.renewal.RenewalPreparationResolution.BLOCKED);
+        payment.setRenewalNextRetryAt(null);
+        var renewal=payment.getRenewal();
+        em.persist(new RenewalOperationEvent(renewal,"PREPARATION_BLOCKED",now(),null,
+            mapper.valueToTree(Map.of("paymentId",payment.getId(),"status","ON_HOLD",
+                "reason","SIGNING_PREPARATION_FAILED","attempts",payment.getRenewalReconciliationAttempts())).toString()));
+        var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
+        if(workflow!=null)em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
+        notifications.createFacilityOperationsNotifications(renewal.getRental().getFacility().getId(),NotificationType.RENEWAL,
+            "Khoản gia hạn đã thu cần được xử lý","Chưa chuẩn bị được ký gia hạn. Cần kiểm tra khả năng tiếp tục hoặc xử lý hoàn tiền; không ghi nhận khách không đến.",renewal.getId());
+        notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
+            "Gia hạn đang chờ cơ sở xử lý","Khoản đã thu được giữ để đối soát. Cơ sở đang kiểm tra khả năng tiếp tục gia hạn hoặc hoàn tiền.",renewal.getId());
+    }
+
     private Instant now(){var clock=clocks.getIfAvailable();return (clock==null?Clock.systemUTC():clock).instant();}
     private static Instant min(Instant a,Instant b){return a.isBefore(b)?a:b;}
 }

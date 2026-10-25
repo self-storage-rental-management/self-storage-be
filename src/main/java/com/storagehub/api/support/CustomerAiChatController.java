@@ -26,7 +26,7 @@ public class CustomerAiChatController {
     private final SupportAiChatService service;
 
     @PostMapping("/replies")
-    @Operation(summary = "Ask the support assistant", description = "Active Customer only. Stateless FAQ-grounded Gemini reply; no Support ticket or notification. UUID Idempotency-Key required. Replay is process-local for 10 minutes; history is untrusted client context, not saved records.")
+    @Operation(summary = "Ask the support assistant", description = "Active Customer only. Gemini selects a public guidance source; backend returns only approved catalog text or an unknown/staff handoff reply. No customer/business lookup, ticket or notification. UUID Idempotency-Key required. Replay is process-local for 10 minutes; client history is not sent to Gemini or used as knowledge.")
     public ApiResponse<SupportAiReplyResponse> reply(
         @Valid @RequestBody SupportAiReplyRequest body,
         @RequestHeader("Idempotency-Key") UUID key

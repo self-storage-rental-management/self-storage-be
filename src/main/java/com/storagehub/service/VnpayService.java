@@ -664,10 +664,12 @@ public class VnpayService {
     private RenewalVnpayPaymentResponse renewalPaymentResponse(Payment payment,String message,String url) {
         var reader=renewalTransactionReaders==null?null:renewalTransactionReaders.getIfAvailable();
         var transaction=reader==null?null:reader.read(payment,Instant.now());
+        boolean preparationHeldAndReconciled=com.storagehub.service.renewal.RenewalPreparationResolution.blocked(payment)
+            &&transaction!=null&&transaction.receiptAvailable();
         return new RenewalVnpayPaymentResponse(payment.getId(),payment.getRenewal().getId(),
             payment.getRenewalRevision()==null?null:payment.getRenewalRevision().getId(),payment.getGatewayIntentId(),
             payment.getAmount(),payment.getCurrency(),payment.getStatus(),payment.getPaymentDeadline(),payment.getPaidAt(),
-            payment.getStatus()==PaymentStatus.PAID&&(payment.getFailureCode()!=null
+            payment.getStatus()==PaymentStatus.PAID&&(payment.getFailureCode()!=null&&!preparationHeldAndReconciled
                 ||"RECONCILIATION_REQUIRED".equals(renewalSettlementStage(payment))),message,url,renewalSettlementStage(payment),
             transaction==null?com.storagehub.service.renewal.RenewalTransactionStatus.resolve(payment,false,BigDecimal.ZERO,Instant.now()):transaction.status(),
             transaction!=null&&transaction.receiptAvailable());
@@ -686,6 +688,8 @@ public class VnpayService {
     }
 
     private String renewalPaymentMessage(Payment payment) {
+        if(com.storagehub.service.renewal.RenewalPreparationResolution.blocked(payment))
+            return "Gia hạn đang chờ cơ sở xử lý bước ký hoặc hoàn tiền.";
         if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT){
             if(payment.getStatus()==PaymentStatus.FAILED)return "Giao dịch thanh toán kỳ thất bại; có thể lấy báo giá mới để thử lại.";
             if(payment.getStatus()==PaymentStatus.CANCELLED)return "Giao dịch thanh toán kỳ đã hủy.";
