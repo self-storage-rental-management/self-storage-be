@@ -57,7 +57,8 @@ public class RenewalWorkflowService {
     }
     public RenewalQuoteResponse quote(ActorPrincipal a,UUID rentalId,RenewalCommands.Quote body){
         owned(a,rentalId);var r=store.lockRental(rentalId);em.refresh(r);checkOwner(a,r);Instant now=now();var g=gate(r,now);
-        var terms=terms(r,g,body.pricingPackageCode(),body.paymentPlan()==null?RenewalPaymentPlan.FULL_TERM:body.paymentPlan());
+        boolean full=Boolean.TRUE.equals(body.fullPayment());
+        var terms=terms(r,g,body.pricingPackageCode(),body.paymentPlan()==null?(full?null:RenewalPaymentPlan.FULL_TERM):body.paymentPlan(),full,body.startDate());
         var q=store.storeQuote(r,r.getCustomer(),terms,now,null);em.flush();return new RenewalQuoteResponse(q.getId(),r.getId(),a.userId(),terms,now,null);
     }
     public RenewalResponse submit(ActorPrincipal a,UUID rentalId,RenewalCommands.Submit body,String key){
@@ -244,7 +245,11 @@ public class RenewalWorkflowService {
             || !Objects.equals(n.getNewEndDate(),t.newEndDate()))
             throw ApiExceptions.conflict("Accepted Renewal terms do not match persisted request");
         String review="UNKNOWN";
-        if(isPrePayment(n)){try{var current=terms(n.getRental(),gate(n.getRental(),now()),t.pricingPackageCode(),t.paymentPlan());review=store.canonical(t).equals(store.canonical(current))?"READY":"AWAITING_CUSTOMER_CONFIRMATION";}catch(com.storagehub.common.api.ApiException ignored){}}
+        if(isPrePayment(n)){try{
+            boolean full=t.paymentPlan()==null||t.remainingRentalAmount().signum()==0;
+            var current=terms(n.getRental(),gate(n.getRental(),now()),t.pricingPackageCode(),t.paymentPlan(),full,t.extensionStartDate());
+            review=store.canonical(t).equals(store.canonical(current))?"READY":"AWAITING_CUSTOMER_CONFIRMATION";
+        }catch(com.storagehub.common.api.ApiException ignored){}}
         var financial=legacy.financialCheck();var fs=finance.getIfAvailable();
         if(fs!=null){var state=fs.read(n.getRental());if(state.isPresent()&&state.get().checkedAt()!=null&&!state.get().checkedAt().isAfter(now())&&state.get().dueObligations()!=null){var s=state.get();financial=new RenewalResponse.FinancialCheck(fs.consistentThroughApproval()?"COMPLETE":"PARTIAL",s.checkedAt(),s.dueObligations(),s.unresolvedDispute());}}
         var systemVerification=verifySystem(n,t,now());
@@ -314,20 +319,25 @@ public class RenewalWorkflowService {
         result.sort(Comparator.comparingInt(RenewalSources.Price::months).thenComparing(RenewalSources.Price::packageCode));return result;
     }
     private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code){
-        return terms(r,g,code,null);
+        return terms(r,g,code,null,false,null);
     }
-    private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code,RenewalPaymentPlan plan){
+    private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code,RenewalPaymentPlan plan,boolean fullPayment){
+        return terms(r,g,code,plan,fullPayment,null);
+    }
+    private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code,RenewalPaymentPlan plan,boolean fullPayment,LocalDate customStart){
         var p=prices(r,new PolicyPeriod(g.policy(),g.period())).stream().filter(x->x.packageCode().equals(code)).findFirst().orElseThrow(()->ApiExceptions.conflict("Package not eligible for Renewal"));
         // Package discounts apply to full-term payment. Monthly installments use the catalog monthly price.
         var discount=plan==RenewalPaymentPlan.MONTHLY?BigDecimal.ZERO:p.discountRate();
-        var t=RenewalTermCalculator.calculate(g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),discount,plan==null?BigDecimal.ZERO:new BigDecimal("0.20"));
-        var deposit=plan==null?t.depositAmount():(plan==RenewalPaymentPlan.MONTHLY?p.monthlyPrice():t.netRent()).multiply(new BigDecimal("0.20")).setScale(0,java.math.RoundingMode.HALF_UP);
+        LocalDate startBase = customStart != null ? customStart : g.period.lastPermittedDate().plusDays(1);
+        var t=RenewalTermCalculator.calculate(startBase,g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),discount,fullPayment?BigDecimal.ONE:new BigDecimal("0.20"));
+        var deposit=fullPayment?t.netRent():(plan==RenewalPaymentPlan.MONTHLY?p.monthlyPrice():t.netRent()).multiply(new BigDecimal("0.20")).setScale(0,java.math.RoundingMode.HALF_UP);
+        var remaining=t.netRent().subtract(deposit);
         if(t.netRent().precision()>14)throw ApiExceptions.conflict("Shared renewal amount exceeds supported precision");
-        return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),discount,t.subtotal(),t.discountAmount(),t.netRent(),deposit,t.netRent().subtract(deposit),p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate(),plan);
+        return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),discount,t.subtotal(),t.discountAmount(),t.netRent(),deposit,remaining,p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate(),fullPayment?null:plan);
     }
     private void requireCurrentTerms(Rental r,Gate g,RenewalQuoteResponse.Terms accepted){
-        // Preserve the split in an immutable server quote, including earlier full-rent quotes.
-        var current=mapper.valueToTree(terms(r,g,accepted.pricingPackageCode(),accepted.paymentPlan()));
+        boolean full=accepted.paymentPlan()==null||accepted.remainingRentalAmount().signum()==0;
+        var current=mapper.valueToTree(terms(r,g,accepted.pricingPackageCode(),accepted.paymentPlan(),full,accepted.extensionStartDate()));
         ((com.fasterxml.jackson.databind.node.ObjectNode)current).set("renewalDepositAmount",mapper.valueToTree(accepted.renewalDepositAmount()));
         ((com.fasterxml.jackson.databind.node.ObjectNode)current).set("remainingRentalAmount",mapper.valueToTree(accepted.remainingRentalAmount()));
         if(!store.canonical(accepted).equals(store.canonical(current)))
@@ -355,7 +365,43 @@ public class RenewalWorkflowService {
         if(paymentRecords!=null&&!paymentRecords.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId()).isEmpty())
             throw ApiExceptions.conflict("Renewal terms cannot change after a VNPay payment intent was created");
     }
+    public RenewalResponse approve(ActorPrincipal a, UUID id) {
+        var n = em.find(Renewal.class, id);
+        if (n == null) throw ApiExceptions.notFound("Renewal was not found");
+        var user = lockActor(a);
+        var r = n.getRental();
+        em.refresh(r);
+        if (n.getNewEndDate() != null) {
+            r.setContractEndDate(n.getNewEndDate());
+        }
+        n.setStatus(RenewalStatus.completed);
+        var wf = em.find(RenewalWorkflow.class, id);
+        if (wf != null) {
+            wf.reviewed(user, now(), "Approved by staff", null, null);
+        }
+        var selectedState = em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class, id);
+        if (selectedState != null) {
+            selectedState.completed(user.getId(), now());
+        }
+        em.flush();
+        return reads.detail(a, id, true);
+    }
+
+    public RenewalResponse reject(ActorPrincipal a, UUID id, String reason) {
+        var n = em.find(Renewal.class, id);
+        if (n == null) throw ApiExceptions.notFound("Renewal was not found");
+        var user = lockActor(a);
+        n.setStatus(RenewalStatus.rejected);
+        var wf = em.find(RenewalWorkflow.class, id);
+        if (wf != null) {
+            wf.reviewed(user, now(), reason != null ? reason : "Rejected by staff", null, null);
+        }
+        em.flush();
+        return reads.detail(a, id, true);
+    }
+
     private <T>T decode(String json,Class<T> type){try{return mapper.readValue(json,type);}catch(Exception e){throw ApiExceptions.conflict("Stored Renewal snapshot is invalid");}}
     private static Instant min(Instant a,Instant b){return a.isBefore(b)?a:b;}
     private static RuntimeException deferred(String reason){return ApiExceptions.conflict("DEFERRED_SOURCE: "+reason);}
 }
+
