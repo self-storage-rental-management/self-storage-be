@@ -81,7 +81,7 @@ public class AccessCredentialService {
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
         if (checkIn.getStatus() != CheckInStatus.payment_collected
-            || reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+            || !isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Credentials can only be activated after payment and before setup");
         }
         if (request.type() != AccessCredentialType.LOCK) {
@@ -387,6 +387,11 @@ public class AccessCredentialService {
         if (!actor.hasRole(RoleCode.STAFF) || actor.hasRole(RoleCode.MANAGER)) {
             throw ApiExceptions.forbidden("Only Staff may issue or revoke access credentials");
         }
+    }
+
+    private boolean isCheckInReadyStatus(ReservationStatus status) {
+        return status == ReservationStatus.UNIT_RESERVED
+            || status == ReservationStatus.READY_FOR_CHECKIN;
     }
 
     private String hashSecret(String secret) {

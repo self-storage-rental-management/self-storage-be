@@ -439,7 +439,7 @@ public class CheckInHandoverService {
         if (checkIn.getStatus() != CheckInStatus.setup_completed) {
             throw ApiExceptions.conflict("Customer setup must be completed before inventory verification");
         }
-        if (reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+        if (!isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
         if (!request.checklist().identityVerified()) {
@@ -546,7 +546,7 @@ public class CheckInHandoverService {
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
         if (checkIn.getStatus() != CheckInStatus.contract_signed
-            || reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+            || !isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Check-in is not ready to record the remaining payment");
         }
         var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
@@ -648,7 +648,7 @@ public class CheckInHandoverService {
         if (checkIn.getStatus() != CheckInStatus.scheduled) {
             throw ApiExceptions.conflict("Only a scheduled check-in can be rejected");
         }
-        if (reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+        if (!isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
 
@@ -738,7 +738,7 @@ public class CheckInHandoverService {
         Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
-        if (reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+        if (!isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
         if (checkIn.getStatus() != expectedStatus) {
@@ -748,6 +748,16 @@ public class CheckInHandoverService {
         }
         checkIn.setReservation(reservation);
         return checkIn;
+    }
+
+    /**
+     * A scheduled check-in is authoritative for the handover workflow. Legacy
+     * records can still retain UNIT_RESERVED after scheduling, so they must be
+     * resumable instead of forcing the operator back through the schedule step.
+     */
+    private boolean isCheckInReadyStatus(ReservationStatus status) {
+        return status == ReservationStatus.UNIT_RESERVED
+            || status == ReservationStatus.READY_FOR_CHECKIN;
     }
 
     private void recordWorkflowAudit(
