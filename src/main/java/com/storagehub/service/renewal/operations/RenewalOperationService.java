@@ -293,7 +293,7 @@ public class RenewalOperationService {
         return finish(c,"d3_refund",key,body,event(c,"REFUND",data),201);
     }
     public Result executeRefund(ActorPrincipal actor,UUID id,RefundExecution body,String key) {
-        var c=context(actor,id,Audience.MANAGER,Capability.REFUND,key,"d3_refund_execute",body,body.expectedVersion());
+        var c=context(actor,id,Audience.STAFF,Capability.REFUND_EXECUTION,key,"d3_refund_execute",body,body.expectedVersion());
         var old=replay(c,"d3_refund_execute",key,body);if(old.isPresent())return old.get();
         if(!Boolean.TRUE.equals(body.transferred()))throw ApiExceptions.validation("Refund payout attestation required",null);
         evidence(actor,c.renewal(),"REFUND",List.of(body.receiptFileId()));

@@ -97,16 +97,28 @@ class RecoveryTaskOperationServiceTests {
     @Test void settlementUsesServerAmountAndRequiresBoundReceiptBeforePhysicalCompletion() {
         inventory();rc.setStatus(ReturnCaseStatus.payment_due);rc.setAmountDueFromCustomer(new BigDecimal("950000"));
         UUID receipt=UUID.randomUUID();jdbc.update("insert into file_assets values(?)",bytes(receipt));
-        when(returns.completeRecoverySettlement(actor,returnId,"BANK-1")).thenAnswer(inv->{rc.setStatus(ReturnCaseStatus.completed);return null;});
-        var result=tx.execute(s->service.settle(actor,RoleCode.STAFF,id,new Settlement(2L,PaymentMethod.BANK_TRANSFER,"BANK-1",receipt,true),"settle"));
+        when(returns.completeRecoverySettlement(eq(actor),eq(returnId),startsWith("TM-"))).thenAnswer(inv->{rc.setStatus(ReturnCaseStatus.completed);return null;});
+        var result=tx.execute(s->service.settle(actor,RoleCode.STAFF,id,new Settlement(2L,PaymentMethod.CASH,null,receipt,true),"settle"));
         assertThat(result.expectedVersion()).isEqualTo(3);assertThat(result.status()).isEqualTo("IN_PROGRESS");
         assertThat(jdbc.queryForObject("select amount from recovery_settlement_receipts",BigDecimal.class)).isEqualByComparingTo("950000");
+        assertThat(jdbc.queryForObject("select payment_method from recovery_settlement_receipts",String.class)).isEqualTo("CASH");
+        assertThat(jdbc.queryForObject("select transaction_reference from recovery_settlement_receipts",String.class)).startsWith("TM-");
         verify(evidence).require(actor,id,"SETTLEMENT",List.of(receipt));
         assertThat(rental.getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
         UUID report=UUID.randomUUID();jdbc.update("insert into file_assets values(?)",bytes(report));
         var closed=tx.execute(s->service.complete(actor,RoleCode.STAFF,id,completion(3L,report),"close"));
         assertThat(closed.status()).isEqualTo("CLOSED");assertThat(closed.assetsCleared()).isTrue();verify(returns).finalizeRecoveryReturn(actor,returnId);
         var replay=tx.execute(s->service.complete(actor,RoleCode.STAFF,id,completion(3L,report),"close"));assertThat(replay).isEqualTo(closed);
+    }
+    @Test void staffCannotCollectByBankTransfer() {
+        inventory();rc.setStatus(ReturnCaseStatus.payment_due);rc.setAmountDueFromCustomer(new BigDecimal("950000"));
+        assertThatThrownBy(()->tx.execute(s->service.settle(actor,RoleCode.STAFF,id,
+            new Settlement(2L,PaymentMethod.BANK_TRANSFER,"BANK-1",UUID.randomUUID(),true),"bank-settle")))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                e->assertThat(e.getStatus().value()).isEqualTo(403));
+        assertThat(jdbc.queryForObject("select count(*) from recovery_settlement_receipts",Long.class)).isZero();
+        assertThat(service.read(actor,RoleCode.STAFF,id).expectedVersion()).isEqualTo(2);
+        verify(returns,never()).completeRecoverySettlement(any(),any(),any());
     }
     @Test void failedReleaseRollsBackTaskClosureAndCommandRecord() {
         inventory();rc.setStatus(ReturnCaseStatus.completed);

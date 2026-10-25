@@ -88,6 +88,7 @@ public class VnpayService {
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private final UserRepository userRepository;
     private final AdminAuthorizationService authorizationService;
+    private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
@@ -104,7 +105,19 @@ public class VnpayService {
         AdminAuthorizationService authorizationService,AuditLogService auditLogService,
         NotificationService notificationService,ObjectMapper objectMapper) {
         this(properties,paymentRepository,complaintRepository,reservationRepository,snapshotRepository,userRepository,
-            authorizationService,auditLogService,notificationService,objectMapper,null,null);
+            authorizationService,null,auditLogService,notificationService,objectMapper,null,null);
+    }
+
+    /** Backward-compatible constructor for renewal payment unit fixtures. */
+    public VnpayService(VnpayProperties properties,PaymentRepository paymentRepository,
+        PaymentComplaintRepository complaintRepository,ReservationRepository reservationRepository,
+        ReservationPricingSnapshotRepository snapshotRepository,UserRepository userRepository,
+        AdminAuthorizationService authorizationService,AuditLogService auditLogService,
+        NotificationService notificationService,ObjectMapper objectMapper,
+        RenewalWorkflowService renewalWorkflowService,
+        ObjectProvider<RenewalVnpaySettlementService> renewalSettlement) {
+        this(properties,paymentRepository,complaintRepository,reservationRepository,snapshotRepository,userRepository,
+            authorizationService,null,auditLogService,notificationService,objectMapper,renewalWorkflowService,renewalSettlement);
     }
 
     @Transactional
@@ -514,14 +527,18 @@ public class VnpayService {
         String clientIp
     ) {
         requireConfigured();
-        if (actor == null || !actor.hasAnyRole(RoleCode.MANAGER, RoleCode.ADMIN)) {
-            throw ApiExceptions.forbidden("Manager role required for VNPAY refunds");
+        if (actor == null || !actor.hasAnyRole(RoleCode.BUSINESS)) {
+            throw ApiExceptions.forbidden("Business Operations execution is required for VNPAY refunds");
         }
-        authorizationService.require(actor, SystemPermission.MANAGE_PAYMENTS);
+        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
         if (payment.getStatus() != PaymentStatus.PAID || payment.getGatewayTransactionNo() == null) {
             throw ApiExceptions.conflict("Only a successful VNPAY payment can be refunded");
+        }
+        UUID facilityId = payment.getReservation().getFacility().getId();
+        if (actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS)) {
+            facilityScopeService.assertCanManage(actor, facilityId);
         }
         if(payment.getRenewal()!=null)
             throw ApiExceptions.conflict("Renewal refunds require the Renewal refund entitlement and payout workflow");
