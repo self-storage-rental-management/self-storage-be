@@ -17,7 +17,24 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
     @Schema(description="Immutable customer-accepted quote terms; null for legacy records. Not current catalog prices.")
     RenewalQuoteResponse.Terms acceptedTerms,
     @Schema(description="Persisted cancellation reason only; no inferred actor/time.") String cancellationReason,
-    String displayCode) {
+    String displayCode,
+    @Schema(description="Independent workflow, receivable and verified transaction read models; null on legacy command replays.")
+    RenewalStatusSummary statusSummary) {
+    public RenewalResponse(UUID id,UUID rentalId,Customer customer,Facility facility,Unit storageUnit,
+        RenewalStatus status,String reviewState,LocalDate oldEndDate,LocalDate newEndDate,BigDecimal amount,
+        String currency,Instant createdAt,Long version,UUID requestedBy,UUID acceptedQuoteId,Integer acceptedRevision,
+        UUID reviewerId,Instant reviewedAt,String reviewReason,Instant approvedPaymentDeadline,UUID extensionHoldRef,
+        FinancialCheck financialCheck,SystemVerification systemVerification,List<String> allowedActions,List<String> disabledReasons,
+        RenewalQuoteResponse.Terms acceptedTerms,String cancellationReason,String displayCode) {
+        this(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,newEndDate,amount,currency,createdAt,version,
+            requestedBy,acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,extensionHoldRef,
+            financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,null);
+    }
+    public RenewalResponse withStatusSummary(RenewalStatusSummary summary) {
+        return new RenewalResponse(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,newEndDate,amount,currency,
+            createdAt,version,requestedBy,acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,
+            extensionHoldRef,financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,summary);
+    }
     public RenewalResponse(UUID id,UUID rentalId,Customer customer,Facility facility,Unit storageUnit,
         RenewalStatus status,String reviewState,LocalDate oldEndDate,LocalDate newEndDate,BigDecimal amount,
         String currency,Instant createdAt,Long version,UUID requestedBy,UUID acceptedQuoteId,Integer acceptedRevision,
