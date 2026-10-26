@@ -33,8 +33,16 @@ public class MaintenanceTask extends BaseEntity {
     @JoinColumn(name = "return_case_id")
     private ReturnCase returnCase;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "rental_id")
+    private Rental rental;
+
     @Column(nullable = false, length = 255)
     private String title;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "task_type", nullable = false, length = 32)
+    private MaintenanceTaskType taskType = MaintenanceTaskType.maintenance;
 
     @Column(nullable = false, length = 2000)
     private String reason;
@@ -47,8 +55,8 @@ public class MaintenanceTask extends BaseEntity {
     @Column(length = 32)
     private DamageClassification damageClassification;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "reported_by", nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reported_by")
     private User reportedBy;
 
     @ManyToOne(fetch = FetchType.LAZY)

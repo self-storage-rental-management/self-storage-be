@@ -37,6 +37,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.PaymentRepository;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
@@ -70,6 +71,7 @@ class CheckInHandoverServiceTests {
     @Mock private FileAssetRepository fileAssetRepository;
     @Mock private RentalRepository rentalRepository;
     @Mock private PaymentRepository paymentRepository;
+    @Mock private MaintenanceTaskRepository maintenanceTaskRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private ReservationPricingSnapshotRepository pricingSnapshotRepository;
     @Mock private UserRepository userRepository;
@@ -91,6 +93,7 @@ class CheckInHandoverServiceTests {
         service = new CheckInHandoverService(
             reservationRepository, storageUnitRepository, assignmentRepository,
             checkInRepository, fileAssetRepository, rentalRepository, paymentRepository,
+            maintenanceTaskRepository,
             goodsItemRepository, pricingSnapshotRepository, userRepository, authorizationService,
             facilityScopeService, auditLogService, notificationService, new ObjectMapper()
         );

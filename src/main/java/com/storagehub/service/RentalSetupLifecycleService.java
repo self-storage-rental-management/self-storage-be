@@ -3,6 +3,11 @@ package com.storagehub.service;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
+import com.storagehub.domain.model.MaintenanceTask;
+import com.storagehub.domain.model.MaintenanceTaskStatus;
+import com.storagehub.domain.model.MaintenanceTaskType;
+import com.storagehub.domain.model.TaskPriority;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -21,6 +26,7 @@ public class RentalSetupLifecycleService {
     private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
 
     private final RentalRepository rentalRepository;
+    private final MaintenanceTaskRepository maintenanceTaskRepository;
     private final NotificationService notificationService;
 
     @Scheduled(
@@ -58,6 +64,11 @@ public class RentalSetupLifecycleService {
         }
 
         for (Rental rental : rentalRepository.findByStatusAndInventoryPendingTrue(RentalStatus.active)) {
+            if (rental.getSetupEndsAt() != null && !rental.getSetupEndsAt().isAfter(now)
+                && rental.getInventoryTaskCreatedAt() == null) {
+                createInventoryTask(rental, now, "Đã hết setup, cần kiểm kê đầu vào");
+                rentalRepository.save(rental);
+            }
             if (rental.getInventoryDueAt() != null && !rental.getInventoryDueAt().isAfter(now)
                 && rental.getInventoryEscalatedAt() == null) {
                 escalateInventory(rental, now, "Đã đến hạn kiểm kê đầu vào");
@@ -80,6 +91,23 @@ public class RentalSetupLifecycleService {
     }
 
     private void createInventoryTask(Rental rental, Instant now, String title) {
+        MaintenanceTask task = new MaintenanceTask();
+        task.setFacility(rental.getFacility());
+        task.setStorageUnit(rental.getStorageUnit());
+        task.setRental(rental);
+        task.setTaskType(MaintenanceTaskType.inventory_check);
+        task.setTitle(title + " · " + rental.getStorageUnit().getCode());
+        task.setReason(
+            "Kiểm kê hàng hóa đầu vào cho đơn " + rental.getReservation().getReservationCode()
+                + ". Hoàn tất trong luồng Nhận kho & bàn giao; không dùng thao tác bảo trì để kết thúc task này."
+        );
+        task.setPriority(TaskPriority.medium);
+        task.setReportedBy(null);
+        task.setStatus(MaintenanceTaskStatus.open);
+        task.setDueAt(rental.getInventoryDueAt() == null
+            ? null
+            : rental.getInventoryDueAt().atZone(VIETNAM_ZONE).toLocalDate());
+        maintenanceTaskRepository.saveAndFlush(task);
         notifyCustomer(rental, title,
             "Rental đã ACTIVE từ " + rental.getStartDate()
                 + ". Kiểm kê đầu vào có hạn đến " + rental.getInventoryDueAt() + ".");
