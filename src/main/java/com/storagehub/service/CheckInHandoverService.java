@@ -442,6 +442,18 @@ public class CheckInHandoverService {
         if (!isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
+        Rental rental = rentalRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Setup rental timeline is missing"));
+        Instant inventoryNow = Instant.now();
+        if (rental.getSetupEndsAt() == null || rental.getSetupEndsAt().isAfter(inventoryNow)) {
+            throw ApiExceptions.conflict("Chỉ được kiểm kê sau khi thời gian setup miễn phí kết thúc.");
+        }
+        if (rental.getStatus() == RentalStatus.setup) {
+            rental.setStatus(RentalStatus.active);
+        }
+        if (rental.getStatus() != RentalStatus.active) {
+            throw ApiExceptions.conflict("Hồ sơ thuê chưa ở trạng thái đang hoạt động để kiểm kê.");
+        }
         if (!request.checklist().identityVerified()) {
             throw ApiExceptions.conflict("Customer identity verification is required");
         }
@@ -472,13 +484,11 @@ public class CheckInHandoverService {
         }
 
         User operator = requireActor(actor);
-        Instant now = Instant.now();
+        Instant now = inventoryNow;
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.completed);
         checkIn.setCheckedInAt(now);
         checkIn.setInventoryVerifiedAt(now);
-        Rental rental = rentalRepository.findByReservation_Id(reservation.getId())
-            .orElseThrow(() -> ApiExceptions.conflict("Setup rental timeline is missing"));
         rental.setInventoryVerifiedAt(now);
         rental.setInventoryPending(false);
         rentalRepository.saveAndFlush(rental);
