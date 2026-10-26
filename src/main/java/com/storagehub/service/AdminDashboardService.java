@@ -66,7 +66,7 @@ public class AdminDashboardService {
 
     @Transactional(readOnly = true)
     public AdminDashboardResponse dashboard(ActorPrincipal actor) {
-        authorizationService.require(actor, SystemPermission.VIEW_DASHBOARD);
+        authorizationService.requireAdmin(actor, SystemPermission.VIEW_DASHBOARD);
 
         Map<RoleCode, Long> usersByRole = new EnumMap<>(RoleCode.class);
         Arrays.stream(RoleCode.values()).forEach(role -> usersByRole.put(role, 0L));
