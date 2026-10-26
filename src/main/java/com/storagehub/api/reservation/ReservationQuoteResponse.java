@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.List;
 
 public class ReservationQuoteResponse {
 
@@ -33,6 +34,10 @@ public class ReservationQuoteResponse {
     private BigDecimal totalAfterDiscount;
     private BigDecimal reservationDepositRate = new BigDecimal("0.20");
     private BigDecimal reservationDepositAmount;
+    private int earlyTerminationFeeCapMonths = 1;
+    private BigDecimal earlyTerminationFeeCoefficient = BigDecimal.ONE;
+    private int earlyTerminationNoticeDays = 14;
+    private BigDecimal earlyTerminationFee = BigDecimal.ZERO;
     private BigDecimal securityDepositAmount;
     private BigDecimal remainingRentalAmount;
     private BigDecimal dueAtCheckIn;
@@ -40,6 +45,10 @@ public class ReservationQuoteResponse {
     private String policyVersion;
     private Instant quotedAt;
     private Instant expiresAt;
+    private List<EarlyTerminationTier> earlyTerminationTiers = List.of();
+    private String earlyTerminationNoticeBasis = "REQUESTED_AT_TO_SCHEDULED_DATE";
+
+    public record EarlyTerminationTier(int rentalMonths, BigDecimal monthlyPrice, int freeSetupDays) {}
 
     public ReservationQuoteResponse() {
     }
@@ -149,6 +158,14 @@ public class ReservationQuoteResponse {
     public BigDecimal getReservationDepositRate() { return reservationDepositRate != null ? reservationDepositRate : new BigDecimal("0.20"); }
     public void setReservationDepositRate(BigDecimal reservationDepositRate) { this.reservationDepositRate = reservationDepositRate; }
     public BigDecimal getReservationDepositAmount() { return reservationDepositAmount; }
+    public int getEarlyTerminationFeeCapMonths() { return earlyTerminationFeeCapMonths; }
+    public void setEarlyTerminationFeeCapMonths(int value) { this.earlyTerminationFeeCapMonths = value; }
+    public BigDecimal getEarlyTerminationFeeCoefficient() { return earlyTerminationFeeCoefficient; }
+    public void setEarlyTerminationFeeCoefficient(BigDecimal value) { this.earlyTerminationFeeCoefficient = value; }
+    public int getEarlyTerminationNoticeDays() { return earlyTerminationNoticeDays; }
+    public void setEarlyTerminationNoticeDays(int value) { this.earlyTerminationNoticeDays = value; }
+    public BigDecimal getEarlyTerminationFee() { return earlyTerminationFee; }
+    public void setEarlyTerminationFee(BigDecimal value) { this.earlyTerminationFee = value; }
     public BigDecimal getSecurityDepositAmount() { return securityDepositAmount; }
     public BigDecimal getRemainingRentalAmount() { return remainingRentalAmount; }
     public BigDecimal getDueAtCheckIn() { return dueAtCheckIn; }
@@ -156,4 +173,10 @@ public class ReservationQuoteResponse {
     public String getPolicyVersion() { return policyVersion; }
     public Instant getQuotedAt() { return quotedAt; }
     public Instant getExpiresAt() { return expiresAt; }
+    public List<EarlyTerminationTier> getEarlyTerminationTiers() { return earlyTerminationTiers; }
+    public void setEarlyTerminationTiers(List<EarlyTerminationTier> tiers) {
+        this.earlyTerminationTiers = tiers == null ? List.of() : List.copyOf(tiers);
+    }
+    public String getEarlyTerminationNoticeBasis() { return earlyTerminationNoticeBasis; }
+    public void setEarlyTerminationNoticeBasis(String value) { this.earlyTerminationNoticeBasis = value; }
 }

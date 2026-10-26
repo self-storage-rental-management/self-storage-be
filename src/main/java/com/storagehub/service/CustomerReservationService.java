@@ -6,6 +6,7 @@ import com.storagehub.api.reservation.ReservationDetailResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationResponse;
 import com.storagehub.api.reservation.UpdateSetupGoodsRequest;
+import com.storagehub.api.returns.CustomerCreateReturnRequest;
 import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
 import com.storagehub.common.api.ApiExceptions;
@@ -22,6 +23,9 @@ import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
+import com.storagehub.domain.model.ReservationCancellationType;
+import com.storagehub.domain.model.RefundRequest;
+import com.storagehub.domain.model.RefundRequestStatus;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
@@ -38,6 +42,7 @@ import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
+import com.storagehub.domain.repo.RefundRequestRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.ledger.LedgerStore;
 import java.time.Instant;
@@ -63,6 +68,8 @@ public class CustomerReservationService {
     private com.storagehub.domain.repo.ReturnCaseRepository setupReturns;
     @Autowired
     private com.storagehub.service.rental.period.ConfirmedRentalPeriods confirmedRentalPeriods;
+    @Autowired
+    private ObjectProvider<ReturnSettlementService> returnSettlementServices;
 
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
@@ -78,6 +85,8 @@ public class CustomerReservationService {
     private final ObjectProvider<LedgerStore> ledgerStores;
     private final AccessCredentialService accessCredentialService;
     private final com.storagehub.domain.repo.ContractRepository contractRepository;
+    @Autowired(required = false)
+    private RefundRequestRepository refundRequestRepository;
 
     private static String clean(String value) {
         if (value == null) return null;
@@ -611,7 +620,8 @@ public class CustomerReservationService {
         Rental handedOver = rentalRepository == null ? null : rentalRepository.findByReservation_Id(reservationId)
             .filter(r -> r.getSetupStartedAt() != null && r.getStatus() != RentalStatus.completed).orElse(null);
         if (handedOver != null) {
-            var service = returnSettlements == null ? null : returnSettlements.getIfAvailable();
+            var service = returnSettlementServices == null ? null : returnSettlementServices.getIfAvailable();
+            if (service == null && returnSettlements != null) service = returnSettlements.getIfAvailable();
             if (service == null) throw ApiExceptions.conflict("Chưa có luồng trả kho. Vui lòng liên hệ cơ sở để xử lý.");
             service.createCustomerReturnRequest(actor, handedOver.getId(), new com.storagehub.api.returns.CustomerCreateReturnRequest(
                 java.time.LocalDate.now(com.storagehub.time.BusinessTime.ZONE), request == null ? "Khách yêu cầu trả kho sau bàn giao" : request.getReason()));
@@ -632,9 +642,43 @@ public class CustomerReservationService {
             .filter(payment -> payment.getStatus() == PaymentStatus.PENDING)
             .forEach(payment -> payment.setStatus(PaymentStatus.CANCELLED));
 
-        // A paid deposit is intentionally non-refundable when the customer cancels
-        // before check-in. Assignment/unit release belongs to the operations flow;
-        // this service does not clear assignedUnit or change StorageUnit status.
+        Payment paidDeposit = payments.stream()
+            .filter(payment -> payment.getStatus() == PaymentStatus.PAID)
+            .findFirst()
+            .orElse(null);
+        if (paidDeposit != null) {
+            ReservationPricingSnapshot pricing = snapshotRepository.findByReservation_Id(reservationId).orElse(null);
+            BigDecimal deposit = paidDeposit.getAmount().setScale(2, RoundingMode.HALF_UP);
+            BigDecimal fee = pricing == null ? BigDecimal.ZERO : EarlyTerminationPolicy.fee(
+                pricing.getReservationDepositAmount(), pricing.getNetRentalAmount(), pricing.getRentalMonths(),
+                pricing.getEarlyTerminationFeeCoefficient(), pricing.getEarlyTerminationFeeCapMonths()
+            );
+            Instant checkInAt = reservation.getAppointmentAt() != null
+                ? reservation.getAppointmentAt()
+                : reservation.getStartDate().atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
+            boolean fullRefund = !Instant.now().isAfter(checkInAt.minus(24, java.time.temporal.ChronoUnit.HOURS));
+            BigDecimal charge = fullRefund ? BigDecimal.ZERO : fee.min(deposit);
+            BigDecimal refund = deposit.subtract(charge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+            reservation.setCancellationType(fullRefund
+                ? ReservationCancellationType.BEFORE_CHECKIN_FULL_REFUND
+                : ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
+            reservation.setCancellationChargeAmount(charge);
+            reservation.setCancellationRefundAmount(refund);
+            if (refund.signum() > 0 && refundRequestRepository != null) {
+                RefundRequest refundRequest = new RefundRequest();
+                refundRequest.setPayment(paidDeposit);
+                refundRequest.setRequestedBy(reservation.getCustomer());
+                refundRequest.setAmount(refund);
+                refundRequest.setReason(fullRefund
+                    ? "Customer cancellation at least 24 hours before check-in"
+                    : "Customer cancellation within 24 hours before check-in; retain early termination fee");
+                refundRequest.setStatus(RefundRequestStatus.REQUESTED);
+                refundRequestRepository.save(refundRequest);
+            }
+        }
+
+        // Assignment/unit release still belongs to the operations flow; this service
+        // records the cancellation settlement but does not mutate storage inventory.
         Instant cancelledAt = Instant.now();
         reservation.setStatus(ReservationStatus.CANCELLED);
         reservation.setCancelledAt(cancelledAt);
@@ -800,6 +844,9 @@ public class CustomerReservationService {
         response.setConfirmedAt(reservation.getConfirmedAt());
         response.setCancelledAt(reservation.getCancelledAt());
         response.setCancelReason(reservation.getCancelReason());
+        response.setCancellationType(reservation.getCancellationType());
+        response.setCancellationRefundAmount(reservation.getCancellationRefundAmount());
+        response.setCancellationChargeAmount(reservation.getCancellationChargeAmount());
         response.setGoodsItems(goodsItems);
         response.setPayments(paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
             .stream()
@@ -817,7 +864,8 @@ public class CustomerReservationService {
             payment.getGatewayPayDate(), payment.getGatewayBankCode(),
             payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
             payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
-            payment.getInitiatedBy().getFullName(), payment.getCreatedAt(), payment.getReservation().getReservationCode()
+            payment.getInitiatedBy().getFullName(), payment.getCreatedAt(), payment.getReservation().getReservationCode(),
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt()
         );
     }
 

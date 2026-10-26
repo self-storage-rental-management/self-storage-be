@@ -38,7 +38,8 @@ public class ActorResponseMapper {
             user.getRoles().stream()
                 .flatMap(role -> role.getEffectivePermissions().stream())
                 .map(permission -> permission.getCode())
-                .collect(Collectors.toUnmodifiableSet())
+                .collect(Collectors.toUnmodifiableSet()),
+            user.getAuthzVersion()
         );
     }
 }

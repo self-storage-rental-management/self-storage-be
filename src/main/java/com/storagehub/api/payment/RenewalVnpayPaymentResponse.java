@@ -1,6 +1,7 @@
 package com.storagehub.api.payment;
 
 import com.storagehub.domain.model.PaymentStatus;
+import com.storagehub.domain.model.InvoiceStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -19,6 +20,9 @@ public record RenewalVnpayPaymentResponse(
     String message,
     String paymentUrl,
     String settlementStage,
+    String invoiceNumber,
+    InvoiceStatus invoiceStatus,
+    Instant invoiceIssuedAt,
     String transactionStatus,
     boolean receiptAvailable
 ) {}

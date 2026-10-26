@@ -20,17 +20,37 @@ VALUES
     (UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), NOW(6), NOW(6), 'BD-F01', 'Kho Việt – Cơ sở Bình Dương', '468 Đại lộ Bình Dương, Phường Lái Thiêu, TP. Thuận An, Bình Dương', 'Bình Dương', 'active')
 ON DUPLICATE KEY UPDATE name=VALUES(name), address=VALUES(address), city=VALUES(city), status='active';
 
-INSERT INTO unit_types (id, created_at, updated_at, facility_id, code, name, length_m, width_m, height_m, monthly_price, max_load_kg, rack_count, rack_length_m, rack_width_m, rack_height_m, status, version)
+INSERT INTO unit_types (id, created_at, updated_at, facility_id, code, name, length_m, width_m, height_m, monthly_price, max_load_kg, rack_count, rack_length_m, rack_width_m, rack_height_m, status, published_revision, accepted_goods_json, version)
 VALUES
-    (UUID_TO_BIN('22222222-2222-2222-0001-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'S', 'Kho Nhỏ (S)', 8.00, 10.00, 5.00, 5500000.00, 600.00, 4, 4.00, 2.00, 4.50, 'active', 0),
-    (UUID_TO_BIN('22222222-2222-2222-0002-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'M', 'Kho Trung (M)', 12.60, 10.40, 5.00, 9500000.00, 1200.00, 6, 4.00, 2.00, 4.50, 'active', 0),
-    (UUID_TO_BIN('22222222-2222-2222-0003-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'L', 'Kho Lớn (L)', 18.30, 10.80, 5.00, 15000000.00, 2400.00, 8, 4.00, 2.00, 4.50, 'active', 0),
-    (UUID_TO_BIN('22222222-2222-2222-0004-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'XL', 'Kho Rất Lớn (XL)', 25.00, 11.20, 5.00, 22500000.00, 3600.00, 10, 4.00, 2.00, 4.50, 'active', 0),
-    (UUID_TO_BIN('22222222-2222-2222-0005-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'S', 'Kho Nhỏ (S)', 8.00, 10.00, 5.00, 5500000.00, 600.00, 4, 4.00, 2.00, 4.50, 'active', 0),
-    (UUID_TO_BIN('22222222-2222-2222-0006-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'M', 'Kho Trung (M)', 12.60, 10.40, 5.00, 9500000.00, 1200.00, 6, 4.00, 2.00, 4.50, 'active', 0),
-    (UUID_TO_BIN('22222222-2222-2222-0007-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'L', 'Kho Lớn (L)', 18.30, 10.80, 5.00, 15000000.00, 2400.00, 8, 4.00, 2.00, 4.50, 'active', 0),
-    (UUID_TO_BIN('22222222-2222-2222-0008-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'XL', 'Kho Rất Lớn (XL)', 25.00, 11.20, 5.00, 22500000.00, 3600.00, 10, 4.00, 2.00, 4.50, 'active', 0)
+    (UUID_TO_BIN('22222222-2222-2222-0001-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'S', 'Kho Nhỏ (S)', 8.00, 10.00, 5.00, 5500000.00, 600.00, 4, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0),
+    (UUID_TO_BIN('22222222-2222-2222-0002-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'M', 'Kho Trung (M)', 12.60, 10.40, 5.00, 9500000.00, 1200.00, 6, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0),
+    (UUID_TO_BIN('22222222-2222-2222-0003-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'L', 'Kho Lớn (L)', 18.30, 10.80, 5.00, 15000000.00, 2400.00, 8, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0),
+    (UUID_TO_BIN('22222222-2222-2222-0004-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'XL', 'Kho Rất Lớn (XL)', 25.00, 11.20, 5.00, 22500000.00, 3600.00, 10, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0),
+    (UUID_TO_BIN('22222222-2222-2222-0005-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'S', 'Kho Nhỏ (S)', 8.00, 10.00, 5.00, 5500000.00, 600.00, 4, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0),
+    (UUID_TO_BIN('22222222-2222-2222-0006-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'M', 'Kho Trung (M)', 12.60, 10.40, 5.00, 9500000.00, 1200.00, 6, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0),
+    (UUID_TO_BIN('22222222-2222-2222-0007-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'L', 'Kho Lớn (L)', 18.30, 10.80, 5.00, 15000000.00, 2400.00, 8, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0),
+    (UUID_TO_BIN('22222222-2222-2222-0008-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'XL', 'Kho Rất Lớn (XL)', 25.00, 11.20, 5.00, 22500000.00, 3600.00, 10, 4.00, 2.00, 4.50, 'active', 0, '{"categoryIds":[],"materialIds":[]}', 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), length_m=VALUES(length_m), width_m=VALUES(width_m), height_m=VALUES(height_m), monthly_price=VALUES(monthly_price), max_load_kg=VALUES(max_load_kg), rack_count=VALUES(rack_count), status='active';
+
+-- Keep the demo unit types compatible with the catalog IDs generated by the current schema.
+UPDATE unit_types
+SET accepted_goods_json = CONCAT(
+    '{"categoryIds":["', BIN_TO_UUID((SELECT id FROM goods_type_catalog WHERE code='FURNITURE' LIMIT 1)),
+    '"],"materialIds":["', BIN_TO_UUID((SELECT id FROM goods_material_catalog WHERE goods_type_id=(SELECT id FROM goods_type_catalog WHERE code='FURNITURE' LIMIT 1) AND display_name='Gỗ' LIMIT 1)), '" ]}'
+)
+WHERE code IN ('S', 'M', 'L', 'XL');
+
+INSERT INTO rental_package_policies (id, created_at, updated_at, facility_id, code, name, rental_months, free_setup_days, discount_rate, deposit_rate, early_termination_fee_cap_months, early_termination_fee_coefficient, early_termination_notice_days, policy_version, publication_status, active, effective_from)
+VALUES
+    (UUID_TO_BIN('66666666-6666-6666-0001-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'DEMO_3M', 'Gói thuê 3 tháng', 3, 3, 0.0000, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01'),
+    (UUID_TO_BIN('66666666-6666-6666-0002-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'DEMO_6M', 'Gói thuê 6 tháng', 6, 7, 0.0500, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01'),
+    (UUID_TO_BIN('66666666-6666-6666-0003-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'DEMO_12M', 'Gói thuê 12 tháng', 12, 15, 0.1000, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01'),
+    (UUID_TO_BIN('66666666-6666-6666-0004-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), 'DEMO_24M', 'Gói thuê 24 tháng', 24, 30, 0.1500, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01'),
+    (UUID_TO_BIN('66666666-6666-6666-0005-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'DEMO_3M', 'Gói thuê 3 tháng', 3, 3, 0.0000, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01'),
+    (UUID_TO_BIN('66666666-6666-6666-0006-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'DEMO_6M', 'Gói thuê 6 tháng', 6, 7, 0.0500, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01'),
+    (UUID_TO_BIN('66666666-6666-6666-0007-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'DEMO_12M', 'Gói thuê 12 tháng', 12, 15, 0.1000, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01'),
+    (UUID_TO_BIN('66666666-6666-6666-0008-000000000001'), NOW(6), NOW(6), UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), 'DEMO_24M', 'Gói thuê 24 tháng', 24, 30, 0.1500, 0.2000, 1, 1.0000, 14, 'demo-v1', 'PUBLISHED', 1, '2020-01-01')
+ON DUPLICATE KEY UPDATE name=VALUES(name), free_setup_days=VALUES(free_setup_days), discount_rate=VALUES(discount_rate), deposit_rate=VALUES(deposit_rate), policy_version=VALUES(policy_version), publication_status=VALUES(publication_status), active=VALUES(active);
 
 -- Five units per type. Occupancy matches LocalDemoDataInitializer.
 INSERT INTO storage_units (id, created_at, updated_at, facility_id, unit_type_id, code, floor, zone, status, version)
