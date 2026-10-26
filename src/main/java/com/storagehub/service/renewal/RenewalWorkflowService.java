@@ -300,6 +300,19 @@ public class RenewalWorkflowService {
         return new RenewalResponse.EffectivePeriod(interval.startDate(),interval.endExclusive(),interval.newEndDate(),false);
     }
     private RenewalResponse.SystemVerification verifySystem(Renewal n,RenewalQuoteResponse.Terms accepted,Instant checkedAt){
+        // A completed renewal is historical: later periods and catalog edits must not
+        // invalidate its accepted terms. Verify the persisted completion evidence instead.
+        if(n.getStatus()==RenewalStatus.completed){
+            try{
+                var period=effectivePeriod(n,accepted);
+                if(period!=null&&period.finalized())return new RenewalResponse.SystemVerification(
+                    "VERIFIED",checkedAt,List.of("ACCEPTED_TERMS_AND_COMPLETION_PERIOD"),List.of());
+                return new RenewalResponse.SystemVerification("INCOMPLETE",checkedAt,List.of(),
+                    List.of("Completed Renewal period evidence unavailable; reconciliation required"));
+            }catch(com.storagehub.common.api.ApiException failure){
+                return new RenewalResponse.SystemVerification("BLOCKED",checkedAt,List.of(),List.of(failure.getMessage()));
+            }
+        }
         var verified=new ArrayList<String>();var blockingReasons=new ArrayList<String>();var status="INCOMPLETE";
         try{
             var g=gate(n.getRental(),checkedAt);requireSnapshot(n.getRental(),accepted);requireCurrentTerms(n.getRental(),g,accepted);

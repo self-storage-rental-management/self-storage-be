@@ -8,13 +8,17 @@ import com.storagehub.domain.model.*;
 import com.storagehub.service.renewal.operations.RenewalOperationEvent;
 import jakarta.persistence.*;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.beans.factory.ObjectProvider;
 
 /** Test-only records/query results. No DB, seed, network, runtime fallback or mutation. */
 class ProjectHandoffRentalPeriodAdapterTests {
     EntityManager em;
+    ConfirmedRentalPeriods periods;
+    ObjectProvider<ConfirmedRentalPeriods> periodProvider;
     ProjectHandoffRentalPeriodAdapter adapter;
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     Rental rental;
@@ -26,7 +30,11 @@ class ProjectHandoffRentalPeriodAdapterTests {
     TypedQuery<ActivityLog> logs;
 
     @BeforeEach void setup() throws Exception {
-        em=mock(EntityManager.class);adapter=new ProjectHandoffRentalPeriodAdapter(em,mapper);
+        em=mock(EntityManager.class);
+        periods=mock(ConfirmedRentalPeriods.class);
+        periodProvider=mock(ObjectProvider.class);
+        when(periodProvider.getIfAvailable()).thenReturn(periods);
+        adapter=new ProjectHandoffRentalPeriodAdapter(em,mapper,periodProvider);
         var f=id(new Facility());var u=id(new User());var unit=id(new StorageUnit());unit.setFacility(f);
         var res=id(new Reservation());res.setCustomer(u);res.setFacility(f);res.setAssignedUnit(unit);
         res.setStatus(ReservationStatus.COMPLETED);res.setStartDate(LocalDate.of(2026,10,1));res.setEndDate(LocalDate.of(2026,11,1));
@@ -70,6 +78,40 @@ class ProjectHandoffRentalPeriodAdapterTests {
         ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
         assertThat(adapter.read(rental).orElseThrow().inclusiveEndDate()).isEqualTo(rental.getContractEndDate());
         verifyNoInteractions(em);
+    }
+    @Test void confirmedExclusivePeriodOverridesLegacyInclusiveConfiguration() {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        var confirmed=RentalPeriod.verified(rental.getId(),rental.getStartDate(),rental.getContractEndDate(),
+            RentalPeriod.Convention.EXCLUSIVE,"confirmed-handover:"+handover.getId()).orElseThrow();
+        when(periods.contains(rental)).thenReturn(true);
+        when(periods.read(rental)).thenReturn(Optional.of(confirmed));
+        var dates=adapter.read(rental).orElseThrow();
+        assertThat(dates.convention()).isEqualTo(RentalPeriod.Convention.EXCLUSIVE);
+        assertThat(dates.inclusiveEndDate()).isEqualTo(rental.getContractEndDate().minusDays(1));
+        assertThat(dates.storedEndDate()).isEqualTo(rental.getContractEndDate());
+    }
+    @Test void invalidConfirmedPeriodDoesNotFallBackToAnotherConvention() {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        when(periods.contains(rental)).thenReturn(true);
+        when(periods.read(rental)).thenReturn(Optional.empty());
+        assertThat(adapter.read(rental)).isEmpty();
+    }
+    @Test void provisionalNewHandoverUsesExclusiveDatesEvenWhenLegacySettingIsInclusive() {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        rental.getReservation().setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        var handoverAt=Instant.parse("2026-10-26T13:46:17Z");
+        rental.setSetupStartedAt(handoverAt);
+        rental.setTermsEffectiveAt(handoverAt);
+        var dates=adapter.read(rental).orElseThrow();
+        assertThat(dates.convention()).isEqualTo(RentalPeriod.Convention.EXCLUSIVE);
+        assertThat(dates.inclusiveEndDate()).isEqualTo(rental.getContractEndDate().minusDays(1));
+    }
+    @Test void newCompletedHandoverWithoutConfirmedPeriodDoesNotUseLegacyConvention() {
+        ReflectionTestUtils.setField(adapter,"inclusiveEnd",true);
+        var handoverAt=Instant.parse("2026-10-26T13:46:17Z");
+        rental.setSetupStartedAt(handoverAt);
+        rental.setTermsEffectiveAt(handoverAt);
+        assertThat(adapter.read(rental)).isEmpty();
     }
     @Test void invalidCurrentDatesRemainUnknown() {
         assertThat(adapter.read(null)).isEmpty();

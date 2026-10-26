@@ -71,6 +71,8 @@ class CheckInHandoverServiceTests {
     @Mock private FileAssetRepository fileAssetRepository;
     @Mock private RentalRepository rentalRepository;
     @Mock private PaymentRepository paymentRepository;
+    @Mock private PaymentProvenance paymentProvenance;
+    @Mock private com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy sandboxPaymentPolicy;
     @Mock private MaintenanceTaskRepository maintenanceTaskRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private ReservationPricingSnapshotRepository pricingSnapshotRepository;
@@ -87,6 +89,7 @@ class CheckInHandoverServiceTests {
     private StorageUnit unit;
     private UnitAssignment assignment;
     private CheckIn checkIn;
+    private com.storagehub.domain.model.Payment depositPayment;
 
     @BeforeEach
     void setUp() {
@@ -97,6 +100,8 @@ class CheckInHandoverServiceTests {
             goodsItemRepository, pricingSnapshotRepository, userRepository, authorizationService,
             facilityScopeService, auditLogService, notificationService, new ObjectMapper()
         );
+        ReflectionTestUtils.setField(service,"paymentProvenance",paymentProvenance);
+        ReflectionTestUtils.setField(service,"sandboxPaymentPolicy",sandboxPaymentPolicy);
         staff = entityWithId(new User());
         staff.setFullName("Staff A");
         actor = new ActorPrincipal(
@@ -146,6 +151,7 @@ class CheckInHandoverServiceTests {
         checkIn.setPerformedBy(staff);
         checkIn.setStatus(CheckInStatus.scheduled);
         checkIn.setScheduledAt(Instant.now().minusSeconds(60));
+        paidReservationFixture();
     }
 
     @Test
@@ -422,6 +428,91 @@ class CheckInHandoverServiceTests {
         verify(rentalRepository, never()).save(any());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"MISSING_PROOF","WRONG_AMOUNT","REFUNDED","NO_PAYMENT","MISSING_SNAPSHOT"})
+    void invalidPrepaymentCannotVerifyIdentity(String kind) {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        switch(kind) {
+            case "MISSING_PROOF" -> when(paymentProvenance.classify(depositPayment)).thenReturn(PaymentProvenance.Classification.UNVERIFIED);
+            case "WRONG_AMOUNT" -> depositPayment.setAmount(depositPayment.getAmount().add(BigDecimal.ONE));
+            case "REFUNDED" -> depositPayment.setRefundedAmount(BigDecimal.ONE);
+            case "NO_PAYMENT" -> when(paymentRepository.findAllByReservation_IdAndStatusIn(reservation.getId(),List.of(com.storagehub.domain.model.PaymentStatus.PAID))).thenReturn(List.of());
+            case "MISSING_SNAPSHOT" -> when(pricingSnapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.empty());
+        }
+        assertThatThrownBy(()->service.verifyIdentity(actor,checkIn.getId(),new VerifyCheckInIdentityRequest("079203009988","TEST")))
+            .isInstanceOf(ApiException.class);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        verify(checkInRepository,never()).saveAndFlush(any());
+        verify(rentalRepository,never()).save(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "2026-10-26T03:00:00Z,3,2026-10-29,2026-11-29",
+        "2026-10-31T16:59:59Z,3,2026-11-03,2026-12-03",
+        "2026-10-31T17:00:00Z,3,2026-11-04,2026-12-04",
+        "2026-12-31T16:59:59Z,0,2026-12-31,2027-01-31",
+        "2026-12-31T17:00:00Z,0,2027-01-01,2027-02-01",
+        "2026-01-28T03:00:00Z,3,2026-01-31,2026-02-28"
+    })
+    void actualHandoverDeterminesPaidPeriodFromAcceptedSetupSnapshot(String instant,int days,String expectedStart,String expectedEnd) {
+        var at=Instant.parse(instant);var start=LocalDate.parse(expectedStart);var end=LocalDate.parse(expectedEnd);
+        var snapshot=pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElseThrow();
+        snapshot.setFreeSetupDays(days);reservation.getSourceQuote().setFreeSetupDays(days);reservation.setSetupDaysSnapshot(days);
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);checkIn.setStatus(CheckInStatus.payment_collected);
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        // Deliberately different planned dates and live catalog price must not set the paid period or price.
+        reservation.setStartDate(LocalDate.of(2025,1,1));reservation.setEndDate(LocalDate.of(2025,2,1));
+        unit.getUnitType().setMonthlyPrice(new BigDecimal("999999"));
+        var balance=entityWithId(new com.storagehub.domain.model.Payment());balance.setReservation(reservation);
+        balance.setPurpose(com.storagehub.domain.model.PaymentType.RENTAL_BALANCE);
+        balance.setStatus(com.storagehub.domain.model.PaymentStatus.PAID);balance.setAmount(snapshot.getDueAtCheckIn());
+        when(paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(reservation.getId(),com.storagehub.domain.model.PaymentType.RENTAL_BALANCE)).thenReturn(Optional.of(balance));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(rentalRepository.saveAndFlush(any(Rental.class))).thenAnswer(call->{Rental r=call.getArgument(0);ReflectionTestUtils.setField(r,"id",UUID.randomUUID());return r;});
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        try(var time=org.mockito.Mockito.mockStatic(Instant.class,org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            time.when(Instant::now).thenReturn(at);
+            service.startSetup(actor,checkIn.getId(),new com.storagehub.api.checkin.StartCheckInSetupRequest("TEST-LOCK","TEST handover"));
+        }
+        var rental=checkIn.getRental();
+        assertThat(rental.getSetupStartedAt()).isEqualTo(at);
+        assertThat(rental.getStartDate()).isEqualTo(start);assertThat(rental.getContractEndDate()).isEqualTo(end);
+        assertThat(rental.getSetupEndsAt()).isEqualTo(start.atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant());
+        assertThat(rental.getMonthlyPrice()).isEqualByComparingTo(snapshot.getMonthlyPrice());
+        assertThat(reservation.getStartDate()).isEqualTo(start);
+    }
+
+    private void paidReservationFixture() {
+        var quote=entityWithId(new com.storagehub.domain.model.ReservationQuote());
+        quote.setPolicyVersion("TEST-V1");quote.setPricingPackageCode("TEST-1M");
+        quote.setRentalMonths(1);quote.setFreeSetupDays(0);quote.setQuotedAt(Instant.parse("2026-10-01T00:00:00Z"));
+        quote.setUnitTypeSnapshotJson("{\"name\":\"TEST\",\"lengthM\":3,\"widthM\":3,\"heightM\":3,\"maxLoadKg\":1000,\"rackCount\":0}");
+        quote.setMonthlyPrice(new BigDecimal("100"));quote.setSubtotal(new BigDecimal("100"));
+        quote.setDiscountRate(BigDecimal.ZERO);quote.setDiscountAmount(BigDecimal.ZERO);quote.setTotalAfterDiscount(new BigDecimal("100"));
+        quote.setReservationDepositAmount(new BigDecimal("20"));quote.setSecurityDepositAmount(new BigDecimal("100"));
+        quote.setRemainingRentalAmount(new BigDecimal("80"));quote.setDueAtCheckIn(new BigDecimal("180"));quote.setTotalInitialObligation(new BigDecimal("200"));
+        reservation.setSourceQuote(quote);reservation.setSetupDaysSnapshot(0);
+        var snapshot=new com.storagehub.domain.model.ReservationPricingSnapshot();snapshot.setReservation(reservation);
+        snapshot.setPricingPolicyVersion(quote.getPolicyVersion());snapshot.setPricingPackageCode(quote.getPricingPackageCode());
+        snapshot.setRentalMonths(quote.getRentalMonths());snapshot.setFreeSetupDays(quote.getFreeSetupDays());snapshot.setQuotedAt(quote.getQuotedAt());
+        snapshot.setMonthlyPrice(quote.getMonthlyPrice());snapshot.setGrossRentalAmount(quote.getSubtotal());
+        snapshot.setDiscountRate(quote.getDiscountRate());snapshot.setDiscountAmount(quote.getDiscountAmount());snapshot.setNetRentalAmount(quote.getTotalAfterDiscount());
+        snapshot.setReservationDepositAmount(quote.getReservationDepositAmount());snapshot.setSecurityDepositAmount(quote.getSecurityDepositAmount());
+        snapshot.setRemainingRentalAmount(quote.getRemainingRentalAmount());snapshot.setDueAtCheckIn(quote.getDueAtCheckIn());snapshot.setTotalInitialObligation(quote.getTotalInitialObligation());
+        var payment=entityWithId(new com.storagehub.domain.model.Payment());payment.setReservation(reservation);
+        payment.setPurpose(com.storagehub.domain.model.PaymentType.RESERVATION_DEPOSIT);payment.setStatus(com.storagehub.domain.model.PaymentStatus.PAID);
+        depositPayment=payment;
+        payment.setAmount(quote.getReservationDepositAmount());payment.setRefundedAmount(BigDecimal.ZERO);
+        org.mockito.Mockito.lenient().when(pricingSnapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
+        org.mockito.Mockito.lenient().when(paymentRepository.findAllByReservation_IdAndStatusIn(reservation.getId(),List.of(com.storagehub.domain.model.PaymentStatus.PAID))).thenReturn(List.of(payment));
+        org.mockito.Mockito.lenient().when(paymentProvenance.classify(payment)).thenReturn(PaymentProvenance.Classification.VERIFIED);
+    }
+
     private void mockCompletionChecks(boolean includeMutationStubs) {
         checkIn.setStatus(CheckInStatus.setup_completed);
         checkIn.setLockReference("LEGACY-LOCK");
@@ -442,6 +533,10 @@ class CheckInHandoverServiceTests {
         )).thenReturn(Optional.of(assignment));
         when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
         if (includeMutationStubs) {
+            var balance=entityWithId(new com.storagehub.domain.model.Payment());balance.setReservation(reservation);
+            balance.setPurpose(com.storagehub.domain.model.PaymentType.RENTAL_BALANCE);
+            balance.setStatus(com.storagehub.domain.model.PaymentStatus.PAID);balance.setAmount(new BigDecimal("180"));
+            when(paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(reservation.getId(),com.storagehub.domain.model.PaymentType.RENTAL_BALANCE)).thenReturn(Optional.of(balance));
             when(rentalRepository.saveAndFlush(rental)).thenReturn(rental);
             UUID evidenceId = UUID.fromString(validCompletionRequest().evidenceReferences().getFirst());
             FileAsset evidence = entityWithId(new FileAsset());

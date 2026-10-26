@@ -149,6 +149,17 @@ class ReservationCreationServiceTests {
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
         assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
         assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
+        var savedReservation=org.mockito.ArgumentCaptor.forClass(Reservation.class);
+        var savedSnapshot=org.mockito.ArgumentCaptor.forClass(ReservationPricingSnapshot.class);
+        org.mockito.Mockito.verify(reservationRepository).saveAndFlush(savedReservation.capture());
+        org.mockito.Mockito.verify(snapshotRepository).saveAndFlush(savedSnapshot.capture());
+        var captured=savedSnapshot.getValue();var originalSetup=captured.getFreeSetupDays();var originalPrice=captured.getMonthlyPrice();var originalVersion=captured.getPricingPolicyVersion();
+        policy.setFreeSetupDays(99);policy.setPolicyVersion("TEST-NEW-POLICY");policy.setDiscountRate(new BigDecimal("0.9"));
+        quote.getUnitType().setMonthlyPrice(new BigDecimal("99999999"));
+        assertThat(ReservationSnapshotView.pricingComplete(savedReservation.getValue(),captured)).isTrue();
+        assertThat(captured.getFreeSetupDays()).isEqualTo(originalSetup);
+        assertThat(captured.getMonthlyPrice()).isEqualByComparingTo(originalPrice);
+        assertThat(captured.getPricingPolicyVersion()).isEqualTo(originalVersion);
         assertThat(response.getReservationCode()).matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
     }
 
