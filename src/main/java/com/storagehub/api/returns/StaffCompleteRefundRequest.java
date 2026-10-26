@@ -9,7 +9,8 @@ public record StaffCompleteRefundRequest(
     @Size(max = 1000, message = "notes cannot exceed 1000 characters")
     String notes,
     java.util.UUID receiptFileId,
-    String paymentMethod
+    String paymentMethod,
+    java.util.UUID originalPaymentId
 ) {
-    public StaffCompleteRefundRequest(String transactionReference,String notes) {this(transactionReference,notes,null,"BANK_TRANSFER");}
+    public StaffCompleteRefundRequest(String transactionReference,String notes) {this(transactionReference,notes,null,"BANK_TRANSFER",null);}
 }

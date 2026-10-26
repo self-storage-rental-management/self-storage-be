@@ -2,7 +2,10 @@ package com.storagehub.service;
 
 import com.storagehub.api.credential.AccessCredentialResponse;
 import com.storagehub.api.credential.CredentialAlertResponse;
+import com.storagehub.api.credential.CredentialAccessEventResponse;
+import com.storagehub.api.credential.CredentialAccessEventType;
 import com.storagehub.api.credential.IssueAccessCredentialRequest;
+import com.storagehub.api.credential.RecordCredentialAccessEventRequest;
 import com.storagehub.api.credential.RevokeAccessCredentialRequest;
 import com.storagehub.api.credential.ReissueAccessCredentialRequest;
 import com.storagehub.common.api.ApiExceptions;
@@ -39,12 +42,15 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -54,6 +60,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class AccessCredentialService {
+
+    private static final Pattern ACCESS_WINDOW = Pattern.compile("(\\d{1,2}:\\d{2}).*?(\\d{1,2}:\\d{2})");
 
     private final AccessCredentialRepository credentialRepository;
     private final CheckInRepository checkInRepository;
@@ -155,6 +163,58 @@ public class AccessCredentialService {
             saved.getFacility().getId(), Map.of("status", AccessCredentialStatus.ACTIVE), toResponse(saved)
         );
         return toResponse(saved);
+    }
+
+    @Transactional
+    public CredentialAccessEventResponse recordAccessEvent(
+        ActorPrincipal actor,
+        UUID credentialId,
+        RecordCredentialAccessEventRequest request
+    ) {
+        requireStaff(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        AccessCredential credential = credentialRepository.findByIdForUpdate(credentialId)
+            .orElseThrow(() -> ApiExceptions.notFound("Access credential was not found"));
+        facilityScopeService.assertCanOperate(actor, credential.getFacility().getId());
+
+        Instant occurredAt = Instant.now();
+        Rental rental = credential.getRental();
+        boolean active = credential.getStatus() == AccessCredentialStatus.ACTIVE;
+        boolean rentalOpen = rental != null
+            && (rental.getStatus() == RentalStatus.setup || rental.getStatus() == RentalStatus.active);
+        boolean withinHours = withinAccessHours(credential.getFacility().getAccessHours(), occurredAt);
+        boolean allowed = active && rentalOpen && withinHours;
+        String reason = !active ? "Credential đã bị thu hồi"
+            : !rentalOpen ? "Rental không còn ở trạng thái setup hoặc active"
+            : !withinHours ? "Ngoài giờ mở cửa cơ sở"
+            : "Truy cập hợp lệ trong giờ mở cửa";
+
+        User staff = requireActor(actor);
+        auditLogService.recordMutation(
+            staff,
+            allowed ? "ACCESS_EVENT_ALLOWED" : "ACCESS_EVENT_DENIED",
+            "AccessCredential",
+            credential.getId(),
+            credential.getFacility().getId(),
+            null,
+            Map.of(
+                "eventType", request.eventType().name(),
+                "occurredAt", occurredAt.toString(),
+                "allowed", allowed,
+                "reason", reason,
+                "note", clean(request.note()) == null ? "" : clean(request.note()),
+                "rentalId", rental == null ? "" : rental.getId().toString()
+            )
+        );
+        return new CredentialAccessEventResponse(
+            credential.getId(),
+            rental == null ? null : rental.getId(),
+            credential.getFacility().getId(),
+            request.eventType(),
+            occurredAt,
+            allowed,
+            reason
+        );
     }
 
     @Transactional
@@ -406,6 +466,23 @@ public class AccessCredentialService {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private boolean withinAccessHours(String raw, Instant occurredAt) {
+        if (raw == null || raw.isBlank()) return true;
+        Matcher matcher = ACCESS_WINDOW.matcher(raw);
+        if (!matcher.find()) return true;
+        try {
+            LocalTime start = LocalTime.parse(matcher.group(1));
+            LocalTime end = LocalTime.parse(matcher.group(2));
+            LocalTime now = occurredAt.atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalTime();
+            if (start.equals(end)) return true;
+            return start.isBefore(end)
+                ? !now.isBefore(start) && now.isBefore(end)
+                : !now.isBefore(start) || now.isBefore(end);
+        } catch (RuntimeException ignored) {
+            return true;
+        }
     }
 
     private AccessCredentialResponse toResponse(AccessCredential credential) {
