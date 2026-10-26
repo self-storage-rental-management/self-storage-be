@@ -40,6 +40,6 @@ class RenewalDepositDeadlineTests {
         return service;
     }
     @Test void expiredSigningDeadlineDoesNotForfeitBeforeDayEight(){assertThat(service(dayEight.minusSeconds(1)).reconcile(id)).isFalse();verifyNoInteractions(ledger);}
-    @Test void exactDayEightRequiresVerifiedMoneyRatherThanInventingForfeiture(){var service=service(dayEight);assertThatThrownBy(()->service.reconcile(id)).hasMessageContaining("Verified deposit and accepted revision required");verifyNoInteractions(ledger);}
+    @Test void exactDayEightRequiresVerifiedMoneyRatherThanInventingForfeiture(){var service=service(dayEight);assertThatThrownBy(()->service.reconcile(id)).hasMessageContaining("Verified accepted revision required");verifyNoInteractions(ledger);}
     @Test void completedRenewalIsNeverForfeited(){var service=service(dayEight);n.setStatus(RenewalStatus.completed);assertThat(service.reconcile(id)).isFalse();verifyNoInteractions(terms,ledger);}
 }
