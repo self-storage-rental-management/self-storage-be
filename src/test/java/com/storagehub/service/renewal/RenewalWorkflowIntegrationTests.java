@@ -85,14 +85,100 @@ class RenewalWorkflowIntegrationTests {
     @Autowired com.storagehub.domain.repo.ReservationPricingSnapshotRepository pricingSnapshots;
     @Autowired com.storagehub.domain.repo.PaymentRepository paymentHistory;
     @Autowired com.storagehub.domain.repo.ActivityLogRepository activityLogs;
+    @Autowired RenewalPersistence persistence;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
-    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";}
+    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";eligibility.unknown=false;}
+    @Test void completedVerificationUsesHistoricalEvidenceAfterRentalAndPolicyChange() throws Exception {
+        var rental=fixture();var actor=customer(rental);
+        var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
+        var response=commands.submit(actor,rental.getId(),new RenewalCommands.Submit(quote.id(),null),"completed-history");
+        var renewal=em.find(Renewal.class,response.id());renewal.setStatus(RenewalStatus.completed);
+        var state=new com.storagehub.service.renewal.operations.RenewalOperationState(renewal);
+        state.completed(actor.userId(),NOW);em.persist(state);
+        var terms=quote.terms();
+        var period=com.storagehub.service.rental.period.RentalPeriod.verified(rental.getId(),rental.getStartDate(),terms.oldEndDate(),
+            com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE,"TEST").orElseThrow();
+        var effective=com.storagehub.service.rental.period.RenewalEffectivePeriod.at(period,terms,NOW);
+        var payload=Map.of("rentalPeriodEvidence",Map.of("schema","RENEWAL_COMPLETION_PERIOD_V2",
+            "effectiveExtensionStartDate",effective.startDate().toString(),"effectiveExtensionEndExclusive",effective.endExclusive().toString()));
+        em.persist(new com.storagehub.service.renewal.operations.RenewalOperationEvent(renewal,"COMPLETION",NOW,actor.userId(),
+            new ObjectMapper().writeValueAsString(payload)));
+        rental.setContractEndDate(effective.newEndDate().plusMonths(1));
+        pricing.rate=new BigDecimal("999");policy.version="v2";eligibility.unknown=true;em.flush();
+        var detail=reads.detail(actor,renewal.getId(),false);
+        assertThat(detail.systemVerification().status()).isEqualTo("VERIFIED");
+        assertThat(detail.systemVerification().blockingReasons()).isEmpty();
+        assertThat(detail.systemVerification().verifiedChecks()).containsExactly("ACCEPTED_TERMS_AND_COMPLETION_PERIOD");
+        assertThat(detail.effectivePeriod().startDate()).isEqualTo(effective.startDate());
+        assertThat(detail.allowedActions()).isEmpty();
+    }
+    @Test void completedStatusWithoutPeriodEvidenceDoesNotClaimVerified() {
+        var rental=fixture();var actor=customer(rental);
+        var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
+        var response=commands.submit(actor,rental.getId(),new RenewalCommands.Submit(quote.id(),null),"missing-completion-history");
+        var renewal=em.find(Renewal.class,response.id());renewal.setStatus(RenewalStatus.completed);em.flush();
+        assertThat(reads.detail(actor,renewal.getId(),false).systemVerification().status()).isEqualTo("INCOMPLETE");
+    }
+    @Test void rejectsFullPaymentQuoteWithoutPersistingIt(){
+        var r=fixture();var a=customer(r);
+        assertThatThrownBy(()->commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST",null,true)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("20%");
+        assertThat(em.createQuery("select count(q) from RenewalQuote q",Long.class).getSingleResult()).isZero();
+    }
+    @Test void removedReviewEndpointsCannotCompleteOrRejectRenewal() throws Exception {
+        var r=fixture();var a=customer(r);var oldEnd=r.getContractEndDate();
+        var quote=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(quote.id(),null),"no-direct-review");
+        var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new ManagerRenewalController(context,reads)).build();
+        for(String role:List.of("manager","staff"))for(String action:List.of("approve","reject"))
+            mvc.perform(post("/api/"+role+"/renewals/"+n.id()+"/"+action)
+                .contentType("application/json").content("{\"reason\":\"test\"}"))
+                .andExpect(status().isNotFound());
+        assertThat(em.find(Renewal.class,n.id()).getStatus()).isEqualTo(RenewalStatus.accepted);
+        assertThat(r.getContractEndDate()).isEqualTo(oldEnd);
+    }
+    @Test void rejectsPreviouslyIssuedFullPaymentQuoteAtSubmission() throws Exception {
+        var r=fixture();var a=customer(r);var q=historicalFullQuote(r,a);
+        assertThatThrownBy(()->commands.submit(a,r.getId(),new RenewalCommands.Submit(q.getId(),null),"old-full"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("100%");
+        assertThat(em.createQuery("select count(n) from Renewal n",Long.class).getSingleResult()).isZero();
+    }
+    @Test void rejectsFullPaymentQuoteWhenRevisingSplitRenewal() throws Exception {
+        var r=fixture();var a=customer(r);var split=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(split.id(),null),"split");
+        var full=historicalFullQuote(r,a);
+        assertThatThrownBy(()->commands.edit(a,n.id(),new RenewalCommands.Edit(full.getId(),null,n.version()),"old-full-edit"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("100%");
+        assertThat(em.find(Renewal.class,n.id()).getAmount()).isEqualByComparingTo(split.terms().totalAfterDiscount());
+    }
+    @Test void historicalFullPaymentRenewalRemainsReadableButCannotOpenPayment() throws Exception {
+        var r=fixture();var a=customer(r);var q=historicalFullQuote(r,a);
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        var terms=mapper.readValue(q.getTermsJson(),RenewalQuoteResponse.Terms.class);
+        var n=new Renewal();n.setRental(r);n.setRequestedBy(r.getCustomer());n.setNewEndDate(terms.newEndDate());
+        n.setAmount(terms.totalAfterDiscount());n.setStatus(RenewalStatus.accepted);em.persist(n);
+        persistence.acceptInitial(r,n,q,NOW,null);em.flush();
+        assertThat(reads.detail(a,n.getId(),false).acceptedTerms().remainingRentalAmount()).isZero();
+        assertThatThrownBy(()->commands.prepareVnpayPayment(a,n.getId()))
+            .isInstanceOf(ApiException.class).hasMessageContaining("100%");
+        assertThat(paymentHistory.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId())).isEmpty();
+    }
+    private RenewalQuote historicalFullQuote(Rental rental,ActorPrincipal actor) throws Exception {
+        var split=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        com.fasterxml.jackson.databind.node.ObjectNode terms=mapper.valueToTree(split.terms());
+        terms.set("renewalDepositAmount",mapper.valueToTree(split.terms().totalAfterDiscount()));
+        terms.put("remainingRentalAmount",0);terms.putNull("paymentPlan");
+        return persistence.storeQuote(rental,rental.getCustomer(),terms,NOW,null);
+    }
     @Test void httpCommandsExposeRealResultsAndRejectInjectedFields() throws Exception {
         var r=fixture();var a=customer(r);var context=mock(ActorContext.class);when(context.required()).thenReturn(a);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads))
             .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
         String path="/api/customer/rentals/"+r.getId();
         mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\",\"amount\":1}")).andExpect(status().isBadRequest());
+        mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\",\"fullPayment\":true}")).andExpect(status().isBadRequest());
         var quote=mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"))
             .andExpect(status().isOk()).andExpect(jsonPath("data.monthlyPrice").value(100)).andReturn();
         String quoteId=new ObjectMapper().readTree(quote.getResponse().getContentAsString()).path("data").path("id").asText();

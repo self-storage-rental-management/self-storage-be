@@ -45,5 +45,14 @@ public record ReturnInspectionRequest(
     boolean returnedCard,
     boolean returnedLock,
 
-    StorageUnitStatus proposedUnitStatus
-) {}
+    StorageUnitStatus proposedUnitStatus,
+    boolean unitVacated
+) {
+    public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
+        BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
+        BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
+        boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus) {
+        this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, false);
+    }
+}

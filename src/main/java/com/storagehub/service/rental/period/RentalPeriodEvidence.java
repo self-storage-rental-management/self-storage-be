@@ -8,6 +8,20 @@ import java.util.Map;
 /** Additive metadata in existing JSON, never a migration or synthetic historical proof. */
 public final class RentalPeriodEvidence {
     private RentalPeriodEvidence() {}
+    public static Map<String,Object> handoverReceipt(Rental rental,com.storagehub.domain.model.CheckIn checkIn) {
+        var data=identity(rental);
+        data.put("schema","CUSTOMER_HANDOVER_PERIOD_V2");
+        data.put("rentalCreated",false);
+        data.put("checkInId",checkIn.getId());
+        data.put("startDate",date(rental.getStartDate()));
+        data.put("storedEndDate",date(rental.getContractEndDate()));
+        data.put("convention","EXCLUSIVE");
+        data.put("handoverAt",rental.getSetupStartedAt().toString());
+        data.put("setupEndsAt",rental.getSetupEndsAt().toString());
+        data.put("termsEffectiveAt",rental.getTermsEffectiveAt().toString());
+        data.put("inventoryVerifiedAt",rental.getInventoryVerifiedAt().toString());
+        return data;
+    }
     public static Map<String, Object> receipt(Rental rental, boolean created) {
         var data = identity(rental);
         data.put("schema", "CUSTOMER_RECEIPT_PERIOD_V1");

@@ -7,7 +7,9 @@ import io.swagger.v3.oas.annotations.media.Schema;
 
 public final class RenewalCommands {
     private RenewalCommands() {}
-    public record Quote(@NotBlank @Size(max=30) String pricingPackageCode, RenewalPaymentPlan paymentPlan, Boolean fullPayment, LocalDate startDate) {
+    public record Quote(@NotBlank @Size(max=30) String pricingPackageCode,
+        @Schema(allowableValues={"FULL_TERM"},description="Trả trước 20% toàn kỳ, phần còn lại thanh toán khi ký; không hỗ trợ trả từng tháng") RenewalPaymentPlan paymentPlan,
+        Boolean fullPayment, LocalDate startDate) {
         public Quote(String pricingPackageCode){this(pricingPackageCode,null,null,null);}
         public Quote(String pricingPackageCode,RenewalPaymentPlan paymentPlan){this(pricingPackageCode,paymentPlan,null,null);}
         public Quote(String pricingPackageCode,RenewalPaymentPlan paymentPlan,Boolean fullPayment){this(pricingPackageCode,paymentPlan,fullPayment,null);}
@@ -20,8 +22,10 @@ public final class RenewalCommands {
     private static void reject(String field){throw new IllegalArgumentException("Unknown Renewal command field: "+field);}
     @Schema(description="Shared integration is deferred; never a synthetic option or quote")
     public record Option(String pricingPackageCode,int rentalMonths,String pricingPackageName) {
+        @com.fasterxml.jackson.annotation.JsonProperty("signingWindowDays")
+        public int signingWindowDays(){return com.storagehub.service.renewal.RenewalSigningDeadline.daysForMonths(rentalMonths);}
         @com.fasterxml.jackson.annotation.JsonProperty("paymentPlans")
-        public java.util.List<RenewalPaymentPlan> paymentPlans(){return java.util.List.of(RenewalPaymentPlan.MONTHLY,RenewalPaymentPlan.FULL_TERM);}
+        public java.util.List<RenewalPaymentPlan> paymentPlans(){return java.util.List.of(RenewalPaymentPlan.FULL_TERM);}
         public Option(String pricingPackageCode,int rentalMonths) {
             this(pricingPackageCode,rentalMonths,null);
         }
