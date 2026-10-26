@@ -223,6 +223,22 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void preventsInventoryVerificationBeforeFreeSetupWindowEnds() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        Rental rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.setup);
+        rental.setSetupEndsAt(Instant.now().plusSeconds(3600));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("setup miễn phí kết thúc");
+    }
+
+    @Test
     void rejectsMismatchedIdentityWithoutVerificationNote() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
@@ -412,19 +428,20 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
+        Rental rental = entityWithId(new Rental());
+        rental.setReservation(reservation);
+        rental.setCustomer(reservation.getCustomer());
+        rental.setFacility(reservation.getFacility());
+        rental.setStorageUnit(unit);
+        rental.setStatus(RentalStatus.active);
+        rental.setSetupEndsAt(Instant.now().minusSeconds(1));
+        checkIn.setRental(rental);
+        org.mockito.Mockito.lenient().when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
         when(assignmentRepository.findByReservation_IdAndStatus(
             reservation.getId(), UnitAssignmentStatus.ACTIVE
         )).thenReturn(Optional.of(assignment));
         when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
         if (includeMutationStubs) {
-            Rental rental = entityWithId(new Rental());
-            rental.setReservation(reservation);
-            rental.setCustomer(reservation.getCustomer());
-            rental.setFacility(reservation.getFacility());
-            rental.setStorageUnit(unit);
-            rental.setStatus(RentalStatus.setup);
-            checkIn.setRental(rental);
-            when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
             when(rentalRepository.saveAndFlush(rental)).thenReturn(rental);
             UUID evidenceId = UUID.fromString(validCompletionRequest().evidenceReferences().getFirst());
             FileAsset evidence = entityWithId(new FileAsset());

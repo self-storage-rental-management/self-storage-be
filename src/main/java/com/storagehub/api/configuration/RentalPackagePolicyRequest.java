@@ -38,6 +38,10 @@ public record RentalPackagePolicyRequest(
     @DecimalMax(value = "1.0", message = "discountRate must be <= 1.0 (100%)")
     BigDecimal discountRate,
 
+    @DecimalMin(value = "0.0", message = "depositRate must be >= 0")
+    @DecimalMax(value = "1.0", message = "depositRate must be <= 1.0 (100%)")
+    BigDecimal depositRate,
+
     @NotBlank(message = "policyVersion is required")
     @Size(max = 50, message = "policyVersion cannot exceed 50 characters")
     String policyVersion,
@@ -57,6 +61,23 @@ public record RentalPackagePolicyRequest(
         UUID facilityId,
         String code,
         String name,
+        Integer rentalMonths,
+        Integer rentalYears,
+        String description,
+        BigDecimal discountRate,
+        String policyVersion,
+        PublicationStatus publicationStatus,
+        Boolean active,
+        LocalDate effectiveFrom,
+        LocalDate effectiveTo
+    ) {
+        this(facilityId, code, name, rentalMonths, rentalYears, description, discountRate, new BigDecimal("0.20"), policyVersion, publicationStatus, active, effectiveFrom, effectiveTo);
+    }
+
+    public RentalPackagePolicyRequest(
+        UUID facilityId,
+        String code,
+        String name,
         int rentalMonths,
         BigDecimal discountRate,
         String policyVersion,
@@ -64,7 +85,7 @@ public record RentalPackagePolicyRequest(
         LocalDate effectiveFrom,
         LocalDate effectiveTo
     ) {
-        this(facilityId, code, name, rentalMonths, null, null, discountRate, policyVersion, null, active, effectiveFrom, effectiveTo);
+        this(facilityId, code, name, rentalMonths, null, null, discountRate, new BigDecimal("0.20"), policyVersion, null, active, effectiveFrom, effectiveTo);
     }
 
     public int resolveRentalMonths() {

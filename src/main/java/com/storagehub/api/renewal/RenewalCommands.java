@@ -2,12 +2,15 @@ package com.storagehub.api.renewal;
 
 import jakarta.validation.constraints.*;
 import java.util.UUID;
+import java.time.LocalDate;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 public final class RenewalCommands {
     private RenewalCommands() {}
-    public record Quote(@NotBlank @Size(max=30) String pricingPackageCode, RenewalPaymentPlan paymentPlan) {
-        public Quote(String pricingPackageCode){this(pricingPackageCode,null);}
+    public record Quote(@NotBlank @Size(max=30) String pricingPackageCode, RenewalPaymentPlan paymentPlan, Boolean fullPayment, LocalDate startDate) {
+        public Quote(String pricingPackageCode){this(pricingPackageCode,null,null,null);}
+        public Quote(String pricingPackageCode,RenewalPaymentPlan paymentPlan){this(pricingPackageCode,paymentPlan,null,null);}
+        public Quote(String pricingPackageCode,RenewalPaymentPlan paymentPlan,Boolean fullPayment){this(pricingPackageCode,paymentPlan,fullPayment,null);}
         @com.fasterxml.jackson.annotation.JsonAnySetter public void unknown(String key,Object value){reject(key);}
     }
     public record Submit(@NotNull UUID renewalQuoteId,@Size(max=2000) String note) { @com.fasterxml.jackson.annotation.JsonAnySetter public void unknown(String key,Object value){reject(key);} }
