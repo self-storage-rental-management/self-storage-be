@@ -18,7 +18,27 @@ public final class RenewalPreparationResolution {
     }
     public static Instant deadline(Payment payment, RenewalOperationState state) {
         if (payment.getPaidAt() == null) return null;
-        var end = payment.getPaidAt().plus(RenewalSigningDeadline.WINDOW);
+        if (payment.getRenewalRevision() == null) {
+            var end = payment.getPaidAt().plus(RenewalSigningDeadline.WINDOW);
+            return state != null && state.getRecoveryCutoff() != null && state.getRecoveryCutoff().isBefore(end) ? state.getRecoveryCutoff() : end;
+        }
+        return deadline(payment, state, new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+    }
+    public static Instant deadline(Payment payment, RenewalOperationState state, com.fasterxml.jackson.databind.ObjectMapper mapper) {
+        if (payment.getPaidAt() == null) return null;
+        java.time.Duration window = RenewalSigningDeadline.WINDOW;
+        var revision = payment.getRenewalRevision();
+        if (revision != null && revision.getQuote() != null) {
+            try {
+                var terms = mapper.readValue(revision.getQuote().getTermsJson(), com.storagehub.api.renewal.RenewalQuoteResponse.Terms.class);
+                window = RenewalSigningDeadline.window(terms);
+            } catch (Exception invalid) {
+                throw com.storagehub.common.api.ApiExceptions.conflict("Accepted signing window requires reconciliation");
+            }
+        } else {
+            throw com.storagehub.common.api.ApiExceptions.conflict("Accepted signing terms missing");
+        }
+        var end = payment.getPaidAt().plus(window);
         return state != null && state.getRecoveryCutoff() != null && state.getRecoveryCutoff().isBefore(end)
             ? state.getRecoveryCutoff() : end;
     }

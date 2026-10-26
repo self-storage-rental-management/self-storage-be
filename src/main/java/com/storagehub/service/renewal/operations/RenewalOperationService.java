@@ -1,5 +1,7 @@
 package com.storagehub.service.renewal.operations;
 
+import com.storagehub.service.renewal.RenewalSigningDeadline;
+
 import com.storagehub.time.BusinessTime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -90,7 +92,7 @@ public class RenewalOperationService {
         var c=context(actor,id,Audience.CUSTOMER,Capability.READ,key,"d3_deposit",body,body.expectedVersion());
         var old=replay(c,"d3_deposit",key,body);if(old.isPresent())return old.get();
         var n=c.renewal();if((n.getStatus()!=RenewalStatus.pending&&n.getStatus()!=RenewalStatus.accepted&&n.getStatus()!=RenewalStatus.approved)||state(n)!=null)throw ApiExceptions.conflict("Renewal is not eligible for its deposit stage");
-        var terms=terms(c);Instant now=now();var policy=policy(n);var safety=safety();var workflow=c.workflow();
+        var terms=terms(c);Instant now=now();var safety=safety();var workflow=c.workflow();
         if (terms.renewalDepositAmount() == null || terms.renewalDepositAmount().signum() == 0)
             throw ApiExceptions.conflict("Renewal no longer collects a deposit; the full-period VNPay Sandbox payment flow is not integrated yet");
         Instant paymentDeadline=workflow.getPaymentDeadline();
@@ -98,7 +100,7 @@ public class RenewalOperationService {
         Instant cutoff=checkSafety(n,terms,workflow.getExtensionHoldRef(),now);
         if(cutoff==null)throw deferred("Recovery cutoff missing");
         beforeOrEqual(now,min(paymentDeadline,cutoff));
-        Instant prospective=min(now.plus(policy.signingWindow()),cutoff);
+        Instant prospective=min(now.plus(RenewalSigningDeadline.window(terms)),cutoff);
         var calendar=calendar();if(!calendar.feasible(n,now,prospective))throw ApiExceptions.conflict("No feasible signing slot before deadline");
         var paid=accounting().deposit(n,terms,actor.userId(),key,paymentDeadline);
         if(paid==null||paid.paymentRef()==null||!id.equals(paid.renewalId())||paid.outcome()==null)throw deferred("Invalid shared deposit result");
@@ -106,10 +108,10 @@ public class RenewalOperationService {
             Instant verifiedNow=now();
             if(paid.amount()==null||paid.amount().compareTo(terms.renewalDepositAmount())!=0||!terms.currency().equals(paid.currency())||paid.paidAt()==null||paid.paidAt().isAfter(verifiedNow)||paid.paidAt().isAfter(paymentDeadline)||paid.paidAt().isAfter(cutoff))throw ApiExceptions.conflict("Verified deposit does not match accepted terms/deadline");
             cutoff=checkSafety(n,terms,c.workflow().getExtensionHoldRef(),verifiedNow);if(cutoff==null)throw deferred("Recovery cutoff disappeared");
-            Instant deadline=min(paid.paidAt().plus(policy.signingWindow()),cutoff);beforeOrEqual(verifiedNow,deadline);
+            Instant deadline=RenewalSigningDeadline.calculate(paid.paidAt(),cutoff,terms);beforeOrEqual(verifiedNow,deadline);
             if(!calendar.feasible(n,verifiedNow,deadline))throw ApiExceptions.conflict("No feasible signing slot for verified payment");
             safety.retain(n,c.workflow().getExtensionHoldRef(),deadline);
-            var s=new RenewalOperationState(n);s.deposit(paid.paymentRef(),paid.paidAt(),deadline,cutoff,policy.reference(),policy.version());em.persist(s);
+            var s=new RenewalOperationState(n);s.deposit(paid.paymentRef(),paid.paidAt(),deadline,cutoff,RenewalSigningDeadline.REFERENCE,RenewalSigningDeadline.version(terms));em.persist(s);
             n.setStatus(RenewalStatus.deposit_paid);
         }
         return finish(c,"d3_deposit",key,body,event(c,"DEPOSIT",paid),200);
@@ -118,12 +120,12 @@ public class RenewalOperationService {
     public Instant[] appointmentWindow(ActorPrincipal actor,UUID id,Audience audience) {
         var n=visible(actor,id,audience,false,Capability.READ);var wf=workflow(n);var s=state(n);
         if(n.getStatus()!=RenewalStatus.accepted||s!=null&&s.hasVerifiedPayment())throw ApiExceptions.conflict("Renewal is not awaiting payment");
-        terms(new Context(n,null,wf));
+        var acceptedTerms = terms(new Context(n,null,wf));
         var source=appointmentTerms.getIfAvailable();var term=source==null?null:source.term(n.getRental(),now()).orElse(null);
         if(term==null||term.recoveryCutoff()==null)throw deferred("Published signing cutoff unavailable");
         Instant cutoff=term.recoveryCutoff();
         if(!cutoff.isAfter(now()))throw ApiExceptions.conflict("Renewal cutoff has passed");
-        return new Instant[]{com.storagehub.service.renewal.RenewalSigningDeadline.calculate(now(),cutoff),cutoff};
+        return new Instant[]{com.storagehub.service.renewal.RenewalSigningDeadline.calculate(now(),cutoff,acceptedTerms),cutoff};
     }
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.overdue.OverdueSources.TermSource> appointmentTerms;
@@ -187,6 +189,7 @@ public class RenewalOperationService {
     }
     public Result cash(ActorPrincipal actor,UUID id,Cash body,String key) {
         var c=context(actor,id,Audience.STAFF,Capability.CASH,key,"d3_cash",body,body.expectedVersion());var old=replay(c,"d3_cash",key,body);if(old.isPresent())return old.get();
+        com.storagehub.api.renewal.RenewalPaymentPlan.requireSupported(terms(c).paymentPlan());
         signing(c,true);if(!Boolean.TRUE.equals(body.received()))throw ApiExceptions.validation("Cash received attestation required",null);
         var finance=accounting();var statement=finance.statement(c.renewal(),terms(c),now());validateStatement(c.renewal(),statement);
         if(statement.amount().signum()==0)throw ApiExceptions.conflict("Required obligations are already paid; no new CASH receipt allowed");
@@ -211,8 +214,9 @@ public class RenewalOperationService {
         var arrival=linked(c.renewal(),body.arrivalRef(),"ARRIVAL");
         if(arrival.getOccurredAt().isAfter(now())||arrival.getOccurredAt().isAfter(s.getEffectiveSigningDeadline()))throw ApiExceptions.conflict("Arrival outside deadline");
         currentAppointment(c,s,s.getAppointmentRef());
-        if(body.signedDocumentFileId()!=null)evidence(actor,c.renewal(),"SIGNED_CONTRACT",List.of(body.signedDocumentFileId()));
-        var terms=terms(c);accounting().requireFullyPaid(c.renewal(),terms,now());
+        if(body.signedDocumentFileId()==null)throw ApiExceptions.validation("Cần upload hợp đồng gia hạn đã ký trước khi hoàn tất.",null);
+        evidence(actor,c.renewal(),"SIGNED_CONTRACT",List.of(body.signedDocumentFileId()));
+        var terms=terms(c);com.storagehub.api.renewal.RenewalPaymentPlan.requireSupported(terms.paymentPlan());accounting().requireFullyPaid(c.renewal(),terms,now());
         var safety=safety();var finalCutoff=checkSafety(c.renewal(),terms,c.workflow().getExtensionHoldRef(),now());
         if(finalCutoff==null)throw deferred("Recovery cutoff unavailable at completion");
         beforeOrEqual(now(),s.getEffectiveSigningDeadline());beforeOrEqual(now(),min(s.getRecoveryCutoff(),finalCutoff));

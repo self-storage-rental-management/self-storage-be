@@ -79,6 +79,10 @@ public class CheckInHandoverService {
     private AccessCredentialService accessCredentialService;
     @Autowired
     private ManualRentalPaymentService manualRentalPayments;
+    @Autowired
+    private PaymentProvenance paymentProvenance;
+    @Autowired
+    private com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy sandboxPaymentPolicy;
     @Autowired(required = false)
     private com.storagehub.domain.repo.ContractRepository contractRepository;
 
@@ -181,6 +185,7 @@ public class CheckInHandoverService {
             && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
             throw ApiExceptions.conflict("Reservation is not ready to schedule check-in");
         }
+        requirePaidReservationDeposit(reservation);
         UnitAssignment assignment = activeAssignment(reservationId);
         StorageUnit unit = requireReservedAssignedUnit(reservation, assignment);
         if (rentalRepository.existsActiveRental(reservationId, unit.getId(), RentalStatus.active)) {
@@ -287,6 +292,11 @@ public class CheckInHandoverService {
         CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.identity_verified);
         validateWorkflowEvidence(checkInId, request.contractEvidenceFileId(), "Contract evidence");
         Reservation reservation = checkIn.getReservation();
+        var pricing = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu snapshot điều khoản đã chấp nhận."));
+        if (pricing.getSetupEarlyExitPolicyVersion() != null
+            && !pricing.getSetupEarlyExitPolicyVersion().equals(request.confirmedSetupEarlyExitPolicyVersion()))
+            throw ApiExceptions.validation("Nhân viên cần xác nhận hợp đồng đã ký có điều khoản phí trả kho trong setup đúng báo giá.", null);
         User operator = requireActor(actor);
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.contract_signed);
@@ -336,7 +346,7 @@ public class CheckInHandoverService {
         String lockReference = request.lockReference().trim();
         User operator = requireActor(actor);
         Instant now = Instant.now();
-        int setupDays = Math.max(0, reservation.getSetupDaysSnapshot());
+        int setupDays = ReservationSnapshotView.requireSetupDays(reservation,snapshot);
         LocalDate handoverDate = now.atZone(VIETNAM_ZONE).toLocalDate();
         LocalDate paidRentalStart = handoverDate.plusDays(setupDays);
         Instant setupEndsAt = paidRentalStart.atStartOfDay(VIETNAM_ZONE).toInstant();
@@ -451,6 +461,7 @@ public class CheckInHandoverService {
         if (!isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
         }
+        requirePaidReservationDeposit(reservation);
         Rental rental = rentalRepository.findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Setup rental timeline is missing"));
         Instant inventoryNow = Instant.now();
@@ -572,8 +583,10 @@ public class CheckInHandoverService {
             || !isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Check-in is not ready to record the remaining payment");
         }
+        requirePaidReservationDeposit(reservation);
         var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        ReservationSnapshotView.requireSetupDays(reservation,snapshot);
         if (request.amount().compareTo(snapshot.getDueAtCheckIn()) != 0) {
             throw ApiExceptions.validation("Payment amount must match the remaining check-in amount", Map.of("expectedAmount", snapshot.getDueAtCheckIn()));
         }
@@ -769,8 +782,41 @@ public class CheckInHandoverService {
                 "Check-in step is out of order. Expected status: " + expectedStatus
             );
         }
+        requirePaidReservationDeposit(reservation);
         checkIn.setReservation(reservation);
         return checkIn;
+    }
+
+    /** The booking prepayment is distinct from the security deposit already included in its quote. */
+    private void requirePaidReservationDeposit(Reservation reservation) {
+        if (paymentRepository == null || pricingSnapshotRepository == null || paymentProvenance == null
+            || sandboxPaymentPolicy == null) {
+            throw ApiExceptions.conflict("Không thể xác minh khoản trả trước của đơn đặt kho.");
+        }
+        var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        if (!ReservationSnapshotView.pricingComplete(reservation, snapshot)
+            || snapshot.getReservationDepositAmount() == null
+            || snapshot.getReservationDepositAmount().signum() <= 0) {
+            throw ApiExceptions.conflict(ReservationSnapshotView.MISSING+": khoản trả trước khi đặt kho");
+        }
+        boolean paid = paymentRepository.findAllByReservation_IdAndStatusIn(
+            reservation.getId(), List.of(PaymentStatus.PAID)
+        ).stream().anyMatch(payment -> {
+            if (payment.getPurpose() != PaymentType.RESERVATION_DEPOSIT
+                || payment.getReservation() == null
+                || !reservation.getId().equals(payment.getReservation().getId())
+                || payment.getAmount() == null
+                || payment.getAmount().compareTo(snapshot.getReservationDepositAmount()) != 0
+                || payment.getRefundedAmount() == null
+                || payment.getRefundedAmount().signum() != 0) return false;
+            var proof = paymentProvenance.classify(payment);
+            return proof == PaymentProvenance.Classification.VERIFIED
+                || proof == PaymentProvenance.Classification.SANDBOX
+                    && sandboxPaymentPolicy.evaluate(payment, proof).eligibleForReconciliation();
+        });
+        if (!paid) throw ApiExceptions.conflict(
+            "Khoản trả trước khi đặt kho chưa được xác minh đã thanh toán hoặc cần đối soát; chưa thể check-in."
+        );
     }
 
     /**
@@ -861,6 +907,8 @@ public class CheckInHandoverService {
     ) {
         StorageUnit unit = assignment.getStorageUnit();
         Rental rental = checkIn == null ? null : checkIn.getRental();
+        var pricing=pricingSnapshotRepository==null?null:pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        Integer setupDays=ReservationSnapshotView.pricingComplete(reservation,pricing)?pricing.getFreeSetupDays():null;
         BigDecimal[] declaredDimensions = declaredGoodsDimensions(reservation.getId());
         return new CheckInResponse(
             checkIn == null ? null : checkIn.getId(),
@@ -876,7 +924,7 @@ public class CheckInHandoverService {
             checkIn == null ? null : checkIn.getPaymentCollectedAt(),
             checkIn == null ? null : checkIn.getSetupStartedAt(),
             checkIn == null ? null : checkIn.getSetupDueAt(),
-            reservation.getSetupDaysSnapshot(),
+            setupDays,
             rental == null ? null : rental.getStartDate(),
             checkIn == null ? null : checkIn.getSetupCompletedAt(),
             checkIn == null ? null : checkIn.getInventoryVerifiedAt(),
@@ -897,7 +945,9 @@ public class CheckInHandoverService {
             reservation.getEndDate(), declaredPackageCount(reservation.getId()),
             reservation.getTotalGoodsWeightKg(),
             reservation.getTotalGoodsVolumeM3(), declaredDimensions[0], declaredDimensions[1],
-            declaredDimensions[2], dueAtCheckIn(reservation.getId()), readHandover(checkIn)
+            declaredDimensions[2], dueAtCheckIn(reservation.getId()), readHandover(checkIn),
+            pricing == null ? null : pricing.getSetupEarlyExitPolicyVersion(),
+            pricing == null ? null : pricing.getSetupEarlyExitFee()
         );
     }
 
@@ -949,11 +999,13 @@ public class CheckInHandoverService {
 
     private void requireRemainingPayment(Reservation reservation) {
         if (pricingSnapshotRepository == null || paymentRepository == null) {
-            return;
+            throw ApiExceptions.conflict(ReservationSnapshotView.MISSING+": nguồn dữ liệu thanh toán");
         }
         var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
-        if (snapshot == null || snapshot.getDueAtCheckIn() == null
-            || snapshot.getDueAtCheckIn().signum() <= 0) {
+        ReservationSnapshotView.requireSetupDays(reservation,snapshot);
+        if(snapshot.getDueAtCheckIn()==null||snapshot.getDueAtCheckIn().signum()<0)
+            throw ApiExceptions.conflict(ReservationSnapshotView.MISSING+": số tiền còn lại khi nhận kho");
+        if (snapshot.getDueAtCheckIn().signum() == 0) {
             return;
         }
         var payment = paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(
