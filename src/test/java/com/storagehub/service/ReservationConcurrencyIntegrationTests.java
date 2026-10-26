@@ -190,6 +190,8 @@ class ReservationConcurrencyIntegrationTests {
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
+        quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        quote.setSetupEarlyExitFee(quote.getMonthlyPrice());
         // The race tests capacity for an already-accepted declaration, not live catalog setup.
         quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(request(quote).getGoodsItems()));
         return quote;
@@ -207,7 +209,9 @@ class ReservationConcurrencyIntegrationTests {
             new BigDecimal("100"), new BigDecimal("60"), new BigDecimal("15"),
             new BigDecimal("18"), false
         );
-        return new CreateReservationRequest(quote.getId(), "Packed", "Concurrency test", List.of(item));
+        var request = new CreateReservationRequest(quote.getId(), "Packed", "Concurrency test", List.of(item));
+        request.setAcceptedSetupEarlyExitPolicyVersion(quote.getSetupEarlyExitPolicyVersion());
+        return request;
     }
 
     private record Result(boolean success, int status, String message) {}

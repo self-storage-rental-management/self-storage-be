@@ -31,7 +31,7 @@ import org.springframework.test.context.*;
 @DataJpaTest @ActiveProfiles("test")
 @TestPropertySource(properties="storagehub.integration.rental-period.enabled=true")
 @Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
-    RenewalPolicyPublicationService.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
+    RenewalPolicyPublicationService.class,EffectiveRenewalPolicySource.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
     ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,
     RenewalPersistence.class,com.storagehub.service.FileStorageService.class,
     com.storagehub.service.AdminAuthorizationService.class,com.storagehub.service.FacilityScopeService.class,
@@ -89,7 +89,13 @@ class DuongPortAdaptersJpaTests {
         em.persist(new RenewalWorkflow(renewal,revision));em.flush();
     }
     @Test void actualSpringDateSourceReadsPersistedHandoffAndExclusiveEnd(){assertThat(periods.read(rental).orElseThrow().inclusiveEndDate()).isEqualTo(LocalDate.of(2026,10,6));}
-    @Test void missingPolicyRemainsUnknownAndDoesNotSeed(){assertThat(adapters.read(rental,LocalDate.of(2026,10,7))).isEmpty();assertThat(adapters.read(renewal)).isEmpty();assertThat(adapters.term(rental,NOW)).isEmpty();assertThat(em.createQuery("select count(s) from SystemSetting s",Long.class).getSingleResult()).isZero();}
+    @Test void missingPolicyUsesExplicitEmptyCatalogFallbackWithoutSeedingPublication(){
+        var fallback=adapters.read(rental,LocalDate.of(2026,10,7)).orElseThrow();
+        assertThat(fallback.reference()).startsWith("facility-rental-packages:");assertThat(fallback.eligiblePackageIds()).isEmpty();
+        assertThat(adapters.read(renewal).orElseThrow().signingWindow()).isEqualTo(Duration.ofDays(3));
+        assertThat(adapters.term(rental,NOW).orElseThrow().lastPermittedDate()).isEqualTo(LocalDate.of(2026,10,6));
+        assertThat(em.createQuery("select count(s) from SystemSetting s",Long.class).getSingleResult()).isZero();
+    }
     @Test void publishedPolicySurvivesFlushClearAndMapsThreePorts(){
         var p=policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),input(0));UUID rid=rental.getId();em.flush();em.clear();rental=em.find(Rental.class,rid);renewal=em.find(Renewal.class,renewal.getId());
         assertThat(policies.get(actor(manager,RoleCode.MANAGER),facility.getId()).version()).isEqualTo(p.version());
@@ -105,9 +111,16 @@ class DuongPortAdaptersJpaTests {
     @Test void wrongFacilityPackageAndMissingPrimitiveRejected() throws Exception {
         var p=input(0);assertThatThrownBy(()->policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),new PublishedRenewalPolicy.Input(0L,p.effectiveFrom(),null,30,24,30,p.depositRate(),Set.of(UUID.randomUUID()),p.signing(),p.term()))).hasMessageContaining("package");
         policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),p);var setting=em.createQuery("select s from SystemSetting s",SystemSetting.class).getSingleResult();var tree=mapper.readTree(setting.getValue());((com.fasterxml.jackson.databind.node.ObjectNode)tree).remove("paymentWindowHours");setting.setValue(mapper.writeValueAsString(tree));em.flush();
-        assertThatThrownBy(()->adapters.read(rental,LocalDate.of(2026,10,7))).hasMessageContaining("incomplete");
+        assertThatThrownBy(()->policies.read(facility.getId(),LocalDate.of(2026,10,7))).hasMessageContaining("incomplete");
+        assertThat(adapters.read(rental,LocalDate.of(2026,10,7)).orElseThrow().reference()).startsWith("facility-rental-packages:");
     }
-    @Test void policyOutsideEffectiveDatesAndOptionalSourcesAreEmpty(){var p=input(0);policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),new PublishedRenewalPolicy.Input(0L,p.effectiveFrom(),p.effectiveFrom(),30,24,30,p.depositRate(),Set.of(),null,null));assertThat(adapters.read(rental,LocalDate.of(2027,1,1))).isEmpty();assertThat(adapters.read(renewal)).isEmpty();assertThat(adapters.term(rental,NOW)).isEmpty();}
+    @Test void policyOutsideEffectiveDatesUsesCatalogFallbackRatherThanExpiredPublication(){
+        var p=input(0);policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),new PublishedRenewalPolicy.Input(0L,p.effectiveFrom(),p.effectiveFrom(),30,24,30,p.depositRate(),Set.of(),null,null));
+        assertThat(policies.read(facility.getId(),LocalDate.of(2027,1,1))).isEmpty();
+        assertThat(adapters.read(rental,LocalDate.of(2027,1,1)).orElseThrow().eligiblePackageIds()).isEmpty();
+        assertThat(adapters.read(renewal).orElseThrow().reference()).startsWith("facility-rental-packages:");
+        assertThat(adapters.term(rental,NOW).orElseThrow().policyRef()).startsWith("facility-rental-packages:");
+    }
     @Test void facilityFaultNeedsExplicitBoundManagerReview() throws Exception {var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW,staff.getId(),"{}");em.persist(incident);em.flush();assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),manager.getId())).hasMessageContaining("missing");em.persist(new RenewalOperationEvent(renewal,"FAULT_REVIEW",NOW.plusSeconds(1),manager.getId(),mapper.writeValueAsString(Map.of("incidentId",incident.getId(),"facilityFault",true))));em.flush();adapters.requireFacilityFault(renewal,incident.getId(),manager.getId());assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),staff.getId())).hasMessageContaining("reviewer");}
     @Test void faultReviewCommandPersistsVerdictNotJustNote(){var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW.minusSeconds(60),staff.getId(),"{}");em.persist(incident);em.flush();operations.reviewFault(actor(manager,RoleCode.MANAGER),renewal.getId(),new RenewalOperationCommands.FaultReview(incident.getId(),true,"TEST verified",List.of(),0L),"fault-test");adapters.requireFacilityFault(renewal,incident.getId(),manager.getId());}
     @Test void revokedFaultReviewerScopeCannotAuthorizeCustomerConfirmation() throws Exception {
