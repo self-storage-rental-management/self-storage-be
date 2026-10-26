@@ -22,6 +22,24 @@ import lombok.Setter;
 @NoArgsConstructor
 public class ReturnCase extends BaseEntity {
 
+    @Column(nullable = false)
+    private boolean setupExitRequested;
+
+    @Column(nullable = false)
+    private boolean setupEarlyExit;
+
+    @Column
+    private Instant setupReturnedAt;
+
+    @Column(length = 50)
+    private String setupEarlyExitPolicyVersion;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal rentalRefundCredit;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal earlyTerminationFee;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "rental_id", nullable = false)
     private Rental rental;
@@ -147,7 +165,7 @@ public class ReturnCase extends BaseEntity {
     private String managerResolutionNote;
 
     // Settlement completion & payment / refund
-    @Column(length = 64)
+    @Column(length = 120)
     private String settlementPaymentId;
 
     @Column

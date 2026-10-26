@@ -108,6 +108,8 @@ class ReservationQuoteServiceTests {
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("21505000.00");
+        assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
+        assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
         assertThat(response.getQuoteId()).isNotNull();
     }
 

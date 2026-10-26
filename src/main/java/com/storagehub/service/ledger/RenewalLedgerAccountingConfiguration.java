@@ -83,6 +83,7 @@ public class RenewalLedgerAccountingConfiguration {
             final Terms terms;
             try {terms=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),Terms.class);}
             catch(Exception invalid){throw deferred("Accepted terms are invalid");}
+            com.storagehub.api.renewal.RenewalPaymentPlan.requireSupported(terms.paymentPlan());
             var payable=statement(renewal,terms,now);
             if(!payable.reference().equals(statement)||payable.amount().signum()<=0)throw deferred("Payable statement is stale or already paid");
             var snapshot=account(renewal);

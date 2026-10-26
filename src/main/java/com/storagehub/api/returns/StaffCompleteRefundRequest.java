@@ -9,7 +9,12 @@ public record StaffCompleteRefundRequest(
     @Size(max = 1000, message = "notes cannot exceed 1000 characters")
     String notes,
     java.util.UUID receiptFileId,
-    String paymentMethod
+    String paymentMethod,
+    Boolean confirmed,
+    java.math.BigDecimal amount
 ) {
-    public StaffCompleteRefundRequest(String transactionReference,String notes) {this(transactionReference,notes,null,"BANK_TRANSFER");}
+    public StaffCompleteRefundRequest(String transactionReference,String notes) {this(transactionReference,notes,null,"BANK_TRANSFER",null,null);}
+    public StaffCompleteRefundRequest(String transactionReference,String notes,java.util.UUID receiptFileId,String paymentMethod) {
+        this(transactionReference,notes,receiptFileId,paymentMethod,null,null);
+    }
 }

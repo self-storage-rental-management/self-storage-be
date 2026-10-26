@@ -74,7 +74,7 @@ public class Rental extends BaseEntity {
     @Column(nullable = false)
     private boolean inventoryPending;
 
-    /** Setup exits are reviewed by Business; no automatic refund is made. */
+    /** A setup return must pass physical inspection and financial reconciliation. */
     @Column(nullable = false)
     private boolean setupExitReviewRequired;
 

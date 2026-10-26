@@ -23,7 +23,7 @@ class ReservationSnapshotViewTests {
     }
 
     @Test
-    void legacyReservationFallsBackToCurrentNameWhenSnapshotHasNoName() {
+    void legacyReservationRequiresReconciliationInsteadOfUsingTheCurrentCatalogName() {
         UnitType currentType = new UnitType();
         currentType.setName("Tên loại kho hiện tại");
         ReservationQuote quote = new ReservationQuote();
@@ -33,6 +33,7 @@ class ReservationSnapshotViewTests {
         reservation.setSourceQuote(quote);
 
         assertThat(ReservationSnapshotView.unitTypeName(reservation))
-            .isEqualTo("Tên loại kho hiện tại");
+            .isEqualTo(ReservationSnapshotView.MISSING)
+            .isNotEqualTo("Tên loại kho hiện tại");
     }
 }

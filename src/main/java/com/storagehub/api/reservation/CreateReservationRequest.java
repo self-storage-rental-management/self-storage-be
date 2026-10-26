@@ -14,6 +14,11 @@ import java.time.Instant;
 
 public class CreateReservationRequest {
 
+    @Size(max = 50)
+    private String acceptedSetupEarlyExitPolicyVersion;
+    public String getAcceptedSetupEarlyExitPolicyVersion() { return acceptedSetupEarlyExitPolicyVersion; }
+    public void setAcceptedSetupEarlyExitPolicyVersion(String value) { acceptedSetupEarlyExitPolicyVersion = value; }
+
     @NotNull
     private UUID quoteId;
 

@@ -71,6 +71,23 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
             || !same(r.getFacility().getId(), log.getFacility())) return Optional.empty();
         var root = json(log.getAfterStateJson());
         var d = root.path("rentalPeriodEvidence");
+        if("CUSTOMER_HANDOVER_PERIOD_V2".equals(d.path("schema").asText())) {
+            var handovers=em.createQuery("select c from CheckIn c where c.reservation.id=:id",CheckIn.class)
+                .setParameter("id",r.getReservation().getId()).setMaxResults(2).getResultList();
+            if(handovers.size()!=1)return Optional.empty();
+            var handover=handovers.getFirst();
+            if(!"COMPLETED".equals(root.path("status").asText())||!id(root,"rentalId",r.getId())
+                ||d.path("rentalCreated").asBoolean(true)||!"EXCLUSIVE".equals(d.path("convention").asText())
+                ||!id(d,"checkInId",handover.getId())||handover.getStatus()!=CheckInStatus.completed||!same(r.getId(),handover.getRental())
+                ||r.getSetupStartedAt()==null||r.getSetupEndsAt()==null||r.getTermsEffectiveAt()==null||r.getInventoryVerifiedAt()==null
+                ||!r.getSetupStartedAt().equals(handover.getSetupStartedAt())||!r.getSetupEndsAt().equals(handover.getSetupDueAt())
+                ||!r.getInventoryVerifiedAt().equals(handover.getInventoryVerifiedAt())
+                ||!r.getSetupStartedAt().toString().equals(d.path("handoverAt").asText())
+                ||!r.getSetupEndsAt().toString().equals(d.path("setupEndsAt").asText())
+                ||!r.getTermsEffectiveAt().toString().equals(d.path("termsEffectiveAt").asText())
+                ||!r.getInventoryVerifiedAt().toString().equals(d.path("inventoryVerifiedAt").asText()))return Optional.empty();
+            return evidence(r,d,"handover-receipt:"+log.getId());
+        }
         // Approved current convention may apply to a legacy confirmed handover without versioned metadata.
         // It establishes today's rule, not a fabricated historical audit or a backfilled DB date.
         if (inclusiveEnd && d.isMissingNode() && "COMPLETED".equals(root.path("status").asText())

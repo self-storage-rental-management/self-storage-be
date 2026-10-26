@@ -75,9 +75,7 @@ public class RenewalRiskReadService {
         if(term==null)return new View(rental.getId(),id,now,"UNKNOWN",null,"UNKNOWN",signing,null,null,
             task==null?null:false,remainder,null,"VND",recoveryStatus,startedAt,taskId);
         // The term provider owns normalization of inclusive/exclusive Rental dates and timezone.
-        ZoneId zone=policies.read(rental.getFacility().getId(),now.atZone(BusinessTime.ZONE).toLocalDate())
-            .filter(s->s.policy().term()!=null).map(s->ZoneId.of(s.policy().term().timezone()))
-            .orElse(BusinessTime.ZONE);
+        ZoneId zone=BusinessTime.ZONE; // Both published and catalog policies use the fixed Vietnam overdue calendar.
         long days=RenewalOverdueTimeline.overdueDays(term.lastPermittedDate(),now,zone);
         boolean allowed=task==null&&rental.getStatus()==RentalStatus.active&&rental.getActualReturnedAt()==null&&now.isBefore(term.recoveryCutoff());
         BigDecimal fee=null;var feeSource=overdueFees==null?null:overdueFees.getIfAvailable();

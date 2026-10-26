@@ -67,7 +67,7 @@ public class RenewalDepositSettlementService implements RefundSource {
             var p=proof(n,false);
             var refund=refundRows(p.payment()).stream().filter(r->Set.of(RefundStatus.PENDING,RefundStatus.PROCESSING,RefundStatus.COMPLETED).contains(r.getStatus())).findFirst().orElse(null);
             String status=refund==null?"PREPARATION_BLOCKED":refund.getStatus()==RefundStatus.COMPLETED?"REFUNDED":"REFUND_APPROVED";
-            var deadline=RenewalPreparationResolution.deadline(p.payment(),s);
+            var deadline=RenewalPreparationResolution.deadline(p.payment(),s,mapper);
             return new View(id,p.workflow().getVersion(),status,p.payment().getAmount(),p.payment().getRefundedAmount(),"VND",p.environment(),
                 refund==null?null:refund.getId(),deadline,now,p.payment().getId(),n.getStatus()==RenewalStatus.accepted&&refund==null&&deadline!=null&&now.isBefore(deadline));
         }
@@ -165,7 +165,7 @@ public class RenewalDepositSettlementService implements RefundSource {
         if(refundRows(p.payment()).stream().anyMatch(r->Set.of(RefundStatus.PENDING,RefundStatus.PROCESSING,RefundStatus.COMPLETED).contains(r.getStatus())))
             throw ApiExceptions.conflict("Refund already reserved; preparation cannot resume");
         var source=overdueTerms.getIfAvailable();var term=source==null?null:source.term(n.getRental(),now).orElse(null);
-        var deadline=RenewalPreparationResolution.deadline(p.payment(),p.state());
+        var deadline=RenewalPreparationResolution.deadline(p.payment(),p.state(),mapper);
         if(term==null||term.recoveryCutoff()==null||deadline==null||!now.isBefore(deadline)||!now.isBefore(term.recoveryCutoff()))
             throw ApiExceptions.conflict("Signing/recovery deadline prevents preparation retry");
         p.payment().setFailureCode(RenewalPreparationResolution.RETRY);
@@ -238,6 +238,9 @@ public class RenewalDepositSettlementService implements RefundSource {
     private Proof proof(Renewal n,boolean write) {
         var s=em.find(RenewalOperationState.class,n.getId());var w=em.find(RenewalWorkflow.class,n.getId());
         if(w==null||w.getAcceptedRevision()==null)throw ApiExceptions.conflict("Verified accepted revision required");
+        final RenewalQuoteResponse.Terms accepted;
+        try{accepted=mapper.readValue(w.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);}
+        catch(Exception invalid){throw ApiExceptions.conflict("Accepted deposit terms invalid");}
         boolean unprepared=s==null||!s.hasVerifiedPayment();
         Payment payment;
         if(unprepared) {
@@ -253,7 +256,7 @@ public class RenewalDepositSettlementService implements RefundSource {
             if(s.getDepositPaymentRef()==null||s.getDepositPaidAt()==null||s.getEffectiveSigningDeadline()==null)
                 throw ApiExceptions.conflict("Verified deposit and accepted revision required");
             if(s.getRecoveryCutoff()==null||s.getOriginalSigningDeadline()==null
-            ||!s.getOriginalSigningDeadline().equals(com.storagehub.service.renewal.RenewalSigningDeadline.calculate(s.getDepositPaidAt(),s.getRecoveryCutoff()))
+            ||!s.getOriginalSigningDeadline().equals(com.storagehub.service.renewal.RenewalSigningDeadline.calculate(s.getDepositPaidAt(),s.getRecoveryCutoff(),accepted))
             ||s.getEffectiveSigningDeadline().isAfter(s.getRecoveryCutoff())
             ||s.getConfirmedExceptionRef()==null&&!s.getEffectiveSigningDeadline().equals(s.getOriginalSigningDeadline()))
                 throw ApiExceptions.conflict("Signing deadline requires reconciliation before deposit settlement");
@@ -267,9 +270,6 @@ public class RenewalDepositSettlementService implements RefundSource {
         var classification=provenance.classify(payment);
         if(!Set.of(PaymentProvenance.Classification.SANDBOX,PaymentProvenance.Classification.VERIFIED).contains(classification))
             throw ApiExceptions.conflict("Deposit payment provenance has not been reconciled");
-        final RenewalQuoteResponse.Terms accepted;
-        try{accepted=mapper.readValue(w.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);}
-        catch(Exception invalid){throw ApiExceptions.conflict("Accepted deposit terms invalid");}
         var specs=FinancialContractSpecifications.accepted(w.getAcceptedRevision(),accepted);
         if(specs.getFirst().kind()!=LedgerStore.Kind.RENEWAL_DEPOSIT||payment.getAmount().compareTo(specs.getFirst().amount())!=0)
             throw ApiExceptions.conflict("Payment is not the accepted Renewal deposit");

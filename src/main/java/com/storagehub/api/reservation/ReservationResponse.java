@@ -10,6 +10,19 @@ import java.util.UUID;
 
 public class ReservationResponse {
 
+    private String setupEarlyExitPolicyVersion;
+    private BigDecimal setupEarlyExitFee;
+    private UUID setupReturnRentalId;
+    private UUID setupReturnCaseId;
+    public String getSetupEarlyExitPolicyVersion() { return setupEarlyExitPolicyVersion; }
+    public void setSetupEarlyExitPolicyVersion(String value) { setupEarlyExitPolicyVersion = value; }
+    public BigDecimal getSetupEarlyExitFee() { return setupEarlyExitFee; }
+    public void setSetupEarlyExitFee(BigDecimal value) { setupEarlyExitFee = value; }
+    public UUID getSetupReturnRentalId() { return setupReturnRentalId; }
+    public void setSetupReturnRentalId(UUID value) { setupReturnRentalId = value; }
+    public UUID getSetupReturnCaseId() { return setupReturnCaseId; }
+    public void setSetupReturnCaseId(UUID value) { setupReturnCaseId = value; }
+
     private UUID id;
     private String reservationCode;
     private UUID quoteId;
@@ -31,6 +44,7 @@ public class ReservationResponse {
     private BigDecimal totalGoodsWeightKg;
     private Instant holdExpiresAt;
     private Instant appointmentAt;
+    public void setAppointmentAt(Instant value){appointmentAt=value;}
     private Instant createdAt;
     private UUID assignedUnitId;
     private String assignedUnitCode;
@@ -44,7 +58,27 @@ public class ReservationResponse {
     // Snapshot discount fields (bảo toàn lịch sử mã giảm giá trên hóa đơn / đơn đặt)
     private String pricingPackageCode;
     private int rentalMonths;
-    private int freeSetupDays;
+    private Integer freeSetupDays;
+    private String pricingPolicyVersion;
+    private String pricingSnapshotStatus;
+    private Instant pricingQuotedAt;
+    private Instant pricingExpiresAt;
+    public Instant getPricingQuotedAt(){return pricingQuotedAt;}
+    public void setPricingQuotedAt(Instant value){pricingQuotedAt=value;}
+    public Instant getPricingExpiresAt(){return pricingExpiresAt;}
+    public void setPricingExpiresAt(Instant value){pricingExpiresAt=value;}
+    private java.util.List<String> snapshotWarnings = java.util.List.of();
+    private UnitTypeSnapshot unitTypeSnapshot;
+    public record UnitTypeSnapshot(String name,BigDecimal lengthM,BigDecimal widthM,BigDecimal heightM,
+        BigDecimal areaM2,BigDecimal volumeM3,BigDecimal maxLoadKg,int rackCount,BigDecimal rackLengthM,BigDecimal rackWidthM,BigDecimal rackHeightM) {}
+    public String getPricingPolicyVersion(){return pricingPolicyVersion;}
+    public void setPricingPolicyVersion(String value){pricingPolicyVersion=value;}
+    public String getPricingSnapshotStatus(){return pricingSnapshotStatus;}
+    public void setPricingSnapshotStatus(String value){pricingSnapshotStatus=value;}
+    public java.util.List<String> getSnapshotWarnings(){return snapshotWarnings;}
+    public void setSnapshotWarnings(java.util.List<String> value){snapshotWarnings=value;}
+    public UnitTypeSnapshot getUnitTypeSnapshot(){return unitTypeSnapshot;}
+    public void setUnitTypeSnapshot(UnitTypeSnapshot value){unitTypeSnapshot=value;}
     private boolean setupExitReviewRequired;
     private java.time.Instant setupGoodsRevisionUsedAt;
     private BigDecimal monthlyPrice;
@@ -172,8 +206,8 @@ public class ReservationResponse {
 
     public String getPricingPackageCode() { return pricingPackageCode; }
     public int getRentalMonths() { return rentalMonths; }
-    public int getFreeSetupDays() { return freeSetupDays; }
-    public void setFreeSetupDays(int freeSetupDays) { this.freeSetupDays = freeSetupDays; }
+    public Integer getFreeSetupDays() { return freeSetupDays; }
+    public void setFreeSetupDays(Integer freeSetupDays) { this.freeSetupDays = freeSetupDays; }
     public boolean isSetupExitReviewRequired() { return setupExitReviewRequired; }
     public void setSetupExitReviewRequired(boolean setupExitReviewRequired) { this.setupExitReviewRequired = setupExitReviewRequired; }
     public java.time.Instant getSetupGoodsRevisionUsedAt() { return setupGoodsRevisionUsedAt; }

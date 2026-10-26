@@ -6,6 +6,7 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.PaymentProvenance;
+import com.storagehub.service.SetupEarlyExitPolicy;
 import com.storagehub.service.renewal.persistence.RenewalWorkflow;
 import com.storagehub.api.renewal.RenewalQuoteResponse;
 import jakarta.persistence.*;
@@ -48,7 +49,8 @@ public class ReturnFinancialReconciliation {
             ||pricing.getRemainingRentalAmount()==null||pricing.getDueAtCheckIn()==null
             ||pricing.getRemainingRentalAmount().add(pricing.getSecurityDepositAmount()).compareTo(pricing.getDueAtCheckIn())!=0)throw unknownDeposit();
         var payments=em.createQuery("select p from Payment p where p.reservation.id=:id and p.renewal is null and p.status=:paid",Payment.class)
-            .setParameter("id",rental.getReservation().getId()).setParameter("paid",PaymentStatus.PAID).getResultList();
+            .setParameter("id",rental.getReservation().getId()).setParameter("paid",PaymentStatus.PAID)
+            .setLockMode(LockModeType.PESSIMISTIC_WRITE).getResultList();
         Payment checkIn=null;BigDecimal paid=BigDecimal.ZERO;
         for(var p:payments) {
             if(!Set.of(PaymentType.RESERVATION_DEPOSIT,PaymentType.RENTAL_BALANCE).contains(p.getPurpose()))throw unknownDeposit();
@@ -83,6 +85,7 @@ public class ReturnFinancialReconciliation {
     private View capture(ReturnCase rc,boolean recovery) {
         var rental=em.find(Rental.class,rc.getRental().getId(),LockModeType.PESSIMISTIC_WRITE);
         var security=security(rental);ledger.open(rental.getId(),rental.getCustomer().getId(),rental.getFacility().getId());
+        if (!recovery) SetupEarlyExitPolicy.capture(rc, security.pricing());
         var account=ledger.read(rental.getId()).orElseThrow();ledger.lockForSettlement(rental.getId(),account.revision());
         if(!account.customerId().equals(rental.getCustomer().getId())||!account.facilityId().equals(rental.getFacility().getId()))throw ApiExceptions.conflict("Sổ công nợ không khớp hồ sơ thuê.");
         Instant calculatedAt=rc.getInspectedAt()==null?Instant.now():rc.getInspectedAt();
@@ -130,11 +133,13 @@ public class ReturnFinancialReconciliation {
         var old=jdbc.queryForList("select revision,settled_at_ms from return_financial_snapshots where return_id=? for update",rc.getId().toString());
         if(!old.isEmpty()&&old.getFirst().get("settled_at_ms")!=null)throw ApiExceptions.conflict("Quyết toán đã được ghi nhận.");
         long revision=old.isEmpty()?1:((Number)old.getFirst().get("revision")).longValue()+1;
-        if(!old.isEmpty())jdbc.update("insert into return_financial_snapshot_history(return_id,ledger_revision,security_payment_id,deposit_amount,debt_amount,allocations_json,revision,captured_at_ms) select return_id,ledger_revision,security_payment_id,deposit_amount,debt_amount,allocations_json,revision,captured_at_ms from return_financial_snapshots where return_id=?",rc.getId().toString());
+        if(!old.isEmpty())jdbc.update("insert into return_financial_snapshot_history(return_id,ledger_revision,security_payment_id,deposit_amount,debt_amount,allocations_json,revision,captured_at_ms,setup_statement_json) select return_id,ledger_revision,security_payment_id,deposit_amount,debt_amount,allocations_json,revision,captured_at_ms,setup_statement_json from return_financial_snapshots where return_id=?",rc.getId().toString());
         if(old.isEmpty())jdbc.update("insert into return_financial_snapshots(return_id,rental_id,ledger_revision,security_payment_id,deposit_amount,debt_amount,allocations_json,revision,captured_at_ms) values(?,?,?,?,?,?,?,?,?)",
             rc.getId().toString(),rental.getId().toString(),account.revision(),security.payment().getId().toString(),security.amount(),debt,json(allocations),revision,Instant.now().toEpochMilli());
         else jdbc.update("update return_financial_snapshots set ledger_revision=?,security_payment_id=?,deposit_amount=?,debt_amount=?,allocations_json=?,revision=?,captured_at_ms=? where return_id=?",
             account.revision(),security.payment().getId().toString(),security.amount(),debt,json(allocations),revision,Instant.now().toEpochMilli(),rc.getId().toString());
+        jdbc.update("update return_financial_snapshots set setup_statement_json=? where return_id=?",
+            rc.isSetupExitRequested() ? setupStatement(rc) : null, rc.getId().toString());
         if(feeQuote!=null) {
             jdbc.update("insert into recovery_overdue_fee_assessments(return_id,snapshot_revision,overdue_days,accrued_amount,outstanding_amount,unposted_amount,source_ref,calculated_at_ms) values(?,?,?,?,?,?,?,?)",
                 rc.getId().toString(),revision,feeQuote.overdueDays(),feeQuote.accrued(),feeQuote.outstanding(),feeQuote.unposted(),feeQuote.sourceRef(),calculatedAt.toEpochMilli());
@@ -156,6 +161,15 @@ public class ReturnFinancialReconciliation {
         var account=ledger.read(rc.getRental().getId()).orElseThrow();
         ledger.lockForSettlement(account.rentalId(),((Number)row.get("ledger_revision")).longValue());
         var proof=security(rc.getRental());
+        if (rc.isSetupExitRequested()) {
+            if (!Objects.equals(row.get("setup_statement_json"), setupStatement(rc)))
+                throw ApiExceptions.conflict("Bảng kê trả kho trong setup đã thay đổi; cần đối soát lại.");
+            if (rc.isSetupEarlyExit() && (!SetupEarlyExitPolicy.applies(rc)
+                || !Objects.equals(proof.pricing().getSetupEarlyExitPolicyVersion(), rc.getSetupEarlyExitPolicyVersion())
+                || proof.pricing().getSetupEarlyExitFee().compareTo(rc.getEarlyTerminationFee()) != 0
+                || proof.pricing().getNetRentalAmount().compareTo(rc.getRentalRefundCredit()) != 0))
+                throw ApiExceptions.conflict("Điều khoản hoặc tiền thuê thực thu không khớp bảng kê setup.");
+        }
         if(!proof.payment().getId().toString().equals(row.get("security_payment_id"))
             ||proof.amount().compareTo(rc.getDepositAmount())!=0||new BigDecimal(row.get("debt_amount").toString()).compareTo(rc.getOutstandingFee())!=0)
             throw ApiExceptions.conflict("Cọc hoặc công nợ đã thay đổi; cần đối soát lại quyết toán.");
@@ -206,6 +220,9 @@ public class ReturnFinancialReconciliation {
         if(asset==null||asset.getStatus()!=FileAssetStatus.ACTIVE||!"RETURN_CASE".equals(asset.getEntityType())
             ||!rc.getId().equals(asset.getEntityId())||asset.getUploadedBy()==null||!actor.userId().equals(asset.getUploadedBy().getId()))
             throw ApiExceptions.validation("Biên lai phải thuộc hồ sơ trả kho và do nhân viên đang xử lý tải lên.",null);
+        if (asset.getStorageKey() == null || asset.getChecksumSha256() == null || asset.getSizeBytes() < 1
+            || !java.nio.file.Files.isRegularFile(java.nio.file.Path.of(asset.getStorageKey())))
+            throw ApiExceptions.conflict("Không tìm thấy tệp biên lai thực tế. Chưa thể xác nhận thu hoặc hoàn tiền.");
         String direction=rc.getStatus()==ReturnCaseStatus.payment_due?"COLLECTION":rc.getStatus()==ReturnCaseStatus.refund_pending?"REFUND":null;
         if(direction==null)throw ApiExceptions.conflict("Hồ sơ không có khoản cần thu hoặc hoàn.");
         var amount=direction.equals("COLLECTION")?rc.getAmountDueFromCustomer():rc.getNetRefundAmount();
@@ -234,4 +251,15 @@ public class ReturnFinancialReconciliation {
         ledger.returnSettled(rc.getRental().getId());
     }
     private String json(Object value){try{return mapper.writeValueAsString(value);}catch(Exception e){throw new IllegalStateException(e);}}
+
+    private String setupStatement(ReturnCase rc) {
+        var statement = new LinkedHashMap<String, Object>();
+        statement.put("policy", rc.getSetupEarlyExitPolicyVersion());
+        statement.put("returnedAt", rc.getSetupReturnedAt() == null ? null
+            : rc.getSetupReturnedAt().truncatedTo(java.time.temporal.ChronoUnit.MICROS).toString());
+        statement.put("eligible", rc.isSetupEarlyExit());
+        statement.put("rentalCredit", rc.getRentalRefundCredit() == null ? null : rc.getRentalRefundCredit().stripTrailingZeros().toPlainString());
+        statement.put("terminationFee", rc.getEarlyTerminationFee() == null ? null : rc.getEarlyTerminationFee().stripTrailingZeros().toPlainString());
+        return json(statement);
+    }
 }
