@@ -12,6 +12,7 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
+import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.StorageUnit;
@@ -85,6 +86,7 @@ public class MaintenanceService {
         task.setStorageUnit(unit);
         task.setReturnCase(returnCase);
         task.setTitle(request.title().trim());
+        task.setTaskType(MaintenanceTaskType.maintenance);
         task.setReason(request.reason().trim());
         task.setPriority(request.priority() != null ? request.priority() : TaskPriority.medium);
         task.setDamageClassification(request.damageClassification());
@@ -169,6 +171,7 @@ public class MaintenanceService {
                 task.setFacility(unit.getFacility());
                 task.setStorageUnit(unit);
                 task.setTitle("Bảo trì gian " + unit.getCode());
+                task.setTaskType(MaintenanceTaskType.maintenance);
                 task.setReason(request.reason() != null && !request.reason().isBlank() ? request.reason().trim() : "Kiểm tra và bảo trì định kỳ theo yêu cầu vận hành");
                 task.setPriority(request.priority() != null ? request.priority() : TaskPriority.medium);
                 task.setDamageClassification(request.damageClassification());
@@ -312,6 +315,9 @@ public class MaintenanceService {
 
         if (task.getStatus() == MaintenanceTaskStatus.completed) {
             throw ApiExceptions.conflict("Task is already completed");
+        }
+        if (task.getTaskType() == MaintenanceTaskType.inventory_check) {
+            throw ApiExceptions.conflict("Inventory check tasks must be completed from the check-in workflow");
         }
 
         task.setStatus(MaintenanceTaskStatus.completed);
@@ -471,8 +477,10 @@ public class MaintenanceService {
             t.getFacility().getName(),
             t.getStorageUnit().getId(),
             t.getStorageUnit().getCode(),
+            t.getRental() != null ? t.getRental().getId() : null,
             t.getReturnCase() != null ? t.getReturnCase().getId() : null,
             t.getTitle(),
+            t.getTaskType() == null ? MaintenanceTaskType.maintenance : t.getTaskType(),
             t.getReason(),
             t.getPriority(),
             t.getDamageClassification(),
