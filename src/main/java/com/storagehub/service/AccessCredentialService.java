@@ -1,8 +1,10 @@
 package com.storagehub.service;
 
 import com.storagehub.api.credential.AccessCredentialResponse;
+import com.storagehub.api.credential.CredentialAccessResponse;
 import com.storagehub.api.credential.CredentialAlertResponse;
 import com.storagehub.api.credential.IssueAccessCredentialRequest;
+import com.storagehub.api.credential.RecordCredentialAccessRequest;
 import com.storagehub.api.credential.RevokeAccessCredentialRequest;
 import com.storagehub.api.credential.ReissueAccessCredentialRequest;
 import com.storagehub.common.api.ApiExceptions;
@@ -39,12 +41,17 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -54,6 +61,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class AccessCredentialService {
+
+    private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final Pattern ACCESS_HOURS_PATTERN = Pattern.compile(
+        "(\\d{1,2})(?::|h)?(\\d{2})?\\s*[-–]\\s*(\\d{1,2})(?::|h)?(\\d{2})?",
+        Pattern.CASE_INSENSITIVE
+    );
 
     private final AccessCredentialRepository credentialRepository;
     private final CheckInRepository checkInRepository;
@@ -239,6 +252,66 @@ public class AccessCredentialService {
         return toResponse(saved);
     }
 
+    /** Records a credential access attempt and applies the facility opening-hours policy. */
+    @Transactional
+    public CredentialAccessResponse recordAccess(
+        ActorPrincipal actor,
+        UUID credentialId,
+        RecordCredentialAccessRequest request
+    ) {
+        requireStaff(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        AccessCredential credential = credentialRepository.findByIdForUpdate(credentialId)
+            .orElseThrow(() -> ApiExceptions.notFound("Access credential was not found"));
+        facilityScopeService.assertCanOperate(actor, credential.getFacility().getId());
+
+        Instant accessedAt = request != null && request.accessedAt() != null
+            ? request.accessedAt() : Instant.now();
+        if (accessedAt.isAfter(Instant.now().plusSeconds(30))) {
+            throw ApiExceptions.validation("Access time cannot be in the future", null);
+        }
+        String accessHours = clean(credential.getFacility().getAccessHours());
+        boolean withinOpeningHours = isWithinOpeningHours(accessHours, accessedAt);
+        Rental rental = credential.getRental();
+        boolean duringSetup = rental != null && rental.getStatus() == RentalStatus.setup;
+        boolean allowed = credential.getStatus() == AccessCredentialStatus.ACTIVE && withinOpeningHours;
+        String reason;
+        if (credential.getStatus() != AccessCredentialStatus.ACTIVE) {
+            reason = "Credential đã bị thu hồi";
+        } else if (accessHours == null) {
+            reason = "Cơ sở chưa cấu hình giờ mở cửa";
+        } else if (!withinOpeningHours) {
+            reason = "Ngoài giờ mở cửa cơ sở (" + accessHours + ")";
+        } else {
+            reason = "Được phép truy cập trong giờ mở cửa cơ sở";
+        }
+
+        Map<String, Object> accessLog = new LinkedHashMap<>();
+        accessLog.put("credentialId", credential.getId());
+        accessLog.put("rentalId", rental == null ? null : rental.getId());
+        accessLog.put("accessedAt", accessedAt);
+        accessLog.put("duringSetup", duringSetup);
+        accessLog.put("withinOpeningHours", withinOpeningHours);
+        accessLog.put("allowed", allowed);
+        accessLog.put("source", request == null ? null : clean(request.source()));
+        accessLog.put("note", request == null ? null : clean(request.note()));
+        accessLog.put("reason", reason);
+        User staff = requireActor(actor);
+        auditLogService.recordMutation(
+            staff,
+            allowed ? "ACCESS_CREDENTIAL_ACCESS_ALLOWED" : "ACCESS_CREDENTIAL_ACCESS_DENIED",
+            "AccessCredential",
+            credential.getId(),
+            credential.getFacility().getId(),
+            null,
+            accessLog
+        );
+        return new CredentialAccessResponse(
+            credential.getId(), rental == null ? null : rental.getId(), accessedAt,
+            allowed, duringSetup, reason, accessHours
+        );
+    }
+
     /** Called by Staff return inspection to revoke every credential for the rental. */
     @Transactional
     public int revokeForRental(ActorPrincipal actor, Rental rental, String reason) {
@@ -406,6 +479,30 @@ public class AccessCredentialService {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private boolean isWithinOpeningHours(String accessHours, Instant instant) {
+        if (accessHours == null) return false;
+        Matcher matcher = ACCESS_HOURS_PATTERN.matcher(accessHours);
+        if (!matcher.find()) return false;
+        try {
+            LocalTime opens = parseTime(matcher.group(1), matcher.group(2));
+            LocalTime closes = parseTime(matcher.group(3), matcher.group(4));
+            LocalTime current = instant.atZone(VIETNAM_ZONE).toLocalTime();
+            if (opens.equals(closes)) return true;
+            if (opens.isBefore(closes)) {
+                return !current.isBefore(opens) && current.isBefore(closes);
+            }
+            return !current.isBefore(opens) || current.isBefore(closes);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private LocalTime parseTime(String hourValue, String minuteValue) {
+        int hour = Integer.parseInt(hourValue);
+        int minute = minuteValue == null || minuteValue.isBlank() ? 0 : Integer.parseInt(minuteValue);
+        return LocalTime.of(hour, minute);
     }
 
     private AccessCredentialResponse toResponse(AccessCredential credential) {
