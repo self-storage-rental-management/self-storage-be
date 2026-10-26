@@ -2,6 +2,7 @@ package com.storagehub.api.maintenance;
 
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
+import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.TaskPriority;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -14,8 +15,10 @@ public record MaintenanceTaskResponse(
     String facilityName,
     UUID storageUnitId,
     String unitCode,
+    UUID rentalId,
     UUID returnCaseId,
     String title,
+    MaintenanceTaskType taskType,
     String reason,
     TaskPriority priority,
     DamageClassification damageClassification,

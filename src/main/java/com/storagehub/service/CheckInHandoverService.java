@@ -36,11 +36,14 @@ import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.UnitAssignment;
 import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.UnitReleaseDisposition;
+import com.storagehub.domain.model.MaintenanceTaskStatus;
+import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.PaymentRepository;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -86,6 +89,7 @@ public class CheckInHandoverService {
     private final FileAssetRepository fileAssetRepository;
     private final RentalRepository rentalRepository;
     private final PaymentRepository paymentRepository;
+    private final MaintenanceTaskRepository maintenanceTaskRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
     private final ReservationPricingSnapshotRepository pricingSnapshotRepository;
     private final UserRepository userRepository;
@@ -436,7 +440,12 @@ public class CheckInHandoverService {
         if (checkIn.getStatus() == CheckInStatus.completed) {
             return toResponse(reservation, checkIn, latestAssignment(reservation.getId()));
         }
-        if (checkIn.getStatus() != CheckInStatus.setup_completed) {
+        Instant now = Instant.now();
+        boolean setupFinishedForInventory = checkIn.getStatus() == CheckInStatus.setup_completed
+            || (checkIn.getStatus() == CheckInStatus.setup_in_progress
+                && checkIn.getSetupDueAt() != null
+                && !checkIn.getSetupDueAt().isAfter(now));
+        if (!setupFinishedForInventory) {
             throw ApiExceptions.conflict("Customer setup must be completed before inventory verification");
         }
         if (!isCheckInReadyStatus(reservation.getStatus())) {
@@ -484,7 +493,6 @@ public class CheckInHandoverService {
         }
 
         User operator = requireActor(actor);
-        Instant now = inventoryNow;
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.completed);
         checkIn.setCheckedInAt(now);
@@ -492,6 +500,7 @@ public class CheckInHandoverService {
         rental.setInventoryVerifiedAt(now);
         rental.setInventoryPending(false);
         rentalRepository.saveAndFlush(rental);
+        completeInventoryTask(rental, now, request.notes());
         checkIn.setChecklistJson(writeHandover(request));
         assignment.setStatus(UnitAssignmentStatus.COMPLETED);
         reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
@@ -921,6 +930,21 @@ public class CheckInHandoverService {
         return pricingSnapshotRepository.findByReservation_Id(reservationId)
             .map(snapshot -> snapshot.getDueAtCheckIn())
             .orElse(null);
+    }
+
+    private void completeInventoryTask(Rental rental, Instant completedAt, String notes) {
+        maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(
+            rental.getId(),
+            MaintenanceTaskType.inventory_check,
+            List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)
+        ).forEach(task -> {
+            task.setStatus(MaintenanceTaskStatus.completed);
+            task.setCompletedAt(completedAt);
+            task.setResultReport(clean(notes) == null
+                ? "Đã hoàn tất kiểm kê đầu vào trong luồng check-in."
+                : clean(notes));
+            maintenanceTaskRepository.save(task);
+        });
     }
 
     private void requireRemainingPayment(Reservation reservation) {
