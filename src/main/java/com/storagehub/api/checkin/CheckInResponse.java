@@ -36,6 +36,8 @@ public record CheckInResponse(
     UnitReleaseDisposition rejectionDisposition,
     UUID performedBy,
     String performedByName,
+    UUID assignedStaff,
+    String assignedStaffName,
     UUID reservationId,
     String reservationCode,
     ReservationStatus reservationStatus,
@@ -117,7 +119,7 @@ public record CheckInResponse(
         BigDecimal dueAtCheckIn,
         CompleteCheckInRequest handover
     ) {
-        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null);
+        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null);
     }
 
 }
