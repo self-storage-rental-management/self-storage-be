@@ -462,7 +462,7 @@ public class AdminUserService {
             || targetRoles.contains(RoleCode.BUSINESS);
         boolean hasCustomerRole = targetRoles.contains(RoleCode.CUSTOMER);
         if (!scopes.isEmpty() && (!hasFacilityRole || hasCustomerRole)) {
-            throw ApiExceptions.validation("Only Staff or Manager accounts can have facility scopes", null);
+            throw ApiExceptions.validation("Only Staff, Manager or Business accounts can have facility scopes", null);
         }
     }
 
@@ -515,6 +515,8 @@ public class AdminUserService {
     }
 
     private void revokeSessions(User user) {
+        user.setAuthzVersion(user.getAuthzVersion() + 1);
+        userRepository.saveAndFlush(user);
         sessionRepository.revokeActiveByUserId(user.getId(), Instant.now());
     }
 

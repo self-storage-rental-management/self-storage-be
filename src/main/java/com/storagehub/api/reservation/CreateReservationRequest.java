@@ -43,6 +43,9 @@ public class CreateReservationRequest {
 
     private Instant appointmentAt;
 
+    /** Must be explicitly true on the public create endpoint before payment is possible. */
+    private Boolean acceptedTerms;
+
     public CreateReservationRequest() {
     }
 
@@ -58,6 +61,7 @@ public class CreateReservationRequest {
         this.notes = notes;
         this.goodsItems = goodsItems;
         this.appointmentAt = appointmentAt;
+        this.acceptedTerms = Boolean.TRUE;
     }
 
     public UUID getQuoteId() { return quoteId; }
@@ -76,6 +80,8 @@ public class CreateReservationRequest {
     public void setGoodsItems(List<GoodsItemRequest> goodsItems) { this.goodsItems = goodsItems; }
     public Instant getAppointmentAt() { return appointmentAt; }
     public void setAppointmentAt(Instant appointmentAt) { this.appointmentAt = appointmentAt; }
+    public Boolean getAcceptedTerms() { return acceptedTerms; }
+    public void setAcceptedTerms(Boolean acceptedTerms) { this.acceptedTerms = acceptedTerms; }
 
     @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
     public boolean isCustomerPhoneValid() {

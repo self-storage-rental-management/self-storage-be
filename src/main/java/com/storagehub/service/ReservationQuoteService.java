@@ -7,7 +7,6 @@ import com.storagehub.api.reservation.ReservationQuoteResponse;
 import com.storagehub.api.reservation.ReservationRentalPackageResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.CompatibilityResult;
-import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.ReservationQuote;
@@ -25,6 +24,9 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Comparator;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -133,11 +135,8 @@ public class ReservationQuoteService {
 
         RentalPackagePolicy policy = policyRepository
             .findByFacility_IdAndCode(request.getFacilityId(), request.getPricingPackageCode().trim())
-            .or(() -> policyRepository.findByFacility_IdOrderByRentalMonthsAsc(request.getFacilityId()).stream()
-                .filter(p -> p.getRentalMonths() == rentalMonths && p.isActive())
-                .findFirst())
-            .orElseGet(() -> createCustomFallbackPolicy(unitType.getFacility(), rentalMonths));
-        validatePolicy(policy, request.getStartDate(), rentalMonths);
+            .orElseThrow(() -> ApiExceptions.notFound("Rental package was not found"));
+        validatePolicy(policy, request.getStartDate(), request.getEndDate(), rentalMonths);
 
         BigDecimal monthlyPrice = money(unitType.getMonthlyPrice());
         BigDecimal subtotal = money(monthlyPrice.multiply(BigDecimal.valueOf(rentalMonths)));
@@ -162,6 +161,16 @@ public class ReservationQuoteService {
         BigDecimal totalAfterDiscount = money(baseEligibleAmount.subtract(voucherDiscountAmount));
         BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
         BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(depositRate));
+        int earlyTerminationFeeCapMonths = policy.getEarlyTerminationFeeCapMonths() > 0
+            ? policy.getEarlyTerminationFeeCapMonths() : EarlyTerminationPolicy.DEFAULT_FEE_CAP_MONTHS;
+        BigDecimal earlyTerminationFeeCoefficient = policy.getEarlyTerminationFeeCoefficient() != null
+            ? policy.getEarlyTerminationFeeCoefficient() : EarlyTerminationPolicy.DEFAULT_FEE_COEFFICIENT;
+        int earlyTerminationNoticeDays = policy.getEarlyTerminationNoticeDays() >= 0
+            ? policy.getEarlyTerminationNoticeDays() : EarlyTerminationPolicy.DEFAULT_NOTICE_DAYS;
+        BigDecimal earlyTerminationFee = EarlyTerminationPolicy.fee(
+            reservationDepositAmount, totalAfterDiscount, rentalMonths,
+            earlyTerminationFeeCoefficient, earlyTerminationFeeCapMonths
+        );
         BigDecimal securityDepositAmount = money(
             (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
                 ? monthlyPrice
@@ -209,6 +218,13 @@ public class ReservationQuoteService {
         quote.setVoucherDiscountAmount(voucherDiscountAmount);
         quote.setTotalAfterDiscount(totalAfterDiscount);
         quote.setReservationDepositRate(depositRate);
+        quote.setEarlyTerminationFeeCapMonths(earlyTerminationFeeCapMonths);
+        quote.setEarlyTerminationFeeCoefficient(earlyTerminationFeeCoefficient);
+        quote.setEarlyTerminationNoticeDays(earlyTerminationNoticeDays);
+        quote.setEarlyTerminationFee(earlyTerminationFee);
+        quote.setEarlyTerminationPricingSnapshotJson(
+            createEarlyTerminationPricingSnapshot(policy, unitType, request.getStartDate())
+        );
         quote.setReservationDepositAmount(reservationDepositAmount);
         quote.setSecurityDepositAmount(securityDepositAmount);
         quote.setRemainingRentalAmount(remainingRentalAmount);
@@ -243,26 +259,11 @@ public class ReservationQuoteService {
         throw ApiExceptions.validation("Rental period must use complete months", null);
     }
 
-    private RentalPackagePolicy createCustomFallbackPolicy(Facility facility, int rentalMonths) {
-        RentalPackagePolicy policy = new RentalPackagePolicy();
-        policy.setFacility(facility);
-        policy.setCode("CUSTOM-" + rentalMonths + "M");
-        policy.setName("Gói " + rentalMonths + " tháng tiêu chuẩn");
-        policy.setRentalMonths(rentalMonths);
-        policy.setFreeSetupDays(defaultFreeSetupDays(rentalMonths));
-        policy.setDiscountRate(BigDecimal.ZERO);
-        policy.setDepositRate(RESERVATION_DEPOSIT_RATE);
-        policy.setPolicyVersion("STANDARD-1.0");
-        policy.setActive(true);
-        policy.setEffectiveFrom(LocalDate.of(2020, 1, 1));
-        return policy;
-    }
-
-    private void validatePolicy(RentalPackagePolicy policy, LocalDate startDate, int rentalMonths) {
+    private void validatePolicy(RentalPackagePolicy policy, LocalDate startDate, LocalDate endDate, int rentalMonths) {
         if (!policy.isActive()
             || policy.getEffectiveFrom().isAfter(startDate)
-            || (policy.getEffectiveTo() != null && policy.getEffectiveTo().isBefore(startDate))) {
-            throw ApiExceptions.conflict("Rental package is not effective for the selected start date");
+            || (policy.getEffectiveTo() != null && policy.getEffectiveTo().isBefore(endDate))) {
+            throw ApiExceptions.conflict("Rental package is not effective for the whole selected rental period");
         }
         if (policy.getRentalMonths() != rentalMonths) {
             throw ApiExceptions.validation("Rental period does not match the selected package", null);
@@ -292,7 +293,33 @@ public class ReservationQuoteService {
             quote.getReservationDepositRate() != null ? quote.getReservationDepositRate() : RESERVATION_DEPOSIT_RATE
         );
         response.setFreeSetupDays(quote.getFreeSetupDays());
+        response.setEarlyTerminationFeeCapMonths(quote.getEarlyTerminationFeeCapMonths());
+        response.setEarlyTerminationFeeCoefficient(quote.getEarlyTerminationFeeCoefficient());
+        response.setEarlyTerminationNoticeDays(quote.getEarlyTerminationNoticeDays());
+        response.setEarlyTerminationFee(quote.getEarlyTerminationFee());
+        response.setEarlyTerminationNoticeBasis(EarlyTerminationPolicy.NOTICE_BASIS);
+        response.setEarlyTerminationTiers(readPricingTiers(quote.getEarlyTerminationPricingSnapshotJson()));
         return response;
+    }
+
+    private List<ReservationQuoteResponse.EarlyTerminationTier> readPricingTiers(String json) {
+        if (json == null || json.isBlank() || "[]".equals(json)) return List.of();
+        try {
+            JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+            List<ReservationQuoteResponse.EarlyTerminationTier> result = new java.util.ArrayList<>();
+            if (root.isArray()) {
+                for (JsonNode node : root) {
+                    result.add(new ReservationQuoteResponse.EarlyTerminationTier(
+                        node.path("rentalMonths").asInt(),
+                        node.path("monthlyPrice").decimalValue(),
+                        node.path("freeSetupDays").asInt()
+                    ));
+                }
+            }
+            return result.stream().filter(item -> item.rentalMonths() > 0).toList();
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     public static int defaultFreeSetupDays(int rentalMonths) {
@@ -303,5 +330,38 @@ public class ReservationQuoteService {
             case 24 -> 30;
             default -> 0;
         };
+    }
+
+    private String createEarlyTerminationPricingSnapshot(
+        RentalPackagePolicy selectedPolicy,
+        UnitType unitType,
+        LocalDate effectiveDate
+    ) {
+        BigDecimal listMonthlyPrice = money(unitType.getMonthlyPrice());
+        var tiers = new LinkedHashMap<Integer, Map<String, Object>>();
+        policyRepository
+            .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(
+                selectedPolicy.getFacility().getId(), effectiveDate
+            )
+            .stream()
+            .filter(policy -> policy.getEffectiveTo() == null || !policy.getEffectiveTo().isBefore(effectiveDate))
+            .sorted(Comparator.comparing(RentalPackagePolicy::getEffectiveFrom).reversed())
+            .forEach(policy -> tiers.putIfAbsent(policy.getRentalMonths(), pricingTier(policy, listMonthlyPrice)));
+        tiers.putIfAbsent(selectedPolicy.getRentalMonths(), pricingTier(selectedPolicy, listMonthlyPrice));
+        return GoodsSnapshotCodec.encodeObject(tiers.values());
+    }
+
+    private Map<String, Object> pricingTier(RentalPackagePolicy policy, BigDecimal listMonthlyPrice) {
+        BigDecimal discount = policy.getDiscountRate() == null ? BigDecimal.ZERO : policy.getDiscountRate();
+        BigDecimal packageMonthlyPrice = listMonthlyPrice
+            .multiply(BigDecimal.ONE.subtract(discount))
+            .setScale(2, RoundingMode.HALF_UP);
+        return Map.of(
+            "rentalMonths", policy.getRentalMonths(),
+            "monthlyPrice", packageMonthlyPrice,
+            "freeSetupDays", policy.getFreeSetupDays(),
+            "pricingPackageCode", policy.getCode(),
+            "policyVersion", policy.getPolicyVersion()
+        );
     }
 }

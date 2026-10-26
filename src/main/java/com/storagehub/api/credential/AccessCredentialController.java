@@ -47,6 +47,17 @@ public class AccessCredentialController {
         );
     }
 
+    @PostMapping("/staff/access-credentials/{credentialId}/access-events")
+    public ApiResponse<CredentialAccessEventResponse> recordAccessEvent(
+        @PathVariable UUID credentialId,
+        @Valid @RequestBody RecordCredentialAccessEventRequest request
+    ) {
+        return new ApiResponse<>(
+            service.recordAccessEvent(actorContext.required(), credentialId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/staff/rentals/{rentalId}/credentials/reissue")
     public ApiResponse<AccessCredentialResponse> reissue(
         @PathVariable UUID rentalId,

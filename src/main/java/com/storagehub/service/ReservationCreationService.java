@@ -30,7 +30,9 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -100,6 +102,9 @@ public class ReservationCreationService {
     @Transactional
     public ReservationResponse create(ActorPrincipal actor, CreateReservationRequest request,
                                       String idempotencyKey) {
+        if (request == null || !Boolean.TRUE.equals(request.getAcceptedTerms())) {
+            throw ApiExceptions.validation("Customer must accept the quoted terms before creating a reservation", null);
+        }
         String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
         String requestFingerprint = requestFingerprint(request);
         Reservation existing = reservationRepository
@@ -326,6 +331,16 @@ public class ReservationCreationService {
         snapshot.setVoucherDiscountAmount(quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO);
         snapshot.setNetRentalAmount(quote.getTotalAfterDiscount());
         snapshot.setReservationDepositAmount(quote.getReservationDepositAmount());
+        snapshot.setEarlyTerminationFeeCapMonths(quote.getEarlyTerminationFeeCapMonths());
+        snapshot.setEarlyTerminationFeeCoefficient(quote.getEarlyTerminationFeeCoefficient());
+        snapshot.setEarlyTerminationNoticeDays(quote.getEarlyTerminationNoticeDays());
+        snapshot.setEarlyTerminationFee(quote.getEarlyTerminationFee());
+        snapshot.setEarlyTerminationPricingSnapshotJson(quote.getEarlyTerminationPricingSnapshotJson());
+        snapshot.setTermsSnapshotJson(termsSnapshot(quote));
+        snapshot.setTermsAcceptanceHash(sha256(snapshot.getTermsSnapshotJson()));
+        snapshot.setTermsAcceptedAt(Instant.now());
+        snapshot.setTermsAcceptedBy(quote.getCustomer());
+        snapshot.setEarlyTerminationNoticeBasis(EarlyTerminationPolicy.NOTICE_BASIS);
         snapshot.setSecurityDepositAmount(quote.getSecurityDepositAmount());
         snapshot.setRemainingRentalAmount(quote.getRemainingRentalAmount());
         snapshot.setDueAtCheckIn(quote.getDueAtCheckIn());
@@ -350,6 +365,10 @@ public class ReservationCreationService {
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
         response.setFreeSetupDays(snapshot.getFreeSetupDays());
+        response.setEarlyTerminationFeeCapMonths(snapshot.getEarlyTerminationFeeCapMonths());
+        response.setEarlyTerminationFeeCoefficient(snapshot.getEarlyTerminationFeeCoefficient());
+        response.setEarlyTerminationNoticeDays(snapshot.getEarlyTerminationNoticeDays());
+        response.setEarlyTerminationFee(snapshot.getEarlyTerminationFee());
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setCustomerName(reservation.getCustomer().getFullName());
@@ -398,6 +417,7 @@ public class ReservationCreationService {
 
     static String requestFingerprint(CreateReservationRequest request) {
         StringBuilder canonical = new StringBuilder();
+        append(canonical, request.getAcceptedTerms());
         append(canonical, request.getQuoteId());
         append(canonical, cleanValue(request.getIdentityDocumentNumber()));
         append(canonical, cleanValue(request.getCustomerPhone()));
@@ -434,6 +454,7 @@ public class ReservationCreationService {
 
     private static String requestFingerprint(Reservation reservation, List<ReservationGoodsItem> items) {
         StringBuilder canonical = new StringBuilder();
+        append(canonical, true);
         append(canonical, reservation.getSourceQuote().getId());
         append(canonical, cleanValue(reservation.getIdentityDocumentNumber()));
         append(canonical, cleanValue(reservation.getCustomerPhone()));
@@ -463,6 +484,25 @@ public class ReservationCreationService {
             append(canonical, item.isFragile());
         }
         return sha256(canonical.toString());
+    }
+
+    private String termsSnapshot(ReservationQuote quote) {
+        Map<String, Object> terms = new LinkedHashMap<>();
+        terms.put("termsVersion", "RESERVATION_TERMS_V1");
+        terms.put("pricingPackageCode", quote.getPricingPackageCode());
+        terms.put("policyVersion", quote.getPolicyVersion());
+        terms.put("startDate", quote.getStartDate() == null ? null : quote.getStartDate().toString());
+        terms.put("endDate", quote.getEndDate() == null ? null : quote.getEndDate().toString());
+        terms.put("rentalMonths", quote.getRentalMonths());
+        terms.put("monthlyPrice", quote.getMonthlyPrice());
+        terms.put("totalAfterDiscount", quote.getTotalAfterDiscount());
+        terms.put("reservationDepositAmount", quote.getReservationDepositAmount());
+        terms.put("freeSetupDays", quote.getFreeSetupDays());
+        terms.put("earlyTerminationFee", quote.getEarlyTerminationFee());
+        terms.put("earlyTerminationNoticeDays", quote.getEarlyTerminationNoticeDays());
+        terms.put("earlyTerminationNoticeBasis", EarlyTerminationPolicy.NOTICE_BASIS);
+        terms.put("earlyTerminationPricingTiers", quote.getEarlyTerminationPricingSnapshotJson());
+        return GoodsSnapshotCodec.encodeObject(terms);
     }
 
     private static void append(StringBuilder target, Object value) {

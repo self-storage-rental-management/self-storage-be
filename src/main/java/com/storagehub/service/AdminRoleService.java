@@ -212,22 +212,27 @@ public class AdminRoleService {
 
         if (roleCode == RoleCode.BUSINESS && !permissions.containsAll(Set.of(
             SystemPermission.VIEW_POLICIES.code(), SystemPermission.MANAGE_POLICIES.code(),
-            SystemPermission.APPROVE_REFUNDS.code(), SystemPermission.EXECUTE_REFUNDS.code(),
+            SystemPermission.APPROVE_REFUNDS.code(),
             SystemPermission.WAIVE_FEES.code()
         ))) {
-            throw ApiExceptions.conflict("Business Operations must retain policy and over-limit approval permissions");
+            throw ApiExceptions.conflict("Business Operations must retain policy, fee and refund-approval permissions");
         }
         if (roleCode == RoleCode.BUSINESS && intersects(permissions, Set.of(
             SystemPermission.MANAGE_SETTINGS.code(),
             SystemPermission.MANAGE_PAYMENTS.code(),
+            SystemPermission.CONFIRM_PAYMENTS.code(),
             SystemPermission.APPROVE_RESERVATIONS.code(),
             SystemPermission.PROCESS_RETURNS.code(),
             SystemPermission.MANAGE_RENTALS.code(),
             SystemPermission.PERFORM_CHECKIN.code(),
             SystemPermission.ASSIGN_UNITS.code(),
-            SystemPermission.MANAGE_SUPPORT.code()
+            SystemPermission.MANAGE_SUPPORT.code(),
+            SystemPermission.OPERATE_RENEWALS.code(),
+            SystemPermission.EXECUTE_REFUNDS.code(),
+            SystemPermission.MANAGE_INVENTORY.code(),
+            SystemPermission.MANAGE_STAFF_TASKS.code()
         ))) {
-            throw ApiExceptions.conflict("Business Operations cannot perform field operations, collect payments or approve reservations");
+            throw ApiExceptions.conflict("Business Operations cannot perform field operations, collect or confirm payments, execute refunds, or approve reservations");
         }
     }
 
@@ -236,12 +241,15 @@ public class AdminRoleService {
     }
 
     private void revokeRoleSessions(RoleCode roleCode) {
-        if (sessionRepository == null) {
-            return;
-        }
         userRepository.findDistinctByRoles_CodeAndStatus(
                 roleCode, com.storagehub.domain.model.UserStatus.ACTIVE
             )
-            .forEach(user -> sessionRepository.revokeActiveByUserId(user.getId(), Instant.now()));
+            .forEach(user -> {
+                user.setAuthzVersion(user.getAuthzVersion() + 1);
+                userRepository.save(user);
+                if (sessionRepository != null) {
+                    sessionRepository.revokeActiveByUserId(user.getId(), Instant.now());
+                }
+            });
     }
 }

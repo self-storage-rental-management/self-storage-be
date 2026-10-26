@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.returns.CustomerConfirmSettlementRequest;
 import com.storagehub.api.returns.CustomerCreateReturnRequest;
 import com.storagehub.api.returns.CustomerPaySettlementRequest;
+import com.storagehub.api.returns.BusinessSetupExitDecisionRequest;
+import com.storagehub.api.returns.BusinessLegacyPricingDecisionRequest;
 import com.storagehub.api.returns.ManagerReviewDisputeRequest;
 import com.storagehub.api.returns.ReturnCaseResponse;
 import com.storagehub.api.returns.ReturnInspectionRequest;
@@ -17,13 +19,20 @@ import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
+import com.storagehub.domain.model.ReturnType;
+import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.SettlementMode;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.SystemPermission;
+import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
+import com.storagehub.domain.repo.PaymentRepository;
+import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
@@ -32,8 +41,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Map;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -55,6 +66,14 @@ public class ReturnSettlementService {
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.overdue.RecoverySettlementGuard> recoveryGuards;
     @Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.ReturnFinancialReconciliation> returnFinances;
+    @Autowired
+    private ReservationPricingSnapshotRepository reservationPricingSnapshotRepository;
+    @Autowired
+    private PaymentRepository paymentRepository;
+    @Autowired
+    private FileAssetRepository fileAssetRepository;
+    @Autowired(required = false)
+    private VnpayService vnpayService;
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager settlementEntityManager;
 
@@ -113,6 +132,16 @@ public class ReturnSettlementService {
         returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : LocalDate.now(BusinessTime.ZONE));
         returnCase.setCustomerNotes(request.notes());
         returnCase.setDepositAmount(depositAmount);
+        LocalDate scheduledDate = returnCase.getScheduledDate();
+        boolean normalReturn = !setupExit
+            && rental.getContractEndDate() != null
+            && !scheduledDate.isBefore(rental.getContractEndDate());
+        returnCase.setReturnType(setupExit
+            ? ReturnType.RETURN_IN_SETUP
+            : normalReturn ? ReturnType.NORMAL : ReturnType.EARLY_RETURN);
+        returnCase.setActiveReturnRepricingRequired(!setupExit && !normalReturn);
+        returnCase.setSettlementMode(setupExit || !normalReturn && !hasPricingTiers(rental)
+            ? SettlementMode.MANUAL_REVIEW : SettlementMode.AUTO);
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
 
@@ -182,6 +211,173 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    public ReturnCaseResponse businessReviewSetupExit(
+        ActorPrincipal actor,
+        UUID returnId,
+        BusinessSetupExitDecisionRequest request
+    ) {
+        if (actor == null || (!actor.hasRole(RoleCode.BUSINESS) && !actor.hasRole(RoleCode.ADMIN))) {
+            throw ApiExceptions.forbidden("Business Operations role is required");
+        }
+        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
+        ReturnCase returnCase = returnCaseRepository.findById(returnId)
+            .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
+        facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
+        lockRecoveryReturn(returnCase);
+
+        Rental rental = returnCase.getRental();
+        if (rental == null || !rental.isSetupExitReviewRequired()) {
+            throw ApiExceptions.conflict("This return case is not awaiting a Business setup-exit decision");
+        }
+        if (rental.getMoveInCompletedAt() != null && returnCase.getInspectedAt() == null) {
+            throw ApiExceptions.conflict("Staff must inspect goods already moved into the unit before Business decides the refund");
+        }
+
+        var setupPricing = setupExitCalculation(returnCase);
+        BigDecimal maximumRentalRefund = setupPricing == null
+            ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP) : setupPricing.rentalRefundAmount();
+        BigDecimal approvedRentalRefund = request.approvedRentalRefundAmount() == null
+            ? maximumRentalRefund
+            : request.approvedRentalRefundAmount().setScale(2, RoundingMode.HALF_UP);
+        if (approvedRentalRefund.compareTo(maximumRentalRefund) > 0) {
+            throw ApiExceptions.conflict("Approved rental refund cannot exceed the snapshot calculation");
+        }
+
+        BigDecimal deposit = returnCase.getDepositAmount() == null
+            ? BigDecimal.ZERO : returnCase.getDepositAmount().setScale(2, RoundingMode.HALF_UP);
+        BigDecimal approvedRefund = request.approvedRefundAmount().setScale(2, RoundingMode.HALF_UP);
+        if (approvedRefund.compareTo(deposit) > 0) {
+            throw ApiExceptions.conflict("Approved setup-exit refund cannot exceed the verified security deposit");
+        }
+
+        User business = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Business user not found"));
+        BigDecimal retained = deposit.subtract(approvedRefund).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal rentalCharge = setupPricing == null
+            ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
+            : setupPricing.totalRentalCharge().add(maximumRentalRefund).subtract(approvedRentalRefund)
+                .setScale(2, RoundingMode.HALF_UP);
+        returnCase.setReviewedBy(business);
+        returnCase.setReviewedAt(Instant.now());
+        returnCase.setManagerResolutionNote("Business setup-exit decision: " + request.resolutionNote().trim());
+        returnCase.setEarlyTerminationCharge(rentalCharge);
+        returnCase.setRentalRefundAmount(approvedRentalRefund);
+        returnCase.setTotalDeductions(retained.add(rentalCharge).setScale(2, RoundingMode.HALF_UP));
+        returnCase.setNetRefundAmount(approvedRefund.add(approvedRentalRefund).setScale(2, RoundingMode.HALF_UP));
+        returnCase.setAmountDueFromCustomer(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+        boolean refundPending = approvedRefund.signum() > 0 || approvedRentalRefund.signum() > 0;
+        returnCase.setStatus(refundPending ? ReturnCaseStatus.refund_pending : ReturnCaseStatus.completed);
+
+        rental.setSetupExitReviewRequired(false);
+        if (!refundPending) {
+            var reconciliation = finance();
+            if (reconciliation != null) {
+                reconciliation.requireCurrent(returnCase);
+                reconciliation.settle(returnCase, actor.userId(), "SETUP_EXIT_OFFSET:" + returnCase.getId(), false);
+            }
+            returnCase.setCompletedAt(Instant.now());
+            finalizeRentalAndUnit(returnCase);
+        } else {
+            rentalRepository.save(rental);
+        }
+
+        ReturnCase saved = returnCaseRepository.save(returnCase);
+        auditLogService.recordMutation(
+            "SETUP_EXIT_REFUND_DECIDED",
+            "return",
+            saved.getId(),
+            saved.getFacility().getId(),
+            null,
+            toResponse(saved)
+        );
+        notificationService.createNotification(
+            saved.getCustomer().getId(),
+            NotificationType.RETURN,
+            "Business đã quyết định xử lý yêu cầu trả kho trong setup",
+            refundPending
+                ? "Khoản hoàn tiền thuê và/hoặc cọc đã được duyệt. Staff sẽ đối chiếu chứng từ thực tế trước khi hoàn tiền."
+                : "Yêu cầu đã được chốt không hoàn tiền và hệ thống đã giải phóng hồ sơ trả kho.",
+            saved.getId()
+        );
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public ReturnCaseResponse businessReviewLegacyPricing(
+        ActorPrincipal actor,
+        UUID returnId,
+        BusinessLegacyPricingDecisionRequest request
+    ) {
+        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
+        ReturnCase returnCase = returnCaseRepository.findById(returnId)
+            .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
+        facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
+        if (returnCase.getStatus() != ReturnCaseStatus.awaiting_business_review
+            || !returnCase.isLegacyPricingReviewRequired()) {
+            throw ApiExceptions.conflict("This return case is not awaiting legacy pricing review");
+        }
+        ReservationPricingSnapshot snapshot = reservationPricingSnapshot(returnCase);
+        if (snapshot == null || snapshot.getNetRentalAmount() == null) {
+            throw ApiExceptions.conflict("Reservation pricing snapshot is missing");
+        }
+        if (request.pricingSnapshotJson() == null || request.pricingSnapshotJson().isBlank()
+            || "[]".equals(request.pricingSnapshotJson().trim())) {
+            throw ApiExceptions.validation("A completed legacy pricing snapshot is required", null);
+        }
+        try {
+            var legacySnapshot = objectMapper.readTree(request.pricingSnapshotJson());
+            if (legacySnapshot == null || legacySnapshot.isNull()
+                || (!legacySnapshot.isArray() && !legacySnapshot.isObject())) {
+                throw new IllegalArgumentException("Legacy pricing snapshot must be a JSON object or array");
+            }
+        } catch (Exception exception) {
+            throw ApiExceptions.validation("Legacy pricing snapshot is invalid JSON", null);
+        }
+        var evidence = fileAssetRepository.findById(request.sourceDocumentFileId())
+            .orElseThrow(() -> ApiExceptions.notFound("The original contract or quote evidence was not found"));
+        if (evidence.getStatus() != FileAssetStatus.ACTIVE) {
+            throw ApiExceptions.conflict("The original contract or quote evidence is not active");
+        }
+        BigDecimal charge = request.approvedRentalCharge().setScale(2, RoundingMode.HALF_UP);
+        BigDecimal refund = request.approvedRentalRefund().setScale(2, RoundingMode.HALF_UP);
+        if (charge.add(refund).compareTo(snapshot.getNetRentalAmount()) > 0) {
+            throw ApiExceptions.conflict("Legacy pricing decision cannot exceed the reservation rental amount");
+        }
+        BigDecimal securityDeductions = zeroIfNull(returnCase.getDamageFee())
+            .add(zeroIfNull(returnCase.getCleaningFee()))
+            .add(zeroIfNull(returnCase.getLostItemFee()))
+            .add(zeroIfNull(returnCase.getOverdueFee()))
+            .add(zeroIfNull(returnCase.getOutstandingFee()))
+            .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal deposit = zeroIfNull(returnCase.getDepositAmount());
+        BigDecimal securityRefund = deposit.subtract(securityDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal amountDue = securityDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+
+        User business = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Business user not found"));
+        returnCase.setReviewedBy(business);
+        returnCase.setReviewedAt(Instant.now());
+        returnCase.setManagerResolutionNote("Legacy pricing decision: " + request.resolutionNote().trim());
+        returnCase.setLegacyPricingSnapshotJson(request.pricingSnapshotJson().trim());
+        returnCase.setLegacyPricingEvidenceFileId(evidence.getId());
+        returnCase.setLegacyPricingDecisionReason(request.resolutionNote().trim());
+        returnCase.setEarlyTerminationCharge(charge);
+        returnCase.setRentalRefundAmount(refund);
+        returnCase.setTotalDeductions(securityDeductions.add(charge).setScale(2, RoundingMode.HALF_UP));
+        returnCase.setNetRefundAmount(securityRefund.add(refund).setScale(2, RoundingMode.HALF_UP));
+        returnCase.setAmountDueFromCustomer(amountDue);
+        returnCase.setLegacyPricingReviewRequired(false);
+        returnCase.setSettlementMode(SettlementMode.AUTO);
+        returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
+        ReturnCase saved = returnCaseRepository.save(returnCase);
+        auditLogService.recordMutation("LEGACY_RETURN_PRICING_REVIEWED", "return", saved.getId(),
+            saved.getFacility().getId(), null, toResponse(saved));
+        notificationService.createNotification(saved.getCustomer().getId(), NotificationType.RETURN,
+            "Business đã duyệt quyết toán trả sớm", "Bạn có thể xác nhận biên bản trả kho để tiếp tục hoàn tiền.", saved.getId());
+        return toResponse(saved);
+    }
+
+    @Transactional
     public ReturnCaseResponse performInspection(
         ActorPrincipal actor,
         UUID returnId,
@@ -213,11 +409,28 @@ public class ReturnSettlementService {
             .add(safeOverdue)
             .add(safeOutstanding)
             .setScale(2, RoundingMode.HALF_UP);
-        requireSettlementLimit(totalDeductions);
 
         BigDecimal deposit = returnCase.getDepositAmount() != null ? returnCase.getDepositAmount() : BigDecimal.ZERO;
-        BigDecimal netRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        var activePricing = activeReturnCalculation(returnCase);
+        boolean legacyPricingReview = returnCase.isActiveReturnRepricingRequired() && activePricing == null;
+        boolean activeRepricing = activePricing != null && activePricing.recalculationRequired();
+        if (returnCase.getRental().getStatus() == RentalStatus.setup) {
+            boolean goodsMovedIn = returnCase.getRental().getMoveInCompletedAt() != null
+                || returnCase.getRental().getInventoryVerifiedAt() != null;
+            returnCase.setReturnType(goodsMovedIn ? ReturnType.RETURN_IN_SETUP : ReturnType.CANCELLED_IN_SETUP);
+            returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+        } else if (!legacyPricingReview && returnCase.getReturnType() == null) {
+            returnCase.setReturnType(activeRepricing ? ReturnType.EARLY_RETURN : ReturnType.NORMAL);
+        }
+        BigDecimal earlyTerminationCharge = !legacyPricingReview && activeRepricing
+            ? activePricing.totalRentalCharge() : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal rentalRefund = !legacyPricingReview && activeRepricing
+            ? activePricing.rentalRefundAmount() : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal securityRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
         BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal netRefund = securityRefund.add(rentalRefund).setScale(2, RoundingMode.HALF_UP);
+        totalDeductions = totalDeductions.add(earlyTerminationCharge).setScale(2, RoundingMode.HALF_UP);
+        requireSettlementLimit(totalDeductions);
 
         returnCase.setInspectedBy(staff);
         returnCase.setInspectedAt(inspectionAt);
@@ -234,9 +447,15 @@ public class ReturnSettlementService {
         returnCase.setLostItemFee(safeLostItem);
         returnCase.setOverdueFee(safeOverdue);
         returnCase.setOutstandingFee(safeOutstanding);
+        returnCase.setEarlyTerminationCharge(earlyTerminationCharge);
+        returnCase.setRentalRefundAmount(rentalRefund);
         returnCase.setTotalDeductions(totalDeductions);
         returnCase.setNetRefundAmount(netRefund);
         returnCase.setAmountDueFromCustomer(amountDue);
+        returnCase.setLegacyPricingReviewRequired(legacyPricingReview);
+        if (legacyPricingReview) {
+            returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+        }
 
         if (accessCredentialService != null) {
             accessCredentialService.revokeForRental(
@@ -254,7 +473,9 @@ public class ReturnSettlementService {
             }
         }
 
-        returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
+        returnCase.setStatus(legacyPricingReview
+            ? ReturnCaseStatus.awaiting_business_review
+            : ReturnCaseStatus.awaiting_customer_confirmation);
         ReturnCase saved = returnCaseRepository.save(returnCase);
 
         Rental rental = saved.getRental();
@@ -274,9 +495,19 @@ public class ReturnSettlementService {
             saved.getCustomer().getId(),
             NotificationType.RETURN,
             "Biên bản nghiệm thu trả kho đã hoàn tất",
-            "Nhân viên đã hoàn thành biên bản nghiệm thu gian " + saved.getStorageUnit().getCode() + ". Vui lòng xác nhận quyết toán.",
+            legacyPricingReview
+                ? "Hồ sơ cũ chưa có bảng giá trả sớm bất biến; Business cần duyệt trước khi quyết toán."
+                : "Nhân viên đã hoàn thành biên bản nghiệm thu gian " + saved.getStorageUnit().getCode() + ". Vui lòng xác nhận quyết toán.",
             saved.getId()
         );
+        if (legacyPricingReview) {
+            notificationService.createBusinessNotifications(
+                NotificationType.RETURN,
+                "Cần duyệt bảng giá trả sớm của hồ sơ cũ",
+                "Reservation chưa có early-termination pricing snapshot. Business phải nhập khoản tính/hoàn thủ công trước khi khách xác nhận.",
+                saved.getId()
+            );
+        }
 
         return toResponse(saved);
     }
@@ -307,17 +538,18 @@ public class ReturnSettlementService {
             returnCase.setStatus(ReturnCaseStatus.disputed);
         } else {
             // Decision accepted
-            try {
-                finance().requireCurrent(returnCase);
-            } catch (Exception ignored) {}
+            var reconciliation = finance();
+            if (reconciliation != null) {
+                reconciliation.requireCurrent(returnCase);
+            }
             if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
                 returnCase.setStatus(ReturnCaseStatus.payment_due);
             } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
                 returnCase.setStatus(ReturnCaseStatus.refund_pending);
             } else {
-                try {
-                    finance().settle(returnCase,actor.userId(),"OFFSET:"+returnCase.getId(),false);
-                } catch (Exception ignored) {}
+                if (reconciliation != null) {
+                    reconciliation.settle(returnCase, actor.userId(), "OFFSET:" + returnCase.getId(), false);
+                }
                 returnCase.setStatus(ReturnCaseStatus.completed);
                 returnCase.setCompletedAt(Instant.now());
                 finalizeRentalAndUnit(returnCase);
@@ -365,18 +597,19 @@ public class ReturnSettlementService {
         returnCase.setCustomerDecision(CustomerDecision.accepted);
         returnCase.setCustomerDecisionNote("Hệ thống tự động chốt quyết toán sau " + autoSettlementSlaHours + " giờ không có khiếu nại (Auto-Settlement SLA).");
 
-        try {
-            if (finance() != null) finance().requireCurrent(returnCase);
-        } catch (Exception ignored) {}
+        var reconciliation = finance();
+        if (reconciliation != null) {
+            reconciliation.requireCurrent(returnCase);
+        }
 
         if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
         } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.refund_pending);
         } else {
-            try {
-                if (finance() != null) finance().settle(returnCase, returnCase.getCustomer().getId(), "AUTO_OFFSET:" + returnCase.getId(), false);
-            } catch (Exception ignored) {}
+            if (reconciliation != null) {
+                reconciliation.settle(returnCase, returnCase.getCustomer().getId(), "AUTO_OFFSET:" + returnCase.getId(), false);
+            }
             returnCase.setStatus(ReturnCaseStatus.completed);
             returnCase.setCompletedAt(Instant.now());
             finalizeRentalAndUnit(returnCase);
@@ -436,8 +669,19 @@ public class ReturnSettlementService {
             .setScale(2, RoundingMode.HALF_UP);
 
         BigDecimal deposit = returnCase.getDepositAmount() != null ? returnCase.getDepositAmount() : BigDecimal.ZERO;
-        BigDecimal netRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        var activePricing = activeReturnCalculation(returnCase);
+        BigDecimal calculatedEarlyTerminationCharge = activePricing == null
+            ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP) : activePricing.totalRentalCharge();
+        BigDecimal calculatedRentalRefund = activePricing == null
+            ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP) : activePricing.rentalRefundAmount();
+        BigDecimal earlyTerminationCharge = returnCase.getEarlyTerminationCharge() != null
+            ? returnCase.getEarlyTerminationCharge() : calculatedEarlyTerminationCharge;
+        BigDecimal rentalRefund = returnCase.getRentalRefundAmount() != null
+            ? returnCase.getRentalRefundAmount() : calculatedRentalRefund;
+        BigDecimal securityRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal netRefund = securityRefund.add(rentalRefund).setScale(2, RoundingMode.HALF_UP);
         BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        totalDeductions = totalDeductions.add(earlyTerminationCharge).setScale(2, RoundingMode.HALF_UP);
 
         requireSettlementLimit(totalDeductions);
         returnCase.setReviewedBy(manager);
@@ -449,6 +693,8 @@ public class ReturnSettlementService {
         returnCase.setLostItemFee(safeLostItem);
         returnCase.setOverdueFee(safeOverdue);
         returnCase.setOutstandingFee(safeOutstanding);
+        returnCase.setEarlyTerminationCharge(earlyTerminationCharge);
+        returnCase.setRentalRefundAmount(rentalRefund);
         returnCase.setTotalDeductions(totalDeductions);
         returnCase.setNetRefundAmount(netRefund);
         returnCase.setAmountDueFromCustomer(amountDue);
@@ -462,9 +708,10 @@ public class ReturnSettlementService {
         } else if (netRefund.compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.refund_pending);
         } else {
-            try {
-                if (finance() != null) finance().settle(returnCase,actor.userId(),"OFFSET:"+returnCase.getId(),false);
-            } catch (Exception ignored) {}
+            var reconciliation = finance();
+            if (reconciliation != null) {
+                reconciliation.settle(returnCase, actor.userId(), "OFFSET:" + returnCase.getId(), false);
+            }
             returnCase.setStatus(ReturnCaseStatus.completed);
             returnCase.setCompletedAt(Instant.now());
             finalizeRentalAndUnit(returnCase);
@@ -498,32 +745,65 @@ public class ReturnSettlementService {
         UUID returnId,
         StaffCompleteRefundRequest request
     ) {
+        boolean business = actor != null && actor.hasRole(RoleCode.BUSINESS);
+        if (actor == null || (!actor.hasRole(RoleCode.STAFF) && !actor.hasRole(RoleCode.BUSINESS) && !actor.hasRole(RoleCode.ADMIN))) {
+            throw ApiExceptions.forbidden("Only Staff or Business Operations can execute a return settlement");
+        }
+        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
+        if (request == null) throw ApiExceptions.validation("Refund details are required", null);
         ReturnCase returnCase = returnCaseRepository.findById(returnId)
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
-        try {
-            if (actor.hasRole(RoleCode.STAFF)) {
-                facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
-            } else {
-                facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
-            }
-        } catch (Exception ignored) {}
+        if (business) {
+            facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
+        } else {
+            facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
+        }
 
         lockRecoveryReturn(returnCase);
         var recoveryGuard = recoveryGuard();
         if (recoveryGuard != null) {
-            try { recoveryGuard.requireManualSettlement(returnCase); } catch (Exception ignored) {}
+            recoveryGuard.requireManualSettlement(returnCase);
         }
-
-        try {
+        boolean vnpay = "VNPAY".equalsIgnoreCase(request.paymentMethod())
+            || "VNPAY_GATEWAY".equalsIgnoreCase(request.paymentMethod());
+        String settlementReference;
+        if (vnpay) {
+            if (vnpayService == null || paymentRepository == null || request.originalPaymentId() == null) {
+                throw ApiExceptions.conflict("Original VNPay payment is required for a gateway refund");
+            }
+            var originalPayment = paymentRepository.findById(request.originalPaymentId())
+                .orElseThrow(() -> ApiExceptions.notFound("Original payment was not found"));
+            if (originalPayment.getReservation() == null
+                || !originalPayment.getReservation().getId().equals(returnCase.getRental().getReservation().getId())) {
+                throw ApiExceptions.conflict("Original payment does not belong to this rental");
+            }
+            settlementReference = vnpayService.executeApprovedReturnRefund(
+                actor, originalPayment.getId(), returnCase.getNetRefundAmount(),
+                request.notes() == null || request.notes().isBlank() ? "StorageHub return refund" : request.notes(),
+                "127.0.0.1"
+            );
+            if (finance() != null) {
+                finance().requireCurrent(returnCase);
+                finance().settle(returnCase, actor.userId(), settlementReference, true);
+            }
+        } else {
+            if (request.transactionReference() == null || request.transactionReference().isBlank()
+                || request.paymentMethod() == null || request.paymentMethod().isBlank() || request.receiptFileId() == null) {
+                throw ApiExceptions.validation("A real refund transaction, payment method and receipt are required", null);
+            }
+            if (finance() == null) {
+                throw ApiExceptions.conflict("Financial reconciliation is unavailable; the return case cannot be completed");
+            }
             finance().receipt(actor, returnCase, request.paymentMethod(), request.transactionReference(), request.receiptFileId());
             finance().settle(returnCase, actor.userId(), request.transactionReference(), true);
-        } catch (Exception ignored) {}
+            settlementReference = request.transactionReference();
+        }
 
         returnCase.setStatus(ReturnCaseStatus.completed);
         returnCase.setCompletedAt(Instant.now());
         returnCase.setSettlementPaidAt(Instant.now());
-        returnCase.setSettlementPaymentId(request.transactionReference() != null ? request.transactionReference() : "REFUND-" + UUID.randomUUID().toString().substring(0, 8));
+        returnCase.setSettlementPaymentId(settlementReference);
 
         finalizeRentalAndUnit(returnCase);
 
@@ -551,34 +831,42 @@ public class ReturnSettlementService {
 
     @Transactional
     public ReturnCaseResponse customerPaySettlement(ActorPrincipal actor,UUID returnId,CustomerPaySettlementRequest request) {
-        var rc=returnCaseRepository.findByIdAndCustomer_Id(returnId,actor.userId()).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
-        lockRecoveryReturn(rc);
-        rc.setStatus(ReturnCaseStatus.completed);
-        rc.setCompletedAt(Instant.now());
-        rc.setSettlementPaidAt(Instant.now());
-        rc.setSettlementPaymentId(request != null && request.paymentMethod() != null ? request.paymentMethod() : "CUST-PAY-" + UUID.randomUUID().toString().substring(0, 8));
-        finalizeRentalAndUnit(rc);
-        return toResponse(returnCaseRepository.saveAndFlush(rc));
+        throw ApiExceptions.conflict("Customer payment must be completed through an approved payment gateway or Staff settlement receipt");
     }
 
     @Transactional
     public ReturnCaseResponse recordSettlement(ActorPrincipal actor,UUID returnId,com.storagehub.api.returns.StaffReturnSettlementRequest request) {
+        if (actor == null || (!actor.hasRole(RoleCode.STAFF) && !actor.hasRole(RoleCode.ADMIN))) {
+            throw ApiExceptions.forbidden("Only Staff can record a return settlement");
+        }
+        if (request == null || request.confirmed() == null || !request.confirmed()) {
+            throw ApiExceptions.validation("Settlement confirmation is required", null);
+        }
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
+        facilityScopeService.assertCanOperate(actor, rc.getFacility().getId());
+        if (rc.getStatus() != ReturnCaseStatus.payment_due && rc.getStatus() != ReturnCaseStatus.refund_pending) {
+            throw ApiExceptions.conflict("The return case has no outstanding collection or refund");
+        }
+        BigDecimal expectedAmount = rc.getStatus() == ReturnCaseStatus.payment_due ? rc.getAmountDueFromCustomer() : rc.getNetRefundAmount();
+        if (expectedAmount == null || request.amount() == null || expectedAmount.compareTo(request.amount()) != 0) {
+            throw ApiExceptions.conflict("The settlement amount does not match the server calculation");
+        }
         lockRecoveryReturn(rc);
         var guard=recoveryGuard();
         if(guard!=null) {
-            try { guard.requireManualSettlement(rc); } catch (Exception ignored) {}
+            guard.requireManualSettlement(rc);
         }
-        try {
-            if(!finance().recordedReceiptMatches(rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId())) {
-                finance().receipt(actor,rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId());
-                finance().settle(rc,actor.userId(),request.transactionReference(),true);
-            }
-        } catch (Exception ignored) {}
+        if (finance() == null) {
+            throw ApiExceptions.conflict("Financial reconciliation is unavailable; the return case cannot be settled");
+        }
+        if(!finance().recordedReceiptMatches(rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId())) {
+            finance().receipt(actor,rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId());
+            finance().settle(rc,actor.userId(),request.transactionReference(),true);
+        }
         rc.setStatus(ReturnCaseStatus.completed);
         rc.setCompletedAt(Instant.now());
         rc.setSettlementPaidAt(Instant.now());
-        rc.setSettlementPaymentId(request != null && request.transactionReference() != null ? request.transactionReference() : "SETTLE-" + UUID.randomUUID().toString().substring(0, 8));
+        rc.setSettlementPaymentId(request.transactionReference());
         returnCaseRepository.saveAndFlush(rc);
         finalizeRentalAndUnit(rc);
         auditLogService.recordMutation("RETURN_FINANCIAL_SETTLED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));
@@ -751,6 +1039,13 @@ public class ReturnSettlementService {
         Rental rental = returnCase.getRental();
         if (rental != null) {
             rental.setStatus(RentalStatus.completed);
+            var returnType = returnCase.getReturnType();
+            rental.setEndReason(returnType == null ? com.storagehub.domain.model.RentalEndReason.NORMAL : switch (returnType) {
+                case CANCELLED_IN_SETUP -> com.storagehub.domain.model.RentalEndReason.CANCELLED_IN_SETUP;
+                case RETURN_IN_SETUP -> com.storagehub.domain.model.RentalEndReason.RETURN_IN_SETUP;
+                case EARLY_RETURN -> com.storagehub.domain.model.RentalEndReason.EARLY_RETURN;
+                case NORMAL -> com.storagehub.domain.model.RentalEndReason.NORMAL;
+            });
             rental.setActualReturnedAt(Instant.now());
             rental.setCompletedAt(Instant.now());
             rentalRepository.save(rental);
@@ -772,6 +1067,10 @@ public class ReturnSettlementService {
         if(fee.signum()<0)throw ApiExceptions.validation("Phí quyết toán không được âm.",null);
         try{return fee.setScale(0,RoundingMode.UNNECESSARY);}
         catch(ArithmeticException invalid){throw ApiExceptions.validation("Phí quyết toán phải là số nguyên đồng Việt Nam.",null);}
+    }
+
+    private BigDecimal zeroIfNull(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     private PageRequest pageable(int page, int size) {
@@ -807,6 +1106,8 @@ public class ReturnSettlementService {
             rc.getCustomer().getEmail(),
             rc.getCustomer().getPhone(),
             rc.getStatus(),
+            rc.getReturnType(),
+            rc.getSettlementMode(),
             rc.getRequestedAt(),
             rc.getScheduledDate(),
             rc.getCustomerNotes(),
@@ -846,9 +1147,145 @@ public class ReturnSettlementService {
             recovery==null?null:recovery.taskId(),
             recovery==null?null:recovery.status(),
             recovery==null?null:recovery.completedAt(),
+            rc.getRental().isSetupExitReviewRequired(),
+            rc.getRental().getMoveInCompletedAt(),
             settlementReceipt,
             overdueSettlement,
-            settlementBlocker
+            settlementBlocker,
+            earlyTerminationPolicy(rc),
+            activeReturnPolicy(rc)
+            ,rc.isLegacyPricingReviewRequired()
+            ,rc.getLegacyPricingSnapshotJson() != null && !rc.getLegacyPricingSnapshotJson().isBlank()
+            ,rc.getLegacyPricingEvidenceFileId()
         );
+    }
+
+    private boolean hasPricingTiers(Rental rental) {
+        if (reservationPricingSnapshotRepository == null) return false;
+        ReservationPricingSnapshot snapshot = rental == null || rental.getReservation() == null
+            ? null : reservationPricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId()).orElse(null);
+        return snapshot != null && snapshot.getEarlyTerminationPricingSnapshotJson() != null
+            && !snapshot.getEarlyTerminationPricingSnapshotJson().isBlank()
+            && !"[]".equals(snapshot.getEarlyTerminationPricingSnapshotJson().trim());
+    }
+
+    private ReturnCaseResponse.EarlyTerminationSummary earlyTerminationPolicy(ReturnCase returnCase) {
+        ReservationPricingSnapshot snapshot = reservationPricingSnapshot(returnCase);
+        var calculation = setupExitCalculation(returnCase);
+        if (snapshot == null || calculation == null) return null;
+        return new ReturnCaseResponse.EarlyTerminationSummary(
+            calculation.type().name(),
+            calculation.earlyTerminationFee(),
+            calculation.billableSetupDays(),
+            calculation.usedGoodsCharge(),
+            calculation.totalRentalCharge(),
+            calculation.rentalRefundAmount(),
+            snapshot.getEarlyTerminationNoticeDays()
+        );
+    }
+
+    private EarlyTerminationPolicy.SetupExitCalculation setupExitCalculation(ReturnCase returnCase) {
+        Rental rental = returnCase == null ? null : returnCase.getRental();
+        ReservationPricingSnapshot snapshot = reservationPricingSnapshot(returnCase);
+        if (rental == null || !rental.isSetupExitReviewRequired() || snapshot == null) return null;
+
+        LocalDate setupStart = rental.getSetupStartedAt() == null
+            ? returnCase.getRequestedAt().atZone(BusinessTime.ZONE).toLocalDate()
+            : rental.getSetupStartedAt().atZone(BusinessTime.ZONE).toLocalDate();
+        LocalDate requested = returnCase.getRequestedAt().atZone(BusinessTime.ZONE).toLocalDate();
+        int usedDays = Math.max(1, (int) ChronoUnit.DAYS.between(setupStart, requested) + 1);
+        boolean goodsMovedIn = rental.getMoveInCompletedAt() != null || rental.getInventoryVerifiedAt() != null;
+        return EarlyTerminationPolicy.setupExit(
+            snapshot.getNetRentalAmount(),
+            snapshot.getReservationDepositAmount(),
+            snapshot.getMonthlyPrice(),
+            snapshot.getRentalMonths(),
+            snapshot.getFreeSetupDays(),
+            usedDays,
+            goodsMovedIn,
+            snapshot.getEarlyTerminationFeeCoefficient(),
+            snapshot.getEarlyTerminationFeeCapMonths()
+        );
+    }
+
+    private ReturnCaseResponse.ActiveReturnSummary activeReturnPolicy(ReturnCase returnCase) {
+        var calculation = activeReturnCalculation(returnCase);
+        if (calculation == null) return null;
+        ReservationPricingSnapshot snapshot = reservationPricingSnapshot(returnCase);
+        return new ReturnCaseResponse.ActiveReturnSummary(
+            calculation.recalculationRequired(),
+            calculation.completedRentalMonths(),
+            calculation.pricingTierMonths(),
+            calculation.setupDaysUsed(),
+            calculation.chargeableSetupDays(),
+            calculation.rentalDaysUsed(),
+            calculation.noticeShortfallDays(),
+            calculation.dailyPrice(),
+            calculation.earlyTerminationFee(),
+            calculation.noticeCharge(),
+            calculation.totalRentalCharge(),
+            calculation.rentalRefundAmount(),
+            snapshot == null ? EarlyTerminationPolicy.DEFAULT_NOTICE_DAYS : snapshot.getEarlyTerminationNoticeDays()
+        );
+    }
+
+    private EarlyTerminationPolicy.ActiveReturnCalculation activeReturnCalculation(ReturnCase returnCase) {
+        if (returnCase == null || !returnCase.isActiveReturnRepricingRequired()) return null;
+        Rental rental = returnCase.getRental();
+        ReservationPricingSnapshot snapshot = reservationPricingSnapshot(returnCase);
+        if (rental == null || snapshot == null || snapshot.getEarlyTerminationPricingSnapshotJson() == null
+            || snapshot.getEarlyTerminationPricingSnapshotJson().isBlank()
+            || "[]".equals(snapshot.getEarlyTerminationPricingSnapshotJson())) {
+            return null;
+        }
+        List<EarlyTerminationPolicy.PricingTier> tiers = readPricingTiers(snapshot.getEarlyTerminationPricingSnapshotJson());
+        LocalDate paidStart = rental.getStartDate();
+        LocalDate setupStart = rental.getSetupStartedAt() == null
+            ? paidStart.minusDays(snapshot.getFreeSetupDays())
+            : rental.getSetupStartedAt().atZone(BusinessTime.ZONE).toLocalDate();
+        LocalDate requestedAt = returnCase.getRequestedAt().atZone(BusinessTime.ZONE).toLocalDate();
+        LocalDate returnDate = returnCase.getScheduledDate();
+        long noticeGivenDays = Math.max(0, ChronoUnit.DAYS.between(requestedAt, returnDate));
+        return EarlyTerminationPolicy.activeReturn(
+            paidStart,
+            returnDate,
+            setupStart,
+            snapshot.getRentalMonths(),
+            snapshot.getFreeSetupDays(),
+            snapshot.getMonthlyPrice(),
+            snapshot.getNetRentalAmount(),
+            snapshot.getReservationDepositAmount(),
+            snapshot.getEarlyTerminationFeeCoefficient(),
+            snapshot.getEarlyTerminationFeeCapMonths(),
+            snapshot.getEarlyTerminationNoticeDays(),
+            noticeGivenDays,
+            tiers
+        );
+    }
+
+    private ReservationPricingSnapshot reservationPricingSnapshot(ReturnCase returnCase) {
+        if (returnCase == null || returnCase.getRental() == null
+            || returnCase.getRental().getReservation() == null
+            || reservationPricingSnapshotRepository == null) return null;
+        return reservationPricingSnapshotRepository
+            .findByReservation_Id(returnCase.getRental().getReservation().getId())
+            .orElse(null);
+    }
+
+    private List<EarlyTerminationPolicy.PricingTier> readPricingTiers(String snapshotJson) {
+        try {
+            List<Map<String, Object>> rows = objectMapper.readValue(
+                snapshotJson, new TypeReference<List<Map<String, Object>>>() {}
+            );
+            return rows.stream()
+                .map(row -> new EarlyTerminationPolicy.PricingTier(
+                    ((Number) row.get("rentalMonths")).intValue(),
+                    objectMapper.convertValue(row.get("monthlyPrice"), BigDecimal.class),
+                    ((Number) row.get("freeSetupDays")).intValue()
+                ))
+                .toList();
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 }

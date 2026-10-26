@@ -6,6 +6,7 @@ import com.storagehub.api.reservation.ReservationDetailResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationResponse;
 import com.storagehub.api.reservation.UpdateSetupGoodsRequest;
+import com.storagehub.api.returns.CustomerCreateReturnRequest;
 import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
 import com.storagehub.common.api.ApiExceptions;
@@ -22,6 +23,9 @@ import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
+import com.storagehub.domain.model.ReservationCancellationType;
+import com.storagehub.domain.model.RefundRequest;
+import com.storagehub.domain.model.RefundRequestStatus;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
@@ -38,6 +42,7 @@ import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
+import com.storagehub.domain.repo.RefundRequestRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.ledger.LedgerStore;
 import java.time.Instant;
@@ -59,6 +64,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerReservationService {
     @Autowired
     private com.storagehub.service.rental.period.ConfirmedRentalPeriods confirmedRentalPeriods;
+    @Autowired
+    private ObjectProvider<ReturnSettlementService> returnSettlementServices;
 
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
@@ -74,6 +81,8 @@ public class CustomerReservationService {
     private final ObjectProvider<LedgerStore> ledgerStores;
     private final AccessCredentialService accessCredentialService;
     private final com.storagehub.domain.repo.ContractRepository contractRepository;
+    @Autowired(required = false)
+    private RefundRequestRepository refundRequestRepository;
 
     private static String clean(String value) {
         if (value == null) return null;
@@ -383,19 +392,12 @@ public class CustomerReservationService {
         if (ledgerStores != null && ledgerStores.getIfAvailable() != null) {
             com.storagehub.service.ledger.FinancialContractSpecifications.validateInitial(snapshot);
         }
+        // CheckInHandoverService.startSetup creates the Rental before the
+        // inventory handover. Customer receipt only confirms that handover;
+        // it must never create an ACTIVE rental or bypass the setup window.
         var existingRental = rentalRepository.findByReservation_Id(reservationId);
-        Rental rental = existingRental.orElseGet(() -> {
-            Rental created = new Rental();
-            created.setCustomer(reservation.getCustomer());
-            created.setFacility(reservation.getFacility());
-            created.setStorageUnit(reservation.getAssignedUnit());
-            created.setReservation(reservation);
-            created.setStatus(RentalStatus.active);
-            created.setStartDate(reservation.getStartDate());
-            created.setContractEndDate(reservation.getEndDate());
-            created.setMonthlyPrice(snapshot.getMonthlyPrice());
-            return rentalRepository.saveAndFlush(created);
-        });
+        Rental rental = existingRental.orElseThrow(() ->
+            ApiExceptions.conflict("Setup rental was not created by the check-in workflow"));
         if (existingRental.isEmpty() && contractRepository != null) {
             Instant contractNow = Instant.now();
             String unitCode = rental.getStorageUnit() != null ? rental.getStorageUnit().getCode() : "UNIT";
@@ -555,27 +557,40 @@ public class CustomerReservationService {
                 .orElse(null);
         if (setupRental != null) {
             if (!setupRental.isSetupExitReviewRequired()) {
-                setupRental.setSetupExitReviewRequired(true);
-                rentalRepository.saveAndFlush(setupRental);
-                String handling = setupRental.getMoveInCompletedAt() == null
-                    ? "Hàng chưa được xác nhận đã chuyển vào: xử lý như hủy sau check-in."
-                    : "Hàng đã chuyển vào: phải dọn kho và kiểm tra trả kho trước khi quyết toán.";
-                notificationService.createBusinessNotifications(
-                    NotificationType.RESERVATION, "Yêu cầu quyết định hoàn tiền trong thời gian setup",
-                    "Đơn " + reservation.getReservationCode() + ". " + handling
-                        + " Không tự động hoàn tiền giữ chỗ hoặc tiền thuê.", reservation.getId()
-                );
-                notificationService.createNotification(
-                    reservation.getCustomer().getId(), NotificationType.RESERVATION,
-                    "Yêu cầu hủy/trả kho đang chờ quyết định",
-                    "Business sẽ quyết định số tiền hoàn. Hệ thống chưa tự động hoàn bất kỳ khoản nào.",
-                    reservation.getId()
-                );
-                auditLogService.recordMutation(
-                    reservation.getCustomer(), "SETUP_EXIT_REVIEW_REQUESTED", "Rental", setupRental.getId(),
-                    reservation.getFacility().getId(), null,
-                    Map.of("setupExitReviewRequired", true, "goodsMovedIn", setupRental.getMoveInCompletedAt() != null)
-                );
+                ReturnSettlementService returnSettlementService = returnSettlementServices == null
+                    ? null : returnSettlementServices.getIfAvailable();
+                if (returnSettlementService != null) {
+                    returnSettlementService.createCustomerReturnRequest(
+                        actor,
+                        setupRental.getId(),
+                        new CustomerCreateReturnRequest(
+                            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")),
+                            request.getReason().trim()
+                        )
+                    );
+                } else {
+                    setupRental.setSetupExitReviewRequired(true);
+                    rentalRepository.saveAndFlush(setupRental);
+                    String handling = setupRental.getMoveInCompletedAt() == null
+                        ? "Hàng chưa được xác nhận đã chuyển vào: xử lý như hủy sau check-in."
+                        : "Hàng đã chuyển vào: phải dọn kho và kiểm tra trả kho.";
+                    notificationService.createBusinessNotifications(
+                        NotificationType.RESERVATION, "Yêu cầu quyết định hoàn tiền trong thời gian setup",
+                        "Đơn " + reservation.getReservationCode() + ". " + handling
+                            + " Không tự động hoàn tiền giữ chỗ hoặc tiền thuê.", reservation.getId()
+                    );
+                    notificationService.createNotification(
+                        reservation.getCustomer().getId(), NotificationType.RESERVATION,
+                        "Yêu cầu hủy/trả kho đang chờ quyết định",
+                        "Business sẽ quyết định số tiền hoàn. Hệ thống chưa tự động hoàn bất kỳ khoản nào.",
+                        reservation.getId()
+                    );
+                    auditLogService.recordMutation(
+                        reservation.getCustomer(), "SETUP_EXIT_REVIEW_REQUESTED", "Rental", setupRental.getId(),
+                        reservation.getFacility().getId(), null,
+                        Map.of("setupExitReviewRequired", true, "goodsMovedIn", setupRental.getMoveInCompletedAt() != null)
+                    );
+                }
             }
             return toDetailResponse(reservation);
         }
@@ -593,9 +608,43 @@ public class CustomerReservationService {
             .filter(payment -> payment.getStatus() == PaymentStatus.PENDING)
             .forEach(payment -> payment.setStatus(PaymentStatus.CANCELLED));
 
-        // A paid deposit is intentionally non-refundable when the customer cancels
-        // before check-in. Assignment/unit release belongs to the operations flow;
-        // this service does not clear assignedUnit or change StorageUnit status.
+        Payment paidDeposit = payments.stream()
+            .filter(payment -> payment.getStatus() == PaymentStatus.PAID)
+            .findFirst()
+            .orElse(null);
+        if (paidDeposit != null) {
+            ReservationPricingSnapshot pricing = snapshotRepository.findByReservation_Id(reservationId).orElse(null);
+            BigDecimal deposit = paidDeposit.getAmount().setScale(2, RoundingMode.HALF_UP);
+            BigDecimal fee = pricing == null ? BigDecimal.ZERO : EarlyTerminationPolicy.fee(
+                pricing.getReservationDepositAmount(), pricing.getNetRentalAmount(), pricing.getRentalMonths(),
+                pricing.getEarlyTerminationFeeCoefficient(), pricing.getEarlyTerminationFeeCapMonths()
+            );
+            Instant checkInAt = reservation.getAppointmentAt() != null
+                ? reservation.getAppointmentAt()
+                : reservation.getStartDate().atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
+            boolean fullRefund = !Instant.now().isAfter(checkInAt.minus(24, java.time.temporal.ChronoUnit.HOURS));
+            BigDecimal charge = fullRefund ? BigDecimal.ZERO : fee.min(deposit);
+            BigDecimal refund = deposit.subtract(charge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+            reservation.setCancellationType(fullRefund
+                ? ReservationCancellationType.BEFORE_CHECKIN_FULL_REFUND
+                : ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
+            reservation.setCancellationChargeAmount(charge);
+            reservation.setCancellationRefundAmount(refund);
+            if (refund.signum() > 0 && refundRequestRepository != null) {
+                RefundRequest refundRequest = new RefundRequest();
+                refundRequest.setPayment(paidDeposit);
+                refundRequest.setRequestedBy(reservation.getCustomer());
+                refundRequest.setAmount(refund);
+                refundRequest.setReason(fullRefund
+                    ? "Customer cancellation at least 24 hours before check-in"
+                    : "Customer cancellation within 24 hours before check-in; retain early termination fee");
+                refundRequest.setStatus(RefundRequestStatus.REQUESTED);
+                refundRequestRepository.save(refundRequest);
+            }
+        }
+
+        // Assignment/unit release still belongs to the operations flow; this service
+        // records the cancellation settlement but does not mutate storage inventory.
         Instant cancelledAt = Instant.now();
         reservation.setStatus(ReservationStatus.CANCELLED);
         reservation.setCancelledAt(cancelledAt);
@@ -752,6 +801,9 @@ public class CustomerReservationService {
         response.setConfirmedAt(reservation.getConfirmedAt());
         response.setCancelledAt(reservation.getCancelledAt());
         response.setCancelReason(reservation.getCancelReason());
+        response.setCancellationType(reservation.getCancellationType());
+        response.setCancellationRefundAmount(reservation.getCancellationRefundAmount());
+        response.setCancellationChargeAmount(reservation.getCancellationChargeAmount());
         response.setGoodsItems(goodsItems);
         response.setPayments(paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
             .stream()
@@ -769,7 +821,8 @@ public class CustomerReservationService {
             payment.getGatewayPayDate(), payment.getGatewayBankCode(),
             payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
             payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
-            payment.getInitiatedBy().getFullName(), payment.getCreatedAt(), payment.getReservation().getReservationCode()
+            payment.getInitiatedBy().getFullName(), payment.getCreatedAt(), payment.getReservation().getReservationCode(),
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt()
         );
     }
 

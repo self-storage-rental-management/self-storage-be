@@ -91,7 +91,8 @@ public class ManagerPaymentHistoryService {
             payment.getRefundedAmount() == null ? BigDecimal.ZERO : payment.getRefundedAmount(),
             method, occurredAt,
             payment.getRenewal()==null?null:payment.getRenewal().getId(),
-            paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null
+            paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null,
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt()
         );
     }
 
