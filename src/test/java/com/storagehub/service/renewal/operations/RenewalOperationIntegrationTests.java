@@ -68,6 +68,11 @@ class RenewalOperationIntegrationTests {
         public Instant check(Renewal n,RenewalQuoteResponse.Terms terms,UUID hold,Instant now){if(hold==null)throw ApiExceptions.conflict("TEST missing hold");return NOW.plus(Duration.ofDays(6));}
         public void retain(Renewal n,UUID hold,Instant deadline){}
         public void consume(Renewal n,UUID hold){consumes++;if(failConsume){var marker=new ActivityLog();marker.setAction("TEST_ROLLBACK_HOLD");marker.setEntityType("TestD3Hold");marker.setEntityId(n.getId());marker.setCorrelationId("test-only-rollback");em.persist(marker);em.flush();throw new IllegalStateException("TEST hold consume failed");}}
+        public void consumePeriod(Renewal n,RenewalQuoteResponse.Terms terms,UUID hold,LocalDate start,LocalDate end,Instant now) {
+            var day=now.atZone(com.storagehub.time.BusinessTime.ZONE).toLocalDate();
+            assertThat(start).isEqualTo(day);assertThat(end).isEqualTo(start.plusMonths(terms.rentalMonths()));
+            consume(n,hold);
+        }
         public void release(Renewal n,UUID hold){releases++;}
         public RenewalOperationSources.Deposit deposit(Renewal n,RenewalQuoteResponse.Terms t,UUID actor,String key,Instant deadline){deposits++;if(advanceDeposit)clock.time=clock.time.plusSeconds(1);return new RenewalOperationSources.Deposit(UUID.randomUUID(),n.getId(),outcome,t.renewalDepositAmount(),"VND",outcome==RenewalOperationSources.Outcome.SUCCESS?clock.time:null);}
         public boolean safeToExpire(Renewal n){return true;}
@@ -185,7 +190,7 @@ class RenewalOperationIntegrationTests {
             for(var kind:List.of("INCIDENT","OTHER_RENEWAL","OTHER_UPLOADER","CHANGED_BYTES")){
                 var id=persistSignedFile(tx,n.getId(),kind.equals("OTHER_UPLOADER")?n.getRequestedBy().getId():assigned,kind.equals("OTHER_RENEWAL")?UUID.randomUUID():n.getId(),kind.equals("INCIDENT")?"INCIDENT":"SIGNED_CONTRACT");
                 if(kind.equals("CHANGED_BYTES")){var key=tx.execute(s->em.find(FileAsset.class,id).getStorageKey());java.nio.file.Files.writeString(java.nio.file.Path.of(key),"WRONG DOC");}
-                var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),id,"TEST invalid evidence");
+                var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),id,"TEST invalid evidence",effectiveStart(n));
                 http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path+"/completion").header("Idempotency-Key","invalid-"+kind).contentType("application/json").content(mapper().writeValueAsString(body)))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().is(kind.equals("CHANGED_BYTES")?409:404));
                 assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).expectedVersion()).isEqualTo(arrival.state().expectedVersion());
@@ -212,12 +217,12 @@ class RenewalOperationIntegrationTests {
             fileHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(downloadPath)).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
             fileHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/files").file(new org.springframework.mock.web.MockMultipartFile("file","signed.png","image/png",uploadedBytes)).param("entityType","DUONG_RENEWAL_SIGNED_CONTRACT").param("entityId",n.getId().toString())).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
             when(actors.required()).thenReturn(staff);
-            var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),document,"TEST signed contract");
+            var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),document,"TEST signed contract",effectiveStart(n));
             var request=org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path+"/completion").header("Idempotency-Key","bound-completion").contentType("application/json").content(mapper().writeValueAsString(body));
             http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
             http.perform(request).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
             http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("data.phase").value("COMPLETED"));
-            tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(LocalDate.of(2026,11,6));realEvidence.requireDownload(actor(n,RoleCode.CUSTOMER),em.find(FileAsset.class,document));});
+            tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(LocalDate.of(2026,11,7));realEvidence.requireDownload(actor(n,RoleCode.CUSTOMER),em.find(FileAsset.class,document));});
             when(actors.required()).thenReturn(actor(n,RoleCode.CUSTOMER));
             fileHttp.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(downloadPath))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
@@ -327,7 +332,7 @@ class RenewalOperationIntegrationTests {
             assertThat(ops.cashes).isZero();
         }finally{org.springframework.test.util.ReflectionTestUtils.setField(service,"ledgers",original);}
     }
-    @Test void slowFinancialVerificationCannotCompletePastDeadline(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrival");ops.advanceCompletion=true;assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST slow finance"),"slow")).hasMessageContaining("deadline");assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,6));}
+    @Test void slowFinancialVerificationCannotCompletePastDeadline(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrival");ops.advanceCompletion=true;assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST slow finance",effectiveStart(n)),"slow")).hasMessageContaining("deadline");assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,6));}
     @Test void httpRejectsMissingHeadersInjectedAmountsAndManagerCompletion() throws Exception {
         var n=fixture();var actors=mock(ActorContext.class);when(actors.required()).thenReturn(actor(n,RoleCode.CUSTOMER));
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalOperationController(actors,service),new StaffRenewalOperationController(actors,service),new com.storagehub.api.overdue.ManagerOverdueController(actors,overdue)).setControllerAdvice(new RenewalOperationRequestAdvice(),new com.storagehub.api.overdue.OverdueRequestAdvice(),new GlobalExceptionHandler()).build();
@@ -335,7 +340,7 @@ class RenewalOperationIntegrationTests {
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).contentType("application/json").content("{\"expectedVersion\":"+version(n)+",\"appointmentAt\":\""+NOW.plusSeconds(3600)+"\"}")).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path).header("Idempotency-Key","bad").contentType("application/json").content("{\"expectedVersion\":"+version(n)+",\"appointmentAt\":\""+NOW.plusSeconds(3600)+"\",\"amount\":1}")).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
         when(actors.required()).thenReturn(actor(n,RoleCode.MANAGER));
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/staff/renewals/"+n.getId()+"/completion").header("Idempotency-Key","manager").contentType("application/json").content("{\"expectedVersion\":"+version(n)+",\"identityVerified\":true,\"arrivalRef\":\""+UUID.randomUUID()+"\",\"signedDocumentFileId\":\""+UUID.randomUUID()+"\"}")).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/staff/renewals/"+n.getId()+"/completion").header("Idempotency-Key","manager").contentType("application/json").content("{\"expectedVersion\":"+version(n)+",\"expectedEffectiveStartDate\":\"2026-10-08\",\"identityVerified\":true,\"arrivalRef\":\""+UUID.randomUUID()+"\",\"signedDocumentFileId\":\""+UUID.randomUUID()+"\"}")).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
         assertThat(ops.deposits).isZero();
     }
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
@@ -343,9 +348,9 @@ class RenewalOperationIntegrationTests {
     void concurrentCompletionsExtendOnce() throws Exception {
         var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);var n=tx.execute(s->scheduled());var staff=actor(n,RoleCode.STAFF);
         var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),state.expectedVersion()),"arrival");
-        var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST race");
+        var body=new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST race",effectiveStart(n));
         var pool=java.util.concurrent.Executors.newFixedThreadPool(2);try {var futures=new ArrayList<java.util.concurrent.Future<Boolean>>();for(int i=0;i<2;i++){String key="complete-race-"+i;futures.add(pool.submit(()->{try{service.complete(staff,n.getId(),body,key);return true;}catch(ApiException e){return false;}}));}int wins=0;for(var f:futures)if(f.get(30,java.util.concurrent.TimeUnit.SECONDS))wins++;assertThat(wins).isEqualTo(1);
-            tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(n.getNewEndDate());assertThat(em.createQuery("select count(e) from RenewalOperationEvent e where e.kind='COMPLETION'",Long.class).getSingleResult()).isEqualTo(1);});
+            tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(LocalDate.of(2026,11,7));assertThat(em.createQuery("select count(e) from RenewalOperationEvent e where e.kind='COMPLETION'",Long.class).getSingleResult()).isEqualTo(1);});
         } finally {pool.shutdownNow();}
     }
     @Test @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
@@ -353,13 +358,13 @@ class RenewalOperationIntegrationTests {
     void sharedHoldFailureRollsBackCompletionAuditAndReplay() {
         var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);var n=tx.execute(s->scheduled());var staff=actor(n,RoleCode.STAFF);var oldEnd=n.getRental().getContractEndDate();
         var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),state.expectedVersion()),"arrival");ops.failConsume=true;
-        assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST rollback"),"rollback")).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(arrival.state().expectedVersion(),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST rollback",effectiveStart(n)),"rollback")).isInstanceOf(IllegalStateException.class);
         tx.executeWithoutResult(s->{assertThat(em.find(Rental.class,n.getRental().getId()).getContractEndDate()).isEqualTo(oldEnd);assertThat(em.find(Renewal.class,n.getId()).getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(em.createQuery("select count(e) from ActivityLog e where e.entityType='TestD3Hold'",Long.class).getSingleResult()).isZero();assertThat(em.createQuery("select count(e) from RenewalIdempotency e where e.operation='d3_complete' and e.resourceId=:id",Long.class).setParameter("id",n.getId()).getSingleResult()).isZero();});
     }
-    @Test void customerCannotSeeOtherRentalAndManagerCannotComplete(){var n=fixture();var other=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());assertThatThrownBy(()->service.detail(other,n.getId(),RenewalOperationService.Audience.CUSTOMER)).hasMessageContaining("not found");assertThatThrownBy(()->service.complete(actor(n,RoleCode.MANAGER),n.getId(),new Completion(version(n),true,UUID.randomUUID(),UUID.randomUUID(),null),"manager")).hasMessageContaining("Staff role");}
+    @Test void customerCannotSeeOtherRentalAndManagerCannotComplete(){var n=fixture();var other=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());assertThatThrownBy(()->service.detail(other,n.getId(),RenewalOperationService.Audience.CUSTOMER)).hasMessageContaining("not found");assertThatThrownBy(()->service.complete(actor(n,RoleCode.MANAGER),n.getId(),new Completion(version(n),true,UUID.randomUUID(),UUID.randomUUID(),null,effectiveStart(n)),"manager")).hasMessageContaining("Staff role");}
     @Test void slotEndMustFitDeadline(){var n=paid();clock.time=NOW.plus(Duration.ofHours(72)).minusSeconds(1800);assertThatThrownBy(()->service.appointment(actor(n,RoleCode.CUSTOMER),n.getId(),new Appointment(clock.time,null,version(n)),"bad-slot",false)).hasMessageContaining("Entire service slot");}
-    @Test void arrivalDoesNotBypassLateCompletionAndExpiryPreservesHistory(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"late-complete")).hasMessageContaining("deadline");assertThat(service.expire(n.getId())).isTrue();assertThat(service.expire(n.getId())).isFalse();assertThat(n.getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).phase()).isEqualTo("SIGNING_EXPIRED");assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNotNull();assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.available);}
-    @Test void completeAtExactDeadlinePermitted(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72));assertThat(service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"exact").state().phase()).isEqualTo("COMPLETED");}
+    @Test void arrivalDoesNotBypassLateCompletionAndExpiryPreservesHistory(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"late-complete")).hasMessageContaining("deadline");assertThat(service.expire(n.getId())).isTrue();assertThat(service.expire(n.getId())).isFalse();assertThat(n.getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).phase()).isEqualTo("SIGNING_EXPIRED");assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNotNull();assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.available);}
+    @Test void completeAtExactDeadlinePermitted(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72));assertThat(service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"exact").state().phase()).isEqualTo("COMPLETED");assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,11,10));}
     @Test void revokedAssignmentBlocksReplay(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var body=new Arrival(state.appointmentRef(),List.of(),version(n));service.arrival(staff,n.getId(),body,"replay");ops.authorized=false;assertThatThrownBy(()->service.arrival(staff,n.getId(),body,"replay")).hasMessageContaining("revoked");}
     @Test void cashHistoryRemainsWhenCompletionBlockedByMoneyOrReturn() throws Exception {
         var n=scheduled();var staff=actor(n,RoleCode.STAFF);
@@ -382,9 +387,9 @@ class RenewalOperationIntegrationTests {
         assertThat(((Map<?,?>)customerReceipt.data()).get("receiptFileId")).isEqualTo(proof.toString());
         assertThat(customerReceipt.actorId()).isNull();
         ops.fullyPaid=false;
-        assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"debt")).hasMessageContaining("payment");
+        assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"debt")).hasMessageContaining("payment");
         ops.fullyPaid=true;n.getRental().setStatus(RentalStatus.return_requested);em.flush();
-        assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"return")).hasMessageContaining("return state");
+        assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"return")).hasMessageContaining("return state");
         assertThat(service.events(staff,n.getId(),RenewalOperationService.Audience.STAFF,"payments",0,20,"test").pagination().totalItems()).isEqualTo(2);
     }
     @Test void staffQueueFiltersCurrentAssignmentsBeforePagination(){var n=scheduled();scheduled();ops.assignedIds=Set.of(n.getId());var list=service.appointments(actor(n,RoleCode.STAFF),null,LocalDate.of(2026,10,8),"SIGNING",0,1,"test");assertThat(list.pagination().totalItems()).isEqualTo(1);assertThat(list.data().getFirst().renewalId()).isEqualTo(n.getId());assertThat(list.data().getFirst().appointmentEnd()).isEqualTo(NOW.plusSeconds(7200));}
@@ -402,16 +407,24 @@ class RenewalOperationIntegrationTests {
         var handover=new CheckIn();handover.setReservation(r.getReservation());handover.setRental(r);handover.setPerformedBy(n.getRequestedBy());handover.setStatus(CheckInStatus.completed);em.persist(handover);em.flush();
         var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);
         var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"exclusive-arrival");
-        var body=new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST exclusive completion");
+        var body=new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),"TEST exclusive completion",effectiveStart(n));
         var result=service.complete(staff,n.getId(),body,"exclusive-complete");
         assertThat(service.complete(staff,n.getId(),body,"exclusive-complete")).isEqualTo(result);
-        assertThat(r.getContractEndDate()).isEqualTo(LocalDate.of(2026,11,7));assertThat(n.getNewEndDate()).isEqualTo(LocalDate.of(2026,11,6));
+        assertThat(r.getContractEndDate()).isEqualTo(LocalDate.of(2026,11,8));assertThat(n.getNewEndDate()).isEqualTo(LocalDate.of(2026,11,6));
         assertThat(ops.consumes).isEqualTo(1);
         assertThat(new ObjectMapper().valueToTree(result.event().data()).has("rentalPeriodEvidence")).isFalse();
         em.flush();var rentalId=r.getId();em.clear();r=em.find(Rental.class,rentalId);
-        var adapter=new com.storagehub.service.rental.period.ProjectHandoffRentalPeriodAdapter(em,new ObjectMapper().findAndRegisterModules());
+        @SuppressWarnings("unchecked")
+        var confirmedProvider=(org.springframework.beans.factory.ObjectProvider<com.storagehub.service.rental.period.ConfirmedRentalPeriods>)
+            org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        var adapter=new com.storagehub.service.rental.period.ProjectHandoffRentalPeriodAdapter(
+            em,new ObjectMapper().findAndRegisterModules(),confirmedProvider);
         var dates=adapter.read(r).orElseThrow();assertThat(dates.convention()).isEqualTo(com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE);
-        assertThat(dates.inclusiveEndDate()).isEqualTo(LocalDate.of(2026,11,6));assertThat(dates.storedEndDate()).isEqualTo(LocalDate.of(2026,11,7));
+        assertThat(dates.inclusiveEndDate()).isEqualTo(LocalDate.of(2026,11,7));assertThat(dates.storedEndDate()).isEqualTo(LocalDate.of(2026,11,8));
+    }
+    @Autowired com.storagehub.service.rental.period.RentalPeriodResolver periods;
+    private LocalDate effectiveStart(Renewal n) {
+        return com.storagehub.service.rental.period.RenewalEffectivePeriod.start(periods.require(n.getRental()),clock.instant());
     }
     private OverdueQuery query(String kind){return new OverdueQuery(0,20,null,kind,"","priority",true);}
     private long version(Renewal n){return em.find(RenewalWorkflow.class,n.getId()).getVersion();}
@@ -443,7 +456,7 @@ class RenewalOperationIntegrationTests {
             em.flush();var oldEnd=r.getContractEndDate();int before=ops.deposits;
             String expected=switch(kind){case "RETURNED" -> "return state changed";case "MAINTENANCE" -> "Active maintenance";case "RECOVERY" -> "Recovery handoff";default -> "Another booking";};
             assertThatThrownBy(()->service.deposit(actor(pending,RoleCode.CUSTOMER),pending.getId(),new RenewalOperationCommands.Version(version(pending)),"blocked")).hasMessageContaining(expected);
-            assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null),"blocked")).hasMessageContaining(expected);
+            assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"blocked")).hasMessageContaining(expected);
             assertThat(ops.deposits).isEqualTo(before);assertThat(ops.consumes).isZero();assertThat(r.getContractEndDate()).isEqualTo(oldEnd);
             assertThat(n.getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(pending.getStatus()).isEqualTo(RenewalStatus.approved);
         } finally {

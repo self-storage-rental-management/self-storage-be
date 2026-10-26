@@ -87,7 +87,38 @@ class RenewalWorkflowIntegrationTests {
     @Autowired com.storagehub.domain.repo.ActivityLogRepository activityLogs;
     @Autowired RenewalPersistence persistence;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
-    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";}
+    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";eligibility.unknown=false;}
+    @Test void completedVerificationUsesHistoricalEvidenceAfterRentalAndPolicyChange() throws Exception {
+        var rental=fixture();var actor=customer(rental);
+        var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
+        var response=commands.submit(actor,rental.getId(),new RenewalCommands.Submit(quote.id(),null),"completed-history");
+        var renewal=em.find(Renewal.class,response.id());renewal.setStatus(RenewalStatus.completed);
+        var state=new com.storagehub.service.renewal.operations.RenewalOperationState(renewal);
+        state.completed(actor.userId(),NOW);em.persist(state);
+        var terms=quote.terms();
+        var period=com.storagehub.service.rental.period.RentalPeriod.verified(rental.getId(),rental.getStartDate(),terms.oldEndDate(),
+            com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE,"TEST").orElseThrow();
+        var effective=com.storagehub.service.rental.period.RenewalEffectivePeriod.at(period,terms,NOW);
+        var payload=Map.of("rentalPeriodEvidence",Map.of("schema","RENEWAL_COMPLETION_PERIOD_V2",
+            "effectiveExtensionStartDate",effective.startDate().toString(),"effectiveExtensionEndExclusive",effective.endExclusive().toString()));
+        em.persist(new com.storagehub.service.renewal.operations.RenewalOperationEvent(renewal,"COMPLETION",NOW,actor.userId(),
+            new ObjectMapper().writeValueAsString(payload)));
+        rental.setContractEndDate(effective.newEndDate().plusMonths(1));
+        pricing.rate=new BigDecimal("999");policy.version="v2";eligibility.unknown=true;em.flush();
+        var detail=reads.detail(actor,renewal.getId(),false);
+        assertThat(detail.systemVerification().status()).isEqualTo("VERIFIED");
+        assertThat(detail.systemVerification().blockingReasons()).isEmpty();
+        assertThat(detail.systemVerification().verifiedChecks()).containsExactly("ACCEPTED_TERMS_AND_COMPLETION_PERIOD");
+        assertThat(detail.effectivePeriod().startDate()).isEqualTo(effective.startDate());
+        assertThat(detail.allowedActions()).isEmpty();
+    }
+    @Test void completedStatusWithoutPeriodEvidenceDoesNotClaimVerified() {
+        var rental=fixture();var actor=customer(rental);
+        var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
+        var response=commands.submit(actor,rental.getId(),new RenewalCommands.Submit(quote.id(),null),"missing-completion-history");
+        var renewal=em.find(Renewal.class,response.id());renewal.setStatus(RenewalStatus.completed);em.flush();
+        assertThat(reads.detail(actor,renewal.getId(),false).systemVerification().status()).isEqualTo("INCOMPLETE");
+    }
     @Test void rejectsFullPaymentQuoteWithoutPersistingIt(){
         var r=fixture();var a=customer(r);
         assertThatThrownBy(()->commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST",null,true)))
