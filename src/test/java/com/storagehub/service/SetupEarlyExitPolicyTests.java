@@ -43,6 +43,20 @@ class SetupEarlyExitPolicyTests {
         pricing.setNetRentalAmount(new BigDecimal("6000000"));
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "2026-10-31T17:00:00Z,-1,true", "2026-10-31T17:00:00Z,0,false", "2026-10-31T17:00:00Z,1,false",
+        "2026-12-31T17:00:00Z,-1,true", "2026-12-31T17:00:00Z,0,false", "2026-12-31T17:00:00Z,1,false"
+    })
+    void actualReturnBoundaryUsesVietnamMidnightAndExclusiveEnd(String end,long seconds,boolean eligible) {
+        var boundary=Instant.parse(end);record.getRental().setSetupEndsAt(boundary);
+        record.setRequestedAt(boundary.minusSeconds(3600));record.setSetupReturnedAt(boundary.plusSeconds(seconds));
+        SetupEarlyExitPolicy.capture(record,pricing);
+        assertThat(record.isSetupEarlyExit()).isEqualTo(eligible);
+        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo(eligible?"2000000":"0");
+        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo(eligible?"6000000":"0");
+    }
+
     @Test
     void creditsTheWholeVerifiedRentalOnceAndChargesOneSnapshotMonth() {
         SetupEarlyExitPolicy.capture(record, pricing);

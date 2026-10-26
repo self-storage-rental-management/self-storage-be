@@ -13,6 +13,7 @@ import jakarta.persistence.EntityManager;
 import java.time.*;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,12 +24,34 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.DateSource {
     private final EntityManager em;
     private final ObjectMapper mapper;
+    private final ObjectProvider<ConfirmedRentalPeriods> confirmedPeriods;
     /** Current project rule, explicitly enabled locally; historical evidence is not rewritten. */
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.rental-period.inclusive-end:false}")
     private boolean inclusiveEnd;
 
     public Optional<RentalReadSources.Dates> read(Rental r) {
         if(r==null)return Optional.empty();
+        var confirmed = confirmedPeriods.getIfAvailable();
+        if (confirmed != null && r.getId() != null && confirmed.contains(r)) {
+            // A confirmed period carries its own date convention. Applying the
+            // facility's legacy inclusive setting to a new exclusive period
+            // would grant an extra paid day and shift the next renewal.
+            return confirmed.read(r).map(p -> new RentalReadSources.Dates(
+                p.rentalId(), p.startDate(), p.lastPermittedDate(), p.reference(),
+                p.storedEndDate(), p.convention()));
+        }
+        if (r.getTermsEffectiveAt() != null) {
+            // The new handover flow creates an exclusive period at setup start.
+            // Before customer receipt it is provisional; after receipt a missing
+            // confirmed row is an incomplete source, not a legacy inclusive one.
+            if (r.getReservation() == null || r.getSetupStartedAt() == null
+                || !r.getTermsEffectiveAt().equals(r.getSetupStartedAt())
+                || r.getReservation().getStatus() == ReservationStatus.COMPLETED) return Optional.empty();
+            return RentalPeriod.verified(r.getId(), r.getStartDate(), r.getContractEndDate(),
+                RentalPeriod.Convention.EXCLUSIVE, "provisional-handover:"+r.getId())
+                .map(p -> new RentalReadSources.Dates(p.rentalId(), p.startDate(),
+                    p.lastPermittedDate(), p.reference(), p.storedEndDate(), p.convention()));
+        }
         return RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),
             inclusiveEnd?RentalPeriod.Convention.INCLUSIVE:RentalPeriod.Convention.EXCLUSIVE,
             "rental-record:"+r.getId())
