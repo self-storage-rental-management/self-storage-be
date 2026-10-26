@@ -15,6 +15,7 @@ public class ReservationResponse {
     private UUID quoteId;
     private UUID facilityId;
     private UUID unitTypeId;
+    private String unitTypeName;
     private ReservationStatus status;
     private GoodsReviewStatus goodsReviewStatus;
     private CompatibilityResult compatibilityResult;
@@ -134,6 +135,8 @@ public class ReservationResponse {
     public UUID getQuoteId() { return quoteId; }
     public UUID getFacilityId() { return facilityId; }
     public UUID getUnitTypeId() { return unitTypeId; }
+    public String getUnitTypeName() { return unitTypeName; }
+    public void setUnitTypeName(String unitTypeName) { this.unitTypeName = unitTypeName; }
     public ReservationStatus getStatus() { return status; }
     public GoodsReviewStatus getGoodsReviewStatus() { return goodsReviewStatus; }
     public CompatibilityResult getCompatibilityResult() { return compatibilityResult; }
