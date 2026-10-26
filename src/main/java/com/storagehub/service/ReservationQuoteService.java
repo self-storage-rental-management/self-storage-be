@@ -211,6 +211,8 @@ public class ReservationQuoteService {
         quote.setRentalMonths(rentalMonths);
         quote.setFreeSetupDays(policy.getFreeSetupDays());
         quote.setMonthlyPrice(monthlyPrice);
+        quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        quote.setSetupEarlyExitFee(monthlyPrice);
         quote.setSubtotal(subtotal);
         quote.setDiscountRate(policy.getDiscountRate());
         quote.setDiscountAmount(discountAmount);
@@ -299,6 +301,8 @@ public class ReservationQuoteService {
         response.setEarlyTerminationFee(quote.getEarlyTerminationFee());
         response.setEarlyTerminationNoticeBasis(EarlyTerminationPolicy.NOTICE_BASIS);
         response.setEarlyTerminationTiers(readPricingTiers(quote.getEarlyTerminationPricingSnapshotJson()));
+        response.setSetupEarlyExitPolicyVersion(quote.getSetupEarlyExitPolicyVersion());
+        response.setSetupEarlyExitFee(quote.getSetupEarlyExitFee());
         return response;
     }
 

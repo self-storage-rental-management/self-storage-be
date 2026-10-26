@@ -43,8 +43,10 @@ public class RenewalPaymentReconciler {
             Boolean allocated=transaction.execute(status->{
                 var payment=payments.findByIdForUpdate(id).orElse(null);
                 if(!eligible(payment))return false;
+                boolean previouslyAllocated=payment.getRenewalAllocatedAt()!=null&&payment.getRenewalLedgerReceiptRef()!=null;
                 var result=settlement.settle(payment,payment.getRenewalEvidenceRef());
                 if(!result.allocated())retry(payment,result.reason());
+                else if(!previouslyAllocated)payment.setRenewalReconciliationAttempts(0);
                 payments.saveAndFlush(payment);
                 return result.allocated();
             });
@@ -83,5 +85,6 @@ public class RenewalPaymentReconciler {
         payment.setRenewalReconciliationAttempts(payment.getRenewalReconciliationAttempts()+1);
         payment.setFailureReason(reason==null?"Reconciliation required":reason.substring(0,Math.min(1000,reason.length())));
         payment.setRenewalNextRetryAt(Instant.now().plusSeconds(Math.min(300,30L*payment.getRenewalReconciliationAttempts())));
+        settlement.holdForPreparationResolution(payment);
     }
 }

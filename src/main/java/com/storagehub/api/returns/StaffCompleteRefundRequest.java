@@ -10,7 +10,15 @@ public record StaffCompleteRefundRequest(
     String notes,
     java.util.UUID receiptFileId,
     String paymentMethod,
-    java.util.UUID originalPaymentId
+    java.util.UUID originalPaymentId,
+    Boolean confirmed,
+    java.math.BigDecimal amount
 ) {
-    public StaffCompleteRefundRequest(String transactionReference,String notes) {this(transactionReference,notes,null,"BANK_TRANSFER",null);}
+    public StaffCompleteRefundRequest(String transactionReference,String notes) {this(transactionReference,notes,null,"BANK_TRANSFER",null,null,null);}
+    public StaffCompleteRefundRequest(String transactionReference,String notes,java.util.UUID receiptFileId,String paymentMethod) {
+        this(transactionReference,notes,receiptFileId,paymentMethod,null,null,null);
+    }
+    public StaffCompleteRefundRequest(String transactionReference,String notes,java.util.UUID receiptFileId,String paymentMethod,Boolean confirmed,java.math.BigDecimal amount) {
+        this(transactionReference,notes,receiptFileId,paymentMethod,null,confirmed,amount);
+    }
 }

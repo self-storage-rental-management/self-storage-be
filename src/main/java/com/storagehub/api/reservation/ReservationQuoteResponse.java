@@ -8,6 +8,13 @@ import java.util.List;
 
 public class ReservationQuoteResponse {
 
+    private String setupEarlyExitPolicyVersion;
+    private BigDecimal setupEarlyExitFee;
+    public String getSetupEarlyExitPolicyVersion() { return setupEarlyExitPolicyVersion; }
+    public void setSetupEarlyExitPolicyVersion(String value) { setupEarlyExitPolicyVersion = value; }
+    public BigDecimal getSetupEarlyExitFee() { return setupEarlyExitFee; }
+    public void setSetupEarlyExitFee(BigDecimal value) { setupEarlyExitFee = value; }
+
     private UUID quoteId;
     private UUID facilityId;
     private String facilityName;

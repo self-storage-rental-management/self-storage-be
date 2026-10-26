@@ -22,5 +22,7 @@ public record RenewalVnpayPaymentResponse(
     String settlementStage,
     String invoiceNumber,
     InvoiceStatus invoiceStatus,
-    Instant invoiceIssuedAt
+    Instant invoiceIssuedAt,
+    String transactionStatus,
+    boolean receiptAvailable
 ) {}

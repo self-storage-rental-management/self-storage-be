@@ -131,13 +131,16 @@ public class ReservationCreationService {
         if (!quote.getExpiresAt().isAfter(Instant.now())) {
             throw ApiExceptions.conflict("Quote has expired");
         }
+        if (!SetupEarlyExitPolicy.VERSION.equals(quote.getSetupEarlyExitPolicyVersion())
+            || !quote.getSetupEarlyExitPolicyVersion().equals(request.getAcceptedSetupEarlyExitPolicyVersion())) {
+            throw ApiExceptions.conflict("Vui lòng lấy báo giá mới và xác nhận điều khoản trả kho trong setup trước khi đặt kho.");
+        }
 
-        boolean legacyQuoteWithoutGoodsSnapshot = quote.getGoodsSnapshotJson() == null
-            || quote.getGoodsSnapshotJson().isBlank() || "[]".equals(quote.getGoodsSnapshotJson());
-        List<GoodsItemRequest> quotedGoodsItems = legacyQuoteWithoutGoodsSnapshot
-            ? request.getGoodsItems() : GoodsSnapshotCodec.decode(quote.getGoodsSnapshotJson());
-        if (!legacyQuoteWithoutGoodsSnapshot
-            && !GoodsSnapshotCodec.sameDeclaration(quotedGoodsItems, request.getGoodsItems())) {
+        if(quote.getGoodsSnapshotJson()==null||quote.getGoodsSnapshotJson().isBlank()||"[]".equals(quote.getGoodsSnapshotJson())
+            ||quote.getUnitTypeSnapshotJson()==null||quote.getUnitTypeSnapshotJson().isBlank())
+            throw ApiExceptions.conflict("Báo giá thiếu dữ liệu lịch sử. Vui lòng lấy báo giá mới trước khi đặt kho.");
+        List<GoodsItemRequest> quotedGoodsItems = GoodsSnapshotCodec.decode(quote.getGoodsSnapshotJson());
+        if (!GoodsSnapshotCodec.sameDeclaration(quotedGoodsItems, request.getGoodsItems())) {
             throw ApiExceptions.conflict("Goods declaration changed after quote creation; please create a new quote");
         }
 
@@ -145,9 +148,7 @@ public class ReservationCreationService {
             quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
             quote.getEndDate(), request.getGoodsCondition(), quotedGoodsItems
         );
-        CompatibilityCheckResponse compatibility = legacyQuoteWithoutGoodsSnapshot
-            ? compatibilityService.check(actor, compatibilityRequest)
-            : compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
+        CompatibilityCheckResponse compatibility = compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
         if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
             throw ApiExceptions.conflict("Goods are not compatible with the selected unit type");
         }
@@ -318,6 +319,8 @@ public class ReservationCreationService {
         snapshot.setRentalMonths(quote.getRentalMonths());
         snapshot.setFreeSetupDays(quote.getFreeSetupDays());
         snapshot.setMonthlyPrice(quote.getMonthlyPrice());
+        snapshot.setSetupEarlyExitPolicyVersion(quote.getSetupEarlyExitPolicyVersion());
+        snapshot.setSetupEarlyExitFee(quote.getSetupEarlyExitFee());
         snapshot.setGrossRentalAmount(quote.getSubtotal());
         snapshot.setDiscountRate(quote.getDiscountRate());
         snapshot.setDiscountAmount(quote.getDiscountAmount());
@@ -369,6 +372,8 @@ public class ReservationCreationService {
         response.setEarlyTerminationFeeCoefficient(snapshot.getEarlyTerminationFeeCoefficient());
         response.setEarlyTerminationNoticeDays(snapshot.getEarlyTerminationNoticeDays());
         response.setEarlyTerminationFee(snapshot.getEarlyTerminationFee());
+        response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
+        ReservationSnapshotView.describe(response,reservation,snapshot);
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setCustomerName(reservation.getCustomer().getFullName());
@@ -419,6 +424,7 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, request.getAcceptedTerms());
         append(canonical, request.getQuoteId());
+        if (request.getAcceptedSetupEarlyExitPolicyVersion() != null) append(canonical, request.getAcceptedSetupEarlyExitPolicyVersion());
         append(canonical, cleanValue(request.getIdentityDocumentNumber()));
         append(canonical, cleanValue(request.getCustomerPhone()));
         append(canonical, cleanValue(request.getCustomerAddress()));
@@ -456,6 +462,7 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, true);
         append(canonical, reservation.getSourceQuote().getId());
+        if (reservation.getSourceQuote().getSetupEarlyExitPolicyVersion() != null) append(canonical, reservation.getSourceQuote().getSetupEarlyExitPolicyVersion());
         append(canonical, cleanValue(reservation.getIdentityDocumentNumber()));
         append(canonical, cleanValue(reservation.getCustomerPhone()));
         append(canonical, cleanValue(reservation.getCustomerAddress()));

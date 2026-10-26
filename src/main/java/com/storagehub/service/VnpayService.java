@@ -69,6 +69,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 
 public class VnpayService {
+    @Autowired
+    private com.storagehub.domain.repo.RentalRepository refundRentals;
+    @Autowired
+    private ObjectProvider<com.storagehub.service.renewal.RenewalTransactionReader> renewalTransactionReaders;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.RenewalInstallmentService> installments;
     @Autowired(required = false)
@@ -78,15 +82,6 @@ public class VnpayService {
     @Autowired(required = false)
     private SystemSettingRepository systemSettingRepository;
 
-    @Transactional
-    public RenewalVnpayPaymentResponse createInstallmentPaymentUrl(ActorPrincipal actor,UUID renewalId,UUID quoteId,String key,String ip){
-        requireConfigured();requireRenewalSandbox();
-        if(renewalSettlement==null||renewalSettlement.getIfAvailable()==null)throw ApiExceptions.conflict("Chưa bật đối soát thanh toán gia hạn.");
-        var source=installments.getIfAvailable();if(source==null)throw ApiExceptions.conflict("Chưa bật thanh toán theo kỳ.");
-        var payment=source.prepareIntent(actor,renewalId,quoteId,key);
-        if(java.util.Set.of(PaymentStatus.PAID,PaymentStatus.FAILED,PaymentStatus.CANCELLED).contains(payment.getStatus()))return renewalPaymentResponse(payment,renewalPaymentMessage(payment),null);
-        return renewalPaymentUrl(payment,ip);
-    }
     @Transactional(readOnly=true)
     public RenewalVnpayPaymentResponse installmentPayment(ActorPrincipal actor,UUID renewalId,UUID paymentId,String audience){
         var source=installments.getIfAvailable();if(source==null)throw ApiExceptions.conflict("Chưa bật thanh toán theo kỳ.");
@@ -178,12 +173,14 @@ public class VnpayService {
                 throw ApiExceptions.conflict("Idempotency-Key is already used for another payment");
             }
             requirePayable(existing.getReservation());
+            ReservationSnapshotView.requireSetupDays(existing.getReservation(),snapshotRepository.findByReservation_Id(reservationId).orElse(null));
             return paymentUrl(existing, clientIp);
         }
 
         Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         requirePayable(reservation);
+        ReservationSnapshotView.requireSetupDays(reservation,snapshotRepository.findByReservation_Id(reservationId).orElse(null));
         Payment latestPayment = paymentRepository
             .findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(reservationId, PaymentType.RESERVATION_DEPOSIT)
             .orElse(null);
@@ -586,6 +583,9 @@ public class VnpayService {
         }
         if(payment.getRenewal()!=null)
             throw ApiExceptions.conflict("Renewal refunds require the Renewal refund entitlement and payout workflow");
+        if (refundRentals.findByReservation_Id(payment.getReservation().getId())
+            .filter(rental -> rental.getSetupStartedAt() != null).isPresent())
+            throw ApiExceptions.conflict("Tiền của hồ sơ đã bàn giao phải được hoàn qua quyết toán trả kho để tránh hoàn trùng.");
         BigDecimal remaining = payment.getAmount().subtract(payment.getRefundedAmount());
         if (request.amount().compareTo(remaining) > 0) {
             throw ApiExceptions.validation("Refund amount exceeds the refundable amount", null);
@@ -949,12 +949,18 @@ public class VnpayService {
     }
 
     private RenewalVnpayPaymentResponse renewalPaymentResponse(Payment payment,String message,String url) {
+        var reader=renewalTransactionReaders==null?null:renewalTransactionReaders.getIfAvailable();
+        var transaction=reader==null?null:reader.read(payment,Instant.now());
+        boolean preparationHeldAndReconciled=com.storagehub.service.renewal.RenewalPreparationResolution.blocked(payment)
+            &&transaction!=null&&transaction.receiptAvailable();
         return new RenewalVnpayPaymentResponse(payment.getId(),payment.getRenewal().getId(),
             payment.getRenewalRevision()==null?null:payment.getRenewalRevision().getId(),payment.getGatewayIntentId(),
             payment.getAmount(),payment.getCurrency(),payment.getStatus(),payment.getPaymentDeadline(),payment.getPaidAt(),
-            payment.getStatus()==PaymentStatus.PAID&&(payment.getFailureCode()!=null
+            payment.getStatus()==PaymentStatus.PAID&&(payment.getFailureCode()!=null&&!preparationHeldAndReconciled
                 ||"RECONCILIATION_REQUIRED".equals(renewalSettlementStage(payment))),message,url,renewalSettlementStage(payment),
-            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt());
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
+            transaction==null?com.storagehub.service.renewal.RenewalTransactionStatus.resolve(payment,false,BigDecimal.ZERO,Instant.now()):transaction.status(),
+            transaction!=null&&transaction.receiptAvailable());
     }
 
     private String renewalSettlementStage(Payment payment) {
@@ -970,8 +976,10 @@ public class VnpayService {
     }
 
     private String renewalPaymentMessage(Payment payment) {
+        if(com.storagehub.service.renewal.RenewalPreparationResolution.blocked(payment))
+            return "Gia hạn đang chờ cơ sở xử lý bước ký hoặc hoàn tiền.";
         if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT){
-            if(payment.getStatus()==PaymentStatus.FAILED)return "Giao dịch thanh toán kỳ thất bại; có thể lấy báo giá mới để thử lại.";
+            if(payment.getStatus()==PaymentStatus.FAILED)return "Giao dịch thanh toán kỳ cũ thất bại. Hệ thống đã ngừng thanh toán từng tháng; vui lòng liên hệ nhân viên để được hỗ trợ.";
             if(payment.getStatus()==PaymentStatus.CANCELLED)return "Giao dịch thanh toán kỳ đã hủy.";
             if(payment.getStatus()==PaymentStatus.PAID)return payment.getRenewalAllocatedAt()!=null?"Đã phân bổ tiền vào các kỳ thuê.":"Đã nhận tiền, đang đối soát phân bổ theo kỳ.";
             return "Đang chờ kết quả thanh toán kỳ từ VNPay.";
