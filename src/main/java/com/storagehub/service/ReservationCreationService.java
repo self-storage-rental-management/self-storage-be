@@ -252,7 +252,8 @@ public class ReservationCreationService {
             }
         }
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
-        BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
+        BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
+        BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(depositRate));
         BigDecimal securityDeposit = money(
             (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
                 ? currentMonthlyPrice
@@ -348,6 +349,7 @@ public class ReservationCreationService {
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
         response.setFreeSetupDays(snapshot.getFreeSetupDays());
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());

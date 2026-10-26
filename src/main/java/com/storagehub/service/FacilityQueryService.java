@@ -65,7 +65,7 @@ public class FacilityQueryService {
                 facility.getAddress(),
                 facility.getCity(),
                 facility.getStatus(),
-                storageUnitRepository.countByFacility_Id(facility.getId()),
+                storageUnitRepository.countByFacility_IdAndStatusIn(facility.getId(), StorageUnitStatus.operationalStatuses()),
                 storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.available),
                 unitTypeRepository.findMinimumMonthlyPrice(facility.getId(), UnitTypeStatus.active),
                 facility.getCreatedAt(),
@@ -121,7 +121,7 @@ public class FacilityQueryService {
             facility.getStatus(),
             facility.getCreatedAt(),
             facility.getUpdatedAt(),
-            storageUnitRepository.countByFacility_Id(facility.getId()),
+            storageUnitRepository.countByFacility_IdAndStatusIn(facility.getId(), StorageUnitStatus.operationalStatuses()),
             storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.available),
             storageUnitRepository.countByFacility_IdAndStatus(facility.getId(), StorageUnitStatus.occupied),
             unitTypeRepository.findByFacility_IdOrderByCodeAsc(facility.getId()).stream()

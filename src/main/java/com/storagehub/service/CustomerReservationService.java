@@ -270,19 +270,32 @@ public class CustomerReservationService {
             throw ApiExceptions.conflict("The setup goods declaration has already been locked or amended");
         }
 
+        List<ReservationGoodsItem> existing = goodsItemRepository
+            .findAllByReservation_IdOrderByCreatedAtAsc(reservationId);
+        if (existing.size() != request.goodsItems().size()) {
+            throw ApiExceptions.conflict("Không thể thêm hoặc xóa loại hàng trong lần sửa setup. Chỉ được điều chỉnh thông tin hàng đã khai báo.");
+        }
         BigDecimal totalVolume = BigDecimal.ZERO;
         BigDecimal totalWeight = BigDecimal.ZERO;
-        List<ReservationGoodsItem> replacement = new java.util.ArrayList<>();
-        for (var input : request.goodsItems()) {
+        BigDecimal rackLengthCm = ReservationSnapshotView.unitTypeDecimal(reservation, "rackLengthM").movePointRight(2);
+        BigDecimal rackWidthCm = ReservationSnapshotView.unitTypeDecimal(reservation, "rackWidthM").movePointRight(2);
+        BigDecimal rackHeightCm = ReservationSnapshotView.unitTypeDecimal(reservation, "rackHeightM").movePointRight(2);
+        var beforeGoods = existing.stream().map(this::goodsAuditSnapshot).toList();
+        for (int index = 0; index < request.goodsItems().size(); index++) {
+            var input = request.goodsItems().get(index);
+            ReservationGoodsItem item = existing.get(index);
+            if (!sameGoodsIdentity(item, input)) {
+                throw ApiExceptions.conflict("Không thể đổi loại hàng hoặc vật liệu trong lần sửa setup. Vui lòng liên hệ nhân viên cơ sở.");
+            }
             BigDecimal itemVolume = input.getLengthCm().multiply(input.getWidthCm())
                 .multiply(input.getHeightCm()).divide(BigDecimal.valueOf(1_000_000), 12, RoundingMode.HALF_UP);
             totalVolume = totalVolume.add(itemVolume.multiply(BigDecimal.valueOf(input.getQuantity())));
             totalWeight = totalWeight.add(input.getWeightPerItemKg().multiply(BigDecimal.valueOf(input.getQuantity())));
-            ReservationGoodsItem item = new ReservationGoodsItem();
-            item.setReservation(reservation);
-            item.setCategory(input.getCategory());
+            if (!dimensionsFit(input.getLengthCm(), input.getWidthCm(), input.getHeightCm(),
+                rackLengthCm, rackWidthCm, rackHeightCm)) {
+                throw ApiExceptions.conflict("Kích thước hàng thứ " + (index + 1) + " không vừa khung kệ của loại kho đã đặt.");
+            }
             item.setCustomGoodsName(clean(input.getCustomGoodsName()));
-            item.setMaterialName(clean(input.getMaterialName()));
             item.setCustomMaterial(clean(input.getCustomMaterial()));
             item.setDescription(clean(input.getDescription()));
             item.setQuantity(input.getQuantity());
@@ -292,20 +305,25 @@ public class CustomerReservationService {
             item.setWeightKg(input.getWeightPerItemKg());
             item.setFragile(input.isFragile());
             item.setCustomerNote(clean(input.getCustomerNote()));
-            item.setRequiresStaffReview(input.getCategory() == GoodsCategory.OTHER);
-            item.setReviewStatus(item.isRequiresStaffReview() ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
-            replacement.add(item);
         }
-        if (reservation.getUnitType().getVolumeM3() != null
-            && totalVolume.compareTo(reservation.getUnitType().getVolumeM3()) > 0) {
+        BigDecimal snapshotVolume = ReservationSnapshotView.unitTypeDecimal(reservation, "lengthM")
+            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "widthM"))
+            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "heightM"));
+        BigDecimal usableRackVolume = ReservationSnapshotView.unitTypeDecimal(reservation, "rackLengthM")
+            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "rackWidthM"))
+            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "rackHeightM"))
+            .multiply(new BigDecimal("0.80"));
+        int requiredRacks = usableRackVolume.signum() > 0
+            ? totalVolume.divide(usableRackVolume, 0, RoundingMode.CEILING).intValueExact()
+            : Integer.MAX_VALUE;
+        if (totalVolume.compareTo(snapshotVolume) > 0
+            || requiredRacks > ReservationSnapshotView.unitTypeRackCount(reservation)) {
             throw ApiExceptions.conflict("Goods volume exceeds the storage unit capacity");
         }
-        if (reservation.getUnitType().getMaxLoadKg() != null
-            && totalWeight.compareTo(reservation.getUnitType().getMaxLoadKg()) > 0) {
+        if (totalWeight.compareTo(ReservationSnapshotView.unitTypeDecimal(reservation, "maxLoadKg")) > 0) {
             throw ApiExceptions.conflict("Goods weight exceeds the storage unit capacity");
         }
-        goodsItemRepository.deleteAll(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId));
-        goodsItemRepository.saveAll(replacement);
+        goodsItemRepository.saveAll(existing);
         reservation.setTotalGoodsVolumeM3(totalVolume.setScale(6, RoundingMode.HALF_UP));
         reservation.setTotalGoodsWeightKg(totalWeight.setScale(2, RoundingMode.HALF_UP));
         reservation.setGoodsCondition(clean(request.goodsCondition()));
@@ -313,8 +331,9 @@ public class CustomerReservationService {
         reservationRepository.saveAndFlush(reservation);
         auditLogService.recordMutation(
             reservation.getCustomer(), "SETUP_GOODS_DECLARATION_AMENDED", "Reservation", reservation.getId(),
-            reservation.getFacility().getId(), null,
-            Map.of("revisionUsedAt", now, "itemCount", replacement.size())
+            reservation.getFacility().getId(), beforeGoods,
+            Map.of("revisionUsedAt", now, "itemCount", existing.size(),
+                "goods", existing.stream().map(this::goodsAuditSnapshot).toList())
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.CHECKIN,
@@ -323,6 +342,48 @@ public class CustomerReservationService {
             reservation.getId()
         );
         return toDetailResponse(reservation);
+    }
+
+    private boolean sameGoodsIdentity(ReservationGoodsItem stored, com.storagehub.api.reservation.GoodsItemRequest input) {
+        if (stored.getCatalogCategoryId() != null || input.getCatalogCategoryId() != null) {
+            if (!java.util.Objects.equals(stored.getCatalogCategoryId(), input.getCatalogCategoryId())) return false;
+        } else if (stored.getCategory() != input.getCategory()) return false;
+        if (stored.getCatalogMaterialId() != null || input.getCatalogMaterialId() != null) {
+            return java.util.Objects.equals(stored.getCatalogMaterialId(), input.getCatalogMaterialId());
+        }
+        return java.util.Objects.equals(clean(stored.getMaterialName()), clean(input.getMaterialName()))
+            && java.util.Objects.equals(clean(stored.getCustomMaterial()), clean(input.getCustomMaterial()));
+    }
+
+    private boolean dimensionsFit(BigDecimal a, BigDecimal b, BigDecimal c,
+                                  BigDecimal x, BigDecimal y, BigDecimal z) {
+        var goods = new java.util.ArrayList<>(List.of(a, b, c));
+        var rack = new java.util.ArrayList<>(List.of(x, y, z));
+        goods.sort(java.util.Comparator.naturalOrder());
+        rack.sort(java.util.Comparator.naturalOrder());
+        for (int index = 0; index < goods.size(); index++) {
+            if (goods.get(index).compareTo(rack.get(index)) > 0) return false;
+        }
+        return true;
+    }
+
+    private Map<String, Object> goodsAuditSnapshot(ReservationGoodsItem item) {
+        Map<String, Object> value = new java.util.LinkedHashMap<>();
+        value.put("goodsCode", item.getGoodsCode());
+        value.put("catalogCategoryId", item.getCatalogCategoryId());
+        value.put("catalogMaterialId", item.getCatalogMaterialId());
+        value.put("categoryCode", item.getCategoryCode());
+        value.put("categoryName", item.getCategoryName());
+        value.put("materialCode", item.getMaterialCode());
+        value.put("materialName", item.getMaterialName());
+        value.put("description", item.getDescription());
+        value.put("quantity", item.getQuantity());
+        value.put("lengthCm", item.getLengthCm());
+        value.put("widthCm", item.getWidthCm());
+        value.put("heightCm", item.getHeightCm());
+        value.put("weightKg", item.getWeightKg());
+        value.put("fragile", item.isFragile());
+        return value;
     }
 
     @Transactional(readOnly = true)
@@ -712,6 +773,7 @@ public class CustomerReservationService {
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
         response.setFreeSetupDays(snapshot.getFreeSetupDays());
         response.setSetupGoodsRevisionUsedAt(reservation.getSetupGoodsRevisionUsedAt());
         if (rentalRepository != null) {

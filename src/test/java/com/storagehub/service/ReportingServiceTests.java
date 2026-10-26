@@ -210,7 +210,8 @@ class ReportingServiceTests {
     @Test
     void getBusinessPerformanceReport_success() {
         when(facilityRepository.findAll()).thenReturn(List.of(facility));
-        when(storageUnitRepository.countByFacility_Id(facilityId)).thenReturn(10L);
+        when(storageUnitRepository.countByFacility_IdAndStatusIn(
+            facilityId, StorageUnitStatus.operationalStatuses())).thenReturn(10L);
         when(storageUnitRepository.countByFacility_IdAndStatus(facilityId, StorageUnitStatus.occupied)).thenReturn(8L);
         when(rentalRepository.countByFacility_IdAndStatus(facilityId, RentalStatus.active)).thenReturn(8L);
         when(returnCaseRepository.countByFacility_IdAndStatusNotIn(eq(facilityId), any())).thenReturn(1L);

@@ -260,7 +260,7 @@ public class ReportingService {
                     .filter(p -> p.getReservation() != null && p.getReservation().getFacility().getId().equals(fac.getId()))
                     .toList();
                 BigDecimal facRevenue = facPayments.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-                long totalUnits = storageUnitRepository.countByFacility_Id(fac.getId());
+                long totalUnits = storageUnitRepository.countByFacility_IdAndStatusIn(fac.getId(), StorageUnitStatus.operationalStatuses());
                 long occupiedUnits = storageUnitRepository.countByFacility_IdAndStatus(fac.getId(), StorageUnitStatus.occupied);
                 double occRate = totalUnits > 0
                     ? BigDecimal.valueOf((occupiedUnits * 100.0) / totalUnits).setScale(1, RoundingMode.HALF_UP).doubleValue()
@@ -301,7 +301,7 @@ public class ReportingService {
 
         List<BusinessPerformanceReportResponse.FacilityPerformance> comparisons = new ArrayList<>();
         for (Facility fac : facilities) {
-            long units = storageUnitRepository.countByFacility_Id(fac.getId());
+            long units = storageUnitRepository.countByFacility_IdAndStatusIn(fac.getId(), StorageUnitStatus.operationalStatuses());
             long occupied = storageUnitRepository.countByFacility_IdAndStatus(fac.getId(), StorageUnitStatus.occupied);
             totalCapacity += units;
             totalOccupied += occupied;
@@ -372,6 +372,8 @@ public class ReportingService {
             case maintenance -> "Bảo trì";
             case held -> "Tạm giữ";
             case assigned -> "Đã phân bổ";
+            case inactive -> "Tạm ngưng";
+            case archived -> "Đã lưu trữ";
         };
     }
 
