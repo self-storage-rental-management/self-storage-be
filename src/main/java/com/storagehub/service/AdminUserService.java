@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -568,22 +569,17 @@ public class AdminUserService {
             throw ApiExceptions.conflict("Không thể xóa Admin cuối cùng");
         }
 
-        // Preserve rentals, payments and audit references. Deletion is a
-        // soft anonymization, never a cascade that removes business history.
         String originalEmail = user.getEmail();
-        revokeSessions(user);
-        scopeRepository.deleteByUserId(user.getId());
-        user.getRoles().clear();
-        user.setStatus(UserStatus.DISABLED);
-        user.setEmail("deleted+" + user.getId() + "@anonymized.invalid");
-        user.setFullName("Tài khoản đã ẩn danh");
-        user.setPhone(null);
-        user.setPermanentAddress(null);
-        user.setEmergencyContactName(null);
-        user.setEmergencyContactPhone(null);
-        user.setAvatarUrl(null);
-        user.setMustChangePassword(true);
-        userRepository.saveAndFlush(user);
+        try {
+            deleteAccountOwnedData(user);
+            entityManager.remove(user);
+            entityManager.flush();
+        } catch (DataIntegrityViolationException exception) {
+            throw ApiExceptions.conflict(
+                "Không thể xóa tài khoản vì còn dữ liệu nghiệp vụ hoặc bằng chứng liên quan. "
+                    + "Hãy hoàn tất hoặc lưu trữ các hồ sơ đó trước khi xóa."
+            );
+        }
 
         auditLogService.recordMutation(
             userRepository.getReferenceById(actor.userId()),
@@ -594,5 +590,34 @@ public class AdminUserService {
             originalEmail,
             null
         );
+    }
+
+    /**
+     * Removes account-only rows before the user row is deleted. Business rows
+     * keep their foreign keys so deleting a user with reservations, rentals,
+     * payments, evidence or audit-owned files is rejected by the database.
+     */
+    private void deleteAccountOwnedData(User user) {
+        UUID userId = user.getId();
+
+        entityManager.createQuery("delete from Session session where session.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("delete from AuthChallenge challenge where challenge.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("delete from Notification notification where notification.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("update LoginHistory history set history.user = null where history.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("update ActivityLog log set log.actor = null where log.actor.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+
+        scopeRepository.deleteByUserId(userId);
+        user.getRoles().clear();
+        entityManager.flush();
     }
 }
