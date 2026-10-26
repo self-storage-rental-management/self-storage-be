@@ -20,6 +20,12 @@ import lombok.Setter;
 @NoArgsConstructor
 public class ReservationPricingSnapshot extends BaseEntity {
 
+    @Column(length = 50)
+    private String setupEarlyExitPolicyVersion;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal setupEarlyExitFee;
+
     @OneToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "reservation_id", nullable = false, unique = true)
     private Reservation reservation;

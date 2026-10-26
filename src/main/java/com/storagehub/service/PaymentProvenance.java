@@ -97,7 +97,8 @@ public class PaymentProvenance {
     private Classification classifyRenewal(Payment p) {
         if(p.getRenewal()==null||p.getRenewal().getRental()==null||p.getRenewal().getRental().getCustomer()==null
             ||p.getRenewalRevision()==null||p.getPaymentDeadline()==null||p.getStatus()!=PaymentStatus.PAID
-            ||(p.getFailureCode()!=null&&!"RENEWAL_PAYMENT_RECONCILIATION_REQUIRED".equals(p.getFailureCode()))
+            ||(p.getFailureCode()!=null&&!Set.of("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED",
+                com.storagehub.service.renewal.RenewalPreparationResolution.BLOCKED).contains(p.getFailureCode()))
             ||!"VNPAY".equals(p.getGatewayProvider())||!Set.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(p.getPurpose())
             ||!"VND".equals(p.getCurrency())||p.getPaidAt()==null||p.getGatewayTransactionNo()==null
             ||p.getGatewayTransactionNo().isBlank()||!"00".equals(p.getGatewayResponseCode())

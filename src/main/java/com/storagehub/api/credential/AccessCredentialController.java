@@ -69,6 +69,17 @@ public class AccessCredentialController {
         );
     }
 
+    @PostMapping("/staff/access-credentials/{credentialId}/access")
+    public ApiResponse<CredentialAccessResponse> recordAccess(
+        @PathVariable UUID credentialId,
+        @Valid @RequestBody RecordCredentialAccessRequest request
+    ) {
+        return new ApiResponse<>(
+            service.recordAccess(actorContext.required(), credentialId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     /** Staff and Manager can monitor history; only Staff may mutate credentials. */
     @GetMapping({"/staff/access-credentials", "/manager/access-credentials"})
     public PageResponse<AccessCredentialResponse> list(

@@ -22,9 +22,10 @@ public final class RenewalTermCalculator {
         try {
             LocalDate startDate = start != null ? start : oldEnd.plusDays(1);
             LocalDate end = startDate.plusMonths(packageMonths);
-            BigDecimal subtotal = money(price.multiply(BigDecimal.valueOf(packageMonths)));
-            BigDecimal discount = money(subtotal.multiply(discountRate));
-            BigDecimal net = money(subtotal.subtract(discount));
+            var rent = RenewalRentCalculation.calculate(price, packageMonths, discountRate);
+            BigDecimal subtotal = rent.subtotal();
+            BigDecimal discount = rent.discount();
+            BigDecimal net = rent.netRent();
             BigDecimal deposit = money(net.multiply(depositRate));
             return new Terms(startDate,end,end.minusDays(1),subtotal,discount,net,deposit,money(net.subtract(deposit)));
         } catch (DateTimeException | ArithmeticException e) {

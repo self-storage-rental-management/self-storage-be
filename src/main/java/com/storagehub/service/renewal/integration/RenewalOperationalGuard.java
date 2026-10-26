@@ -19,6 +19,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class RenewalOperationalGuard {
     private final EntityManager em;
 
+    // Expected eligibility denials are rendered by read projections. This guard never
+    // writes; a caught business denial must not poison the caller's read transaction.
+    // Write commands still roll back when the denial escapes their service boundary.
+    @Transactional(readOnly=true, noRollbackFor=com.storagehub.common.api.ApiException.class)
     public void requireNoKnownConflict(Rental rental) {
         if(rental==null || rental.getId()==null || rental.getFacility()==null || rental.getStorageUnit()==null)
             throw ApiExceptions.conflict("DEFERRED_SOURCE: Rental operational context incomplete");

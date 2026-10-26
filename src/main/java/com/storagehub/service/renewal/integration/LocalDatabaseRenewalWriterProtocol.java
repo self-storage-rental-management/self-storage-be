@@ -51,7 +51,9 @@ public class LocalDatabaseRenewalWriterProtocol implements RenewalSharedWriterPr
         var unit=em.find(StorageUnit.class,locked.getStorageUnit().getId(),LockModeType.PESSIMISTIC_WRITE);
         if(unit==null)throw ApiExceptions.conflict("Renewal unit missing");
         em.refresh(unit,LockModeType.PESSIMISTIC_WRITE);
-        if(start==null||end==null||!end.isAfter(start)||!periods.require(locked).endExclusive().equals(start))
+        var previous=periods.require(locked);
+        if(start==null||end==null||!end.isAfter(start)||start.isBefore(previous.endExclusive())
+            ||start.isAfter(com.storagehub.service.rental.period.RenewalEffectivePeriod.start(previous,now)))
             throw ApiExceptions.conflict("Renewal extension interval changed");
         guard.requireNoKnownConflict(locked);
         var recovery=recoveries.getIfAvailable();

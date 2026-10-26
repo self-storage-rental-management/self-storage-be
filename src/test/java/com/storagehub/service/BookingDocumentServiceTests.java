@@ -103,6 +103,7 @@ class BookingDocumentServiceTests {
         snapshot.setRemainingRentalAmount(new BigDecimal("600000.00"));
         snapshot.setDueAtCheckIn(new BigDecimal("1600000.00"));
         snapshot.setTotalInitialObligation(new BigDecimal("2000000.00"));
+        com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation, snapshot);
     }
 
     @Test
@@ -151,6 +152,7 @@ class BookingDocumentServiceTests {
         snapshot.setDiscountRate(new BigDecimal("0.0500"));
         snapshot.setDiscountAmount(new BigDecimal("375000.00"));
         snapshot.setNetRentalAmount(new BigDecimal("7125000.00"));
+        com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation, snapshot);
 
         AtomicReference<Path> storedPath = new AtomicReference<>();
         when(documentRepository.findByReservation_IdAndReservation_Customer_Id(reservation.getId(), actor.userId()))

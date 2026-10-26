@@ -39,6 +39,9 @@ import org.springframework.web.multipart.MultipartFile;
 @RequiredArgsConstructor
 public class FileStorageService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.ReturnCaseRepository returnCaseRepository;
+
     private static final Set<String> ALLOWED_TYPES = Set.of("image/jpeg", "image/png", "image/webp", "application/pdf");
     private static final Set<CheckInStatus> ACTIVE_CHECK_IN_EVIDENCE_STATUSES = Set.of(
         CheckInStatus.scheduled,
@@ -142,6 +145,17 @@ public class FileStorageService {
     }
 
     private void requireDownloadAccess(ActorPrincipal actor, FileAsset asset) {
+        if ("RETURN_CASE".equals(asset.getEntityType())) {
+            var rc = returnCaseRepository.findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            if (actor.hasRole(RoleCode.CUSTOMER)) {
+                if (!rc.getCustomer().getId().equals(actor.userId())) throw ApiExceptions.notFound("File was not found");
+            } else {
+                authorizationService.require(actor, SystemPermission.VIEW_RETURNS);
+                facilityScopeService.assertCanRead(actor, rc.getFacility().getId());
+            }
+            return;
+        }
         if(com.storagehub.service.integration.DuongFileEvidence.handles(asset.getEntityType())) {
             duongEvidence().requireDownload(actor,asset);
             return; // Deliberately before uploader shortcut, so INTERNAL never leaks to Customer.
@@ -266,6 +280,21 @@ public class FileStorageService {
             if (!ACTIVE_CHECK_IN_EVIDENCE_STATUSES.contains(checkIn.getStatus())) {
                 throw ApiExceptions.conflict("Evidence can only be uploaded while the check-in workflow is active");
             }
+            return;
+        }
+        if ("RETURN_CASE".equals(entityType)) {
+            if (entityId == null) throw ApiExceptions.validation("entityId is required for return evidence", null);
+            var rc = returnCaseRepository.findById(entityId)
+                .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
+            if (actor.hasRole(RoleCode.STAFF)) {
+                authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
+                facilityScopeService.assertCanOperate(actor, rc.getFacility().getId());
+            } else {
+                authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
+                facilityScopeService.assertCanManage(actor, rc.getFacility().getId());
+            }
+            if (rc.getStatus() == com.storagehub.domain.model.ReturnCaseStatus.completed)
+                throw ApiExceptions.conflict("Hồ sơ đã hoàn tất, không tải thêm chứng từ quyết toán.");
             return;
         }
         if ("MAINTENANCE_TASK".equals(entityType)) {

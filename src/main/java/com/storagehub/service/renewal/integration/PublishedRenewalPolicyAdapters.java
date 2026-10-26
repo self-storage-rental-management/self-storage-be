@@ -19,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Component @RequiredArgsConstructor @Transactional(readOnly=true)
 public class PublishedRenewalPolicyAdapters implements RenewalSources.PolicySource,RenewalOperationSources.PolicySource,OverdueSources.TermSource {
+    @org.springframework.beans.factory.annotation.Autowired
+    private EffectiveRenewalPolicySource effectivePolicies;
     private final RenewalPolicyPublicationService policies;
     private final RentalPeriodResolver periods;
     private final EntityManager em;
@@ -26,21 +28,25 @@ public class PublishedRenewalPolicyAdapters implements RenewalSources.PolicySour
     private final com.storagehub.service.integration.DuongResourceAccess access;
     public Optional<RenewalSources.Policy> read(Rental r,LocalDate start) {
         if(r==null||r.getFacility()==null)return Optional.empty();
-        return policies.read(r.getFacility().getId(),start).map(s->{var p=s.policy();return new RenewalSources.Policy(s.reference(),p.version(),Duration.ZERO,Duration.ofHours(p.paymentWindowHours()),0,p.depositRate(),p.eligiblePackageIds());});
+        return effective(r,start).map(p -> new RenewalSources.Policy(p.reference(),p.version(),Duration.ZERO,p.paymentWindow(),0,p.depositRate(),p.eligiblePackageIds()));
     }
     public Optional<RenewalOperationSources.Policy> read(Renewal n) {
         if(n==null||n.getRental()==null||n.getRental().getFacility()==null)return Optional.empty();
         var period=periods.read(n.getRental());if(period.isEmpty())return Optional.empty();
-        return policies.read(n.getRental().getFacility().getId(),period.get().endExclusive()).filter(s->s.policy().signing()!=null)
-            .map(s->new RenewalOperationSources.Policy(s.reference(),s.policy().version(),Duration.ofMinutes(s.policy().signing().signingWindowMinutes()),Duration.ofMinutes(s.policy().signing().exceptionExtensionLimitMinutes())));
+        return effective(n.getRental(),period.get().endExclusive()).filter(s->s.signing()!=null)
+            .map(s->new RenewalOperationSources.Policy(s.reference(),s.version(),Duration.ofMinutes(s.signing().signingWindowMinutes()),Duration.ofMinutes(s.signing().exceptionExtensionLimitMinutes())));
     }
     public Optional<OverdueSources.Term> term(Rental r,Instant now) {
         if(r==null||r.getFacility()==null||now==null)return Optional.empty();
         var period=periods.read(r);if(period.isEmpty())return Optional.empty();
-        return policies.read(r.getFacility().getId(),now.atZone(BusinessTime.ZONE).toLocalDate()).filter(s->s.policy().term()!=null).map(s->{
-            var t=s.policy().term();var last=period.get().lastPermittedDate();var zone=ZoneId.of(t.timezone());
-            return com.storagehub.service.overdue.RenewalOverdueTimeline.term(s.reference(),s.policy().version(),last,zone);
+        return effective(r,now.atZone(BusinessTime.ZONE).toLocalDate()).filter(s->s.term()!=null).map(s->{
+            var t=s.term();var last=period.get().lastPermittedDate();var zone=ZoneId.of(t.timezone());
+            return com.storagehub.service.overdue.RenewalOverdueTimeline.term(s.reference(),s.version(),last,zone);
         });
+    }
+    private Optional<EffectiveRenewalPolicySource.Resolved> effective(Rental rental,LocalDate date) {
+        return effectivePolicies != null ? effectivePolicies.read(rental,date)
+            : policies.read(rental.getFacility().getId(),date).map(EffectiveRenewalPolicySource.Resolved::published);
     }
     public void requireFacilityFault(Renewal n,UUID incident,UUID reviewer) {
         var user=reviewer==null?null:em.find(User.class,reviewer);
