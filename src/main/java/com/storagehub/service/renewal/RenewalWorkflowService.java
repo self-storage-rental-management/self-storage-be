@@ -56,6 +56,7 @@ public class RenewalWorkflowService {
         return prices(r,context).stream().map(p->new RenewalCommands.Option(p.packageCode(),p.months(),p.packageName())).toList();
     }
     public RenewalQuoteResponse quote(ActorPrincipal a,UUID rentalId,RenewalCommands.Quote body){
+        RenewalPaymentPlan.requireSupported(body.paymentPlan());
         if(Boolean.TRUE.equals(body.fullPayment()))throw ApiExceptions.validation("Gia hạn chỉ hỗ trợ trả trước 20%, phần còn lại thanh toán khi ký.",null);
         owned(a,rentalId);var r=store.lockRental(rentalId);em.refresh(r);checkOwner(a,r);Instant now=now();var g=gate(r,now);
         var backendStart=com.storagehub.service.rental.period.RenewalEffectivePeriod.start(g.period(),now);
@@ -136,8 +137,8 @@ public class RenewalWorkflowService {
         if(selection==null||selection.getAppointmentRef()==null||selection.getAppointmentStart()==null||selection.getAppointmentEnd()==null
             ||!selection.getAppointmentStart().isAfter(now))throw ApiExceptions.conflict("Select a future signing appointment before payment");
         if(selection.getAppointmentEnd().isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
-        if(selection.getAppointmentEnd().isAfter(RenewalSigningDeadline.calculate(now,gate.eligibility().recoveryCutoff())))
-            throw ApiExceptions.conflict("Select a signing appointment within the three-day signing window");
+        if(selection.getAppointmentEnd().isAfter(RenewalSigningDeadline.calculate(now,gate.eligibility().recoveryCutoff(),accepted)))
+            throw ApiExceptions.conflict("Select a signing appointment within the accepted package signing window");
         var selectedCalendar=calendars.getIfAvailable();
         if(selectedCalendar==null||!selectedCalendar.atomic())throw deferred("Signing calendar unavailable");
         var selectedSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart()).orElseThrow(()->ApiExceptions.conflict("Selected signing slot is no longer available"));
@@ -252,7 +253,9 @@ public class RenewalWorkflowService {
         if(isPrePayment(n)){try{
             boolean full=t.paymentPlan()==null||t.remainingRentalAmount().signum()==0;
             var current=terms(n.getRental(),gate(n.getRental(),now()),t.pricingPackageCode(),t.paymentPlan(),full,t.extensionStartDate());
-            review=store.canonical(t).equals(store.canonical(current))?"READY":"AWAITING_CUSTOMER_CONFIRMATION";
+            var comparison=mapper.valueToTree(current);
+            ((com.fasterxml.jackson.databind.node.ObjectNode)comparison).set("signingWindowDays",mapper.valueToTree(t.signingWindowDays()));
+            review=store.canonical(t).equals(store.canonical(comparison))?"READY":"AWAITING_CUSTOMER_CONFIRMATION";
         }catch(com.storagehub.common.api.ApiException ignored){}}
         var financial=legacy.financialCheck();var fs=finance.getIfAvailable();
         if(fs!=null){var state=fs.read(n.getRental());if(state.isPresent()&&state.get().checkedAt()!=null&&!state.get().checkedAt().isAfter(now())&&state.get().dueObligations()!=null){var s=state.get();financial=new RenewalResponse.FinancialCheck(fs.consistentThroughApproval()?"COMPLETE":"PARTIAL",s.checkedAt(),s.dueObligations(),s.unresolvedDispute());}}
@@ -357,18 +360,19 @@ public class RenewalWorkflowService {
     }
     private RenewalQuoteResponse.Terms terms(Rental r,Gate g,String code,RenewalPaymentPlan plan,boolean fullPayment,LocalDate customStart){
         var p=prices(r,new PolicyPeriod(g.policy(),g.period())).stream().filter(x->x.packageCode().equals(code)).findFirst().orElseThrow(()->ApiExceptions.conflict("Package not eligible for Renewal"));
-        // Package discounts apply to full-term payment. Monthly installments use the catalog monthly price.
-        var discount=plan==RenewalPaymentPlan.MONTHLY?BigDecimal.ZERO:p.discountRate();
+        RenewalPaymentPlan.requireSupported(plan);
+        var discount=p.discountRate();
         LocalDate startBase = customStart != null ? customStart : com.storagehub.service.rental.period.RenewalEffectivePeriod.start(g.period(),now());
         if(startBase.isBefore(g.period().endExclusive())||startBase.isAfter(com.storagehub.service.rental.period.RenewalEffectivePeriod.start(g.period(),now())))
             throw ApiExceptions.conflict("Ngày dự kiến gia hạn không hợp lệ; cần lấy báo giá mới từ hệ thống.");
         var t=RenewalTermCalculator.calculate(startBase,g.period.lastPermittedDate(),p.months(),p.monthlyPrice(),discount,fullPayment?BigDecimal.ONE:new BigDecimal("0.20"));
-        var deposit=fullPayment?t.netRent():(plan==RenewalPaymentPlan.MONTHLY?p.monthlyPrice():t.netRent()).multiply(new BigDecimal("0.20")).setScale(0,java.math.RoundingMode.HALF_UP);
+        var deposit=fullPayment?t.netRent():t.netRent().multiply(new BigDecimal("0.20")).setScale(0,java.math.RoundingMode.HALF_UP);
         var remaining=t.netRent().subtract(deposit);
         if(t.netRent().precision()>14)throw ApiExceptions.conflict("Shared renewal amount exceeds supported precision");
-        return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),discount,t.subtotal(),t.discountAmount(),t.netRent(),deposit,remaining,p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate(),fullPayment?null:plan);
+        return new RenewalQuoteResponse.Terms(r.getContractEndDate(),t.startDate(),t.endExclusive(),t.newEndDate(),p.unitTypeId(),p.packageCode(),p.packageId(),p.packageVersion(),p.months(),p.monthlyPrice(),discount,t.subtotal(),t.discountAmount(),t.netRent(),deposit,remaining,p.currency(),g.policy.reference(),g.policy.version(),r.getStorageUnit().getId(),r.getFacility().getId(),g.period.convention().name(),g.period.startDate(),fullPayment?null:plan,RenewalSigningDeadline.daysForMonths(p.months()));
     }
     private void requireNewPaymentTerms(RenewalQuoteResponse.Terms terms){
+        RenewalPaymentPlan.requireSupported(terms.paymentPlan());
         if(terms.totalAfterDiscount()!=null&&terms.totalAfterDiscount().signum()>0
             &&(terms.renewalDepositAmount()==null||terms.renewalDepositAmount().signum()<=0
                 ||terms.remainingRentalAmount()==null||terms.remainingRentalAmount().signum()<=0))
@@ -379,6 +383,7 @@ public class RenewalWorkflowService {
         var current=mapper.valueToTree(terms(r,g,accepted.pricingPackageCode(),accepted.paymentPlan(),full,accepted.extensionStartDate()));
         ((com.fasterxml.jackson.databind.node.ObjectNode)current).set("renewalDepositAmount",mapper.valueToTree(accepted.renewalDepositAmount()));
         ((com.fasterxml.jackson.databind.node.ObjectNode)current).set("remainingRentalAmount",mapper.valueToTree(accepted.remainingRentalAmount()));
+        ((com.fasterxml.jackson.databind.node.ObjectNode)current).set("signingWindowDays",mapper.valueToTree(accepted.signingWindowDays()));
         if(!store.canonical(accepted).equals(store.canonical(current)))
             throw ApiExceptions.conflict("Terms changed: new quote and Customer confirmation required");
     }

@@ -23,7 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Read-only bridge to the existing shared catalog, not a renewal-policy publisher.
- * RenewalWorkflowService must still intersect these prices with the BO policy's
+ * RenewalWorkflowService must still intersect these prices with the effective policy's (publication or facility catalog fallback)
  * eligiblePackageIds and enforce every eligibility/finance/hold/lifecycle gate.
  * VND, scale 2 and HALF_UP are the existing ReservationQuoteService and
  * RenewalTermCalculator money contract; no currency conversion is performed.

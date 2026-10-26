@@ -92,6 +92,8 @@ class ReservationCreationServiceTests {
         quote.setEndDate(LocalDate.of(2027, 1, 10));
         quote.setRentalMonths(3);
         quote.setMonthlyPrice(new BigDecimal("5500000.00"));
+        quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        quote.setSetupEarlyExitFee(new BigDecimal("5500000.00"));
         quote.setSubtotal(new BigDecimal("16500000.00"));
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("495000.00"));
@@ -121,7 +123,7 @@ class ReservationCreationServiceTests {
             .thenReturn(Optional.empty());
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        when(compatibilityService.check(any(), any())).thenReturn(compatibleResponse());
+        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
         when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), "THREE_MONTHS"))
             .thenReturn(Optional.of(policy));
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
@@ -132,8 +134,12 @@ class ReservationCreationServiceTests {
             ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
             return reservation;
         });
-        when(snapshotRepository.saveAndFlush(any(ReservationPricingSnapshot.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
+        when(snapshotRepository.saveAndFlush(any(ReservationPricingSnapshot.class))).thenAnswer(invocation -> {
+            ReservationPricingSnapshot saved = invocation.getArgument(0);
+            assertThat(saved.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
+            assertThat(saved.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
+            return saved;
+        });
 
         var response = service.create(actor, request, "create-1");
 
@@ -141,6 +147,8 @@ class ReservationCreationServiceTests {
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
+        assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
+        assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
         assertThat(response.getReservationCode()).matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
     }
 
@@ -150,6 +158,7 @@ class ReservationCreationServiceTests {
         quote.getUnitType().setMonthlyPrice(new BigDecimal("2000000.00"));
         quote.getUnitType().setSecurityDepositAmount(new BigDecimal("200000.00"));
         quote.setMonthlyPrice(new BigDecimal("2000000.00"));
+        quote.setSetupEarlyExitFee(new BigDecimal("2000000.00"));
         quote.setSubtotal(new BigDecimal("6000000.00"));
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("180000.00"));
@@ -165,7 +174,7 @@ class ReservationCreationServiceTests {
             .thenReturn(Optional.empty());
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        when(compatibilityService.check(any(), any())).thenReturn(compatibleResponse());
+        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
         when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), "THREE_MONTHS"))
             .thenReturn(Optional.of(policy));
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
@@ -283,6 +292,40 @@ class ReservationCreationServiceTests {
             .isEqualTo(ReservationCreationService.requestFingerprint(original));
     }
 
+    @Test
+    void creationRequiresExplicitAcceptanceOfTheQuotedSetupPolicy() {
+        var input = request();
+        input.setAcceptedSetupEarlyExitPolicyVersion(null);
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId())).thenReturn(Optional.of(quote));
+        assertThatThrownBy(() -> service.create(actor, input, "missing-setup-acceptance"))
+            .hasMessageContaining("xác nhận điều khoản");
+        input.setAcceptedSetupEarlyExitPolicyVersion("OTHER_VERSION");
+        assertThatThrownBy(() -> service.create(actor, input, "wrong-setup-acceptance"))
+            .hasMessageContaining("xác nhận điều khoản");
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+        org.mockito.Mockito.verifyNoInteractions(compatibilityService);
+    }
+
+    @Test
+    void historicalQuoteCannotBeUpgradedBySendingTheCurrentPolicyCode() {
+        var input = request();
+        quote.setSetupEarlyExitPolicyVersion(null);
+        quote.setSetupEarlyExitFee(null);
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId())).thenReturn(Optional.of(quote));
+        assertThatThrownBy(() -> service.create(actor, input, "old-quote"))
+            .hasMessageContaining("lấy báo giá mới");
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+    }
+
+    @Test
+    void setupPolicyAcceptanceIsBoundToTheIdempotencyFingerprint() {
+        var original = request();
+        var changed = request();
+        changed.setAcceptedSetupEarlyExitPolicyVersion("OTHER_VERSION");
+        assertThat(ReservationCreationService.requestFingerprint(changed))
+            .isNotEqualTo(ReservationCreationService.requestFingerprint(original));
+    }
+
     private CreateReservationRequest request() {
         GoodsItemRequest item = new GoodsItemRequest(
             GoodsCategory.FURNITURE, null, "Wood", null, "Desk", null, 2,
@@ -295,6 +338,9 @@ class ReservationCreationServiceTests {
         request.setIdentityDocumentNumber("079203009988");
         request.setCustomerPhone("0908123456");
         request.setCustomerAddress("Quận 1, TP. Hồ Chí Minh");
+        request.setAcceptedSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(List.of(item)));
+        quote.setUnitTypeSnapshotJson("{\"name\":\"Kho tại lúc báo giá\"}");
         return request;
     }
 

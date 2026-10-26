@@ -142,9 +142,9 @@ public class RenewalVnpaySettlementService {
             return new Result(false,null,"Atomic signing and Recovery sources are unavailable");
         var chosen=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         boolean selected=chosen!=null&&chosen.getAppointmentRef()!=null&&chosen.getAppointmentStart()!=null&&chosen.getAppointmentEnd()!=null;
-        Instant selectedDeadline=payment.getPaidAt().plus(com.storagehub.service.renewal.RenewalSigningDeadline.WINDOW);
+        Instant selectedDeadline=payment.getPaidAt().plus(com.storagehub.service.renewal.RenewalSigningDeadline.window(terms));
         String deadlineRef=com.storagehub.service.renewal.RenewalSigningDeadline.REFERENCE;
-        String deadlineVersion=com.storagehub.service.renewal.RenewalSigningDeadline.VERSION;
+        String deadlineVersion=com.storagehub.service.renewal.RenewalSigningDeadline.version(terms);
         UUID hold=workflow.getExtensionHoldRef();
         if(hold==null&&simplePayment) {
             var holdSource=extensionHolds==null?null:extensionHolds.getIfAvailable();
@@ -161,7 +161,7 @@ public class RenewalVnpaySettlementService {
         // Callback arrival time does not decide whether the customer paid before the deadline.
         if(cutoff==null||payment.getPaidAt().isAfter(payment.getPaymentDeadline())||payment.getPaymentDeadline().isAfter(cutoff))
             return new Result(false,null,"Extension rights require reconciliation");
-        Instant signingDeadline=com.storagehub.service.renewal.RenewalSigningDeadline.calculate(payment.getPaidAt(),cutoff);
+        Instant signingDeadline=com.storagehub.service.renewal.RenewalSigningDeadline.calculate(payment.getPaidAt(),cutoff,terms);
         if(selected&&(chosen.getAppointmentStart().isBefore(payment.getPaidAt())||chosen.getAppointmentEnd().isAfter(signingDeadline)))
             return new Result(false,null,"Selected signing appointment is outside the paid signing window");
         boolean missedAppointment=selected&&!chosen.getAppointmentEnd().isAfter(now);
@@ -230,7 +230,7 @@ public class RenewalVnpaySettlementService {
             ||payment.getPurpose()!=PaymentType.RENEWAL||payment.getRenewalAllocatedAt()==null
             ||payment.getRenewalLedgerReceiptRef()==null||payment.getRenewalSigningPreparedAt()!=null)return;
         var state=em.find(RenewalOperationState.class,payment.getRenewal().getId());
-        var deadline=com.storagehub.service.renewal.RenewalPreparationResolution.deadline(payment,state);
+        var deadline=com.storagehub.service.renewal.RenewalPreparationResolution.deadline(payment,state,mapper);
         if(payment.getRenewalReconciliationAttempts()<com.storagehub.service.renewal.RenewalPreparationResolution.MAX_AUTOMATIC_ATTEMPTS
             &&deadline!=null&&now().isBefore(deadline))return;
         payment.setFailureCode(com.storagehub.service.renewal.RenewalPreparationResolution.BLOCKED);

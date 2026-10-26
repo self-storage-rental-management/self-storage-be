@@ -58,9 +58,8 @@ public class RenewalOverdueFeeService {
     }
     private Daily daily(Rental rental,Instant now,boolean signing) {
         var period=periods.require(rental);
-        var published=policies.read(rental.getFacility().getId(),now.atZone(BusinessTime.ZONE).toLocalDate())
-            .filter(p->p.policy().term()!=null).orElseThrow(()->ApiExceptions.conflict("DEFERRED_SOURCE: Overdue fee timezone policy missing"));
-        ZoneId zone=ZoneId.of(published.policy().term().timezone());LocalDate today=now.atZone(zone).toLocalDate();
+        // The fixed overdue timeline uses the business timezone independently of an optional renewal publication.
+        ZoneId zone=BusinessTime.ZONE;LocalDate today=now.atZone(zone).toLocalDate();
         long days=Math.max(0,ChronoUnit.DAYS.between(period.lastPermittedDate(),today)-(signing?1:0));
         var settings=em.createQuery("select s from SystemSetting s where s.settingKey=:key",SystemSetting.class)
             .setParameter("key","lateFeeAmount").getResultList();
