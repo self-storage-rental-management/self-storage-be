@@ -71,6 +71,7 @@ public class BookingDocumentService {
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
 
+        ReservationSnapshotView.requireSetupDays(reservation,snapshot);
         byte[] pdf = buildPdf(reservation, snapshot);
         UUID fileId = existing == null ? UUID.randomUUID() : existing.getFileAsset().getId();
         String fileName = CURRENT_FILE_PREFIX + reservation.getReservationCode().toLowerCase(Locale.ROOT) + ".pdf";

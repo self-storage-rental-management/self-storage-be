@@ -13,6 +13,7 @@ import jakarta.persistence.EntityManager;
 import java.time.*;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,12 +24,34 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.DateSource {
     private final EntityManager em;
     private final ObjectMapper mapper;
+    private final ObjectProvider<ConfirmedRentalPeriods> confirmedPeriods;
     /** Current project rule, explicitly enabled locally; historical evidence is not rewritten. */
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.rental-period.inclusive-end:false}")
     private boolean inclusiveEnd;
 
     public Optional<RentalReadSources.Dates> read(Rental r) {
         if(r==null)return Optional.empty();
+        var confirmed = confirmedPeriods.getIfAvailable();
+        if (confirmed != null && r.getId() != null && confirmed.contains(r)) {
+            // A confirmed period carries its own date convention. Applying the
+            // facility's legacy inclusive setting to a new exclusive period
+            // would grant an extra paid day and shift the next renewal.
+            return confirmed.read(r).map(p -> new RentalReadSources.Dates(
+                p.rentalId(), p.startDate(), p.lastPermittedDate(), p.reference(),
+                p.storedEndDate(), p.convention()));
+        }
+        if (r.getTermsEffectiveAt() != null) {
+            // The new handover flow creates an exclusive period at setup start.
+            // Before customer receipt it is provisional; after receipt a missing
+            // confirmed row is an incomplete source, not a legacy inclusive one.
+            if (r.getReservation() == null || r.getSetupStartedAt() == null
+                || !r.getTermsEffectiveAt().equals(r.getSetupStartedAt())
+                || r.getReservation().getStatus() == ReservationStatus.COMPLETED) return Optional.empty();
+            return RentalPeriod.verified(r.getId(), r.getStartDate(), r.getContractEndDate(),
+                RentalPeriod.Convention.EXCLUSIVE, "provisional-handover:"+r.getId())
+                .map(p -> new RentalReadSources.Dates(p.rentalId(), p.startDate(),
+                    p.lastPermittedDate(), p.reference(), p.storedEndDate(), p.convention()));
+        }
         return RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),
             inclusiveEnd?RentalPeriod.Convention.INCLUSIVE:RentalPeriod.Convention.EXCLUSIVE,
             "rental-record:"+r.getId())
@@ -71,6 +94,23 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
             || !same(r.getFacility().getId(), log.getFacility())) return Optional.empty();
         var root = json(log.getAfterStateJson());
         var d = root.path("rentalPeriodEvidence");
+        if("CUSTOMER_HANDOVER_PERIOD_V2".equals(d.path("schema").asText())) {
+            var handovers=em.createQuery("select c from CheckIn c where c.reservation.id=:id",CheckIn.class)
+                .setParameter("id",r.getReservation().getId()).setMaxResults(2).getResultList();
+            if(handovers.size()!=1)return Optional.empty();
+            var handover=handovers.getFirst();
+            if(!"COMPLETED".equals(root.path("status").asText())||!id(root,"rentalId",r.getId())
+                ||d.path("rentalCreated").asBoolean(true)||!"EXCLUSIVE".equals(d.path("convention").asText())
+                ||!id(d,"checkInId",handover.getId())||handover.getStatus()!=CheckInStatus.completed||!same(r.getId(),handover.getRental())
+                ||r.getSetupStartedAt()==null||r.getSetupEndsAt()==null||r.getTermsEffectiveAt()==null||r.getInventoryVerifiedAt()==null
+                ||!r.getSetupStartedAt().equals(handover.getSetupStartedAt())||!r.getSetupEndsAt().equals(handover.getSetupDueAt())
+                ||!r.getInventoryVerifiedAt().equals(handover.getInventoryVerifiedAt())
+                ||!r.getSetupStartedAt().toString().equals(d.path("handoverAt").asText())
+                ||!r.getSetupEndsAt().toString().equals(d.path("setupEndsAt").asText())
+                ||!r.getTermsEffectiveAt().toString().equals(d.path("termsEffectiveAt").asText())
+                ||!r.getInventoryVerifiedAt().toString().equals(d.path("inventoryVerifiedAt").asText()))return Optional.empty();
+            return evidence(r,d,"handover-receipt:"+log.getId());
+        }
         // Approved current convention may apply to a legacy confirmed handover without versioned metadata.
         // It establishes today's rule, not a fabricated historical audit or a backfilled DB date.
         if (inclusiveEnd && d.isMissingNode() && "COMPLETED".equals(root.path("status").asText())
@@ -100,24 +140,30 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
         var rev = wf.getAcceptedRevision();
         if (rev == null || rev.getQuote() == null || !same(n.getId(), rev.getRenewal()) || !same(r.getId(), rev.getQuote().getRental())
             || !same(r.getCustomer().getId(), rev.getQuote().getCustomer())
-            || !"RENEWAL_COMPLETION_PERIOD_V1".equals(d.path("schema").asText())
+            || !java.util.Set.of("RENEWAL_COMPLETION_PERIOD_V1","RENEWAL_COMPLETION_PERIOD_V2").contains(d.path("schema").asText())
             || d.path("previousProof").asText().isBlank() || !id(d, "acceptedQuoteId", rev.getQuote().getId())) return Optional.empty();
         try {
             var t = mapper.readValue(rev.getQuote().getTermsJson(), RenewalQuoteResponse.Terms.class);
             if (t == null) return Optional.empty();
             var p = evidence(r, d, "completion:" + event.getId());
-            if (p.isEmpty() || !Objects.equals(n.getNewEndDate(), p.get().lastPermittedDate())
-                || !Objects.equals(t.newEndDate(), p.get().lastPermittedDate())
+            boolean effective="RENEWAL_COMPLETION_PERIOD_V2".equals(d.path("schema").asText());
+            if (p.isEmpty() || !Objects.equals(n.getNewEndDate(), t.newEndDate())
+                || !effective && !Objects.equals(t.newEndDate(), p.get().lastPermittedDate())
                 || !Objects.equals(t.oldEndDate(), date(d, "oldStoredEndDate"))
-                || !Objects.equals(t.extensionEndExclusive(), p.get().endExclusive())
+                || !effective && !Objects.equals(t.extensionEndExclusive(), p.get().endExclusive())
                 || !Objects.equals(t.storageUnitId(), r.getStorageUnit().getId())
                 || !Objects.equals(t.facilityId(), r.getFacility().getId())) return Optional.empty();
             var previous = RentalPeriod.verified(r.getId(), r.getStartDate(), t.oldEndDate(),
                 p.get().convention(), d.path("previousProof").asText());
-            if (previous.isEmpty() || !Objects.equals(previous.get().endExclusive(), t.extensionStartDate())
-                || t.rentalMonths() < 1 || !previous.get().endExclusive().plusMonths(t.rentalMonths()).equals(p.get().endExclusive()))
-                return Optional.empty();
+            if (previous.isEmpty()) return Optional.empty();
             RenewalPeriodCompatibility.require(previous.get(), t);
+            if(effective) {
+                var interval=RenewalEffectivePeriod.at(previous.get(),t,event.getOccurredAt());
+                if(!interval.startDate().equals(date(d,"effectiveExtensionStartDate"))
+                    ||!interval.endExclusive().equals(date(d,"effectiveExtensionEndExclusive"))
+                    ||!interval.endExclusive().equals(p.get().endExclusive()))return Optional.empty();
+            } else if(!Objects.equals(previous.get().endExclusive(),t.extensionStartDate())
+                ||!t.extensionEndExclusive().equals(p.get().endExclusive()))return Optional.empty();
             return p;
         } catch (JsonProcessingException | DateTimeException | com.storagehub.common.api.ApiException e) { return Optional.empty(); }
     }

@@ -23,6 +23,22 @@ class RenewalOperationalGuardJpaTests {
     private static final Instant NOW=Instant.parse("2026-10-10T00:00:00Z");
     @Autowired EntityManager em;
     @Autowired RenewalOperationalGuard guard;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+
+    @Test void caughtEligibilityDenialDoesNotMarkReadProjectionRollbackOnly() {
+        var rental = fixture();
+        rental.setStatus(RentalStatus.return_requested);
+        em.flush();
+        var read = new org.springframework.transaction.support.TransactionTemplate(transactions);
+        read.setReadOnly(true);
+        read.execute(status -> {
+            assertThatThrownBy(() -> guard.requireNoKnownConflict(rental))
+                .isInstanceOf(ApiException.class).hasMessageContaining("non-active rental");
+            assertThat(status.isRollbackOnly()).isFalse();
+            assertThat(em.createQuery("select count(n) from Rental n", Long.class).getSingleResult()).isPositive();
+            return null;
+        });
+    }
 
     @Test void passingNegativeChecksDoesNotMutateDataOrProvideEligibilityHoldOrMoney() {
         var r=fixture();var id=r.getId();em.clear();var current=em.find(Rental.class,id);

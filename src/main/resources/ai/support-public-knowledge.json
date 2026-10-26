@@ -1,0 +1,177 @@
+{
+  "version": "support-public/2026-10-26-v2",
+  "entries": [
+    {
+      "id": "faq-unit-capacity",
+      "question": "Chọn kích thước kho phù hợp",
+      "aliases": [
+        "Tư vấn chọn kích thước kho phù hợp với đồ đạc"
+      ],
+      "answer": "Vào **Tìm gian kho trống** để xem cơ sở, cỡ kho và thông tin đang được hệ thống công bố. Giá, kích thước và tình trạng còn kho phải xem theo kết quả hiện hành; trợ lý không tự xác nhận còn kho hoặc báo giá riêng. Đồ có yêu cầu đặc biệt cần trao đổi với nhân viên.",
+      "sources": [
+        {
+          "label": "Danh mục cơ sở công khai",
+          "path": "/api/public/facilities"
+        },
+        {
+          "label": "Danh mục loại kho công khai",
+          "path": "/api/public/unit-types"
+        }
+      ]
+    },
+    {
+      "id": "faq-contract-renew",
+      "question": "Làm sao để gia hạn thuê kho?",
+      "aliases": [
+        "Cách gia hạn hợp đồng thuê kho"
+      ],
+      "answer": "Vào **Hồ sơ thuê của tôi**, chọn hồ sơ và làm theo các bước gia hạn hệ thống đang mở. Xem báo giá, lịch ký và các khoản phải thu trong đúng yêu cầu. Thanh toán được xác minh chưa có nghĩa đã hoàn tất gia hạn; cần đủ điều kiện và hoàn tất ký. Trợ lý không đọc hoặc xác nhận tình trạng hồ sơ của bạn.",
+      "sources": [
+        {
+          "label": "Hồ sơ thuê của khách hàng",
+          "path": "/api/customer/rentals"
+        },
+        {
+          "label": "Yêu cầu gia hạn của khách hàng",
+          "path": "/api/customer/renewals"
+        }
+      ]
+    },
+    {
+      "id": "faq-renewal-dates",
+      "question": "Ngày bắt đầu kỳ gia hạn được xác định thế nào?",
+      "aliases": [],
+      "answer": "Ngày gia hạn do hệ thống xác định và hiển thị trong hồ sơ. Nếu hoàn tất ký khi chưa quá hạn, kỳ mới nối tiếp kỳ cũ; nếu đã quá hạn, kỳ mới bắt đầu từ ngày hoàn tất ký đủ điều kiện. Gia hạn không cộng ngày setup miễn phí. Ngày thanh toán không tự động là ngày bắt đầu kỳ mới; hãy xem kỳ hiệu lực đã xác nhận trong hồ sơ.",
+      "sources": [
+        {
+          "label": "Chi tiết gia hạn của khách hàng",
+          "path": "/api/customer/renewals"
+        }
+      ]
+    },
+    {
+      "id": "faq-payment-method",
+      "question": "Thanh toán và xem giao dịch ở đâu?",
+      "aliases": [
+        "Thanh toán tiền thuê kho như thế nào"
+      ],
+      "answer": "Xem giao dịch tại **Lịch sử thanh toán**. Để thanh toán, mở đúng đơn đặt kho hoặc yêu cầu gia hạn và dùng phương thức, nút thanh toán đang được hệ thống cho phép. Ảnh chuyển tiền hoặc mã tham chiếu riêng lẻ chưa xác nhận thanh toán thành công. Trợ lý không xác nhận đã thu tiền và không cam kết thời gian cập nhật; cần đối soát thì chọn **Nhân viên**.",
+      "sources": [
+        {
+          "label": "Lịch sử thanh toán của khách hàng",
+          "path": "/api/customer/reservations/payment-history"
+        },
+        {
+          "label": "Yêu cầu gia hạn của khách hàng",
+          "path": "/api/customer/renewals"
+        }
+      ]
+    },
+    {
+      "id": "faq-late-fee",
+      "question": "Tôi cần kiểm tra khoản quá hạn",
+      "aliases": [
+        "Phí phạt trễ hạn thanh toán tính như thế nào"
+      ],
+      "answer": "Mở **Hồ sơ thuê của tôi** và yêu cầu gia hạn liên quan để xem trạng thái, hạn xử lý và bảng kê do hệ thống cung cấp. Trợ lý không có nguồn công khai để xác nhận mức phí/ngày hoặc tự tính số tiền bạn phải trả. Nếu cần biết mức áp dụng hoặc đối soát khoản thu, chọn **Nhân viên** và liên kết đúng hồ sơ.",
+      "sources": [
+        {
+          "label": "Hồ sơ thuê của khách hàng",
+          "path": "/api/customer/rentals"
+        },
+        {
+          "label": "Yêu cầu gia hạn của khách hàng",
+          "path": "/api/customer/renewals"
+        }
+      ]
+    },
+    {
+      "id": "faq-return-storage",
+      "question": "Trả kho và hoàn tiền cọc thế nào?",
+      "aliases": [
+        "Quy trình trả kho và hoàn tiền đảm bảo (tiền cọc)"
+      ],
+      "answer": "Vào **Hồ sơ thuê của tôi**, chọn hồ sơ và dùng **Yêu cầu trả kho** nếu hệ thống cho phép. Nhân viên kiểm tra, nghiệm thu và đối soát trước khi quyết toán. Số được hoàn và trạng thái hoàn phải theo kết quả xử lý thực tế; trợ lý không hứa số tiền hoặc thời gian chuyển tiền. Duyệt hoàn chưa đồng nghĩa đã chuyển tiền.",
+      "sources": [
+        {
+          "label": "Hồ sơ thuê của khách hàng",
+          "path": "/api/customer/rentals"
+        }
+      ]
+    },
+    {
+      "id": "faq-password-reset",
+      "question": "Quên hoặc muốn đổi mật khẩu",
+      "aliases": [
+        "Quên mật khẩu / Cần đặt lại mật khẩu"
+      ],
+      "answer": "Dùng **Quên mật khẩu** tại màn hình đăng nhập hoặc chức năng đổi mật khẩu trong hồ sơ cá nhân. Không gửi mật khẩu, OTP hoặc giấy tờ định danh qua chat. Trợ lý không cấp tài khoản, đặt lại mật khẩu hoặc xác nhận danh tính thay nhân viên.",
+      "sources": [
+        {
+          "label": "Khôi phục mật khẩu tại màn hình đăng nhập",
+          "path": "/api/auth/forgot-password"
+        }
+      ]
+    },
+    {
+      "id": "faq-pin-reset",
+      "question": "Mã truy cập không hoạt động",
+      "aliases": [
+        "Mã PIN không hoạt động / Bị lỗi bàn phím"
+      ],
+      "answer": "Chọn **Nhân viên**, xác nhận cơ sở hoặc hồ sơ thuê để được kiểm tra quyền truy cập. Không gửi mã PIN, mật khẩu hoặc OTP trong chat. Trợ lý không đọc, cấp, đặt lại mã hoặc xác nhận lịch tự đổi mã.",
+      "sources": [
+        {
+          "label": "Yêu cầu hỗ trợ của khách hàng",
+          "path": "/api/customer/support-workflows"
+        }
+      ]
+    },
+    {
+      "id": "faq-gate-stuck",
+      "question": "Cổng hoặc cửa kho gặp sự cố",
+      "aliases": [
+        "Cổng ra vào không phản hồi / Kẹt cửa cuốn"
+      ],
+      "answer": "Chọn **Nhân viên**, xác nhận cơ sở và mô tả sự cố cổng hoặc cửa kho. Nhân viên cần kiểm tra tình trạng thực tế. Câu hỏi với trợ lý chưa tự tạo yêu cầu, chưa xác nhận có người tiếp nhận và không cam kết thời gian có mặt.",
+      "sources": [
+        {
+          "label": "Yêu cầu hỗ trợ của khách hàng",
+          "path": "/api/customer/support-workflows"
+        }
+      ]
+    },
+    {
+      "id": "faq-switch-unit",
+      "question": "Tôi muốn đổi sang kho khác",
+      "aliases": [
+        "Muốn đổi sang gian kho lớn/nhỏ hơn"
+      ],
+      "answer": "Tham khảo các loại kho được công bố tại **Tìm gian kho trống**. Nếu muốn chuyển kho đang thuê, chọn **Nhân viên** để kiểm tra điều kiện cụ thể. Trợ lý không xác nhận được quyền chuyển kho, giá áp dụng hoặc việc chuyển hợp đồng và tiền cọc.",
+      "sources": [
+        {
+          "label": "Danh mục loại kho công khai",
+          "path": "/api/public/unit-types"
+        },
+        {
+          "label": "Yêu cầu hỗ trợ của khách hàng",
+          "path": "/api/customer/support-workflows"
+        }
+      ]
+    },
+    {
+      "id": "faq-damage-leak",
+      "question": "Báo hư hỏng hoặc sự cố tại kho",
+      "aliases": [
+        "Sự cố đồ đạc trong kho bị hư hỏng / thấm dột"
+      ],
+      "answer": "Chọn **Nhân viên**, xác nhận cơ sở/hồ sơ và mô tả sự cố; có thể gửi hình ảnh trong kênh hỗ trợ nhân viên. Trợ lý không kết luận nguyên nhân, bảo hiểm hoặc số tiền bồi thường. Nếu có nguy hiểm trực tiếp, ưu tiên rời khu vực nguy hiểm và liên hệ nhân sự tại cơ sở.",
+      "sources": [
+        {
+          "label": "Yêu cầu hỗ trợ của khách hàng",
+          "path": "/api/customer/support-workflows"
+        }
+      ]
+    }
+  ]
+}

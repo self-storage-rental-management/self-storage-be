@@ -142,9 +142,9 @@ public class RenewalVnpaySettlementService {
             return new Result(false,null,"Atomic signing and Recovery sources are unavailable");
         var chosen=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         boolean selected=chosen!=null&&chosen.getAppointmentRef()!=null&&chosen.getAppointmentStart()!=null&&chosen.getAppointmentEnd()!=null;
-        Instant selectedDeadline=payment.getPaidAt().plus(com.storagehub.service.renewal.RenewalSigningDeadline.WINDOW);
+        Instant selectedDeadline=payment.getPaidAt().plus(com.storagehub.service.renewal.RenewalSigningDeadline.window(terms));
         String deadlineRef=com.storagehub.service.renewal.RenewalSigningDeadline.REFERENCE;
-        String deadlineVersion=com.storagehub.service.renewal.RenewalSigningDeadline.VERSION;
+        String deadlineVersion=com.storagehub.service.renewal.RenewalSigningDeadline.version(terms);
         UUID hold=workflow.getExtensionHoldRef();
         if(hold==null&&simplePayment) {
             var holdSource=extensionHolds==null?null:extensionHolds.getIfAvailable();
@@ -161,7 +161,7 @@ public class RenewalVnpaySettlementService {
         // Callback arrival time does not decide whether the customer paid before the deadline.
         if(cutoff==null||payment.getPaidAt().isAfter(payment.getPaymentDeadline())||payment.getPaymentDeadline().isAfter(cutoff))
             return new Result(false,null,"Extension rights require reconciliation");
-        Instant signingDeadline=com.storagehub.service.renewal.RenewalSigningDeadline.calculate(payment.getPaidAt(),cutoff);
+        Instant signingDeadline=com.storagehub.service.renewal.RenewalSigningDeadline.calculate(payment.getPaidAt(),cutoff,terms);
         if(selected&&(chosen.getAppointmentStart().isBefore(payment.getPaidAt())||chosen.getAppointmentEnd().isAfter(signingDeadline)))
             return new Result(false,null,"Selected signing appointment is outside the paid signing window");
         boolean missedAppointment=selected&&!chosen.getAppointmentEnd().isAfter(now);
@@ -217,10 +217,34 @@ public class RenewalVnpaySettlementService {
         payment.setRenewalSigningPreparedAt(now);
         payment.setFailureCode(null);payment.setFailureReason(null);payment.setRenewalNextRetryAt(null);
         notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
-            deposit?"Đã nhận thanh toán cọc gia hạn":"Đã nhận thanh toán gia hạn",
+            deposit?"Đã nhận thanh toán tiền thuê gia hạn trả trước":"Đã nhận thanh toán gia hạn",
             "Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" cho hồ sơ thuê "+renewal.getRental().getId()
                 +" đã được xác nhận. Tiếp tục theo dõi lịch ký gia hạn trong hồ sơ.",renewal.getId());
         return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
+    }
+
+    @Transactional(propagation=Propagation.MANDATORY)
+    public void holdForPreparationResolution(Payment payment) {
+        if(payment==null||payment.getRenewal()==null||payment.getStatus()!=PaymentStatus.PAID
+            ||com.storagehub.service.renewal.RenewalPreparationResolution.blocked(payment)
+            ||payment.getPurpose()!=PaymentType.RENEWAL||payment.getRenewalAllocatedAt()==null
+            ||payment.getRenewalLedgerReceiptRef()==null||payment.getRenewalSigningPreparedAt()!=null)return;
+        var state=em.find(RenewalOperationState.class,payment.getRenewal().getId());
+        var deadline=com.storagehub.service.renewal.RenewalPreparationResolution.deadline(payment,state,mapper);
+        if(payment.getRenewalReconciliationAttempts()<com.storagehub.service.renewal.RenewalPreparationResolution.MAX_AUTOMATIC_ATTEMPTS
+            &&deadline!=null&&now().isBefore(deadline))return;
+        payment.setFailureCode(com.storagehub.service.renewal.RenewalPreparationResolution.BLOCKED);
+        payment.setRenewalNextRetryAt(null);
+        var renewal=payment.getRenewal();
+        em.persist(new RenewalOperationEvent(renewal,"PREPARATION_BLOCKED",now(),null,
+            mapper.valueToTree(Map.of("paymentId",payment.getId(),"status","ON_HOLD",
+                "reason","SIGNING_PREPARATION_FAILED","attempts",payment.getRenewalReconciliationAttempts())).toString()));
+        var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
+        if(workflow!=null)em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
+        notifications.createFacilityOperationsNotifications(renewal.getRental().getFacility().getId(),NotificationType.RENEWAL,
+            "Khoản gia hạn đã thu cần được xử lý","Chưa chuẩn bị được ký gia hạn. Cần kiểm tra khả năng tiếp tục hoặc xử lý hoàn tiền; không ghi nhận khách không đến.",renewal.getId());
+        notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
+            "Gia hạn đang chờ cơ sở xử lý","Khoản đã thu được giữ để đối soát. Cơ sở đang kiểm tra khả năng tiếp tục gia hạn hoặc hoàn tiền.",renewal.getId());
     }
 
     private Instant now(){var clock=clocks.getIfAvailable();return (clock==null?Clock.systemUTC():clock).instant();}
