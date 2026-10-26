@@ -137,6 +137,53 @@ class FacilityDeletionSafetyTests {
         verify(unitTypes, never()).save(any());
     }
 
+    @Test void decreasingQuantityArchivesAvailableUnitsWithoutDeletingHistory() {
+        editableType();
+        StorageUnit first = availableUnit("B-206");
+        StorageUnit second = availableUnit("B-205");
+        when(units.countByFacility_IdAndUnitType_IdAndStatusIn(
+            eq(id), eq(id), eq(StorageUnitStatus.operationalStatuses()))).thenReturn(6L);
+        when(units.findByFacility_Id(id)).thenReturn(List.of(second, first));
+
+        service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("4")));
+
+        assertThat(first.getStatus()).isEqualTo(StorageUnitStatus.archived);
+        assertThat(second.getStatus()).isEqualTo(StorageUnitStatus.archived);
+        verify(units).saveAll(argThat(saved -> {
+            var values = new ArrayList<StorageUnit>();
+            saved.forEach(values::add);
+            return values.size() == 2 && values.stream().allMatch(unit -> unit.getStatus() == StorageUnitStatus.archived);
+        }));
+        verify(units, never()).delete(any());
+        verify(units, never()).deleteAll(anyList());
+    }
+
+    private StorageUnit availableUnit(String code) {
+        StorageUnit unit = new StorageUnit();
+        UnitType type = new UnitType();
+        org.springframework.test.util.ReflectionTestUtils.setField(type, "id", id);
+        unit.setUnitType(type);
+        unit.setCode(code);
+        unit.setStatus(StorageUnitStatus.available);
+        unit.setAvailableFrom(java.time.Instant.now());
+        return unit;
+    }
+
+    @Test void newUnitsNeverReuseCodesThatAlreadyExistInHistory() {
+        UnitType type = new UnitType();
+        type.setFacility(new Facility());
+        when(units.existsByCode(anyString())).thenAnswer(invocation ->
+            Set.of("B-201", "B-202", "B-203", "B-204").contains(invocation.getArgument(0)));
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service, "createPhysicalUnits", type, 2, "Tầng 2", "Khu B");
+
+        var captor = ArgumentCaptor.forClass(StorageUnit.class);
+        verify(units, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).extracting(StorageUnit::getCode)
+            .containsExactly("B-205", "B-206");
+    }
+
     private UnitTypeChangeRequest submittedChange(UnitType type) {
         service.updateUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("4")));
         var captor = ArgumentCaptor.forClass(UnitTypeChangeRequest.class);
