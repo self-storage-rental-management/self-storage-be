@@ -19,6 +19,7 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
+import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FileAsset;
 import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.NotificationType;
@@ -39,6 +40,7 @@ import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.RentalRepository;
@@ -199,6 +201,9 @@ public class CheckInHandoverService {
         }
         checkIn.setReservation(reservation);
         checkIn.setPerformedBy(operator);
+        checkIn.setAssignedStaff(resolveAssignedStaff(
+            request.assignedStaffId(), operator, reservation.getFacility().getId()
+        ));
         checkIn.setStatus(CheckInStatus.scheduled);
         // The appointment belongs to the customer. Keep the request field for API
         // compatibility, but never let a staff actor move the customer appointment.
@@ -235,7 +240,8 @@ public class CheckInHandoverService {
             Map.of("reservationStatus", previousStatus),
             Map.of(
                 "reservationStatus", ReservationStatus.READY_FOR_CHECKIN,
-                "scheduledAt", appointmentAt
+                "scheduledAt", appointmentAt,
+                "assignedStaffId", saved.getAssignedStaff().getId()
             )
         );
         notificationService.createNotification(
@@ -900,6 +906,27 @@ public class CheckInHandoverService {
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
     }
 
+    private User resolveAssignedStaff(UUID assignedStaffId, User operator, UUID facilityId) {
+        User assigned = assignedStaffId == null
+            ? operator
+            : userRepository.findById(assignedStaffId)
+                .orElseThrow(() -> ApiExceptions.notFound("Assigned Staff user was not found"));
+        boolean eligible = assigned.getStatus() == UserStatus.ACTIVE
+            && assigned.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.STAFF)
+            && userRepository.findEligibleStaff(
+                UserStatus.ACTIVE,
+                RoleCode.STAFF,
+                facilityId,
+                List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
+            ).stream().anyMatch(user -> user.getId().equals(assigned.getId()));
+        if (!eligible) {
+            throw ApiExceptions.forbidden(
+                "Assigned user must be an active Staff with facility OPERATE scope"
+            );
+        }
+        return assigned;
+    }
+
     private CheckInResponse toResponse(
         Reservation reservation,
         CheckIn checkIn,
@@ -936,6 +963,8 @@ public class CheckInHandoverService {
             checkIn == null ? null : checkIn.getRejectionDisposition(),
             checkIn == null ? null : checkIn.getPerformedBy().getId(),
             checkIn == null ? null : checkIn.getPerformedBy().getFullName(),
+            checkIn == null || checkIn.getAssignedStaff() == null ? null : checkIn.getAssignedStaff().getId(),
+            checkIn == null || checkIn.getAssignedStaff() == null ? null : checkIn.getAssignedStaff().getFullName(),
             reservation.getId(), reservation.getReservationCode(), reservation.getStatus(),
             reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
             reservation.getCustomer().getEmail(), reservation.getIdentityDocumentNumber(),
