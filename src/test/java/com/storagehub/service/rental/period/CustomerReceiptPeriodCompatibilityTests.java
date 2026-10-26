@@ -14,6 +14,7 @@ import com.storagehub.service.*;
 import com.storagehub.service.ledger.LedgerStore;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
-/** Regression for Customer receipt confirmation, including the additive ledger activation hook. */
+/** Receipt acknowledges an existing verified handover; it cannot invent a Rental or ledger. */
 class CustomerReceiptPeriodCompatibilityTests {
     ReservationRepository reservations;
     RentalRepository rentals;
@@ -85,6 +86,18 @@ class CustomerReceiptPeriodCompatibilityTests {
         snapshot.setRemainingRentalAmount(new BigDecimal("98764.80"));
         snapshot.setDueAtCheckIn(new BigDecimal("222220.80"));
         snapshot.setTotalInitialObligation(new BigDecimal("246912"));
+        com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation,snapshot);
+        var handoverAt=Instant.parse("2026-10-01T02:00:00Z");
+        var rental=id(new Rental());
+        rental.setReservation(reservation);rental.setCustomer(user);rental.setFacility(facility);rental.setStorageUnit(unit);
+        rental.setStatus(RentalStatus.active);rental.setStartDate(reservation.getStartDate());rental.setContractEndDate(reservation.getEndDate());
+        rental.setMonthlyPrice(snapshot.getMonthlyPrice());rental.setSetupStartedAt(handoverAt);rental.setTermsEffectiveAt(handoverAt);
+        rental.setSetupEndsAt(Instant.parse("2026-09-30T17:00:00Z"));rental.setInventoryVerifiedAt(handoverAt.plusSeconds(3600));
+        checkIn.setRental(rental);checkIn.setSetupStartedAt(handoverAt);checkIn.setSetupDueAt(rental.getSetupEndsAt());
+        checkIn.setContractSignedAt(handoverAt.minusSeconds(120));checkIn.setPaymentCollectedAt(handoverAt.minusSeconds(60));
+        checkIn.setInventoryVerifiedAt(rental.getInventoryVerifiedAt());
+        when(rentals.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+        when(rentals.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
         actor = new ActorPrincipal(user.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
 
         when(reservations.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
@@ -113,7 +126,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     }
 
     @Test
-    void newReceiptPreservesHandoverEffectsAndOpensBoundLedgerOnce() {
+    void newReceiptPreservesExistingHandoverWithoutCreatingRentalOrLedger() {
         var response = service.confirmReceipt(actor, reservation.getId());
         var rental = checkIn.getRental();
         assertThat(response.getReservation().getStatus()).isEqualTo(ReservationStatus.COMPLETED);
@@ -122,35 +135,43 @@ class CustomerReceiptPeriodCompatibilityTests {
         assertThat(rental.getMonthlyPrice()).isEqualByComparingTo("123456");
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
         assertThat(reservation.getAssignedUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
-        assertThat(evidence(rental)).containsEntry("rentalCreated", true).containsEntry("convention", "EXCLUSIVE")
+        assertThat(evidence(rental)).containsEntry("rentalCreated", false).containsEntry("convention", "EXCLUSIVE")
             .containsEntry("storedEndDate", "2026-11-01");
-        verify(ledger).open(rental.getId(), reservation.getCustomer().getId(), reservation.getFacility().getId());
-        verify(rentals, times(1)).saveAndFlush(any());
-        verify(checkIns).saveAndFlush(checkIn);
+        verifyNoInteractions(ledger);
+        verify(rentals, never()).saveAndFlush(any());
+        verify(checkIns,never()).saveAndFlush(any());
         verify(units).saveAndFlush(reservation.getAssignedUnit());
         verify(notifications).createNotification(any(), eq(NotificationType.CHECKIN), anyString(), anyString(),
             eq(reservation.getId()));
     }
 
     @Test
-    void reusingExistingRentalDoesNotBackfillLedgerOrChangeHistoricalTerms() {
+    void inconsistentExistingRentalIsBlockedWithoutBackfillingLedgerOrChangingHistoricalTerms() {
         var existing = id(new Rental());
         existing.setStartDate(LocalDate.of(2026, 9, 10));
         existing.setContractEndDate(LocalDate.of(2026, 10, 31));
         existing.setMonthlyPrice(new BigDecimal("999"));
         existing.setCustomer(reservation.getCustomer());
         existing.setFacility(reservation.getFacility());
-        when(rentals.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(existing));
+        when(rentals.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(existing));
 
-        service.confirmReceipt(actor, reservation.getId());
+        assertThatThrownBy(()->service.confirmReceipt(actor, reservation.getId())).hasMessageContaining("Thiếu hoặc lệch chứng cứ bàn giao/setup");
 
-        assertThat(checkIn.getRental()).isSameAs(existing);
+        assertThat(checkIn.getRental()).isNotSameAs(existing);
         assertThat(existing.getContractEndDate()).isEqualTo(LocalDate.of(2026, 10, 31));
         assertThat(existing.getMonthlyPrice()).isEqualByComparingTo("999");
         verify(rentals, never()).saveAndFlush(any());
-        verify(ledgerStores).getIfAvailable();
         verifyNoInteractions(ledger);
-        assertThat(evidence(existing)).containsEntry("rentalCreated", false).containsEntry("convention", "UNKNOWN");
+        verifyNoInteractions(audit,notifications);
+    }
+
+    @Test
+    void completedCheckInWithoutHandoverRentalCannotInventRentalOrLedger() {
+        when(rentals.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.empty());
+        assertThatThrownBy(()->service.confirmReceipt(actor,reservation.getId()))
+            .hasMessageContaining("Thiếu hồ sơ thuê từ bàn giao thực tế");
+        verify(rentals,never()).saveAndFlush(any());
+        verifyNoInteractions(ledger,units,audit,notifications);
     }
 
     @Test

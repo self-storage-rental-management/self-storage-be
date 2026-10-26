@@ -52,6 +52,7 @@ class RenewalPaymentIntentTests {
     @Test void reservationReusesItsPendingDepositIntentWhenClientUsesANewKey() {
         var reservation=id(new Reservation());reservation.setReservationCode("TEST-RESERVATION");
         reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);reservation.setPaymentExpiresAt(deadline);
+        acceptedReservation(reservation);
         var pending=id(new Payment());pending.setReservation(reservation);pending.setInitiatedBy(user);
         pending.setAmount(new BigDecimal("20"));pending.setCurrency("VND");pending.setPurpose(PaymentType.RESERVATION_DEPOSIT);
         pending.setStatus(PaymentStatus.PENDING);pending.setGatewayIntentId("existing-reservation-intent");
@@ -77,6 +78,7 @@ class RenewalPaymentIntentTests {
         config.setReturnUrl("http://localhost:8080/api/public/payments/vnpay/return");
         var reservation=id(new Reservation());reservation.setReservationCode("TEST-RESERVATION");
         reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);reservation.setPaymentExpiresAt(deadline);
+        acceptedReservation(reservation);
         var deposit=id(new Payment());deposit.setReservation(reservation);deposit.setInitiatedBy(user);
         deposit.setAmount(new BigDecimal("20"));deposit.setCurrency("VND");deposit.setGatewayIntentId("reservation-intent");
         when(payments.findByIdempotencyKey("reservation-key")).thenReturn(Optional.of(deposit));
@@ -118,6 +120,18 @@ class RenewalPaymentIntentTests {
             when(payments.findByIdempotencyKey("key")).thenReturn(Optional.of(p));
             assertThatThrownBy(()->gateway.createRenewalPaymentUrl(actor,renewalId,"key","127.0.0.1")).hasMessageContaining("binding changed");
         }
+    }
+    void acceptedReservation(Reservation reservation) {
+        reservation.setCustomer(user);reservation.setFacility(id(new Facility()));reservation.setUnitType(id(new UnitType()));
+        var snapshot=new ReservationPricingSnapshot();snapshot.setReservation(reservation);
+        snapshot.setPricingPackageCode("TEST-1M");snapshot.setRentalMonths(1);
+        snapshot.setMonthlyPrice(new BigDecimal("100"));snapshot.setGrossRentalAmount(new BigDecimal("100"));
+        snapshot.setDiscountRate(BigDecimal.ZERO);snapshot.setDiscountAmount(BigDecimal.ZERO);
+        snapshot.setNetRentalAmount(new BigDecimal("100"));snapshot.setReservationDepositAmount(new BigDecimal("20"));
+        snapshot.setSecurityDepositAmount(BigDecimal.ZERO);snapshot.setRemainingRentalAmount(new BigDecimal("80"));
+        snapshot.setDueAtCheckIn(new BigDecimal("80"));snapshot.setTotalInitialObligation(new BigDecimal("100"));
+        com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation,snapshot);
+        when(snapshots.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
     }
     Payment existing(){var p=id(new Payment());p.setRenewal(n);p.setRenewalRevision(revision);p.setInitiatedBy(user);p.setAmount(new BigDecimal("100"));p.setCurrency("VND");p.setPurpose(PaymentType.RENEWAL);p.setGatewayProvider("VNPAY");p.setGatewayIntentId("test-intent");p.setPaymentDeadline(deadline);return p;}
 }

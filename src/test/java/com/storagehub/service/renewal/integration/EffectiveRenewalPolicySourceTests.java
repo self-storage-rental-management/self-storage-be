@@ -28,9 +28,9 @@ class EffectiveRenewalPolicySourceTests {
         assertThat(result.eligiblePackageIds()).containsExactly(valid.getId());
         assertThat(result.reference()).isEqualTo("facility-rental-packages:"+id);
         assertThat(source.read(rental,date).orElseThrow().version()).isEqualTo(result.version());
-        when(publications.read(id,date)).thenThrow(com.storagehub.common.api.ApiExceptions.conflict("Published renewal policy is invalid"));
+        doThrow(com.storagehub.common.api.ApiExceptions.conflict("Published renewal policy is invalid")).when(publications).read(id,date);
         assertThat(source.read(rental,date).orElseThrow().eligiblePackageIds()).containsExactly(valid.getId());
-        when(publications.read(id,date)).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("database unavailable"));
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("database unavailable")).when(publications).read(id,date);
         assertThatThrownBy(()->source.read(rental,date)).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
     }
     @Test void explicitEmptyPublishedWhitelistIsRespected() {

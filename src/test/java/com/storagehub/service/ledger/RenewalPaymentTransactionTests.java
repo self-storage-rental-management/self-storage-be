@@ -299,7 +299,7 @@ class RenewalPaymentTransactionTests {
         assertThatThrownBy(()->tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();source.execute(p.getRenewal(),refund,UUID.randomUUID(),"duplicate",executor,now.plusSeconds(2));})).hasMessageContaining("awaiting execution");
     }
     @Test void dailyFeesUseActualAllocationsAndASecondDayCanBePaidWithoutPayingRentAgain() throws Exception {
-        UUID payment=paidDeposit(true);Instant first=NOW.plusSeconds(3600),second=NOW.plus(Duration.ofDays(1));
+        UUID payment=paidDeposit(true);Instant first=NOW.plus(Duration.ofDays(1)).plusSeconds(3600),second=NOW.plus(Duration.ofDays(2));
         var provider=new org.springframework.beans.factory.support.StaticListableBeanFactory();provider.addBean("finance",finance);
         var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
         org.springframework.test.util.ReflectionTestUtils.setField(accounting,"manualPayments",new ManualRentalPaymentService(payments,audit));
