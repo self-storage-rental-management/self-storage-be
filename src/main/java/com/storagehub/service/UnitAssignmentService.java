@@ -312,7 +312,7 @@ public class UnitAssignmentService {
             reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
             reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), reservation.getUnitType().getId(),
-            reservation.getUnitType().getName(), reservation.getStartDate(), reservation.getEndDate(),
+            ReservationSnapshotView.unitTypeName(reservation), reservation.getStartDate(), reservation.getEndDate(),
             reservation.getConfirmedAt(), ReservationCheckInPolicy.managerAssignmentDueAt(reservation.getConfirmedAt()),
             reservation.getTotalGoodsVolumeM3(),
             reservation.getTotalGoodsWeightKg(),
