@@ -30,7 +30,7 @@ public class RentalSetupLifecycleService {
     private final NotificationService notificationService;
 
     @Scheduled(
-        fixedDelayString = "${storagehub.setup-lifecycle.delay-ms:3600000}",
+        fixedDelayString = "${storagehub.setup-lifecycle.delay-ms:60000}",
         initialDelayString = "${storagehub.setup-lifecycle.initial-delay-ms:60000}"
     )
     @Transactional
