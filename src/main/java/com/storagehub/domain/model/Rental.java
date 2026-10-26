@@ -44,6 +44,10 @@ public class Rental extends BaseEntity {
     @Column(nullable = false, length = 32)
     private RentalStatus status = RentalStatus.active;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "end_reason", length = 32)
+    private RentalEndReason endReason;
+
     @Column(nullable = false)
     private LocalDate startDate;
 

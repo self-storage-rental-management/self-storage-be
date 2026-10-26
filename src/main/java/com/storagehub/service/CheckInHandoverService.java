@@ -1023,7 +1023,8 @@ public class CheckInHandoverService {
             payment.getId(), payment.getReservation().getId(), payment.getAmount(), payment.getCurrency(),
             payment.getPurpose(), payment.getStatus(), payment.getGatewayTransactionNo(),
             payment.getGatewayBankCode(), payment.getPaidAt(), payment.getProcessedAt(),
-            payment.getInitiatedBy().getFullName()
+            payment.getInitiatedBy().getFullName(), payment.getInvoiceNumber(), payment.getInvoiceStatus(),
+            payment.getInvoiceIssuedAt()
         );
     }
 

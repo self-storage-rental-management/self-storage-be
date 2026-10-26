@@ -28,5 +28,15 @@ public record UpdateBusinessConfigRequest(
     @Min(value = 1, message = "autoInvoiceDays must be >= 1")
     Integer autoInvoiceDays,
 
-    Boolean autoProrate
-) {}
+    Boolean autoProrate,
+
+    @DecimalMin(value = "0.0", message = "managerRefundApprovalLimit must be >= 0")
+    BigDecimal managerRefundApprovalLimit
+) {
+    public UpdateBusinessConfigRequest(Integer gracePeriodDays, BigDecimal lateFeeAmount, BigDecimal defaultDepositRatio,
+        Double holdExpiryHours, Integer dimDivisor, Boolean maintenanceMode, String bannerNotice,
+        Integer autoInvoiceDays, Boolean autoProrate) {
+        this(gracePeriodDays, lateFeeAmount, defaultDepositRatio, holdExpiryHours, dimDivisor,
+            maintenanceMode, bannerNotice, autoInvoiceDays, autoProrate, null);
+    }
+}
