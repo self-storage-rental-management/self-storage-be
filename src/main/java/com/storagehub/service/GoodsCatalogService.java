@@ -3,6 +3,7 @@ package com.storagehub.service;
 import com.storagehub.api.reservation.GoodsCatalogResponse;
 import com.storagehub.api.reservation.GoodsCatalogCategoryUpdateRequest;
 import com.storagehub.api.reservation.GoodsCatalogMaterialRequest;
+import com.storagehub.common.api.ApiException;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.GoodsCatalogStatus;
 import com.storagehub.domain.model.UnitType;
@@ -28,21 +29,21 @@ public class GoodsCatalogService {
     private record Definition(String label, List<String> normal, List<String> fragile) {}
 
     private static final Map<GoodsCategory, Definition> DEFAULTS = Map.ofEntries(
-        entry(GoodsCategory.FURNITURE, "Nội thất và đồ gia dụng", "Gỗ|Kim loại|Nhựa|Vải|Da", "Kính|Gương|Đá"),
+        entry(GoodsCategory.FURNITURE, "Nội thất và đồ gia dụng", "Gỗ|Kim loại|Nhựa|Vải|Da", "Kính|Đá"),
         entry(GoodsCategory.KITCHENWARE, "Dụng cụ nhà bếp không chứa thực phẩm", "Inox|Kim loại|Nhựa|Gỗ", "Thủy tinh|Gốm|Sứ"),
         entry(GoodsCategory.DECOR, "Đồ trang trí & thủ công", "Gỗ|Nhựa|Kim loại|Vải|Giấy", "Thủy tinh|Pha lê|Gốm|Sứ"),
-        entry(GoodsCategory.ELECTRONICS, "Thiết bị điện tử đã tháo pin rời", "Nhựa|Kim loại|Cao su", "Kính màn hình|Màn hình LCD/LED"),
+        entry(GoodsCategory.ELECTRONICS, "Thiết bị điện tử đã tháo pin rời", "Nhựa|Kim loại|Cao su", "Kính"),
         entry(GoodsCategory.OFFICE, "Thiết bị văn phòng", "Nhựa|Kim loại|Gỗ|Giấy", "Kính"),
-        entry(GoodsCategory.TOYS, "Đồ chơi & đồ trẻ em", "Nhựa|Gỗ|Vải|Cao su|Kim loại", "Kính hoặc chi tiết thủy tinh nếu có"),
-        entry(GoodsCategory.SPORTS, "Đồ thể thao", "Nhựa|Cao su|Kim loại|Vải|Da|Composite", "Kính|Vật liệu carbon mỏng cần bảo vệ đặc biệt"),
+        entry(GoodsCategory.TOYS, "Đồ chơi & đồ trẻ em", "Nhựa|Gỗ|Vải|Cao su|Kim loại", "Kính"),
+        entry(GoodsCategory.SPORTS, "Đồ thể thao", "Nhựa|Cao su|Kim loại|Vải|Da|Composite", "Kính|Sợi carbon"),
         entry(GoodsCategory.GIFTS, "Quà tặng & đồ lưu niệm", "Gỗ|Nhựa|Kim loại|Vải|Giấy", "Thủy tinh|Pha lê|Gốm|Sứ"),
-        entry(GoodsCategory.MUSICAL_INSTRUMENTS, "Nhạc cụ", "Gỗ|Kim loại|Nhựa|Da|Vải", "Bộ phận kính hoặc vật liệu mỏng, dễ nứt"),
-        entry(GoodsCategory.CAMERA_EQUIPMENT, "Thiết bị chụp ảnh / quay phim", "Nhựa|Kim loại|Cao su", "Kính quang học|Ống kính"),
-        entry(GoodsCategory.EVENT_EQUIPMENT, "Thiết bị sự kiện / triển lãm", "Kim loại|Nhựa|Vải|Gỗ", "Kính|Mica cứng dễ nứt"),
-        entry(GoodsCategory.STORE_FIXTURES, "Kệ, tủ & vật dụng cửa hàng", "Kim loại|Gỗ|Nhựa", "Kính|Gương"),
-        entry(GoodsCategory.FINE_ART, "Đồ mỹ thuật", "Giấy|Vải|Canvas|Gỗ", "Kính khung tranh|Gốm|Tượng dễ vỡ"),
+        entry(GoodsCategory.MUSICAL_INSTRUMENTS, "Nhạc cụ", "Gỗ|Kim loại|Nhựa|Da|Vải", "Thủy tinh"),
+        entry(GoodsCategory.CAMERA_EQUIPMENT, "Thiết bị chụp ảnh / quay phim", "Nhựa|Kim loại|Cao su", "Kính|Thủy tinh"),
+        entry(GoodsCategory.EVENT_EQUIPMENT, "Thiết bị sự kiện / triển lãm", "Kim loại|Nhựa|Vải|Gỗ", "Kính|Mica"),
+        entry(GoodsCategory.STORE_FIXTURES, "Kệ, tủ & vật dụng cửa hàng", "Kim loại|Gỗ|Nhựa", "Kính|Thủy tinh"),
+        entry(GoodsCategory.FINE_ART, "Đồ mỹ thuật", "Giấy|Vải|Canvas|Gỗ", "Kính|Gốm|Sứ"),
         entry(GoodsCategory.CERAMIC_GLASS, "Đồ gốm / thủy tinh", "", "Thủy tinh|Pha lê|Gốm|Sứ"),
-        entry(GoodsCategory.MOVING_ITEMS, "Vật dụng chuyển nhà", "Gỗ|Nhựa|Kim loại|Vải|Carton", "Kính|Gương|Gốm|Sứ"),
+        entry(GoodsCategory.MOVING_ITEMS, "Vật dụng chuyển nhà", "Gỗ|Nhựa|Kim loại|Vải|Carton", "Kính|Thủy tinh|Gốm|Sứ"),
         entry(GoodsCategory.OTHER, "Loại hàng khác cần duyệt", "", "")
     );
 
@@ -195,22 +196,24 @@ public class GoodsCatalogService {
             "goodsItems[" + index + "].materialName is not allowed for category " + category, null);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ApiException.class)
     public void validateForUnitType(UnitType unitType, GoodsCategory category, String materialName, int index) {
         validate(category, materialName, index);
         try {
             var scope = new com.fasterxml.jackson.databind.ObjectMapper().readTree(unitType.getAcceptedGoodsJson());
             var type = typeRepository.findByCode(category.name())
                 .orElseThrow(() -> ApiExceptions.validation("Loại hàng chưa được cấu hình cho loại kho đã chọn.", null));
-            boolean categoryAllowed = false;
-            for (var id : scope.path("categoryIds")) if (type.getId().toString().equals(id.asText())) categoryAllowed = true;
+            var categoryIds = scope.path("categoryIds");
+            boolean categoryAllowed = !categoryIds.isArray() || categoryIds.isEmpty();
+            for (var id : categoryIds) if (type.getId().toString().equals(id.asText())) categoryAllowed = true;
             if (!categoryAllowed) throw ApiExceptions.validation("goodsItems[" + index + "] không thuộc nhóm hàng loại kho này nhận.", null);
             if (category == GoodsCategory.OTHER) return;
             var material = materialRepository.findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE)
                 .stream().filter(value -> value.getDisplayName().equalsIgnoreCase(materialName.trim())).findFirst()
                 .orElseThrow(() -> ApiExceptions.validation("Vật liệu không còn được áp dụng.", null));
-            boolean materialAllowed = false;
-            for (var id : scope.path("materialIds")) if (material.getId().toString().equals(id.asText())) materialAllowed = true;
+            var materialIds = scope.path("materialIds");
+            boolean materialAllowed = !materialIds.isArray() || materialIds.isEmpty();
+            for (var id : materialIds) if (material.getId().toString().equals(id.asText())) materialAllowed = true;
             if (!materialAllowed) throw ApiExceptions.validation("goodsItems[" + index + "] có vật liệu không được nhận tại loại kho này.", null);
         } catch (com.storagehub.common.api.ApiException exception) {
             throw exception;
@@ -219,7 +222,7 @@ public class GoodsCatalogService {
         }
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = ApiException.class)
     public void validateForUnitType(UnitType unitType, com.storagehub.api.reservation.GoodsItemRequest item, int index) {
         GoodsTypeCatalog type = (item.getCatalogCategoryId() == null
             ? typeRepository.findByCode(item.getCategory().name())
@@ -228,8 +231,9 @@ public class GoodsCatalogService {
             .orElseThrow(() -> ApiExceptions.validation("Loại hàng không còn được áp dụng.", null));
         try {
             var scope = new com.fasterxml.jackson.databind.ObjectMapper().readTree(unitType.getAcceptedGoodsJson());
-            boolean allowed = false;
-            for (var id : scope.path("categoryIds")) if (type.getId().toString().equals(id.asText())) allowed = true;
+            var categoryIds = scope.path("categoryIds");
+            boolean allowed = !categoryIds.isArray() || categoryIds.isEmpty();
+            for (var id : categoryIds) if (type.getId().toString().equals(id.asText())) allowed = true;
             if (!allowed) throw ApiExceptions.validation("Loại kho này không nhận loại hàng đã chọn.", null);
             item.setCatalogCategoryId(type.getId());
             item.setCategoryCode(type.getCode());
@@ -246,8 +250,9 @@ public class GoodsCatalogService {
                     ? value.getId().equals(item.getCatalogMaterialId())
                     : value.getDisplayName().equalsIgnoreCase(item.getMaterialName() == null ? "" : item.getMaterialName().trim()))
                 .findFirst().orElseThrow(() -> ApiExceptions.validation("Vật liệu không thuộc loại hàng đã chọn.", null));
-            allowed = false;
-            for (var id : scope.path("materialIds")) if (material.getId().toString().equals(id.asText())) allowed = true;
+            var materialIds = scope.path("materialIds");
+            allowed = !materialIds.isArray() || materialIds.isEmpty();
+            for (var id : materialIds) if (material.getId().toString().equals(id.asText())) allowed = true;
             if (!allowed) throw ApiExceptions.validation("Loại kho này không nhận vật liệu đã chọn.", null);
             item.setCatalogMaterialId(material.getId());
             item.setMaterialCode(material.getCode());
