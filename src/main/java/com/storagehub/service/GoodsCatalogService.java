@@ -17,10 +17,12 @@ import com.storagehub.domain.repo.GoodsTypeCatalogRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -29,28 +31,27 @@ public class GoodsCatalogService {
     private record Definition(String label, List<String> normal, List<String> fragile) {}
 
     private static final Map<GoodsCategory, Definition> DEFAULTS = Map.ofEntries(
-        entry(GoodsCategory.FURNITURE, "Nội thất và đồ gia dụng", "Gỗ|Kim loại|Nhựa|Vải|Da", "Kính|Đá"),
-        entry(GoodsCategory.KITCHENWARE, "Dụng cụ nhà bếp không chứa thực phẩm", "Inox|Kim loại|Nhựa|Gỗ", "Thủy tinh|Gốm|Sứ"),
-        entry(GoodsCategory.DECOR, "Đồ trang trí & thủ công", "Gỗ|Nhựa|Kim loại|Vải|Giấy", "Thủy tinh|Pha lê|Gốm|Sứ"),
-        entry(GoodsCategory.ELECTRONICS, "Thiết bị điện tử đã tháo pin rời", "Nhựa|Kim loại|Cao su", "Kính"),
-        entry(GoodsCategory.OFFICE, "Thiết bị văn phòng", "Nhựa|Kim loại|Gỗ|Giấy", "Kính"),
-        entry(GoodsCategory.TOYS, "Đồ chơi & đồ trẻ em", "Nhựa|Gỗ|Vải|Cao su|Kim loại", "Kính"),
-        entry(GoodsCategory.SPORTS, "Đồ thể thao", "Nhựa|Cao su|Kim loại|Vải|Da|Composite", "Kính|Sợi carbon"),
-        entry(GoodsCategory.GIFTS, "Quà tặng & đồ lưu niệm", "Gỗ|Nhựa|Kim loại|Vải|Giấy", "Thủy tinh|Pha lê|Gốm|Sứ"),
-        entry(GoodsCategory.MUSICAL_INSTRUMENTS, "Nhạc cụ", "Gỗ|Kim loại|Nhựa|Da|Vải", "Thủy tinh"),
-        entry(GoodsCategory.CAMERA_EQUIPMENT, "Thiết bị chụp ảnh / quay phim", "Nhựa|Kim loại|Cao su", "Kính|Thủy tinh"),
-        entry(GoodsCategory.EVENT_EQUIPMENT, "Thiết bị sự kiện / triển lãm", "Kim loại|Nhựa|Vải|Gỗ", "Kính|Mica"),
-        entry(GoodsCategory.STORE_FIXTURES, "Kệ, tủ & vật dụng cửa hàng", "Kim loại|Gỗ|Nhựa", "Kính|Thủy tinh"),
-        entry(GoodsCategory.FINE_ART, "Đồ mỹ thuật", "Giấy|Vải|Canvas|Gỗ", "Kính|Gốm|Sứ"),
-        entry(GoodsCategory.CERAMIC_GLASS, "Đồ gốm / thủy tinh", "", "Thủy tinh|Pha lê|Gốm|Sứ"),
-        entry(GoodsCategory.MOVING_ITEMS, "Vật dụng chuyển nhà", "Gỗ|Nhựa|Kim loại|Vải|Carton", "Kính|Thủy tinh|Gốm|Sứ"),
-        entry(GoodsCategory.OTHER, "Loại hàng khác cần duyệt", "", "")
+        entry(GoodsCategory.FURNITURE, "Nội thất", "Gỗ|Kim loại|Nhựa|Vải|Da|Kính/Thủy tinh|Đá", ""),
+        entry(GoodsCategory.KITCHENWARE, "Đồ dùng nhà bếp", "Inox|Gang|Nhôm|Nhựa|Gỗ|Kính/Thủy tinh|Gốm/Sứ", ""),
+        entry(GoodsCategory.DECOR, "Vật dụng trang trí", "Gỗ|Kim loại|Nhựa|Vải|Kính/Thủy tinh|Gốm/Sứ|Đá", ""),
+        entry(GoodsCategory.DOCUMENTS, "Sách & hồ sơ", "Giấy|Carton", ""),
+        entry(GoodsCategory.TOYS, "Đồ chơi", "Nhựa|Gỗ|Vải|Cao su|Kim loại", ""),
+        entry(GoodsCategory.SPORTS, "Dụng cụ thể thao", "Kim loại|Cao su|Da|Vải|Composite|Sợi carbon", ""),
+        entry(GoodsCategory.MUSICAL_INSTRUMENTS, "Nhạc cụ", "Gỗ|Kim loại", ""),
+        entry(GoodsCategory.FINE_ART, "Tranh & tượng", "Giấy|Canvas|Gỗ|Kim loại|Đá|Kính/Thủy tinh|Gốm/Sứ", ""),
+        entry(GoodsCategory.ELECTRONICS, "Đồ điện & điện tử", "", ""),
+        entry(GoodsCategory.CAMERA_EQUIPMENT, "Máy ảnh & máy quay", "", ""),
+        entry(GoodsCategory.OTHER, "Hàng hóa khác", "", "")
+    );
+    private static final Set<GoodsCategory> OPTIONAL_MATERIAL_CATEGORIES = Set.of(
+        GoodsCategory.ELECTRONICS, GoodsCategory.CAMERA_EQUIPMENT, GoodsCategory.MUSICAL_INSTRUMENTS
     );
 
     private final GoodsTypeCatalogRepository typeRepository;
     private final GoodsMaterialCatalogRepository materialRepository;
     private final AdminAuthorizationService authorization;
     private final AuditLogService audit;
+    private final ApplicationEventPublisher events;
 
     static String historicalCategoryName(com.storagehub.domain.model.ReservationGoodsItem item) {
         if (item.getCategoryName() != null) return item.getCategoryName();
@@ -84,6 +85,7 @@ public class GoodsCatalogService {
         GoodsTypeCatalog saved = typeRepository.saveAndFlush(type);
         var result = toCategory(saved, false);
         audit.recordMutation("GOODS_CATEGORY_CREATED", "GoodsTypeCatalog", saved.getId(), null, null, result);
+        events.publishEvent(new GoodsCatalogEvents.Changed());
         return result;
     }
 
@@ -97,6 +99,7 @@ public class GoodsCatalogService {
         GoodsTypeCatalog saved = typeRepository.saveAndFlush(type);
         var after = toCategory(saved, false);
         audit.recordMutation("GOODS_CATEGORY_UPDATED", "GoodsTypeCatalog", id, null, before, after);
+        events.publishEvent(new GoodsCatalogEvents.Changed());
         return after;
     }
 
@@ -119,6 +122,7 @@ public class GoodsCatalogService {
         GoodsMaterialCatalog saved = materialRepository.saveAndFlush(material);
         var result = toMaterial(saved);
         audit.recordMutation("GOODS_MATERIAL_CREATED", "GoodsMaterialCatalog", saved.getId(), null, null, result);
+        events.publishEvent(new GoodsCatalogEvents.Changed());
         return result;
     }
 
@@ -138,6 +142,7 @@ public class GoodsCatalogService {
         GoodsMaterialCatalog saved = materialRepository.saveAndFlush(material);
         var after = toMaterial(saved);
         audit.recordMutation("GOODS_MATERIAL_UPDATED", "GoodsMaterialCatalog", id, null, before, after);
+        events.publishEvent(new GoodsCatalogEvents.Changed());
         return after;
     }
 
@@ -156,6 +161,7 @@ public class GoodsCatalogService {
         typeRepository.saveAllAndFlush(all);
         audit.recordMutation("GOODS_CATEGORIES_REORDERED", "GoodsTypeCatalog",
             orderedIds.isEmpty() ? actor.userId() : orderedIds.get(0), null, null, normalized);
+        events.publishEvent(new GoodsCatalogEvents.Changed());
         return managerCatalog(actor);
     }
 
@@ -171,6 +177,7 @@ public class GoodsCatalogService {
         }
         materialRepository.saveAllAndFlush(all);
         audit.recordMutation("GOODS_MATERIALS_REORDERED", "GoodsTypeCatalog", categoryId, null, null, orderedIds);
+        events.publishEvent(new GoodsCatalogEvents.Changed());
         return toCategory(type, false);
     }
 
@@ -188,7 +195,7 @@ public class GoodsCatalogService {
         GoodsTypeCatalog type = typeRepository.findByCode(category.name())
             .filter(value -> value.getStatus() == GoodsCatalogStatus.ACTIVE)
             .orElseThrow(() -> ApiExceptions.validation("goodsItems[" + index + "].category is not active", null));
-        if (category == GoodsCategory.OTHER) return;
+        if (category == GoodsCategory.OTHER || materialOptional(category, materialName)) return;
         String requested = materialName == null ? "" : materialName.trim();
         boolean supported = materialRepository.findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE)
             .stream().anyMatch(value -> value.getDisplayName().equalsIgnoreCase(requested));
@@ -207,7 +214,7 @@ public class GoodsCatalogService {
             boolean categoryAllowed = !categoryIds.isArray() || categoryIds.isEmpty();
             for (var id : categoryIds) if (type.getId().toString().equals(id.asText())) categoryAllowed = true;
             if (!categoryAllowed) throw ApiExceptions.validation("goodsItems[" + index + "] không thuộc nhóm hàng loại kho này nhận.", null);
-            if (category == GoodsCategory.OTHER) return;
+            if (category == GoodsCategory.OTHER || materialOptional(category, materialName)) return;
             var material = materialRepository.findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE)
                 .stream().filter(value -> value.getDisplayName().equalsIgnoreCase(materialName.trim())).findFirst()
                 .orElseThrow(() -> ApiExceptions.validation("Vật liệu không còn được áp dụng.", null));
@@ -244,6 +251,11 @@ public class GoodsCatalogService {
                 item.setCatalogMaterialId(null);
                 return;
             }
+            if (item.getCatalogMaterialId() == null && materialOptional(item.getCategory(), item.getMaterialName())) {
+                item.setCatalogMaterialId(null);
+                item.setMaterialName(null);
+                return;
+            }
             GoodsMaterialCatalog material = materialRepository
                 .findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE)
                 .stream().filter(value -> item.getCatalogMaterialId() != null
@@ -257,9 +269,6 @@ public class GoodsCatalogService {
             item.setCatalogMaterialId(material.getId());
             item.setMaterialCode(material.getCode());
             item.setMaterialName(material.getDisplayName());
-            if (material.isFragile() && !item.isFragile()) {
-                throw ApiExceptions.validation("Vật liệu đã chọn thuộc nhóm dễ vỡ. Vui lòng đánh dấu hàng dễ vỡ.", null);
-            }
         } catch (com.storagehub.common.api.ApiException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -270,6 +279,7 @@ public class GoodsCatalogService {
     @Transactional
     public void seedDefaults() {
         for (GoodsCategory code : GoodsCategory.values()) {
+            if (!DEFAULTS.containsKey(code)) continue;
             // Seed only new categories; never recreate renamed or archived manager data.
             if (typeRepository.findByCode(code.name()).isPresent()) continue;
             Definition definition = DEFAULTS.get(code);
@@ -335,6 +345,11 @@ public class GoodsCatalogService {
 
     private static List<String> split(String values) {
         return values.isBlank() ? List.of() : List.of(values.split("\\|"));
+    }
+
+    private static boolean materialOptional(GoodsCategory category, String materialName) {
+        return OPTIONAL_MATERIAL_CATEGORIES.contains(category)
+            && (materialName == null || materialName.isBlank());
     }
 
     private static GoodsCategory reservationCategory(String code) {
