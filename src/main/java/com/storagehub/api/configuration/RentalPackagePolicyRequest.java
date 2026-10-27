@@ -2,6 +2,8 @@ package com.storagehub.api.configuration;
 
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -30,6 +32,10 @@ public record RentalPackagePolicyRequest(
     @jakarta.validation.constraints.Min(value = 1, message = "rentalYears must be > 0")
     Integer rentalYears,
 
+    @Min(value = 0, message = "freeSetupDays must be >= 0")
+    @Max(value = 365, message = "freeSetupDays must be <= 365")
+    Integer freeSetupDays,
+
     @Size(max = 500, message = "description cannot exceed 500 characters")
     String description,
 
@@ -37,6 +43,10 @@ public record RentalPackagePolicyRequest(
     @DecimalMin(value = "0.0", message = "discountRate must be >= 0")
     @DecimalMax(value = "1.0", message = "discountRate must be <= 1.0 (100%)")
     BigDecimal discountRate,
+
+    @DecimalMin(value = "0.0", message = "depositRate must be >= 0")
+    @DecimalMax(value = "1.0", message = "depositRate must be <= 1.0 (100%)")
+    BigDecimal depositRate,
 
     @NotBlank(message = "policyVersion is required")
     @Size(max = 50, message = "policyVersion cannot exceed 50 characters")
@@ -51,8 +61,36 @@ public record RentalPackagePolicyRequest(
     LocalDate effectiveFrom,
 
     @JsonFormat(pattern = "yyyy-MM-dd")
-    LocalDate effectiveTo
+    LocalDate effectiveTo,
+
+    @Min(value = 1, message = "earlyTerminationFeeCapMonths must be >= 1")
+    Integer earlyTerminationFeeCapMonths,
+
+    @DecimalMin(value = "0.0", message = "earlyTerminationFeeCoefficient must be >= 0")
+    @DecimalMax(value = "1.0", message = "earlyTerminationFeeCoefficient must be <= 1.0")
+    BigDecimal earlyTerminationFeeCoefficient,
+
+    @Min(value = 0, message = "earlyTerminationNoticeDays must be >= 0")
+    @Max(value = 365, message = "earlyTerminationNoticeDays must be <= 365")
+    Integer earlyTerminationNoticeDays
 ) {
+    public RentalPackagePolicyRequest(
+        UUID facilityId,
+        String code,
+        String name,
+        Integer rentalMonths,
+        Integer rentalYears,
+        String description,
+        BigDecimal discountRate,
+        String policyVersion,
+        PublicationStatus publicationStatus,
+        Boolean active,
+        LocalDate effectiveFrom,
+        LocalDate effectiveTo
+    ) {
+        this(facilityId, code, name, rentalMonths, rentalYears, null, description, discountRate, new BigDecimal("0.20"), policyVersion, publicationStatus, active, effectiveFrom, effectiveTo, 1, BigDecimal.ONE, 14);
+    }
+
     public RentalPackagePolicyRequest(
         UUID facilityId,
         String code,
@@ -64,7 +102,7 @@ public record RentalPackagePolicyRequest(
         LocalDate effectiveFrom,
         LocalDate effectiveTo
     ) {
-        this(facilityId, code, name, rentalMonths, null, null, discountRate, policyVersion, null, active, effectiveFrom, effectiveTo);
+        this(facilityId, code, name, rentalMonths, null, null, null, discountRate, new BigDecimal("0.20"), policyVersion, null, active, effectiveFrom, effectiveTo, 1, BigDecimal.ONE, 14);
     }
 
     public int resolveRentalMonths() {

@@ -23,7 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Read-only bridge to the existing shared catalog, not a renewal-policy publisher.
- * RenewalWorkflowService must still intersect these prices with the BO policy's
+ * RenewalWorkflowService must still intersect these prices with the effective policy's (publication or facility catalog fallback)
  * eligiblePackageIds and enforce every eligibility/finance/hold/lifecycle gate.
  * VND, scale 2 and HALF_UP are the existing ReservationQuoteService and
  * RenewalTermCalculator money contract; no currency conversion is performed.
@@ -76,12 +76,7 @@ public class SharedCatalogRenewalPricingSource implements RenewalSources.Pricing
                 throw inconsistent("Package does not belong to the Rental facility");
             }
             if (!pack.isActive()) continue;
-            if (pack.getEffectiveFrom() == null || pack.getEffectiveTo() != null
-                && pack.getEffectiveTo().isBefore(pack.getEffectiveFrom())) {
-                throw inconsistent("Active package effective dates are invalid");
-            }
-            if (pack.getEffectiveFrom().isAfter(extensionStart)
-                || pack.getEffectiveTo() != null && pack.getEffectiveTo().isBefore(extensionStart)) continue;
+            // Renewal eligibility uses the published facility policy, not package effective dates.
             if (pack.getId() == null || !ids.add(pack.getId()) || pack.getCode() == null
                 || pack.getCode().isBlank() || !pack.getCode().equals(pack.getCode().trim())
                 || pack.getCode().length() > 30 || !codes.add(pack.getCode())

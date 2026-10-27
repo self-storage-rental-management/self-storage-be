@@ -22,6 +22,24 @@ import lombok.Setter;
 @NoArgsConstructor
 public class ReturnCase extends BaseEntity {
 
+    @Column(nullable = false)
+    private boolean setupExitRequested;
+
+    @Column(nullable = false)
+    private boolean setupEarlyExit;
+
+    @Column
+    private Instant setupReturnedAt;
+
+    @Column(length = 50)
+    private String setupEarlyExitPolicyVersion;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal rentalRefundCredit;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal earlyTerminationFee;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "rental_id", nullable = false)
     private Rental rental;
@@ -45,6 +63,14 @@ public class ReturnCase extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 48)
     private ReturnCaseStatus status = ReturnCaseStatus.requested;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "return_type", nullable = false, length = 32)
+    private ReturnType returnType = ReturnType.NORMAL;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "settlement_mode", nullable = false, length = 20)
+    private SettlementMode settlementMode = SettlementMode.AUTO;
 
     @Column(nullable = false)
     private Instant requestedAt;
@@ -86,6 +112,23 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false)
     private boolean returnedLock = false;
 
+    /** Whether this return was requested after the rental had become ACTIVE. */
+    @Column(nullable = false)
+    private boolean activeReturnRepricingRequired = false;
+
+    /** Old reservations without a tier snapshot require an explicit Business decision. */
+    @Column(name = "legacy_pricing_review_required", nullable = false)
+    private boolean legacyPricingReviewRequired = false;
+
+    @Column(name = "legacy_pricing_snapshot_json", columnDefinition = "LONGTEXT")
+    private String legacyPricingSnapshotJson;
+
+    @Column(name = "legacy_pricing_evidence_file_id", columnDefinition = "BINARY(16)")
+    private java.util.UUID legacyPricingEvidenceFileId;
+
+    @Column(name = "legacy_pricing_decision_reason", length = 2000)
+    private String legacyPricingDecisionReason;
+
     @Enumerated(EnumType.STRING)
     @Column(length = 32)
     private StorageUnitStatus proposedUnitStatus = StorageUnitStatus.available;
@@ -118,6 +161,13 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amountDueFromCustomer = BigDecimal.ZERO;
 
+    /** Rental-only charge/refund; the security deposit remains separate. */
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal earlyTerminationCharge = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal rentalRefundAmount = BigDecimal.ZERO;
+
     @Column
     private Integer overdueDays;
 
@@ -147,7 +197,7 @@ public class ReturnCase extends BaseEntity {
     private String managerResolutionNote;
 
     // Settlement completion & payment / refund
-    @Column(length = 64)
+    @Column(length = 120)
     private String settlementPaymentId;
 
     @Column

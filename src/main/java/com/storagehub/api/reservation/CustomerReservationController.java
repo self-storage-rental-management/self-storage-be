@@ -44,6 +44,12 @@ public class CustomerReservationController {
     private final ReservationEmailVerificationService emailVerificationService;
     private final VnpayService vnpayService;
     private final PaymentComplaintService paymentComplaintService;
+    private final com.storagehub.service.GoodsCatalogService goodsCatalogService;
+
+    @GetMapping("/goods-catalog")
+    public ApiResponse<GoodsCatalogResponse> goodsCatalog() {
+        return new ApiResponse<>(goodsCatalogService.catalog(), CorrelationIdContext.current());
+    }
 
     @PostMapping("/compatibility-check")
     public ApiResponse<CompatibilityCheckResponse> checkCompatibility(
@@ -51,6 +57,16 @@ public class CustomerReservationController {
     ) {
         return new ApiResponse<>(
             compatibilityService.check(actorContext.required(), request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/recommendation")
+    public ApiResponse<ReservationRecommendationResponse> recommendUnitType(
+        @Valid @RequestBody ReservationRecommendationRequest request
+    ) {
+        return new ApiResponse<>(
+            compatibilityService.recommend(actorContext.required(), request),
             CorrelationIdContext.current()
         );
     }
@@ -124,6 +140,17 @@ public class CustomerReservationController {
     ) {
         return new ApiResponse<>(
             customerReservationService.confirmReceipt(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{reservationId}/setup-goods")
+    public ApiResponse<ReservationDetailResponse> updateSetupGoods(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody UpdateSetupGoodsRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.updateSetupGoods(actorContext.required(), reservationId, request),
             CorrelationIdContext.current()
         );
     }

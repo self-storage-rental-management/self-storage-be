@@ -16,6 +16,7 @@ import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.UUID;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -45,6 +46,7 @@ public class UnitTypeQueryService {
         Facility facility = facilityRepository.findById(facilityId)
             .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
         facilityScopeService.assertCanRead(actor, facility.getId());
+        requireCustomerVisibleFacility(actor, facility);
 
         validateDateRange(startDate, endDate);
         UnitTypeStatus effectiveStatus = actor.hasRole(RoleCode.CUSTOMER) ? UnitTypeStatus.active : status;
@@ -67,6 +69,7 @@ public class UnitTypeQueryService {
         UnitType unitType = unitTypeRepository.findById(unitTypeId)
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         facilityScopeService.assertCanRead(actor, unitType.getFacility().getId());
+        requireCustomerVisibleFacility(actor, unitType.getFacility());
         if (actor.hasRole(RoleCode.CUSTOMER) && unitType.getStatus() != UnitTypeStatus.active) {
             throw ApiExceptions.notFound("Unit type was not found");
         }
@@ -126,13 +129,28 @@ public class UnitTypeQueryService {
             unitType.getSmallBoxCapacity(),
             unitType.getLargeBoxCapacity(),
             unitType.getStatus(),
-            storageUnitRepository.countByFacility_IdAndUnitType_Id(unitType.getFacility().getId(), unitType.getId()),
+            storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatusIn(
+                unitType.getFacility().getId(), unitType.getId(), StorageUnitStatus.operationalStatuses()),
             availableUnitCount,
             storageUnitRepository.countByFacility_IdAndUnitType_IdAndStatus(unitType.getFacility().getId(), unitType.getId(), StorageUnitStatus.occupied),
             unitType.getCreatedAt(),
             unitType.getUpdatedAt(),
-            unitType.getDetailImageUrl()
+            unitType.getDetailImageUrl(),
+            unitType.getPublishedRevision(),
+            goodsScope(unitType, "categoryIds"),
+            goodsScope(unitType, "materialIds")
         );
+    }
+
+    private List<UUID> goodsScope(UnitType unitType, String field) {
+        try {
+            var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(unitType.getAcceptedGoodsJson()).path(field);
+            List<UUID> result = new java.util.ArrayList<>();
+            node.forEach(value -> result.add(UUID.fromString(value.asText())));
+            return result;
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     private void validateDateRange(LocalDate startDate, LocalDate endDate) {
@@ -141,6 +159,12 @@ public class UnitTypeQueryService {
         }
         if (startDate != null && !endDate.isAfter(startDate)) {
             throw ApiExceptions.validation("endDate must be after startDate", null);
+        }
+    }
+
+    private void requireCustomerVisibleFacility(ActorPrincipal actor, Facility facility) {
+        if (actor.hasRole(RoleCode.CUSTOMER) && facility.getStatus() != FacilityStatus.active) {
+            throw ApiExceptions.notFound("Facility was not found");
         }
     }
 }

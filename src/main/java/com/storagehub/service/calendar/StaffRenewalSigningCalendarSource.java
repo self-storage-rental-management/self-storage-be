@@ -88,7 +88,7 @@ public class StaffRenewalSigningCalendarSource implements RenewalOperationSource
     private List<UUID> eligibleStaff(UUID facility) {
         return em.createQuery("select s.user from UserFacilityScope s where s.facility.id=:f and s.scopeLevel in :levels",User.class)
             .setParameter("f",facility).setParameter("levels",List.of(FacilityScopeLevel.OPERATE,FacilityScopeLevel.MANAGE)).getResultList().stream()
-            .filter(u->access.eligible(u,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS))
+            .filter(u->access.eligible(u,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.OPERATE_RENEWALS))
             .map(User::getId).distinct().sorted().toList();
     }
     private String reference(Renewal n,Instant at) {

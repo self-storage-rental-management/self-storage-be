@@ -39,8 +39,25 @@ public class RentalPackagePolicy extends BaseEntity {
     @Column(nullable = false)
     private int rentalMonths;
 
+    /** Free calendar days granted once, only for the initial move-in setup. */
+    @Column(nullable = false)
+    private int freeSetupDays;
+
     @Column(nullable = false, precision = 5, scale = 4)
     private BigDecimal discountRate = BigDecimal.ZERO;
+
+    @Column(name = "deposit_rate", nullable = false, precision = 5, scale = 4)
+    private BigDecimal depositRate = new BigDecimal("0.2000");
+
+    /** Snapshot defaults for early termination; copied into each accepted quote. */
+    @Column(name = "early_termination_fee_cap_months", nullable = false)
+    private int earlyTerminationFeeCapMonths = 1;
+
+    @Column(name = "early_termination_fee_coefficient", nullable = false, precision = 5, scale = 4)
+    private BigDecimal earlyTerminationFeeCoefficient = BigDecimal.ONE;
+
+    @Column(name = "early_termination_notice_days", nullable = false)
+    private int earlyTerminationNoticeDays = 14;
 
     @Column(length = 500)
     private String description;

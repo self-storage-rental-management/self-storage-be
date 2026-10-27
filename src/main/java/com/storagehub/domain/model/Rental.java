@@ -44,11 +44,55 @@ public class Rental extends BaseEntity {
     @Column(nullable = false, length = 32)
     private RentalStatus status = RentalStatus.active;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "end_reason", length = 32)
+    private RentalEndReason endReason;
+
     @Column(nullable = false)
     private LocalDate startDate;
 
     @Column(nullable = false)
     private LocalDate contractEndDate;
+
+    /** Actual handover instant. Contract responsibilities apply from this moment. */
+    @Column
+    private Instant setupStartedAt;
+
+    /** Exclusive setup boundary. The paid rental becomes active at this instant. */
+    @Column
+    private Instant setupEndsAt;
+
+    @Column
+    private Instant termsEffectiveAt;
+
+    /** Customer-declared completion; it never shortens the free setup window. */
+    @Column
+    private Instant moveInCompletedAt;
+
+    @Column
+    private Instant inventoryVerifiedAt;
+
+    @Column
+    private Instant inventoryDueAt;
+
+    @Column(nullable = false)
+    private boolean inventoryPending;
+
+    /** A setup return must pass physical inspection and financial reconciliation. */
+    @Column(nullable = false)
+    private boolean setupExitReviewRequired;
+
+    @Column
+    private Instant setupReminderTwoDaysAt;
+
+    @Column
+    private Instant setupReminderLastDayAt;
+
+    @Column
+    private Instant inventoryEscalatedAt;
+
+    @Column
+    private Instant inventoryTaskCreatedAt;
 
     @Column
     private Instant actualReturnedAt;

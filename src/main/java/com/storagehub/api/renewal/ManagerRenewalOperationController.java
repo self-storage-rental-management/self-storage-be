@@ -19,6 +19,9 @@ import static com.storagehub.service.renewal.operations.RenewalOperationService.
 @io.swagger.v3.oas.annotations.responses.ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409",description="Stale version/phase/deadline or DEFERRED_SOURCE"))
 public class ManagerRenewalOperationController {
     private final ActorContext actors;private final RenewalOperationService service;
+    @PostMapping("/preparation-resolutions") @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+    @Operation(summary="Resolve an allocated payment whose signing preparation is blocked",description="Manager may request a bounded retry or reserve a refund with evidence and service-unavailable attestation. Does not complete a renewal or execute payout.")
+    public ApiResponse<RenewalOperationService.Result> preparation(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.PreparationResolution body,@RequestHeader("Idempotency-Key") String key){return response(service.resolvePreparation(actors.required(),id,body,key));}
     @PostMapping("/facility-fault-reviews") @ResponseStatus(org.springframework.http.HttpStatus.CREATED) @Operation(summary="Xác minh sự cố thuộc trách nhiệm cơ sở",description="Ghi kết quả xác minh riêng; không tự đổi lịch, hoàn tiền hoặc duyệt ngoại lệ.")
     public ApiResponse<RenewalOperationService.Result> fault(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.FaultReview body,@RequestHeader("Idempotency-Key") String key){return response(service.reviewFault(actors.required(),id,body,key));}
     @GetMapping("/operations") @Operation(summary="Read facility Renewal operational state")
@@ -27,9 +30,6 @@ public class ManagerRenewalOperationController {
     public ApiResponse<RenewalOperationService.Result> exception(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.ExceptionDecision body,@RequestHeader("Idempotency-Key") String key){return response(service.exception(actors.required(),id,body,key));}
     @PostMapping("/refund-decisions") @ResponseStatus(org.springframework.http.HttpStatus.CREATED) @Operation(summary="Reserve policy refund entitlement or reject",description="Approval is APPROVED_AWAITING_EXECUTION, not payout. Accounting reserves actual/pending entitlement; execution belongs to shared owner.")
     public ApiResponse<RenewalOperationService.Result> refund(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.RefundDecision body,@RequestHeader("Idempotency-Key") String key){return response(service.refund(actors.required(),id,body,key));}
-    @PostMapping("/refund-executions") @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
-    @Operation(summary="Record a completed deposit refund with payout evidence",description="Requires current manager financial permissions, an approved reservation, linked evidence and explicit payout attestation. Sandbox records remain labeled Sandbox; this endpoint does not initiate a bank transfer.")
-    public ApiResponse<RenewalOperationService.Result> executeRefund(@PathVariable UUID id,@Valid @RequestBody RenewalOperationCommands.RefundExecution body,@RequestHeader("Idempotency-Key") String key){return response(service.executeRefund(actors.required(),id,body,key));}
     @GetMapping("/facility-incidents") @Operation(summary="Read incident and exception timeline")
     public PageResponse<RenewalOperationResponse.Event> incidents(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){return timeline(id,query,"facility-incidents");}
     @GetMapping("/payments") @Operation(summary="Read facility Renewal payment events")

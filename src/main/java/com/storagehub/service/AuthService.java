@@ -39,6 +39,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 @RequiredArgsConstructor
@@ -163,7 +165,7 @@ public class AuthService {
         session.setTokenHash(jwtService.hash(issuedToken.value()));
         session.setRefreshTokenHash(jwtService.hash(refreshToken));
         sessionRepository.saveAndFlush(session);
-        loginHistoryService.record(user, email, true, ipAddress, safeUserAgent, null);
+        recordSuccessfulLoginAfterCommit(user, email, ipAddress, safeUserAgent);
         auditLogService.recordMutation(user, "SESSION_CREATED", "Session", session.getId(), null, null,
             Map.of("sessionId", session.getId(), "expiresAt", issuedToken.expiresAt()));
 
@@ -175,6 +177,24 @@ public class AuthService {
             actorResponseMapper.toResponse(user),
             refreshToken
         );
+    }
+
+    private void recordSuccessfulLoginAfterCommit(User user, String email, String ipAddress, String userAgent) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            loginHistoryService.record(user, email, true, ipAddress, userAgent, null);
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    loginHistoryService.record(user, email, true, ipAddress, userAgent, null);
+                } catch (RuntimeException exception) {
+                    log.warn("Successful login history persistence failed after authentication commit: {}", exception.getMessage());
+                }
+            }
+        });
     }
 
     private void handleNewLoginNotice(User user, String ipAddress, String userAgent) {

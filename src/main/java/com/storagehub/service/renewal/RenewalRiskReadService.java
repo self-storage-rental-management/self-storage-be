@@ -1,5 +1,7 @@
 package com.storagehub.service.renewal;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.renewal.RenewalQuoteResponse;
 import com.storagehub.common.api.ApiExceptions;
@@ -67,19 +69,17 @@ public class RenewalRiskReadService {
         if(renewal!=null) {
             var workflow=em.find(RenewalWorkflow.class,id);
             if(workflow!=null)try {
-                remainder=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class).remainingRentalAmount();
+                remainder=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class).dueAtSigning();
             }catch(Exception invalid){throw ApiExceptions.conflict("Accepted financial terms invalid");}
         }
         if(term==null)return new View(rental.getId(),id,now,"UNKNOWN",null,"UNKNOWN",signing,null,null,
             task==null?null:false,remainder,null,"VND",recoveryStatus,startedAt,taskId);
         // The term provider owns normalization of inclusive/exclusive Rental dates and timezone.
-        ZoneId zone=policies.read(rental.getFacility().getId(),now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate())
-            .filter(s->s.policy().term()!=null).map(s->ZoneId.of(s.policy().term().timezone()))
-            .orElse(ZoneId.of("Asia/Ho_Chi_Minh"));
+        ZoneId zone=BusinessTime.ZONE; // Both published and catalog policies use the fixed Vietnam overdue calendar.
         long days=RenewalOverdueTimeline.overdueDays(term.lastPermittedDate(),now,zone);
         boolean allowed=task==null&&rental.getStatus()==RentalStatus.active&&rental.getActualReturnedAt()==null&&now.isBefore(term.recoveryCutoff());
         BigDecimal fee=null;var feeSource=overdueFees==null?null:overdueFees.getIfAvailable();
-        if(feeSource!=null)try{fee=feeSource.estimate(rental,now);}catch(com.storagehub.common.api.ApiException unavailable){/* Keep the deadline warning visible when fee policy is unavailable. */}
+        if(feeSource!=null)try{fee=feeSource.estimateAtSigning(rental,now);}catch(com.storagehub.common.api.ApiException unavailable){/* Keep the deadline warning visible when fee policy is unavailable. */}
         return new View(rental.getId(),id,now,"COMPLETE",days,RenewalOverdueTimeline.severity(days,now,term.recoveryCutoff()),
             signing,term.recoveryCutoff(),term.recoveryStart(),allowed,remainder,fee,"VND",recoveryStatus,startedAt,taskId);
     }

@@ -35,7 +35,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.test.context.transaction.TestTransaction;
 
-/** Real JPA/JDBC persistence for the existing Customer receipt activation flow, isolated in H2. */
+/** Receipt preserves persisted handover and any existing ledger; isolated JPA/JDBC in H2. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE, properties = {
     "spring.datasource.url=${STORAGEHUB_LEDGER_E2E_DB_URL:jdbc:h2:mem:ledger-activation;MODE=MySQL;DB_CLOSE_DELAY=-1}",
     "spring.datasource.driver-class-name=${STORAGEHUB_LEDGER_E2E_DRIVER:org.h2.Driver}",
@@ -116,7 +116,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
 
     @Test
     @Order(2)
-    void receiptActivationPersistsOneBoundLedgerAccountAndReplayHasNoAdditionalEffect() {
+    void receiptPreservesOneExistingBoundLedgerAccountAndReplayHasNoAdditionalEffect() {
         Fixture fixture = fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT, CheckInStatus.completed, false);
 
         var first = service.confirmReceipt(fixture.actor(), fixture.reservationId());
@@ -193,7 +193,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         TestTransaction.start();
     }
     @Test @Order(6)
-    void failureAfterLedgerOpeningRollsBackRentalUnitCheckinAndReservation() {
+    void failedReceiptRollsBackConfirmationAndPreservesPreexistingHandoverAndLedger() {
         var f=fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT,CheckInStatus.completed,false);
         TestTransaction.flagForCommit();TestTransaction.end();
         org.mockito.Mockito.doThrow(new IllegalStateException("Injected audit failure after ledger opening")).when(activationAudit).recordMutation(
@@ -203,11 +203,11 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         try {assertThatThrownBy(()->service.confirmReceipt(f.actor(),f.reservationId())).hasMessageContaining("Injected audit failure");}
         finally {org.mockito.Mockito.reset(activationAudit);}
         TestTransaction.start();em.clear();
-        assertThat(rentals.findByReservation_Id(f.reservationId())).isEmpty();
+        assertThat(rentals.findByReservation_Id(f.reservationId())).isPresent();
         assertThat(jdbc.queryForObject("select count(*) from rental_ledger_accounts",Long.class)).isEqualTo(before);
         var res=em.find(Reservation.class,f.reservationId());assertThat(res.getStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         assertThat(res.getAssignedUnit().getStatus()).isEqualTo(StorageUnitStatus.assigned);
-        var checkin=em.createQuery("select c from CheckIn c where c.reservation.id=:id",CheckIn.class).setParameter("id",f.reservationId()).getSingleResult();assertThat(checkin.getRental()).isNull();
+        var checkin=em.createQuery("select c from CheckIn c where c.reservation.id=:id",CheckIn.class).setParameter("id",f.reservationId()).getSingleResult();assertThat(checkin.getRental()).isNotNull();
     }
     @Test @Order(7)
     void immutableAcceptedRevisionMapsOnlyItsOwnRenewalPurposesAndRejectsHashTampering() throws Exception {
@@ -245,6 +245,28 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         var f = fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT, CheckInStatus.completed, false);
         service.confirmReceipt(f.actor(), f.reservationId());
         var rental = rentals.findByReservation_Id(f.reservationId()).orElseThrow();
+        assertThatThrownBy(() -> returns.createCustomerReturnRequest(f.actor(), rental.getId(),
+            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "TEST missing receipt")))
+            .hasMessageContaining("Chưa xác minh được cọc thực thu");
+        // Persist a real manual-payment proof, rather than bypassing deposit reconciliation.
+        var reservation = em.find(Reservation.class, f.reservationId());
+        var paidAt = Instant.now().minusSeconds(1).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        var payment = new Payment();payment.setReservation(reservation);payment.setInitiatedBy(reservation.getCustomer());
+        payment.setAmount(new BigDecimal("100000"));payment.setCurrency("VND");payment.setPurpose(PaymentType.RENTAL_BALANCE);
+        payment.setStatus(PaymentStatus.PAID);payment.setGatewayProvider("MANUAL");payment.setGatewayBankCode("CASH");
+        payment.setGatewayIntentId("MANUAL-RENTAL-"+UUID.randomUUID());
+        payment.setGatewayTransactionNo("TEST-RETURN-"+f.reservationId());payment.setIdempotencyKey("TEST-RETURN-"+f.reservationId());
+        payment.setPaidAt(paidAt);em.persist(payment);em.flush();
+        var proof = new java.util.LinkedHashMap<String,Object>();proof.put("paymentId",payment.getId());
+        proof.put("reservationId",reservation.getId());proof.put("renewalId",null);proof.put("initiatedBy",reservation.getCustomer().getId());
+        proof.put("currency","VND");proof.put("amount",payment.getAmount());proof.put("paymentMethod","CASH");
+        proof.put("transactionReference",payment.getGatewayTransactionNo());proof.put("paidAt",paidAt.toString());
+        var log = new ActivityLog();log.setActor(reservation.getCustomer());log.setFacility(reservation.getFacility());
+        log.setAction(com.storagehub.service.ManualRentalPaymentService.AUDIT_ACTION);log.setEntityType("Payment");log.setEntityId(payment.getId());
+        log.setCorrelationId("TEST-RETURN-PROOF");
+        try {log.setAfterStateJson(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(proof));}
+        catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw new IllegalStateException(invalid);}
+        em.persist(log);em.flush();
         var requested = returns.createCustomerReturnRequest(f.actor(), rental.getId(),
             new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "TEST search"));
         em.flush();
@@ -286,7 +308,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         type.setRackHeightM(BigDecimal.ZERO);
         em.persist(type);
 
-        ReservationQuote quote = new ReservationQuote();
+        ReservationQuote quote = com.storagehub.testing.LegacyReservationQuoteFixture.create();
         quote.setCustomer(customer);
         quote.setFacility(facility);
         quote.setUnitType(type);
@@ -349,21 +371,29 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         snapshot.setRemainingRentalAmount(new BigDecimal("100000"));
         snapshot.setDueAtCheckIn(new BigDecimal("100000"));
         snapshot.setTotalInitialObligation(new BigDecimal("100000"));
-        snapshot.setQuotedAt(Instant.now());
-        snapshot.setExpiresAt(Instant.now().plusSeconds(600));
+        snapshot.setQuotedAt(quote.getQuotedAt());
+        snapshot.setExpiresAt(quote.getExpiresAt());
+        snapshot.setFreeSetupDays(quote.getFreeSetupDays());
+        reservation.setSetupDaysSnapshot(snapshot.getFreeSetupDays());
         em.persist(snapshot);
 
+        Instant handoverAt=Instant.now().minusSeconds(2*86400).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        LocalDate paidStart=handoverAt.atZone(com.storagehub.time.BusinessTime.ZONE).toLocalDate();
         Rental rental = null;
-        if (existingRental) {
+        if (existingRental || reservationStatus==ReservationStatus.AWAITING_CUSTOMER_RECEIPT && checkInStatus==CheckInStatus.completed) {
             rental = new Rental();
             rental.setCustomer(customer);
             rental.setFacility(facility);
             rental.setStorageUnit(unit);
             rental.setReservation(reservation);
             rental.setStatus(RentalStatus.active);
-            rental.setStartDate(LocalDate.of(2026, 10, 1));
-            rental.setContractEndDate(LocalDate.of(2026, 11, 1));
-            rental.setMonthlyPrice(new BigDecimal("99999"));
+            rental.setStartDate(paidStart);
+            rental.setContractEndDate(paidStart.plusMonths(snapshot.getRentalMonths()));
+            rental.setMonthlyPrice(snapshot.getMonthlyPrice());
+            rental.setSetupStartedAt(handoverAt);rental.setTermsEffectiveAt(handoverAt);
+            rental.setSetupEndsAt(paidStart.atStartOfDay(com.storagehub.time.BusinessTime.ZONE).toInstant());
+            rental.setInventoryVerifiedAt(handoverAt.plusSeconds(60));
+            reservation.setStartDate(rental.getStartDate());reservation.setEndDate(rental.getContractEndDate());
             em.persist(rental);
         }
 
@@ -373,9 +403,14 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         checkIn.setStatus(checkInStatus);
         em.persist(checkIn);
         em.flush();
-        if (existingRental) {
+        if (rental!=null) {
             checkIn.setRental(rental);
+            checkIn.setSetupStartedAt(rental.getSetupStartedAt());checkIn.setSetupDueAt(rental.getSetupEndsAt());
+            checkIn.setInventoryVerifiedAt(rental.getInventoryVerifiedAt());
+            checkIn.setContractSignedAt(handoverAt.minusSeconds(120));checkIn.setPaymentCollectedAt(handoverAt.minusSeconds(60));
             em.flush();
+            // Explicit pre-existing account fixture: receipt must preserve it, never invent one.
+            if(!existingRental)ledger.open(rental.getId(),customer.getId(),facility.getId());
         }
         return new Fixture(reservation.getId(), new ActorPrincipal(customer.getId(), UUID.randomUUID(),
             Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()), customer.getId(), facility.getId());

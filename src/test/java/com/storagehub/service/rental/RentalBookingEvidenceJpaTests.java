@@ -14,9 +14,12 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 /** SQL-backed rollback tests; these fixtures exist only inside the H2 test transaction. */
-@DataJpaTest(properties={"storagehub.project.payment-environment=VNPAY_SANDBOX","storagehub.project.sandbox-recognition-enabled=true","storagehub.integration.ledger.enabled=true","storagehub.integration.sandbox-reconciliation.enabled=true"}) @ActiveProfiles("test") @Import({RentalBookingEvidenceReader.class,com.storagehub.service.ledger.SandboxPaymentReconciliationService.class,com.storagehub.service.integration.DuongResourceAccess.class,com.storagehub.service.ledger.LedgerQueryService.class,com.storagehub.service.ledger.LedgerCoverageInventory.class,com.storagehub.service.RentalQueryService.class,com.storagehub.service.PaymentProvenance.class,com.storagehub.service.VnpayService.class,com.storagehub.service.AuditLogService.class,com.storagehub.service.ledger.PaymentReconciliationPreflight.class,com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy.class,RentalBookingEvidenceJpaTests.JsonConfig.class})
+@DataJpaTest(properties={"storagehub.project.payment-environment=VNPAY_SANDBOX","storagehub.project.sandbox-recognition-enabled=true","storagehub.integration.ledger.enabled=true","storagehub.integration.sandbox-reconciliation.enabled=true"}) @ActiveProfiles("test") @Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RentalBookingEvidenceReader.class,com.storagehub.service.ledger.SandboxPaymentReconciliationService.class,com.storagehub.service.integration.DuongResourceAccess.class,com.storagehub.service.ledger.LedgerQueryService.class,com.storagehub.service.ledger.LedgerCoverageInventory.class,com.storagehub.service.RentalQueryService.class,com.storagehub.service.PaymentProvenance.class,com.storagehub.service.VnpayService.class,com.storagehub.service.AuditLogService.class,com.storagehub.service.ledger.PaymentReconciliationPreflight.class,com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy.class,RentalBookingEvidenceJpaTests.JsonConfig.class})
 class RentalBookingEvidenceJpaTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.renewal.RenewalWorkflowService renewalWorkflow;
     @org.springframework.boot.test.context.TestConfiguration static class JsonConfig {
+        @org.springframework.context.annotation.Bean com.storagehub.service.FacilityScopeService facilityScopes(){return new com.storagehub.service.FacilityScopeService();}
         @org.springframework.context.annotation.Bean(destroyMethod="close") java.sql.Connection ledgerTestSchema(javax.sql.DataSource datasource)throws Exception {
             var connection=datasource.getConnection();
             // H2 CHECK optimization retains the DDL session comparator. Keep that TEST session open until context close.
@@ -301,7 +304,7 @@ class RentalBookingEvidenceJpaTests {
         t.setHeightM(BigDecimal.ONE);t.setMonthlyPrice(BigDecimal.ONE);t.setMaxLoadKg(BigDecimal.ONE);t.setRackLengthM(BigDecimal.ONE);
         t.setRackWidthM(BigDecimal.ONE);t.setRackHeightM(BigDecimal.ONE);em.persist(t);
         var unit=new StorageUnit();unit.setFacility(f);unit.setUnitType(t);unit.setCode("TEST-"+key);unit.setStatus(StorageUnitStatus.occupied);em.persist(unit);
-        var q=new ReservationQuote();q.setCustomer(u);q.setFacility(f);q.setUnitType(t);q.setPricingPackageCode("TEST");q.setPolicyVersion("TEST");
+        var q=com.storagehub.testing.LegacyReservationQuoteFixture.create();q.setCustomer(u);q.setFacility(f);q.setUnitType(t);q.setPricingPackageCode("TEST");q.setPolicyVersion("TEST");
         q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,11,1));q.setRentalMonths(1);q.setMonthlyPrice(BigDecimal.ONE);
         q.setSubtotal(BigDecimal.ONE);q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(BigDecimal.ONE);
         q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(BigDecimal.ONE);

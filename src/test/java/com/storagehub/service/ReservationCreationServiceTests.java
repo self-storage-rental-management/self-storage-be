@@ -81,7 +81,7 @@ class ReservationCreationServiceTests {
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()
         );
 
-        quote = new ReservationQuote();
+        quote = com.storagehub.testing.LegacyReservationQuoteFixture.create();
         ReflectionTestUtils.setField(quote, "id", UUID.randomUUID());
         quote.setCustomer(customer);
         quote.setFacility(facility);
@@ -92,14 +92,16 @@ class ReservationCreationServiceTests {
         quote.setEndDate(LocalDate.of(2027, 1, 10));
         quote.setRentalMonths(3);
         quote.setMonthlyPrice(new BigDecimal("5500000.00"));
+        quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        quote.setSetupEarlyExitFee(new BigDecimal("5500000.00"));
         quote.setSubtotal(new BigDecimal("16500000.00"));
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("495000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("16005000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("6402000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("3201000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("5500000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("9603000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("15103000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("12804000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("18304000.00"));
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
@@ -121,7 +123,7 @@ class ReservationCreationServiceTests {
             .thenReturn(Optional.empty());
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        when(compatibilityService.check(any(), any())).thenReturn(compatibleResponse());
+        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
         when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), "THREE_MONTHS"))
             .thenReturn(Optional.of(policy));
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
@@ -132,16 +134,33 @@ class ReservationCreationServiceTests {
             ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
             return reservation;
         });
-        when(snapshotRepository.saveAndFlush(any(ReservationPricingSnapshot.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
+        when(snapshotRepository.saveAndFlush(any(ReservationPricingSnapshot.class))).thenAnswer(invocation -> {
+            ReservationPricingSnapshot saved = invocation.getArgument(0);
+            assertThat(saved.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
+            assertThat(saved.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
+            return saved;
+        });
 
         var response = service.create(actor, request, "create-1");
 
         assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
-        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("6402000.00");
-        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("9603000.00");
-        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("15103000.00");
-        assertThat(response.getReservationCode()).startsWith("RSV-");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
+        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
+        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
+        assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
+        assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
+        var savedReservation=org.mockito.ArgumentCaptor.forClass(Reservation.class);
+        var savedSnapshot=org.mockito.ArgumentCaptor.forClass(ReservationPricingSnapshot.class);
+        org.mockito.Mockito.verify(reservationRepository).saveAndFlush(savedReservation.capture());
+        org.mockito.Mockito.verify(snapshotRepository).saveAndFlush(savedSnapshot.capture());
+        var captured=savedSnapshot.getValue();var originalSetup=captured.getFreeSetupDays();var originalPrice=captured.getMonthlyPrice();var originalVersion=captured.getPricingPolicyVersion();
+        policy.setFreeSetupDays(99);policy.setPolicyVersion("TEST-NEW-POLICY");policy.setDiscountRate(new BigDecimal("0.9"));
+        quote.getUnitType().setMonthlyPrice(new BigDecimal("99999999"));
+        assertThat(ReservationSnapshotView.pricingComplete(savedReservation.getValue(),captured)).isTrue();
+        assertThat(captured.getFreeSetupDays()).isEqualTo(originalSetup);
+        assertThat(captured.getMonthlyPrice()).isEqualByComparingTo(originalPrice);
+        assertThat(captured.getPricingPolicyVersion()).isEqualTo(originalVersion);
+        assertThat(response.getReservationCode()).matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
     }
 
     @Test
@@ -150,14 +169,15 @@ class ReservationCreationServiceTests {
         quote.getUnitType().setMonthlyPrice(new BigDecimal("2000000.00"));
         quote.getUnitType().setSecurityDepositAmount(new BigDecimal("200000.00"));
         quote.setMonthlyPrice(new BigDecimal("2000000.00"));
+        quote.setSetupEarlyExitFee(new BigDecimal("2000000.00"));
         quote.setSubtotal(new BigDecimal("6000000.00"));
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("180000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("5820000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("2328000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("1164000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("200000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("3492000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("3692000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("4656000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("4856000.00"));
         quote.setTotalInitialObligation(new BigDecimal("6020000.00"));
 
         CreateReservationRequest request = request();
@@ -165,7 +185,7 @@ class ReservationCreationServiceTests {
             .thenReturn(Optional.empty());
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        when(compatibilityService.check(any(), any())).thenReturn(compatibleResponse());
+        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
         when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), "THREE_MONTHS"))
             .thenReturn(Optional.of(policy));
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
@@ -204,6 +224,7 @@ class ReservationCreationServiceTests {
         ReflectionTestUtils.setField(existing, "createdAt", Instant.now());
         existing.setReservationCode("RSV-EXISTING001");
         existing.setCustomer(quote.getCustomer());
+        existing.setIdentityDocumentNumber("079203009988");
         existing.setSourceQuote(quote);
         existing.setIdempotencyKey("create-retry");
         existing.setFacility(quote.getFacility());
@@ -215,6 +236,9 @@ class ReservationCreationServiceTests {
         existing.setTotalGoodsVolumeM3(new BigDecimal("0.180000"));
         existing.setTotalGoodsWeightKg(new BigDecimal("36.00"));
         existing.setHoldExpiresAt(Instant.now().plusSeconds(600));
+        existing.setIdentityDocumentNumber(request().getIdentityDocumentNumber());
+        existing.setCustomerPhone(request().getCustomerPhone());
+        existing.setCustomerAddress(request().getCustomerAddress());
         existing.setGoodsCondition("Packed");
         existing.setNotes("Handle with care");
 
@@ -279,6 +303,40 @@ class ReservationCreationServiceTests {
             .isEqualTo(ReservationCreationService.requestFingerprint(original));
     }
 
+    @Test
+    void creationRequiresExplicitAcceptanceOfTheQuotedSetupPolicy() {
+        var input = request();
+        input.setAcceptedSetupEarlyExitPolicyVersion(null);
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId())).thenReturn(Optional.of(quote));
+        assertThatThrownBy(() -> service.create(actor, input, "missing-setup-acceptance"))
+            .hasMessageContaining("xác nhận điều khoản");
+        input.setAcceptedSetupEarlyExitPolicyVersion("OTHER_VERSION");
+        assertThatThrownBy(() -> service.create(actor, input, "wrong-setup-acceptance"))
+            .hasMessageContaining("xác nhận điều khoản");
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+        org.mockito.Mockito.verifyNoInteractions(compatibilityService);
+    }
+
+    @Test
+    void historicalQuoteCannotBeUpgradedBySendingTheCurrentPolicyCode() {
+        var input = request();
+        quote.setSetupEarlyExitPolicyVersion(null);
+        quote.setSetupEarlyExitFee(null);
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId())).thenReturn(Optional.of(quote));
+        assertThatThrownBy(() -> service.create(actor, input, "old-quote"))
+            .hasMessageContaining("lấy báo giá mới");
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+    }
+
+    @Test
+    void setupPolicyAcceptanceIsBoundToTheIdempotencyFingerprint() {
+        var original = request();
+        var changed = request();
+        changed.setAcceptedSetupEarlyExitPolicyVersion("OTHER_VERSION");
+        assertThat(ReservationCreationService.requestFingerprint(changed))
+            .isNotEqualTo(ReservationCreationService.requestFingerprint(original));
+    }
+
     private CreateReservationRequest request() {
         GoodsItemRequest item = new GoodsItemRequest(
             GoodsCategory.FURNITURE, null, "Wood", null, "Desk", null, 2,
@@ -289,6 +347,11 @@ class ReservationCreationServiceTests {
             quote.getId(), "Packed", "Handle with care", List.of(item)
         );
         request.setIdentityDocumentNumber("079203009988");
+        request.setCustomerPhone("0908123456");
+        request.setCustomerAddress("Quận 1, TP. Hồ Chí Minh");
+        request.setAcceptedSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(List.of(item)));
+        quote.setUnitTypeSnapshotJson("{\"name\":\"Kho tại lúc báo giá\"}");
         return request;
     }
 

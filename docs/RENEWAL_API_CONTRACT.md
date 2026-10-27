@@ -1,5 +1,29 @@
 # Renewal API contract
 
+## Mốc hẹn ký và hạn hoàn tất — 22/10/2026
+
+- Lịch ký hiển thị một mốc `appointmentStart`: giờ khách dự kiến đến cơ sở.
+- Không dùng `appointmentEnd` để từ chối ghi nhận khách đến hoặc yêu cầu đổi lịch chỉ vì đã qua 30 phút. Staff vẫn được ghi nhận khách đến và hoàn tất gia hạn trong `effectiveSigningDeadline`, với các điều kiện thanh toán, minh chứng và quyền hiện có.
+- `appointmentEnd` và khung 30 phút trong calendar chỉ phục vụ đặt chỗ/phân bổ sức chứa Staff, không phải hạn hoàn tất ký của khách. Không thay đổi schema hay xóa dữ liệu lịch cũ.
+- Hạn hoàn tất ký, cutoff xử lý quá hạn/thu hồi và kiểm tra idempotency vẫn có hiệu lực. Replay một lượt khách đến đã thành công không tạo thêm sự kiện, kể cả sau hạn ký.
+- Mô tả lịch 30 phút ở các phần lịch sử bên dưới được hiểu là khung đặt chỗ nội bộ, không phải thời hạn bắt buộc hoàn tất gia hạn.
+
+## Điều kiện gói gia hạn, 22/10/2026
+
+- Gói phải thuộc đúng cơ sở, đang hoạt động và được chọn trong chính sách gia hạn của cơ sở.
+- Luồng gia hạn không kiểm tra ngày bắt đầu hoặc ngày kết thúc hiệu lực riêng của từng gói. Ngày hiệu lực của chính sách gia hạn cấp cơ sở vẫn được áp dụng.
+
+## Cách tính báo giá hiện hành, 21/10/2026
+
+Mục này thay thế mô tả tỷ lệ cọc 40% và phần còn lại 60% của báo giá mới bên dưới.
+
+- Đơn giá tháng lấy từ `unit_types.monthly_price` của loại gian kho tại đúng cơ sở. Tỷ lệ giảm lấy từ gói thuê đang có hiệu lực.
+- `FULL_TERM`: tạm tính = đơn giá tháng × số tháng, giảm giá = tạm tính × tỷ lệ giảm của gói, tổng phải trả = tạm tính trừ giảm giá. Cọc = 20% tổng sau giảm, phần còn lại khi ký = tổng sau giảm trừ cọc.
+- `MONTHLY`: không áp dụng giảm giá cả kỳ. Cọc = 20% đơn giá tháng, thu phần còn lại của tháng đầu khi ký, các tháng sau theo lịch thanh toán.
+- Tổng tiền và giảm giá làm tròn 2 chữ số thập phân HALF_UP, cọc của phương án thanh toán mới làm tròn đến đồng HALF_UP. Phần còn lại luôn lấy tổng trừ cọc.
+- Ví dụ `FULL_TERM`, 2.000.000 đ/tháng trong 3 tháng, giảm 5%: tạm tính 6.000.000 đ, giảm 300.000 đ, tổng 5.700.000 đ, cọc 1.140.000 đ, còn lại 4.560.000 đ.
+- Không ghi đè báo giá đã chấp nhận hoặc khoản đã thanh toán. Yêu cầu chưa thanh toán cần lấy báo giá mới và xác nhận lại nếu điều khoản thay đổi.
+
 ## Cập nhật mất cọc và xử lý Recovery — 15/10/2026
 
 Quy tắc mới thay thế mô tả disposition theo hạn ký phía dưới: gia hạn không cần Manager duyệt. Chỉ ghi nhận mất cọc khi đến `recoveryStart` ngày quá hạn thứ 8 mà chưa hoàn tất gia hạn, dựa trên tiền cọc đã xác thực và phân bổ; không tự thu thêm tiền và không lấy tiền bảo đảm Rental. API xử lý nhiệm vụ, chứng từ quyết toán và giải phóng kho sau thu hồi được mô tả tại [RECOVERY_TASK_API_CONTRACT.md](RECOVERY_TASK_API_CONTRACT.md). Chưa sửa giao diện.
@@ -336,6 +360,7 @@ SafetySource có adapter persistence opt-in `TransactionalRenewalExtensionHoldSo
 | Staff                  | POST `.../facility-incidents`            | appointmentRef,reason,evidenceFileIds,expectedVersion                                               | 201 sự kiện; có thể ghi nhận sự cố sau hết hạn để xem xét                                                           |
 | Staff                  | GET `.../payable-statement`              | —                                                                                                   | statementRef/phiên bản/hạn/số tiền/nghĩa vụ bắt buộc thực tế                                                        |
 | Staff                  | POST `.../cash-receipts`                 | payableStatementRef,receiptReference,receiptFileId,received=true,expectedVersion                                  | 201 sự kiện biên nhận thực từ Ledger và chứng từ Staff; không phải hoàn tất                                                 |
+| Staff                  | POST `.../refund-executions`             | refundId,receiptFileId,transactionReference,transferred=true,expectedVersion                                      | 201 ghi nhận hoàn cọc đã thực hiện; Staff có quyền thực thi và không được là người duyệt khoản hoàn đó                  |
 | Staff                  | POST `.../completion`                    | expectedVersion,identityVerified=true,arrivalRef,signedDocumentFileId,completionNote                | 200 Result; kéo dài Rental đúng một lần                                                                             |
 | Manager                | GET `/manager/renewals/{id}/operations`  | —                                                                                                   | Trạng thái trong phạm vi READ + VIEW_RENTALS                                                                        |
 | Manager                | GET `.../facility-incidents`             | page,size                                                                                           | Dòng thời gian sự cố/ngoại lệ nội bộ                                                                                |
@@ -358,7 +383,7 @@ Result = `{state: RenewalOperationResponse, event: {id,kind,occurredAt,actorId,d
 - Cho phép hoàn tất đúng thời điểm bằng hạn/mốc giới hạn có hiệu lực; sau đó bị chặn. Cần bảo đảm khóa từ nguồn chung để xử lý cạnh tranh Return/Recovery; chỉ khóa Rental local không chứng minh điều này.
 - Ngoại lệ APPROVE_RESCHEDULE_BEFORE_CUTOFF chỉ là đề xuất. Cần lỗi cơ sở đã xác minh, khung hẹn thực và giới hạn kéo dài BO so với hạn GỐC. Theo dõi rõ đề xuất mới nhất; Customer xác nhận thì kiểm tra lại và tái giữ chỗ/tiếp tục giữ hold. Giữ nguyên hạn gốc; yêu cầu kết thúc không được hồi sinh, sau mốc giới hạn không được hoàn tất/tạm dừng Recovery.
 - REJECT và REQUEST_POST_CUTOFF_REVIEW chỉ ghi nhận xem xét, không ghi đè hạn hoặc trạng thái Rental. Cần thêm quyền chuyên biệt.
-- Duyệt hoàn tiền dành quyền được hoàn thực tế qua chủ nguồn và trả APPROVED_AWAITING_EXECUTION; khoản đang chờ phải ngăn duyệt trùng dưới khóa chung. Không dùng ReturnCase/tiền bảo đảm kho thay thế, khoản thanh toán âm, ví hoặc giao dịch chuyển tiền thực giả lập. Bên thực thi dùng chung phải là Staff được phân công và được cấp quyền, không phải người duyệt, có bằng chứng/lịch sử/idempotency thực; module này KHÔNG tạo API thực thi hoàn tiền.
+- Duyệt hoàn tiền dành quyền được hoàn thực tế qua chủ nguồn và trả APPROVED_AWAITING_EXECUTION; khoản đang chờ phải ngăn duyệt trùng dưới khóa chung. Không dùng ReturnCase/tiền bảo đảm kho thay thế, khoản thanh toán âm, ví hoặc giao dịch chuyển tiền thực giả lập. Bên thực thi dùng chung phải là Staff được cấp quyền, không phải người duyệt, có bằng chứng/lịch sử/idempotency thực; endpoint Staff chỉ ghi nhận bằng chứng hoàn đã thực hiện và không tự gửi lệnh chuyển tiền ngân hàng.
 - `RenewalOperationService.expire(id)` là điểm vào đối soát giao dịch NỘI BỘ. Nó kiểm tra đồng hồ server phải nằm sau hạn, đối soát thanh toán đang xử lý, chỉ giải phóng extension hold và ghi REVIEW_REQUIRED. Giữ lịch sử đã nộp tiền, ngày gốc, open slot và gian vật lý. Không bật bộ lập lịch tự động cho đến khi chủ nguồn/vòng đời/schema duyệt triển khai.
 
 #### Lưu trữ/triển khai
@@ -469,7 +494,7 @@ Nguồn term không thu phí, khóa kho, tạo Recovery hoặc thay số dư.
 
 #### 3. Staff processing permissions
 
-Manager Staff-assignment POST is removed. Eligible Staff at the Renewal facility can process the request without assignment. The current database and token must grant rentals:read for viewing, rentals:update for arrival/incident/completion, and payments:read/payments:collect for CASH. Historical STAFF_ASSIGNMENT records are metadata only. Staff lists are filtered by current facility OPERATE scope before pagination.
+Manager Staff-assignment POST is removed. Eligible Staff at the Renewal facility can process the request without assignment. The current database and token must grant rentals:read for viewing, `renewals:operate` for arrival/incident/completion, and payments:read/payments:collect for CASH. Historical STAFF_ASSIGNMENT records are metadata only. Staff lists are filtered by current facility OPERATE scope before pagination. Manager uses rentals:read/rentals:update for management decisions.
 
 #### 4. Xác minh lỗi cơ sở
 
@@ -580,8 +605,8 @@ Worker mặc định kiểm tra mỗi 60 giây sau hạn ký, nhưng chỉ ghi m
 #### Duyệt và ghi nhận hoàn cọc
 
 - Manager dùng `/refund-decisions` hiện có. Sự cố phải gắn với lịch hẹn hợp lệ đã đóng cọc và có kết luận lỗi cơ sở. Nếu hạn ký còn hiệu lực, calendar phải xác nhận không thể bố trí lịch thay thế trước khi duyệt hoàn.
-- POST `/api/manager/renewals/{id}/refund-executions`: bắt buộc `Idempotency-Key`, `expectedVersion`, `refundId`, `receiptFileId`, `transactionReference`, `transferred: true`. Không nhận số tiền do client truyền.
-- Chứng từ upload namespace `DUONG_RENEWAL_REFUND`, liên kết đúng renewal, còn ACTIVE và qua kiểm tra file/scope. Guard Manager REFUND kiểm tra lại quyền và phiên bản trước replay.
+- POST `/api/staff/renewals/{id}/refund-executions`: bắt buộc `Idempotency-Key`, `expectedVersion`, `refundId`, `receiptFileId`, `transactionReference`, `transferred: true`. Không nhận số tiền do client truyền. Manager chỉ duyệt qua `/refund-decisions`, không có endpoint thực thi.
+- Chứng từ upload namespace `DUONG_RENEWAL_REFUND`, liên kết đúng renewal, còn ACTIVE và qua kiểm tra file/scope. Guard Staff REFUND_EXECUTION kiểm tra lại quyền/phạm vi và phiên bản trước replay.
 - API này ghi nhận khoản hoàn đã thực hiện ngoài hệ thống; không gửi lệnh chuyển tiền ngân hàng. Sandbox dùng bằng chứng thử nghiệm có nhãn rõ ràng.
 - Response dùng Result operations hiện có, event `REFUND_EXECUTION`. Timeline `/refunds` bổ sung `DEPOSIT_DISPOSITION` và `REFUND_EXECUTION`. Customer không nhận mã giao dịch hoặc file hoàn nội bộ.
 - Cập nhật Shared Refund, Payment.refundedAmount và ledger trong cùng transaction. Khoản đã hoàn không được thực hiện lại; retry cùng key/body trả kết quả cũ sau khi kiểm tra quyền hiện tại.

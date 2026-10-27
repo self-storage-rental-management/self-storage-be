@@ -54,7 +54,7 @@ public class RenewalLedgerAccountingConfiguration {
             if(workflow==null||workflow.getAcceptedRevision()==null||state==null||!state.hasVerifiedPayment()
                 ||state.getEffectiveSigningDeadline()==null||!state.getEffectiveSigningDeadline().isAfter(now))
                 throw deferred("Current paid Renewal signing state required");
-            var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
+            var specs=FinancialContractSpecifications.signing(FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms));
             var snapshot=account(renewal);
             if(specs.size()>1) {
                 var initial=obligation(snapshot,workflow,specs.getFirst());
@@ -83,6 +83,7 @@ public class RenewalLedgerAccountingConfiguration {
             final Terms terms;
             try {terms=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),Terms.class);}
             catch(Exception invalid){throw deferred("Accepted terms are invalid");}
+            com.storagehub.api.renewal.RenewalPaymentPlan.requireSupported(terms.paymentPlan());
             var payable=statement(renewal,terms,now);
             if(!payable.reference().equals(statement)||payable.amount().signum()<=0)throw deferred("Payable statement is stale or already paid");
             var snapshot=account(renewal);
@@ -115,7 +116,7 @@ public class RenewalLedgerAccountingConfiguration {
         private LedgerStore.Obligation obligation(LedgerStore.Snapshot snapshot,RenewalWorkflow workflow,FinancialContractSpecifications.Specification spec) {
             var matches=snapshot.obligations().stream().filter(o->Objects.equals(o.renewalId(),spec.renewalId())&&o.kind()==spec.kind()
                 &&o.sourceRef().equals(spec.sourceReference())&&o.amount().compareTo(spec.amount())==0
-                &&o.dueAt().toEpochMilli()==workflow.getPaymentDeadline().toEpochMilli()).toList();
+                &&o.dueAt().toEpochMilli()==spec.requireDue(workflow.getPaymentDeadline(),workflow.getSigningBalanceDueAt()).toEpochMilli()).toList();
             if(matches.size()!=1||!ledger.renewalPaymentCommandMatches(matches.getFirst(),spec,snapshot.customerId()))
                 throw deferred("Accepted Renewal obligation or writer evidence is missing");
             return matches.getFirst();
@@ -124,7 +125,7 @@ public class RenewalLedgerAccountingConfiguration {
             var workflow=em.find(RenewalWorkflow.class,renewal.getId(),jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
             if(workflow==null||workflow.getAcceptedRevision()==null||workflow.getPaymentDeadline()==null)
                 throw deferred("Accepted Renewal revision and payment deadline are unavailable");
-            var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
+            var specs=FinancialContractSpecifications.signing(FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms));
             var snapshot=account(renewal);
             for(var required:specs) {
                 var o=obligation(snapshot,workflow,required);

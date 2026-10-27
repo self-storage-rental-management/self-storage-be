@@ -14,12 +14,14 @@ import com.storagehub.api.checkin.CompleteCheckInRequest;
 import com.storagehub.api.checkin.MarkNoShowRequest;
 import com.storagehub.api.checkin.RejectCheckInRequest;
 import com.storagehub.api.checkin.ScheduleCheckInRequest;
+import com.storagehub.api.checkin.VerifyCheckInIdentityRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FileAsset;
+import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
@@ -35,6 +37,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.CheckInRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.PaymentRepository;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
@@ -68,6 +71,9 @@ class CheckInHandoverServiceTests {
     @Mock private FileAssetRepository fileAssetRepository;
     @Mock private RentalRepository rentalRepository;
     @Mock private PaymentRepository paymentRepository;
+    @Mock private PaymentProvenance paymentProvenance;
+    @Mock private com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy sandboxPaymentPolicy;
+    @Mock private MaintenanceTaskRepository maintenanceTaskRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private ReservationPricingSnapshotRepository pricingSnapshotRepository;
     @Mock private UserRepository userRepository;
@@ -83,15 +89,19 @@ class CheckInHandoverServiceTests {
     private StorageUnit unit;
     private UnitAssignment assignment;
     private CheckIn checkIn;
+    private com.storagehub.domain.model.Payment depositPayment;
 
     @BeforeEach
     void setUp() {
         service = new CheckInHandoverService(
             reservationRepository, storageUnitRepository, assignmentRepository,
             checkInRepository, fileAssetRepository, rentalRepository, paymentRepository,
+            maintenanceTaskRepository,
             goodsItemRepository, pricingSnapshotRepository, userRepository, authorizationService,
             facilityScopeService, auditLogService, notificationService, new ObjectMapper()
         );
+        ReflectionTestUtils.setField(service,"paymentProvenance",paymentProvenance);
+        ReflectionTestUtils.setField(service,"sandboxPaymentPolicy",sandboxPaymentPolicy);
         staff = entityWithId(new User());
         staff.setFullName("Staff A");
         actor = new ActorPrincipal(
@@ -141,6 +151,7 @@ class CheckInHandoverServiceTests {
         checkIn.setPerformedBy(staff);
         checkIn.setStatus(CheckInStatus.scheduled);
         checkIn.setScheduledAt(Instant.now().minusSeconds(60));
+        paidReservationFixture();
     }
 
     @Test
@@ -188,6 +199,90 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void persistsIdentityVerificationAsTheFirstWorkflowStep() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
+            .thenReturn(Optional.of(assignment));
+
+        var response = service.verifyIdentity(
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("0792 0300 9988", "Đã xem giấy tờ gốc")
+        );
+
+        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("079203009988");
+        assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
+    }
+
+    @Test
+    void preventsInventoryVerificationBeforeCustomerSetupIsCompleted() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("setup must be completed");
+    }
+
+    @Test
+    void preventsInventoryVerificationBeforeFreeSetupWindowEnds() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        Rental rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.setup);
+        rental.setSetupEndsAt(Instant.now().plusSeconds(3600));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("setup miễn phí kết thúc");
+    }
+
+    @Test
+    void rejectsMismatchedIdentityWithoutVerificationNote() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+
+        CompleteCheckInRequest request = completionRequest("079203009999", "");
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), request))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
+    }
+
+    @Test
+    void rejectsMismatchedIdentityEvenWhenVerificationNoteIsRecorded() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+
+        assertThatThrownBy(() -> service.complete(
+            actor, checkIn.getId(), completionRequest("079203009999", "Tên trên giấy tờ không trùng với hồ sơ")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
+    }
+
+    @Test
+    void rejectsLegacyReservationWithoutDeclaredIdentity() {
+        reservation.setIdentityDocumentNumber(null);
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("identity does not match");
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
+    }
+
+    @Test
     void rejectsHandoverWhenGoodsExceedUnitCapacity() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
@@ -195,6 +290,7 @@ class CheckInHandoverServiceTests {
         CompleteCheckInRequest oversized = new CompleteCheckInRequest(
             base.checklist(),
             base.identityDocumentNumber(),
+            base.identityVerificationNote(),
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("1001"), BigDecimal.ONE, false
@@ -207,7 +303,7 @@ class CheckInHandoverServiceTests {
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("weight exceeds");
 
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
     }
 
@@ -239,6 +335,7 @@ class CheckInHandoverServiceTests {
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
             base.checklist(),
             base.identityDocumentNumber(),
+            base.identityVerificationNote(),
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("120"), new BigDecimal("1.2"), false
@@ -262,7 +359,7 @@ class CheckInHandoverServiceTests {
             .thenReturn(List.of(declaredItem));
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
-            base.checklist(), base.identityDocumentNumber(), new CheckInMeasurements(
+            base.checklist(), base.identityDocumentNumber(), base.identityVerificationNote(), new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, false
             ), null, base.initialUnitCondition(),
@@ -288,7 +385,7 @@ class CheckInHandoverServiceTests {
             .thenReturn(List.of(declaredItem));
         CompleteCheckInRequest base = validCompletionRequest();
         CompleteCheckInRequest changed = new CompleteCheckInRequest(
-            base.checklist(), base.identityDocumentNumber(), new CheckInMeasurements(
+            base.checklist(), base.identityDocumentNumber(), base.identityVerificationNote(), new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, false
             ), null, base.initialUnitCondition(), base.goodsCondition(), base.packageCount(),
@@ -304,6 +401,7 @@ class CheckInHandoverServiceTests {
     void rejectsCheckInAndReleasesUnitWithoutCreatingRental() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
+        checkIn.setStatus(CheckInStatus.scheduled);
         UUID evidenceId = UUID.fromString("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0");
         FileAsset evidence = entityWithId(new FileAsset());
         ReflectionTestUtils.setField(evidence, "id", evidenceId);
@@ -330,18 +428,116 @@ class CheckInHandoverServiceTests {
         verify(rentalRepository, never()).save(any());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"MISSING_PROOF","WRONG_AMOUNT","REFUNDED","NO_PAYMENT","MISSING_SNAPSHOT"})
+    void invalidPrepaymentCannotVerifyIdentity(String kind) {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        switch(kind) {
+            case "MISSING_PROOF" -> when(paymentProvenance.classify(depositPayment)).thenReturn(PaymentProvenance.Classification.UNVERIFIED);
+            case "WRONG_AMOUNT" -> depositPayment.setAmount(depositPayment.getAmount().add(BigDecimal.ONE));
+            case "REFUNDED" -> depositPayment.setRefundedAmount(BigDecimal.ONE);
+            case "NO_PAYMENT" -> when(paymentRepository.findAllByReservation_IdAndStatusIn(reservation.getId(),List.of(com.storagehub.domain.model.PaymentStatus.PAID))).thenReturn(List.of());
+            case "MISSING_SNAPSHOT" -> when(pricingSnapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.empty());
+        }
+        assertThatThrownBy(()->service.verifyIdentity(actor,checkIn.getId(),new VerifyCheckInIdentityRequest("079203009988","TEST")))
+            .isInstanceOf(ApiException.class);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        verify(checkInRepository,never()).saveAndFlush(any());
+        verify(rentalRepository,never()).save(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "2026-10-26T03:00:00Z,3,2026-10-29,2026-11-29",
+        "2026-10-31T16:59:59Z,3,2026-11-03,2026-12-03",
+        "2026-10-31T17:00:00Z,3,2026-11-04,2026-12-04",
+        "2026-12-31T16:59:59Z,0,2026-12-31,2027-01-31",
+        "2026-12-31T17:00:00Z,0,2027-01-01,2027-02-01",
+        "2026-01-28T03:00:00Z,3,2026-01-31,2026-02-28"
+    })
+    void actualHandoverDeterminesPaidPeriodFromAcceptedSetupSnapshot(String instant,int days,String expectedStart,String expectedEnd) {
+        var at=Instant.parse(instant);var start=LocalDate.parse(expectedStart);var end=LocalDate.parse(expectedEnd);
+        var snapshot=pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElseThrow();
+        snapshot.setFreeSetupDays(days);reservation.getSourceQuote().setFreeSetupDays(days);reservation.setSetupDaysSnapshot(days);
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);checkIn.setStatus(CheckInStatus.payment_collected);
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        // Deliberately different planned dates and live catalog price must not set the paid period or price.
+        reservation.setStartDate(LocalDate.of(2025,1,1));reservation.setEndDate(LocalDate.of(2025,2,1));
+        unit.getUnitType().setMonthlyPrice(new BigDecimal("999999"));
+        var balance=entityWithId(new com.storagehub.domain.model.Payment());balance.setReservation(reservation);
+        balance.setPurpose(com.storagehub.domain.model.PaymentType.RENTAL_BALANCE);
+        balance.setStatus(com.storagehub.domain.model.PaymentStatus.PAID);balance.setAmount(snapshot.getDueAtCheckIn());
+        when(paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(reservation.getId(),com.storagehub.domain.model.PaymentType.RENTAL_BALANCE)).thenReturn(Optional.of(balance));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(rentalRepository.saveAndFlush(any(Rental.class))).thenAnswer(call->{Rental r=call.getArgument(0);ReflectionTestUtils.setField(r,"id",UUID.randomUUID());return r;});
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        try(var time=org.mockito.Mockito.mockStatic(Instant.class,org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            time.when(Instant::now).thenReturn(at);
+            service.startSetup(actor,checkIn.getId(),new com.storagehub.api.checkin.StartCheckInSetupRequest("TEST-LOCK","TEST handover"));
+        }
+        var rental=checkIn.getRental();
+        assertThat(rental.getSetupStartedAt()).isEqualTo(at);
+        assertThat(rental.getStartDate()).isEqualTo(start);assertThat(rental.getContractEndDate()).isEqualTo(end);
+        assertThat(rental.getSetupEndsAt()).isEqualTo(start.atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant());
+        assertThat(rental.getMonthlyPrice()).isEqualByComparingTo(snapshot.getMonthlyPrice());
+        assertThat(reservation.getStartDate()).isEqualTo(start);
+    }
+
+    private void paidReservationFixture() {
+        var quote=entityWithId(new com.storagehub.domain.model.ReservationQuote());
+        quote.setPolicyVersion("TEST-V1");quote.setPricingPackageCode("TEST-1M");
+        quote.setRentalMonths(1);quote.setFreeSetupDays(0);quote.setQuotedAt(Instant.parse("2026-10-01T00:00:00Z"));
+        quote.setUnitTypeSnapshotJson("{\"name\":\"TEST\",\"lengthM\":3,\"widthM\":3,\"heightM\":3,\"maxLoadKg\":1000,\"rackCount\":0}");
+        quote.setMonthlyPrice(new BigDecimal("100"));quote.setSubtotal(new BigDecimal("100"));
+        quote.setDiscountRate(BigDecimal.ZERO);quote.setDiscountAmount(BigDecimal.ZERO);quote.setTotalAfterDiscount(new BigDecimal("100"));
+        quote.setReservationDepositAmount(new BigDecimal("20"));quote.setSecurityDepositAmount(new BigDecimal("100"));
+        quote.setRemainingRentalAmount(new BigDecimal("80"));quote.setDueAtCheckIn(new BigDecimal("180"));quote.setTotalInitialObligation(new BigDecimal("200"));
+        reservation.setSourceQuote(quote);reservation.setSetupDaysSnapshot(0);
+        var snapshot=new com.storagehub.domain.model.ReservationPricingSnapshot();snapshot.setReservation(reservation);
+        snapshot.setPricingPolicyVersion(quote.getPolicyVersion());snapshot.setPricingPackageCode(quote.getPricingPackageCode());
+        snapshot.setRentalMonths(quote.getRentalMonths());snapshot.setFreeSetupDays(quote.getFreeSetupDays());snapshot.setQuotedAt(quote.getQuotedAt());
+        snapshot.setMonthlyPrice(quote.getMonthlyPrice());snapshot.setGrossRentalAmount(quote.getSubtotal());
+        snapshot.setDiscountRate(quote.getDiscountRate());snapshot.setDiscountAmount(quote.getDiscountAmount());snapshot.setNetRentalAmount(quote.getTotalAfterDiscount());
+        snapshot.setReservationDepositAmount(quote.getReservationDepositAmount());snapshot.setSecurityDepositAmount(quote.getSecurityDepositAmount());
+        snapshot.setRemainingRentalAmount(quote.getRemainingRentalAmount());snapshot.setDueAtCheckIn(quote.getDueAtCheckIn());snapshot.setTotalInitialObligation(quote.getTotalInitialObligation());
+        var payment=entityWithId(new com.storagehub.domain.model.Payment());payment.setReservation(reservation);
+        payment.setPurpose(com.storagehub.domain.model.PaymentType.RESERVATION_DEPOSIT);payment.setStatus(com.storagehub.domain.model.PaymentStatus.PAID);
+        depositPayment=payment;
+        payment.setAmount(quote.getReservationDepositAmount());payment.setRefundedAmount(BigDecimal.ZERO);
+        org.mockito.Mockito.lenient().when(pricingSnapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
+        org.mockito.Mockito.lenient().when(paymentRepository.findAllByReservation_IdAndStatusIn(reservation.getId(),List.of(com.storagehub.domain.model.PaymentStatus.PAID))).thenReturn(List.of(payment));
+        org.mockito.Mockito.lenient().when(paymentProvenance.classify(payment)).thenReturn(PaymentProvenance.Classification.VERIFIED);
+    }
+
     private void mockCompletionChecks(boolean includeMutationStubs) {
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setLockReference("LEGACY-LOCK");
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
+        Rental rental = entityWithId(new Rental());
+        rental.setReservation(reservation);
+        rental.setCustomer(reservation.getCustomer());
+        rental.setFacility(reservation.getFacility());
+        rental.setStorageUnit(unit);
+        rental.setStatus(RentalStatus.active);
+        rental.setSetupEndsAt(Instant.now().minusSeconds(1));
+        checkIn.setRental(rental);
+        org.mockito.Mockito.lenient().when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
         when(assignmentRepository.findByReservation_IdAndStatus(
             reservation.getId(), UnitAssignmentStatus.ACTIVE
         )).thenReturn(Optional.of(assignment));
         when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
-        when(rentalRepository.existsActiveRental(
-            reservation.getId(), unit.getId(), RentalStatus.active
-        )).thenReturn(false);
         if (includeMutationStubs) {
+            var balance=entityWithId(new com.storagehub.domain.model.Payment());balance.setReservation(reservation);
+            balance.setPurpose(com.storagehub.domain.model.PaymentType.RENTAL_BALANCE);
+            balance.setStatus(com.storagehub.domain.model.PaymentStatus.PAID);balance.setAmount(new BigDecimal("180"));
+            when(paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(reservation.getId(),com.storagehub.domain.model.PaymentType.RENTAL_BALANCE)).thenReturn(Optional.of(balance));
+            when(rentalRepository.saveAndFlush(rental)).thenReturn(rental);
             UUID evidenceId = UUID.fromString(validCompletionRequest().evidenceReferences().getFirst());
             FileAsset evidence = entityWithId(new FileAsset());
             ReflectionTestUtils.setField(evidence, "id", evidenceId);
@@ -355,16 +551,21 @@ class CheckInHandoverServiceTests {
     }
 
     private CompleteCheckInRequest validCompletionRequest() {
+        return completionRequest("079203009988", "Đã bàn giao");
+    }
+
+    private CompleteCheckInRequest completionRequest(String identityDocumentNumber, String notes) {
         return new CompleteCheckInRequest(
             new CheckInChecklist(true, true, true, true, true, true, true, true),
-            "079203009988",
+            identityDocumentNumber,
+            notes.isBlank() ? null : notes,
             new CheckInMeasurements(
                 new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
                 new BigDecimal("100"), BigDecimal.ONE, true
             ),
             null,
             "Kho sạch, không hư hại", "Hàng nguyên vẹn", 3, "Đồ gia dụng",
-            List.of("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"), List.of("PIN", "Biên nhận"), "Đã bàn giao"
+            List.of("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0"), List.of("Ổ khóa LEGACY-LOCK", "Biên nhận"), notes
         );
     }
 

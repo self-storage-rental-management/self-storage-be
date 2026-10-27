@@ -11,14 +11,12 @@ import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.Reservation;
-import com.storagehub.domain.model.ReservationCodeSequence;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
-import com.storagehub.domain.repo.ReservationCodeSequenceRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationQuoteRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -32,9 +30,10 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import lombok.RequiredArgsConstructor;
+import java.util.Map;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,6 +43,8 @@ import com.storagehub.domain.repo.DiscountCodeRepository;
 public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
+    private static final java.security.SecureRandom PUBLIC_CODE_RANDOM = new java.security.SecureRandom();
+    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -53,7 +54,6 @@ public class ReservationCreationService {
     private final ReservationCompatibilityService compatibilityService;
     private final AuditLogService auditLogService;
     private final ReservationCapacityService capacityService;
-    private final ReservationCodeSequenceRepository reservationCodeSequenceRepository;
     private final DiscountCodeRepository discountCodeRepository;
     private final DiscountCodeService discountCodeService;
 
@@ -67,7 +67,6 @@ public class ReservationCreationService {
         ReservationCompatibilityService compatibilityService,
         AuditLogService auditLogService,
         ReservationCapacityService capacityService,
-        ReservationCodeSequenceRepository reservationCodeSequenceRepository,
         DiscountCodeRepository discountCodeRepository,
         DiscountCodeService discountCodeService
     ) {
@@ -79,7 +78,6 @@ public class ReservationCreationService {
         this.compatibilityService = compatibilityService;
         this.auditLogService = auditLogService;
         this.capacityService = capacityService;
-        this.reservationCodeSequenceRepository = reservationCodeSequenceRepository;
         this.discountCodeRepository = discountCodeRepository;
         this.discountCodeService = discountCodeService;
     }
@@ -96,7 +94,7 @@ public class ReservationCreationService {
     ) {
         this(
             reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
-            policyRepository, compatibilityService, auditLogService, capacityService, null,
+            policyRepository, compatibilityService, auditLogService, capacityService,
             null, null
         );
     }
@@ -104,6 +102,9 @@ public class ReservationCreationService {
     @Transactional
     public ReservationResponse create(ActorPrincipal actor, CreateReservationRequest request,
                                       String idempotencyKey) {
+        if (request == null || !Boolean.TRUE.equals(request.getAcceptedTerms())) {
+            throw ApiExceptions.validation("Customer must accept the quoted terms before creating a reservation", null);
+        }
         String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
         String requestFingerprint = requestFingerprint(request);
         Reservation existing = reservationRepository
@@ -130,12 +131,24 @@ public class ReservationCreationService {
         if (!quote.getExpiresAt().isAfter(Instant.now())) {
             throw ApiExceptions.conflict("Quote has expired");
         }
+        if (!SetupEarlyExitPolicy.VERSION.equals(quote.getSetupEarlyExitPolicyVersion())
+            || !quote.getSetupEarlyExitPolicyVersion().equals(request.getAcceptedSetupEarlyExitPolicyVersion())) {
+            throw ApiExceptions.conflict("Vui lòng lấy báo giá mới và xác nhận điều khoản trả kho trong setup trước khi đặt kho.");
+        }
+
+        if(quote.getGoodsSnapshotJson()==null||quote.getGoodsSnapshotJson().isBlank()||"[]".equals(quote.getGoodsSnapshotJson())
+            ||quote.getUnitTypeSnapshotJson()==null||quote.getUnitTypeSnapshotJson().isBlank())
+            throw ApiExceptions.conflict("Báo giá thiếu dữ liệu lịch sử. Vui lòng lấy báo giá mới trước khi đặt kho.");
+        List<GoodsItemRequest> quotedGoodsItems = GoodsSnapshotCodec.decode(quote.getGoodsSnapshotJson());
+        if (!GoodsSnapshotCodec.sameDeclaration(quotedGoodsItems, request.getGoodsItems())) {
+            throw ApiExceptions.conflict("Goods declaration changed after quote creation; please create a new quote");
+        }
 
         CompatibilityCheckRequest compatibilityRequest = new CompatibilityCheckRequest(
             quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
-            quote.getEndDate(), request.getGoodsCondition(), request.getGoodsItems()
+            quote.getEndDate(), request.getGoodsCondition(), quotedGoodsItems
         );
-        CompatibilityCheckResponse compatibility = compatibilityService.check(actor, compatibilityRequest);
+        CompatibilityCheckResponse compatibility = compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
         if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
             throw ApiExceptions.conflict("Goods are not compatible with the selected unit type");
         }
@@ -148,7 +161,8 @@ public class ReservationCreationService {
         Instant now = Instant.now();
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
-        reservation.setReservationCode(generateReservationCode());
+        reservation.setReservationCode(uniqueReservationCode(reservationRepository,
+            ReservationCreationService::generateReservationCode));
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
         reservation.setIdentityDocumentNumber(clean(request.getIdentityDocumentNumber()));
@@ -180,6 +194,7 @@ public class ReservationCreationService {
             .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         reservation.setStartDate(rentalStartDate);
         reservation.setEndDate(rentalStartDate.plusMonths(quote.getRentalMonths()));
+        reservation.setSetupDaysSnapshot(quote.getFreeSetupDays());
         reservation.setAppointmentAt(request.getAppointmentAt());
         reservation.setAmount(quote.getTotalAfterDiscount());
         reservation.setGoodsCondition(clean(request.getGoodsCondition()));
@@ -192,7 +207,7 @@ public class ReservationCreationService {
         Reservation saved = reservationRepository.saveAndFlush(reservation);
 
         List<ReservationGoodsItem> goodsItems = new ArrayList<>();
-        for (GoodsItemRequest itemRequest : request.getGoodsItems()) {
+        for (GoodsItemRequest itemRequest : quotedGoodsItems) {
             goodsItems.add(toGoodsItem(saved, itemRequest));
         }
         goodsItemRepository.saveAll(goodsItems);
@@ -228,8 +243,23 @@ public class ReservationCreationService {
         BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
         BigDecimal baseEligible = money(subtotal.subtract(discountAmount));
         BigDecimal voucherDiscountAmount = quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO;
+        if (quote.getVoucherCode() != null && !quote.getVoucherCode().isBlank()) {
+            if (discountCodeService == null) {
+                throw ApiExceptions.conflict("Voucher validation is not available");
+            }
+            DiscountCodeService.VoucherApplicationResult currentVoucher =
+                discountCodeService.calculateVoucherDiscount(
+                    quote.getVoucherCode(), quote.getFacility().getId(), policy.getId(), baseEligible
+                );
+            if (currentVoucher == null
+                || !currentVoucher.voucherCode().equalsIgnoreCase(quote.getVoucherCode())
+                || money(currentVoucher.discountAmount()).compareTo(money(voucherDiscountAmount)) != 0) {
+                throw ApiExceptions.conflict("Quote is no longer valid because the voucher has changed");
+            }
+        }
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
-        BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(RESERVATION_DEPOSIT_RATE));
+        BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
+        BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(depositRate));
         BigDecimal securityDeposit = money(
             (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
                 ? currentMonthlyPrice
@@ -239,6 +269,7 @@ public class ReservationCreationService {
         boolean policyInvalid = !policy.isActive()
             || !policy.getPolicyVersion().equals(quote.getPolicyVersion())
             || policy.getRentalMonths() != quote.getRentalMonths()
+            || policy.getFreeSetupDays() != quote.getFreeSetupDays()
             || policy.getEffectiveFrom().isAfter(quote.getStartDate())
             || (policy.getEffectiveTo() != null && policy.getEffectiveTo().isBefore(quote.getStartDate()));
         boolean priceChanged = currentMonthlyPrice.compareTo(quote.getMonthlyPrice()) != 0
@@ -254,10 +285,16 @@ public class ReservationCreationService {
     }
 
     private ReservationGoodsItem toGoodsItem(Reservation reservation, GoodsItemRequest request) {
-        boolean reviewRequired = request.getCategory() == GoodsCategory.OTHER;
+        boolean reviewRequired = ReservationCompatibilityService.isOther(request);
         ReservationGoodsItem item = new ReservationGoodsItem();
+        item.setGoodsCode("GDS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase());
         item.setReservation(reservation);
         item.setCategory(request.getCategory());
+        item.setCatalogCategoryId(request.getCatalogCategoryId());
+        item.setCatalogMaterialId(request.getCatalogMaterialId());
+        item.setCategoryCode(request.getCategoryCode());
+        item.setCategoryName(request.getCategoryName());
+        item.setMaterialCode(request.getMaterialCode());
         item.setCustomGoodsName(clean(request.getCustomGoodsName()));
         item.setMaterialName(clean(request.getMaterialName()));
         item.setCustomMaterial(clean(request.getCustomMaterial()));
@@ -280,7 +317,10 @@ public class ReservationCreationService {
         snapshot.setPricingPackageCode(quote.getPricingPackageCode());
         snapshot.setPricingPolicyVersion(quote.getPolicyVersion());
         snapshot.setRentalMonths(quote.getRentalMonths());
+        snapshot.setFreeSetupDays(quote.getFreeSetupDays());
         snapshot.setMonthlyPrice(quote.getMonthlyPrice());
+        snapshot.setSetupEarlyExitPolicyVersion(quote.getSetupEarlyExitPolicyVersion());
+        snapshot.setSetupEarlyExitFee(quote.getSetupEarlyExitFee());
         snapshot.setGrossRentalAmount(quote.getSubtotal());
         snapshot.setDiscountRate(quote.getDiscountRate());
         snapshot.setDiscountAmount(quote.getDiscountAmount());
@@ -294,6 +334,16 @@ public class ReservationCreationService {
         snapshot.setVoucherDiscountAmount(quote.getVoucherDiscountAmount() != null ? quote.getVoucherDiscountAmount() : BigDecimal.ZERO);
         snapshot.setNetRentalAmount(quote.getTotalAfterDiscount());
         snapshot.setReservationDepositAmount(quote.getReservationDepositAmount());
+        snapshot.setEarlyTerminationFeeCapMonths(quote.getEarlyTerminationFeeCapMonths());
+        snapshot.setEarlyTerminationFeeCoefficient(quote.getEarlyTerminationFeeCoefficient());
+        snapshot.setEarlyTerminationNoticeDays(quote.getEarlyTerminationNoticeDays());
+        snapshot.setEarlyTerminationFee(quote.getEarlyTerminationFee());
+        snapshot.setEarlyTerminationPricingSnapshotJson(quote.getEarlyTerminationPricingSnapshotJson());
+        snapshot.setTermsSnapshotJson(termsSnapshot(quote));
+        snapshot.setTermsAcceptanceHash(sha256(snapshot.getTermsSnapshotJson()));
+        snapshot.setTermsAcceptedAt(Instant.now());
+        snapshot.setTermsAcceptedBy(quote.getCustomer());
+        snapshot.setEarlyTerminationNoticeBasis(EarlyTerminationPolicy.NOTICE_BASIS);
         snapshot.setSecurityDepositAmount(quote.getSecurityDepositAmount());
         snapshot.setRemainingRentalAmount(quote.getRemainingRentalAmount());
         snapshot.setDueAtCheckIn(quote.getDueAtCheckIn());
@@ -317,6 +367,13 @@ public class ReservationCreationService {
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
+        response.setFreeSetupDays(snapshot.getFreeSetupDays());
+        response.setEarlyTerminationFeeCapMonths(snapshot.getEarlyTerminationFeeCapMonths());
+        response.setEarlyTerminationFeeCoefficient(snapshot.getEarlyTerminationFeeCoefficient());
+        response.setEarlyTerminationNoticeDays(snapshot.getEarlyTerminationNoticeDays());
+        response.setEarlyTerminationFee(snapshot.getEarlyTerminationFee());
+        response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
+        ReservationSnapshotView.describe(response,reservation,snapshot);
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
         response.setCustomerName(reservation.getCustomer().getFullName());
@@ -336,19 +393,23 @@ public class ReservationCreationService {
         return value.trim();
     }
 
-    private String generateReservationCode() {
-        if (reservationCodeSequenceRepository == null) {
-            return "RSV-000001";
+    static String generateReservationCode() {
+        StringBuilder code = new StringBuilder("RSV-");
+        for (int index = 0; index < 12; index++) {
+            if (index > 0 && index % 4 == 0) code.append('-');
+            code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
         }
-        ReservationCodeSequence sequence = reservationCodeSequenceRepository.findPrimaryForUpdate()
-            .orElseThrow(() -> ApiExceptions.conflict("Reservation code sequence is not configured"));
-        long value = sequence.getNextValue();
-        if (value > 999999) {
-            throw ApiExceptions.conflict("Reservation code sequence has reached its limit");
+        return code.toString();
+    }
+
+    static String uniqueReservationCode(ReservationRepository repository,
+                                        java.util.function.Supplier<String> generator) {
+        for (int attempt = 0; attempt < 20; attempt++) {
+            String code = generator.get();
+            if (!repository.existsByReservationCode(code)) return code;
         }
-        sequence.setNextValue(value + 1);
-        reservationCodeSequenceRepository.save(sequence);
-        return String.format(Locale.ROOT, "RSV-%06d", value);
+        // The database unique constraint remains the final guard for concurrent inserts.
+        throw ApiExceptions.conflict("Chưa thể cấp mã đặt kho. Vui lòng thử lại.");
     }
 
     private BigDecimal money(BigDecimal value) {
@@ -361,7 +422,9 @@ public class ReservationCreationService {
 
     static String requestFingerprint(CreateReservationRequest request) {
         StringBuilder canonical = new StringBuilder();
+        append(canonical, request.getAcceptedTerms());
         append(canonical, request.getQuoteId());
+        if (request.getAcceptedSetupEarlyExitPolicyVersion() != null) append(canonical, request.getAcceptedSetupEarlyExitPolicyVersion());
         append(canonical, cleanValue(request.getIdentityDocumentNumber()));
         append(canonical, cleanValue(request.getCustomerPhone()));
         append(canonical, cleanValue(request.getCustomerAddress()));
@@ -374,6 +437,10 @@ public class ReservationCreationService {
         append(canonical, items == null ? null : items.size());
         if (items != null) {
             for (GoodsItemRequest item : items) {
+                if (item.getCatalogCategoryId() != null) {
+                    append(canonical, item.getCatalogCategoryId());
+                    append(canonical, item.getCatalogMaterialId());
+                }
                 append(canonical, item.getCategory());
                 append(canonical, cleanValue(item.getCustomGoodsName()));
                 append(canonical, cleanValue(item.getMaterialName()));
@@ -393,7 +460,9 @@ public class ReservationCreationService {
 
     private static String requestFingerprint(Reservation reservation, List<ReservationGoodsItem> items) {
         StringBuilder canonical = new StringBuilder();
+        append(canonical, true);
         append(canonical, reservation.getSourceQuote().getId());
+        if (reservation.getSourceQuote().getSetupEarlyExitPolicyVersion() != null) append(canonical, reservation.getSourceQuote().getSetupEarlyExitPolicyVersion());
         append(canonical, cleanValue(reservation.getIdentityDocumentNumber()));
         append(canonical, cleanValue(reservation.getCustomerPhone()));
         append(canonical, cleanValue(reservation.getCustomerAddress()));
@@ -404,6 +473,10 @@ public class ReservationCreationService {
         }
         append(canonical, items.size());
         for (ReservationGoodsItem item : items) {
+            if (item.getCatalogCategoryId() != null) {
+                append(canonical, item.getCatalogCategoryId());
+                append(canonical, item.getCatalogMaterialId());
+            }
             append(canonical, item.getCategory());
             append(canonical, cleanValue(item.getCustomGoodsName()));
             append(canonical, cleanValue(item.getMaterialName()));
@@ -418,6 +491,25 @@ public class ReservationCreationService {
             append(canonical, item.isFragile());
         }
         return sha256(canonical.toString());
+    }
+
+    private String termsSnapshot(ReservationQuote quote) {
+        Map<String, Object> terms = new LinkedHashMap<>();
+        terms.put("termsVersion", "RESERVATION_TERMS_V1");
+        terms.put("pricingPackageCode", quote.getPricingPackageCode());
+        terms.put("policyVersion", quote.getPolicyVersion());
+        terms.put("startDate", quote.getStartDate() == null ? null : quote.getStartDate().toString());
+        terms.put("endDate", quote.getEndDate() == null ? null : quote.getEndDate().toString());
+        terms.put("rentalMonths", quote.getRentalMonths());
+        terms.put("monthlyPrice", quote.getMonthlyPrice());
+        terms.put("totalAfterDiscount", quote.getTotalAfterDiscount());
+        terms.put("reservationDepositAmount", quote.getReservationDepositAmount());
+        terms.put("freeSetupDays", quote.getFreeSetupDays());
+        terms.put("earlyTerminationFee", quote.getEarlyTerminationFee());
+        terms.put("earlyTerminationNoticeDays", quote.getEarlyTerminationNoticeDays());
+        terms.put("earlyTerminationNoticeBasis", EarlyTerminationPolicy.NOTICE_BASIS);
+        terms.put("earlyTerminationPricingTiers", quote.getEarlyTerminationPricingSnapshotJson());
+        return GoodsSnapshotCodec.encodeObject(terms);
     }
 
     private static void append(StringBuilder target, Object value) {

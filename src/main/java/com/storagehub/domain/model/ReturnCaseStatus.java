@@ -4,6 +4,7 @@ public enum ReturnCaseStatus {
     requested,
     scheduled,
     inspected,
+    awaiting_business_review,
     awaiting_customer_confirmation,
     disputed,
     payment_due,

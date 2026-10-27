@@ -15,8 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** Payment rows are the persistent work queue. Each stage commits independently. */
 @Service
-@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled",
-    "storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled","storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
 public class RenewalPaymentReconciler {
     public record Verified(UUID paymentId) {}
     private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(RenewalPaymentReconciler.class);
@@ -44,8 +43,10 @@ public class RenewalPaymentReconciler {
             Boolean allocated=transaction.execute(status->{
                 var payment=payments.findByIdForUpdate(id).orElse(null);
                 if(!eligible(payment))return false;
+                boolean previouslyAllocated=payment.getRenewalAllocatedAt()!=null&&payment.getRenewalLedgerReceiptRef()!=null;
                 var result=settlement.settle(payment,payment.getRenewalEvidenceRef());
                 if(!result.allocated())retry(payment,result.reason());
+                else if(!previouslyAllocated)payment.setRenewalReconciliationAttempts(0);
                 payments.saveAndFlush(payment);
                 return result.allocated();
             });
@@ -59,7 +60,7 @@ public class RenewalPaymentReconciler {
             });
         } catch(RuntimeException unavailable) {
             LOG.warn("Renewal payment {} requires reconciliation; verified funds remain committed",id);
-            LOG.debug("Renewal payment reconciliation failure",unavailable);
+            LOG.error("Renewal payment reconciliation failure: {}", unavailable.getMessage(), unavailable);
             try {
                 transaction.executeWithoutResult(status->{
                     var payment=payments.findByIdForUpdate(id).orElse(null);
@@ -84,5 +85,6 @@ public class RenewalPaymentReconciler {
         payment.setRenewalReconciliationAttempts(payment.getRenewalReconciliationAttempts()+1);
         payment.setFailureReason(reason==null?"Reconciliation required":reason.substring(0,Math.min(1000,reason.length())));
         payment.setRenewalNextRetryAt(Instant.now().plusSeconds(Math.min(300,30L*payment.getRenewalReconciliationAttempts())));
+        settlement.holdForPreparationResolution(payment);
     }
 }

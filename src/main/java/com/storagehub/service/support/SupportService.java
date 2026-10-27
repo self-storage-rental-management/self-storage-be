@@ -20,6 +20,8 @@ import static com.storagehub.service.support.SupportSources.*;
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class SupportService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.BusinessRecordCodes displayCodes;
     public enum Audience { CUSTOMER, MANAGER, STAFF }
     private final EntityManager em;
     private final SupportPersistence receipts;
@@ -38,7 +40,8 @@ public class SupportService {
     public PageResponse<SupportResponse> list(ActorPrincipal actor,Audience audience,SupportQuery q,String correlation) {
         authorize(actor,audience,false);
         StringBuilder where=new StringBuilder(" where t.facility is not null");var params=new HashMap<String,Object>();
-        if(audience==Audience.CUSTOMER){where.append(" and t.customer.id=:actor");params.put("actor",actor.userId());}
+        where.append(" and not exists (select r.id from SupportState r where r.id=t.id and (r.conversationPurgedAt is not null or r.conversationExpiresAt<=:retentionNow))");params.put("retentionNow",now());
+        if(audience==Audience.CUSTOMER){where.append(" and t.customer.id=:actor and not exists (select h.ticketId from SupportHiddenHistory h where h.ticketId=t.id and h.customerId=:actor)");params.put("actor",actor.userId());}
         else {
             var scopes=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(audience==Audience.MANAGER?FacilityScopeLevel.READ:FacilityScopeLevel.OPERATE))
                 .map(Map.Entry::getKey).filter(id->currentScope(actor.userId(),id,audience==Audience.MANAGER?FacilityScopeLevel.READ:FacilityScopeLevel.OPERATE)).toList();
@@ -53,7 +56,11 @@ public class SupportService {
         }
         if(q.staffId()!=null){where.append(" and t.assignedTo.id=:staff");params.put("staff",q.staffId());}
         if(q.status()!=null){where.append(" and t.status=:status");params.put("status",q.status());}
-        if(!q.search().isEmpty()){where.append(" and (lower(t.subject) like :search escape '!' or lower(t.description) like :search escape '!')");params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");}
+        if(!q.search().isEmpty()){
+String codeKey=displayCodes==null?null:displayCodes.resource("HT",q.search());
+where.append(" and (lower(t.subject) like :search escape '!' or lower(t.description) like :search escape '!'"+(codeKey==null?"":" or t.id=:codeId")+")");
+if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
+params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");}
         boolean activitySort=q.sort().equals("updatedAt");
         String activityJoin=activitySort?" left join SupportState w on w.id=t.id":"";
         String sortExpression=activitySort?"coalesce(w.changedAt,t.updatedAt)":"t."+q.sort();
@@ -65,16 +72,117 @@ public class SupportService {
     public SupportResponse detail(ActorPrincipal actor,Audience audience,UUID id){return response(visible(actor,audience,id,false));}
 
     @Transactional(readOnly=true)
+    public SupportInboxResponse inbox(ActorPrincipal actor,SupportQuery q,SupportInboxResponse.View view,String correlation) {
+        authorize(actor,Audience.STAFF,false);
+        var scopes=actor.facilityScopes().entrySet().stream()
+            .filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.OPERATE))
+            .map(Map.Entry::getKey).filter(id->currentScope(actor.userId(),id,FacilityScopeLevel.OPERATE)).toList();
+        var params=new HashMap<String,Object>();params.put("actor",actor.userId());params.put("at",now());params.put("scopes",scopes);
+        params.put("active",List.of(SupportTicketStatus.open,SupportTicketStatus.in_progress,SupportTicketStatus.waiting_customer));
+        params.put("terminal",List.of(SupportTicketStatus.resolved,SupportTicketStatus.closed));params.put("open",SupportTicketStatus.open);
+        String from=" from SupportTicket t left join SupportState w on w.id=t.id";
+        var counts=new EnumMap<SupportInboxResponse.View,Long>(SupportInboxResponse.View.class);
+        for(var mode:SupportInboxResponse.View.values()) {
+            var count=em.createQuery("select count(t)"+from+inboxWhere(mode),Long.class);
+            counts.put(mode,scopes.isEmpty()?0L:bindInbox(count,params).getSingleResult());
+        }
+        var items=new ArrayList<SupportInboxResponse.Row>();
+        if(!scopes.isEmpty()) {
+            var rows=bindInbox(em.createQuery("select t"+from+inboxWhere(view)+" order by coalesce(w.changedAt,t.updatedAt) desc,t.id",SupportTicket.class),params)
+                .setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList();
+            for(var ticket:rows) {
+                boolean owned=ticket.getAssignedTo()!=null&&ticket.getAssignedTo().getId().equals(actor.userId());
+                var state=em.find(SupportState.class,ticket.getId());
+                long older=owned?em.createQuery("select count(t) from SupportTicket t left join SupportState w on w.id=t.id where t.customer.id=:customer and t.facility.id=:facility and t.assignedTo.id=:actor and t.id<>:id and "+inboxRetained("w"),Long.class)
+                    .setParameter("customer",ticket.getCustomer().getId()).setParameter("facility",ticket.getFacility().getId()).setParameter("actor",actor.userId()).setParameter("id",ticket.getId()).setParameter("at",now()).getSingleResult():0;
+                items.add(new SupportInboxResponse.Row(owned?response(ticket):null,owned?null:new SupportQueueItem(ticket.getId(),ticket.getFacility().getId(),ticket.getSubject(),ticket.getCreatedAt(),state.getVersion(),displayCodes==null?null:displayCodes.find("HT:"+ticket.getId())),older,state==null?ticket.getUpdatedAt():state.getChangedAt()));
+            }
+        }
+        var result=page(items,q,counts.get(view),correlation);
+        return new SupportInboxResponse(result.data(),result.pagination(),correlation,new SupportInboxResponse.Counts(counts.get(SupportInboxResponse.View.queue),counts.get(SupportInboxResponse.View.mine),counts.get(SupportInboxResponse.View.all),counts.get(SupportInboxResponse.View.history)));
+    }
+    private static String inboxRetained(String state) {
+        return "("+state+".conversationPurgedAt is null and ("+state+".conversationExpiresAt is null or "+state+".conversationExpiresAt>:at))";
+    }
+    private static String inboxEligible(String ticket,String state,SupportInboxResponse.View view) {
+        String mine=ticket+".assignedTo.id=:actor and "+ticket+".status in "+(view==SupportInboxResponse.View.history?":terminal":":active");
+        String queue=ticket+".status=:open and "+ticket+".assignedTo is null and "+state+".id is not null and "+state+".acceptedBy is null and "+state+".acceptedAt is null";
+        return inboxRetained(state)+" and ("+switch(view){case queue->queue;case mine,history->mine;case all->"("+mine+") or ("+queue+")";}+")";
+    }
+    private static String inboxWhere(SupportInboxResponse.View view) {
+        String at="coalesce(w.changedAt,t.updatedAt)",otherAt="coalesce(ow.changedAt,other.updatedAt)";
+        String newer="("+otherAt+">"+at+" or ("+otherAt+"="+at+" and other.id<t.id))";
+        if(view==SupportInboxResponse.View.all) {
+            String rank="case when t.assignedTo.id=:actor then 0 else 1 end",otherRank="case when other.assignedTo.id=:actor then 0 else 1 end";
+            newer="("+otherRank+"<"+rank+" or ("+otherRank+"="+rank+" and "+newer+"))";
+        }
+        return " where t.facility.id in :scopes and "+inboxEligible("t","w",view)
+            +" and not exists (select other.id from SupportTicket other left join SupportState ow on ow.id=other.id where other.customer.id=t.customer.id and other.facility.id=t.facility.id and "+inboxEligible("other","ow",view)+" and "+newer+")";
+    }
+    private static <T> TypedQuery<T> bindInbox(TypedQuery<T> query,Map<String,Object> params) {
+        for(var parameter:query.getParameters())query.setParameter(parameter.getName(),params.get(parameter.getName()));
+        return query;
+    }
+    @Transactional(readOnly=true)
+    public PageResponse<SupportResponse> relatedStaffHistory(ActorPrincipal actor,UUID id,SupportQuery q,String correlation) {
+        var selected=visible(actor,Audience.STAFF,id,false);
+        String from=" from SupportTicket t left join SupportState w on w.id=t.id where t.customer.id=:customer and t.facility.id=:facility and t.assignedTo.id=:actor and "+inboxRetained("w");
+        var params=Map.<String,Object>of("customer",selected.getCustomer().getId(),"facility",selected.getFacility().getId(),"actor",actor.userId(),"at",now());
+        var rows=bindInbox(em.createQuery("select t"+from+" order by coalesce(w.changedAt,t.updatedAt) desc,t.id",SupportTicket.class),params)
+            .setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList().stream().map(this::response).toList();
+        return page(rows,q,bindInbox(em.createQuery("select count(t)"+from,Long.class),params).getSingleResult(),correlation);
+    }
+    public SupportResponse.HiddenHistory hideCustomerHistory(ActorPrincipal actor,UUID id) {
+        var ticket=command(actor,Audience.CUSTOMER,id);
+        if(em.find(SupportHiddenHistory.class,id)==null)em.persist(new SupportHiddenHistory(id,actor.userId(),now()));
+        em.flush();return new SupportResponse.HiddenHistory(ticket.getId(),true);
+    }
+    private void revealCustomerHistory(UUID id) {
+        var hidden=em.find(SupportHiddenHistory.class,id);if(hidden!=null)em.remove(hidden);
+    }
+    @Transactional(readOnly=true)
+    public List<SupportResponse.ReadStatus> readStatus(ActorPrincipal actor,Audience audience,List<UUID> ids) {
+        if(audience==Audience.MANAGER)throw ApiExceptions.forbidden("Unsupported read audience");
+        if(ids==null||ids.size()>100||ids.stream().anyMatch(Objects::isNull))throw ApiExceptions.validation("Tối đa 100 hội thoại.",null);
+        var result=new ArrayList<SupportResponse.ReadStatus>();
+        for(UUID id:new LinkedHashSet<>(ids)) {
+            visible(actor,audience,id,false);
+            long count=em.createQuery("select count(m) from SupportMessage m where m.ticket.id=:id and m.visibility='PUBLIC' and m.authorRole<>'AI_CONTEXT' and m.authorId<>:actor and not exists (select r.messageId from SupportMessageRead r where r.readerId=:actor and r.messageId=m.id)",Long.class)
+                .setParameter("id",id).setParameter("actor",actor.userId()).getSingleResult();
+            var at=em.createQuery("select max(m.sentAt) from SupportMessage m where m.ticket.id=:id and m.visibility='PUBLIC'",Instant.class).setParameter("id",id).getSingleResult();
+            result.add(new SupportResponse.ReadStatus(id,count,at));
+        }
+        return result;
+    }
+    public SupportResponse.ReadStatus markRead(ActorPrincipal actor,Audience audience,UUID id,List<UUID> ids) {
+        if(audience==Audience.MANAGER)throw ApiExceptions.forbidden("Unsupported read audience");
+        if(ids==null||ids.isEmpty()||ids.size()>100||ids.stream().anyMatch(Objects::isNull))throw ApiExceptions.validation("Tối đa 100 tin nhắn đã hiển thị.",null);
+        lockActor(actor);visible(actor,audience,id,false);
+        var messages=new ArrayList<SupportMessage>();
+        for(UUID messageId:new LinkedHashSet<>(ids)) {
+            var message=em.find(SupportMessage.class,messageId);
+            if(message==null||!message.getTicket().getId().equals(id)||!message.getVisibility().equals("PUBLIC"))throw ApiExceptions.notFound("Support message not found");
+            messages.add(message);
+        }
+        for(var message:messages)if(!message.getAuthorId().equals(actor.userId())&&!message.getAuthorRole().equals("AI_CONTEXT")) {
+            var key=new SupportMessageRead.Key(actor.userId(),message.getId());
+            if(em.find(SupportMessageRead.class,key)==null)em.persist(new SupportMessageRead(actor.userId(),message.getId(),id,now()));
+        }
+        em.flush();return readStatus(actor,audience,List.of(id)).get(0);
+    }
+
+    @Transactional(readOnly=true)
     public SupportStatusSummary summary(ActorPrincipal actor,UUID facilityId) {
         authorize(actor,Audience.MANAGER,false);
         requireScope(actor,facilityId,FacilityScopeLevel.READ);
         var counts=new LinkedHashMap<String,Long>();
         for(var status:SupportTicketStatus.values())counts.put(status.name(),0L);
-        var rows=em.createQuery("select t.status,count(t) from SupportTicket t where t.facility.id=:facility group by t.status",Object[].class)
-            .setParameter("facility",facilityId).getResultList();
+        String retained=" and not exists (select r.id from SupportState r where r.id=t.id and (r.conversationPurgedAt is not null or r.conversationExpiresAt<=:retentionNow))";
+        var rows=em.createQuery("select t.status,count(t) from SupportTicket t where t.facility.id=:facility"+retained+" group by t.status",Object[].class)
+            .setParameter("facility",facilityId).setParameter("retentionNow",now()).getResultList();
         for(var row:rows)counts.put(((SupportTicketStatus)row[0]).name(),(Long)row[1]);
-        long unassigned=em.createQuery("select count(t) from SupportTicket t join SupportState w on w.id=t.id where t.facility.id=:facility and t.status=:open and t.assignedTo is null and w.acceptedBy is null and w.acceptedAt is null",Long.class)
-            .setParameter("facility",facilityId).setParameter("open",SupportTicketStatus.open).getSingleResult();
+        long unassigned=em.createQuery("select count(t) from SupportTicket t join SupportState w on w.id=t.id where t.facility.id=:facility and t.status=:open and t.assignedTo is null and w.acceptedBy is null and w.acceptedAt is null"+retained,Long.class)
+            .setParameter("facility",facilityId).setParameter("open",SupportTicketStatus.open).setParameter("retentionNow",now()).getSingleResult();
         return new SupportStatusSummary(Map.copyOf(counts),unassigned);
     }
 
@@ -86,11 +194,14 @@ public class SupportService {
             .map(Map.Entry::getKey).filter(id->currentScope(actor.userId(),id,FacilityScopeLevel.OPERATE)).toList();
         if(scopes.isEmpty())return page(List.of(),q,0,correlation);
         String where=" where t.status=:open and t.assignedTo is null and t.facility.id in :scopes"
-            +" and w.acceptedBy is null and w.acceptedAt is null";
+            +" and w.acceptedBy is null and w.acceptedAt is null and w.conversationPurgedAt is null and (w.conversationExpiresAt is null or w.conversationExpiresAt>:retentionNow)";
         var params=new HashMap<String,Object>();params.put("open",SupportTicketStatus.open);params.put("scopes",scopes);
+        params.put("retentionNow",now());
         if(q.status()!=null&&q.status()!=SupportTicketStatus.open)return page(List.of(),q,0,correlation);
         if(!q.search().isEmpty()){
-            where+=" and lower(t.subject) like :search escape '!'";
+            String codeKey=displayCodes==null?null:displayCodes.resource("HT",q.search());
+where+=" and (lower(t.subject) like :search escape '!'"+(codeKey==null?"":" or t.id=:codeId")+")";
+if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
             params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");
         }
         String join=" from SupportTicket t join SupportState w on w.id=t.id";
@@ -100,7 +211,7 @@ public class SupportService {
         var count=em.createQuery("select count(t)"+join+where,Long.class);
         params.forEach((k,v)->{rows.setParameter(k,v);count.setParameter(k,v);});
         var items=rows.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList().stream()
-            .map(row->new SupportQueueItem((UUID)row[0],(UUID)row[1],(String)row[2],(Instant)row[3],(Long)row[4])).toList();
+            .map(row->new SupportQueueItem((UUID)row[0],(UUID)row[1],(String)row[2],(Instant)row[3],(Long)row[4],displayCodes==null?null:displayCodes.find("HT:"+row[0]))).toList();
         return page(items,q,count.getSingleResult(),correlation);
     }
 
@@ -110,17 +221,57 @@ public class SupportService {
         Object payload=Arrays.asList(body,parent);String operation=parent==null?"support_create":"support_follow_up";
         if(parent!=null){var previous=visible(actor,Audience.CUSTOMER,parent,true);if(previous.getStatus()!=SupportTicketStatus.closed)throw ApiExceptions.conflict("Follow-up requires a closed parent ticket");}
         var replay=receipts.replay(actor.userId(),operation,key,payload,SupportResponse.class);if(replay.isPresent())return replay.get();
+        var context=body.handoffMessages()==null?List.<HandoffMessage>of():body.handoffMessages();
+        if(context.size()>200||context.stream().anyMatch(m->m==null||m.role()==null||m.body()==null||m.body().isBlank()||m.body().length()>4000)
+            ||context.stream().mapToLong(m->m.body().length()).sum()>200000)
+            throw ApiExceptions.validation("Lịch sử chuyển tiếp vượt giới hạn cho phép.",null);
         UUID requestedFacility=body.facilityId();
         if(parent!=null&&requestedFacility==null)requestedFacility=em.find(SupportTicket.class,parent).getFacility().getId();
         Facility facility=linkedFacility(actor,body.linkedRecord(),requestedFacility);
         if(parent!=null){var previous=em.find(SupportTicket.class,parent);if(!previous.getFacility().getId().equals(facility.getId()))throw ApiExceptions.validation("Follow-up facility must match parent",null);}
+        // The Customer row lock serializes handoffs across tabs and idempotency keys.
+        // Reuse only retained AI handoffs at the same facility; expired history stays inaccessible.
+        if(parent==null&&body.handoffMessages()!=null&&body.linkedRecord()==null) {
+            var existing=em.createQuery("select s.ticket.id from SupportState s where s.ticket.customer.id=:customer and s.ticket.facility.id=:facility and s.conversationPurgedAt is null and s.conversationExpiresAt>:at order by case when s.ticket.status in :active then 0 else 1 end,s.changedAt desc,s.id",UUID.class)
+                .setParameter("customer",actor.userId()).setParameter("facility",facility.getId()).setParameter("at",now()).setParameter("active",List.of(SupportTicketStatus.open,SupportTicketStatus.in_progress,SupportTicketStatus.waiting_customer)).setMaxResults(1).getResultList();
+            if(!existing.isEmpty()) {
+                var prior=command(actor,Audience.CUSTOMER,existing.get(0));
+                var priorState=state(prior,null);
+                revealCustomerHistory(prior.getId());
+                // A competing Staff reply can extend retention while we acquire the ticket lock.
+                if(Set.of(SupportTicketStatus.resolved,SupportTicketStatus.closed).contains(prior.getStatus())) {
+                    prior.setAssignedTo(null);prior.setStatus(SupportTicketStatus.open);priorState.reopen(false,now());
+                    prior.setSubject(text(body.subject(),200));
+                    appendHandoffContext(actor,prior,context);
+                    append(actor,prior,priorState,"CUSTOMER",Visibility.PUBLIC,body.description(),body.evidenceFileIds());
+                    event(actor,prior,priorState,"REOPENED","Customer requested Staff again");
+                    notifySupportStaff(prior,"Có yêu cầu hỗ trợ cần tiếp nhận lại",prior.getSubject());
+                }
+                // An active conversation is resumed without another queue entry or duplicate transcript.
+                return finish(actor,operation,key,payload,prior);
+            }
+        }
         var ticket=new SupportTicket();ticket.setCustomer(em.getReference(User.class,actor.userId()));ticket.setFacility(facility);
         ticket.setSubject(text(body.subject(),200));ticket.setDescription(text(body.description(),4000));em.persist(ticket);em.flush();
+        if(displayCodes!=null)displayCodes.assign("HT","HT:"+ticket.getId(),now());
         var state=new SupportState(ticket,body.linkedRecord()==null?null:body.linkedRecord().type().name(),body.linkedRecord()==null?null:body.linkedRecord().id(),parent,now());em.persist(state);
+        if(body.handoffMessages()!=null)state.retainConversation(now());
+        // Context is copied atomically with ticket creation and the idempotency receipt.
+        // Distinct roles identify unverified Customer-supplied history, not Staff replies.
+        // Millisecond offsets preserve source order with both MySQL and H2 timestamp precision.
+        appendHandoffContext(actor,ticket,context);
         append(actor,ticket,state,"CUSTOMER",Visibility.PUBLIC,body.description(),body.evidenceFileIds());
         event(actor,ticket,state,"CREATED","Created Support ticket");notifySupportStaff(ticket,"New Support ticket",ticket.getSubject());notifyManagers(ticket,"New Support ticket",ticket.getSubject());
         notify(ticket.getCustomer().getId(),ticket,"Đã ghi nhận yêu cầu hỗ trợ của bạn",ticket.getSubject());
         return finish(actor,operation,key,payload,ticket);
+    }
+    private void appendHandoffContext(ActorPrincipal actor,SupportTicket ticket,List<HandoffMessage> context) {
+        Instant contextStart=now().minusSeconds(1);
+        for(int i=0;i<context.size();i++) {
+            var message=context.get(i);
+            em.persist(new SupportMessage(ticket,actor.userId(),message.role()==ContextRole.ASSISTANT?"AI_CONTEXT":"USER_CONTEXT",
+                Visibility.PUBLIC.name(),text(message.body(),4000),"[]",contextStart.plusMillis(i)));
+        }
     }
     public SupportResponse followUp(ActorPrincipal actor,UUID parent,Create body,String key) {
         // Parent ownership is rechecked before replay; internal messages/files are never cloned.
@@ -158,6 +309,7 @@ public class SupportService {
         var replay=receipts.replay(actor.userId(),"support_claim",key,payload,SupportResponse.class);
         if(replay.isPresent())return replay.get();
         var state=requiredState(ticket,body.expectedVersion());
+        if(state.conversationExpired(now()))throw ApiExceptions.notFound("Cuộc trò chuyện đã hết thời hạn lưu trữ.");
         if(ticket.getStatus()!=SupportTicketStatus.open||ticket.getAssignedTo()!=null
             ||state.getAcceptedBy()!=null||state.getAcceptedAt()!=null)
             throw ApiExceptions.conflict("Support ticket is already claimed or unavailable");
@@ -219,15 +371,22 @@ public class SupportService {
     public SupportResponse resolve(ActorPrincipal actor,UUID id,Resolution body,String key) {
         var ticket=command(actor,Audience.STAFF,id);Object payload=payload(id,body);
         var replay=receipts.replay(actor.userId(),"support_resolve",key,payload,SupportResponse.class);if(replay.isPresent())return replay.get();
-        var state=requiredState(ticket,body.expectedVersion());requireStatus(ticket,SupportTicketStatus.in_progress);requireAccepted(ticket,state);
+        var state=requiredState(ticket,body.expectedVersion());
+        if(!(Boolean.TRUE.equals(body.statusOnly())&&ticket.getStatus()==SupportTicketStatus.waiting_customer))requireStatus(ticket,SupportTicketStatus.in_progress);
+        requireAccepted(ticket,state);
         requireEscalationsResolved(ticket);
         // The linked record supplies context. Resolution records Staff's Support outcome
         // for Customer review; it does not complete or mutate the linked module.
         var evidenceFiles=files(body.evidenceFileIds());
         String summary=body.summary()==null?"":body.summary().trim();
-        if(summary.isEmpty()&&evidenceFiles.isEmpty())throw ApiExceptions.validation("Cần nhập mô tả xử lý hoặc đính kèm minh chứng để gửi cho khách hàng.",null);
-        if(summary.isEmpty())summary="Nhân viên đã gửi minh chứng xử lý. Vui lòng kiểm tra và xác nhận kết quả.";
-        append(actor,ticket,state,"STAFF",Visibility.PUBLIC,summary,evidenceFiles);ticket.setStatus(SupportTicketStatus.resolved);state.resolve(actor.userId(),now());
+        if(Boolean.TRUE.equals(body.statusOnly())) {
+            if(!summary.isEmpty()||!evidenceFiles.isEmpty())throw ApiExceptions.validation("Thao tác đổi trạng thái không gửi kèm nội dung hoặc tệp.",null);
+        } else {
+            if(summary.isEmpty()&&evidenceFiles.isEmpty())throw ApiExceptions.validation("Cần nhập mô tả xử lý hoặc đính kèm minh chứng để gửi cho khách hàng.",null);
+            if(summary.isEmpty())summary="Nhân viên đã gửi minh chứng xử lý. Vui lòng kiểm tra và xác nhận kết quả.";
+            append(actor,ticket,state,"STAFF",Visibility.PUBLIC,summary,evidenceFiles);
+        }
+        ticket.setStatus(SupportTicketStatus.resolved);state.resolve(actor.userId(),now());
         var resolvedEvent=event(actor,ticket,state,"RESOLVED","Staff supplied resolution");em.flush();
         var channel=communication==null?null:communication.getIfAvailable();
         if(channel==null||!channel.enqueueReview(ticket,state,resolvedEvent,now()))notify(ticket.getCustomer().getId(),ticket,"Support resolved; please review",ticket.getSubject());
@@ -249,7 +408,7 @@ public class SupportService {
         var ticket=command(actor,Audience.CUSTOMER,id);Object payload=payload(id,body);
         var replay=receipts.replay(actor.userId(),"support_reopen",key,payload,SupportResponse.class);if(replay.isPresent())return replay.get();
         var state=requiredState(ticket,body.expectedVersion());requireStatus(ticket,SupportTicketStatus.resolved);
-        boolean keep=eligible(ticket.getAssignedTo(),ticket.getFacility().getId())&&state.getAcceptedBy()!=null&&state.getAcceptedBy().equals(ticket.getAssignedTo().getId());
+        boolean keep=state.getConversationExpiresAt()==null&&eligible(ticket.getAssignedTo(),ticket.getFacility().getId())&&state.getAcceptedBy()!=null&&state.getAcceptedBy().equals(ticket.getAssignedTo().getId());
         if(!keep)ticket.setAssignedTo(null);ticket.setStatus(keep?SupportTicketStatus.in_progress:SupportTicketStatus.open);state.reopen(keep,now());
         append(actor,ticket,state,"CUSTOMER",Visibility.PUBLIC,body.reason(),List.of());event(actor,ticket,state,"REOPENED",text(body.reason(),2000));
         notifyManagers(ticket,"Customer reopened Support",ticket.getSubject());
@@ -291,7 +450,7 @@ public class SupportService {
     /** System-only service entry. No public HTTP route and no implicit scheduler enablement. */
     public boolean autoClose(UUID id) {
         var ticket=em.find(SupportTicket.class,id,LockModeType.PESSIMISTIC_WRITE);if(ticket==null||ticket.getFacility()==null||ticket.getStatus()!=SupportTicketStatus.resolved)return false;
-        var state=em.find(SupportState.class,id,LockModeType.PESSIMISTIC_WRITE);if(state==null)return false;
+        var state=em.find(SupportState.class,id,LockModeType.PESSIMISTIC_WRITE);if(state==null||state.conversationExpired(now()))return false;
         var rule=closeRule(ticket,state);if(rule.autoCloseAt()==null||now().isBefore(rule.autoCloseAt()))return false;requireEscalationsResolved(ticket);
         requireReviewNotice(ticket,state,rule);
         notify(ticket.getCustomer().getId(),ticket,"Support automatically closed after review period",ticket.getSubject());
@@ -314,6 +473,7 @@ public class SupportService {
     }
     private SupportTicket visible(ActorPrincipal actor,Audience audience,UUID id,boolean write) {
         authorize(actor,audience,write);var ticket=em.find(SupportTicket.class,id);if(ticket==null||ticket.getFacility()==null)throw ApiExceptions.notFound("Support ticket not found or needs authorized legacy triage");
+        var retention=em.find(SupportState.class,id);if(retention!=null&&retention.conversationExpired(now()))throw ApiExceptions.notFound("Cuộc trò chuyện đã hết thời hạn lưu trữ.");
         if(audience==Audience.CUSTOMER){if(!ticket.getCustomer().getId().equals(actor.userId()))throw ApiExceptions.notFound("Support ticket not found");}
         else {
             var needed=audience==Audience.MANAGER?(write?FacilityScopeLevel.MANAGE:FacilityScopeLevel.READ):FacilityScopeLevel.OPERATE;
@@ -327,7 +487,8 @@ public class SupportService {
         var ticket=em.find(SupportTicket.class,id,LockModeType.PESSIMISTIC_WRITE);em.refresh(ticket,LockModeType.PESSIMISTIC_WRITE);return visible(actor,audience,id,true);
     }
     private void lockActor(ActorPrincipal actor){var u=em.find(User.class,actor.userId(),LockModeType.PESSIMISTIC_WRITE);em.refresh(u,LockModeType.PESSIMISTIC_WRITE);}
-    private SupportState state(SupportTicket ticket,Long expected){var state=em.find(SupportState.class,ticket.getId(),LockModeType.PESSIMISTIC_WRITE);if(state==null)throw deferred("Legacy ticket has no verified workflow metadata; no automatic backfill");em.refresh(state,LockModeType.PESSIMISTIC_WRITE);if(expected!=null)version(state,expected);return state;}
+    // Ticket is already locked; refresh metadata before checking its version to avoid upgrading a stale cached version.
+    private SupportState state(SupportTicket ticket,Long expected){var state=em.find(SupportState.class,ticket.getId());if(state==null)throw deferred("Legacy ticket has no verified workflow metadata; no automatic backfill");em.refresh(state,LockModeType.PESSIMISTIC_WRITE);if(expected!=null)version(state,expected);return state;}
     private SupportState requiredState(SupportTicket ticket,Long expected){var state=state(ticket,null);version(state,expected);return state;}
     private void version(SupportState state,Long expected){if(expected==null||expected<0)throw ApiExceptions.validation("expectedVersion required for this transition",null);if(state.getVersion()!=expected)throw ApiExceptions.conflict("Support version is stale");}
     private void requireStatus(SupportTicket ticket,SupportTicketStatus required){if(ticket.getStatus()!=required)throw ApiExceptions.conflict("Support state does not allow this operation");}
@@ -353,9 +514,13 @@ public class SupportService {
         if(facility.getStatus()!=FacilityStatus.active)throw ApiExceptions.conflict("Support facility is not active");return facility;
     }
     private SupportMessage append(ActorPrincipal actor,SupportTicket ticket,SupportState state,String role,Visibility visibility,String body,List<UUID> requested) {
-        var files=files(requested);attach(actor,ticket,visibility,files);var message=new SupportMessage(ticket,actor.userId(),role,visibility.name(),text(body,4000),receipts.json(files),now());em.persist(message);
+        var files=files(requested);
+        if(body==null||body.length()>4000||body.isBlank()&&files.isEmpty())throw ApiExceptions.validation("Cần nội dung hoặc ít nhất một tệp đính kèm.",null);
+        attach(actor,ticket,visibility,files);var message=new SupportMessage(ticket,actor.userId(),role,visibility.name(),body.trim(),receipts.json(files),now());em.persist(message);
+        if(visibility==Visibility.PUBLIC)revealCustomerHistory(ticket.getId());
         if(role.equals("STAFF")&&visibility==Visibility.PUBLIC)state.reply(now());
         else state.touch(now());
+        state.retainNewMessage(now());
         return message;
     }
     private List<UUID> files(List<UUID> requested){if(requested==null)return List.of();if(requested.size()>10||requested.stream().anyMatch(Objects::isNull)||new HashSet<>(requested).size()!=requested.size())throw ApiExceptions.validation("Use at most 10 distinct evidence file IDs",null);return List.copyOf(requested);}
@@ -372,7 +537,7 @@ public class SupportService {
         var state=em.find(SupportState.class,ticket.getId());var source=slas.getIfAvailable();var sla=source==null||state==null?null:source.read(ticket,state,now()).orElse(null);
         if(sla!=null&&(sla.priority()==null||!Set.of("HIGH","MEDIUM","LOW").contains(sla.priority())||sla.policyRef()==null||sla.policyRef().isBlank()||sla.policyVersion()==null||sla.policyVersion().isBlank()))throw ApiExceptions.conflict("Authoritative Support SLA inconsistent");
         if(sla!=null&&sla.activeWorkPaused()!=(ticket.getStatus()==SupportTicketStatus.waiting_customer))throw ApiExceptions.conflict("SLA processing pause must reflect waiting_customer only");
-        return new SupportResponse(ticket.getId(),ticket.getCustomer().getId(),ticket.getFacility()==null?null:ticket.getFacility().getId(),ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getId(),ticket.getStatus(),ticket.getSubject(),ticket.getDescription(),ticket.getCreatedAt(),state==null?null:state.getVersion(),state==null?null:state.getAssignmentRevision(),state==null?null:state.getAssignedAt(),state==null?null:state.getAcceptedAt(),state==null?null:state.getResolvedAt(),state==null?null:state.getClosedAt(),state==null?null:state.getResolvedBy(),state==null?null:state.getParentTicketId(),state==null?null:state.getLinkedType(),state==null?null:state.getLinkedId(),state!=null,sla==null?"UNKNOWN":"COMPLETE",sla,sla==null?"DEFERRED_SOURCE: shared Support priority/SLA/calendar":null,ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getFullName(),ticket.getCustomer().getFullName());
+        return new SupportResponse(ticket.getId(),ticket.getCustomer().getId(),ticket.getFacility()==null?null:ticket.getFacility().getId(),ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getId(),ticket.getStatus(),ticket.getSubject(),ticket.getDescription(),ticket.getCreatedAt(),state==null?null:state.getVersion(),state==null?null:state.getAssignmentRevision(),state==null?null:state.getAssignedAt(),state==null?null:state.getAcceptedAt(),state==null?null:state.getResolvedAt(),state==null?null:state.getClosedAt(),state==null?null:state.getResolvedBy(),state==null?null:state.getParentTicketId(),state==null?null:state.getLinkedType(),state==null?null:state.getLinkedId(),state!=null,sla==null?"UNKNOWN":"COMPLETE",sla,sla==null?"DEFERRED_SOURCE: shared Support priority/SLA/calendar":null,ticket.getAssignedTo()==null?null:ticket.getAssignedTo().getFullName(),ticket.getCustomer().getFullName(),displayCodes==null?null:displayCodes.find("HT:"+ticket.getId()));
     }
     private EscalationSource receiver(Module module){var source=receivers.getIfAvailable();if(source==null||!source.atomic()||!source.supports(module))throw deferred("Authorized escalation receiving/result adapter unavailable");return source;}
     private ReceiverResult result(SupportEscalation e,EscalationSource source){if(e.getReceiverRef()==null||source==null)return null;var r=source.result(e.getTicket(),e).orElse(null);if(r!=null&&(!e.getTicket().getId().equals(r.ticketId())||!e.getId().equals(r.escalationId())||!e.getReceiverRef().equals(r.receiverRef())||!Set.of("ACKNOWLEDGED","REJECTED","COMPLETED").contains(r.status())||r.status().equals("COMPLETED")&&r.resultRef()==null))throw ApiExceptions.conflict("Escalation result reference/state inconsistent");return r;}
@@ -398,7 +563,7 @@ public class SupportService {
     private SupportResponse finish(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket){em.flush();var result=response(ticket);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private SupportResponse.Message finishMessage(ActorPrincipal actor,String operation,String key,Object payload,SupportTicket ticket,SupportMessage message){em.flush();var result=messageResponse(actor,ticket,message);receipts.remember(actor.userId(),operation,key,payload,result);audit(actor,ticket,operation);return result;}
     private void audit(ActorPrincipal actor,SupportTicket ticket,String operation){audit.recordMutation(em.getReference(User.class,actor.userId()),operation,"SupportTicket",ticket.getId(),ticket.getFacility().getId(),null,Map.of("status",ticket.getStatus().name()));}
-    private void notify(UUID recipient,SupportTicket ticket,String title,String content){notifications.createNotification(recipient,NotificationType.SUPPORT,SupportNotificationText.title(title),"Yêu cầu hỗ trợ: "+content,ticket.getId());}
+    private void notify(UUID recipient,SupportTicket ticket,String title,String content){String code=displayCodes==null?null:displayCodes.find("HT:"+ticket.getId());notifications.createNotification(recipient,NotificationType.SUPPORT,SupportNotificationText.title(title),"Yêu cầu hỗ trợ"+(code==null?"":" "+code)+": "+content,ticket.getId());}
     private void notifyAssignedStaff(SupportTicket ticket,String title,String content){if(eligible(ticket.getAssignedTo(),ticket.getFacility().getId()))notify(ticket.getAssignedTo().getId(),ticket,title,content);}
     private void notifySupportStaff(SupportTicket ticket,String title,String content){
         var staff=em.createQuery("select distinct s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel=:level and s.user.status=:active",User.class)

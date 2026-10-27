@@ -11,10 +11,8 @@ import java.util.List;
 
 public record CompleteCheckInRequest(
     @NotNull @Valid CheckInChecklist checklist,
-    @NotBlank
-    @Size(min = 9, max = 30)
-    @Pattern(regexp = "^[0-9A-Za-z][0-9A-Za-z .-]{8,29}$", message = "identityDocumentNumber contains unsupported characters")
-    String identityDocumentNumber,
+    @NotBlank @Size(max = 30) String identityDocumentNumber,
+    @Size(max = 1000) String identityVerificationNote,
     @NotNull @Valid CheckInMeasurements actualMeasurements,
     @Size(max = 1000) String varianceReason,
     @NotBlank @Size(max = 1000) String initialUnitCondition,
@@ -23,6 +21,26 @@ public record CompleteCheckInRequest(
     @NotBlank @Size(max = 160) String goodsCategory,
     @NotEmpty @Size(max = 10) List<@NotBlank @Size(max = 500) String> evidenceReferences,
     @NotEmpty @Size(max = 20) List<@NotBlank @Size(max = 200) String> handedOverItems,
-    @Size(max = 2000) String notes
+    @Size(max = 2000) String notes,
+    @NotBlank @Size(max = 160) String lockReference
 ) {
+    /** Compatibility constructor for older internal callers; new requests must send lockReference. */
+    public CompleteCheckInRequest(
+        CheckInChecklist checklist,
+        String identityDocumentNumber,
+        String identityVerificationNote,
+        CheckInMeasurements actualMeasurements,
+        String varianceReason,
+        String initialUnitCondition,
+        String goodsCondition,
+        int packageCount,
+        String goodsCategory,
+        List<String> evidenceReferences,
+        List<String> handedOverItems,
+        String notes
+    ) {
+        this(checklist, identityDocumentNumber, identityVerificationNote, actualMeasurements,
+            varianceReason, initialUnitCondition, goodsCondition, packageCount, goodsCategory,
+            evidenceReferences, handedOverItems, notes, "LEGACY-LOCK");
+    }
 }

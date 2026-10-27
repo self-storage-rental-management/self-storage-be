@@ -2,6 +2,7 @@ package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
+import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.TaskPriority;
 import java.util.Collection;
 import java.util.List;
@@ -18,13 +19,26 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
 
     List<MaintenanceTask> findByStorageUnit_IdAndStatusIn(UUID storageUnitId, Collection<MaintenanceTaskStatus> statuses);
 
+    List<MaintenanceTask> findByStorageUnit_IdAndTaskTypeAndStatusIn(
+        UUID storageUnitId,
+        MaintenanceTaskType taskType,
+        Collection<MaintenanceTaskStatus> statuses
+    );
+
+    List<MaintenanceTask> findByRental_IdAndTaskTypeAndStatusIn(
+        UUID rentalId,
+        MaintenanceTaskType taskType,
+        Collection<MaintenanceTaskStatus> statuses
+    );
+
     @Query("""
         select t from MaintenanceTask t
         where (:facilityId is null or t.facility.id = :facilityId)
           and (:storageUnitId is null or t.storageUnit.id = :storageUnitId)
           and (:status is null or t.status = :status)
           and (:priority is null or t.priority = :priority)
-          and (:assignedStaffId is null or (t.assignedTo is not null and t.assignedTo.id = :assignedStaffId))
+          and (:assignedStaffId is null or t.assignedTo is null
+              or (t.assignedTo is not null and t.assignedTo.id = :assignedStaffId))
           and (:scoped = false or t.facility.id in :allowedFacilityIds)
           and (
             :q is null or :q = ''

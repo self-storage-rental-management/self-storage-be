@@ -19,10 +19,15 @@ public class RenewalWorkflow {
     @Column(length=2000) private String reviewReason;
     @Column(length=2000) private String cancellationReason;
     private Instant paymentDeadline;
+    private Instant signingBalanceDueAt;
     private UUID extensionHoldRef;
     public RenewalWorkflow(Renewal renewal,RenewalAcceptedRevision revision) {this.renewal=renewal;this.acceptedRevision=revision;}
     public void accept(RenewalAcceptedRevision revision) {this.acceptedRevision=revision;}
     public void cancelled(String reason) {this.cancellationReason=reason;}
+    public void signingBalanceDue(Instant due) {
+        if(due==null||paymentDeadline!=null&&!due.isAfter(paymentDeadline))throw new IllegalArgumentException("Signing balance must be due after the prepayment deadline");
+        signingBalanceDueAt=due;
+    }
     public void paymentReady(Instant deadline) {
         if(deadline==null)throw new IllegalArgumentException("Payment deadline required");
         if(paymentDeadline!=null&&!paymentDeadline.equals(deadline))throw new IllegalStateException("Payment deadline is immutable");

@@ -47,6 +47,9 @@ class LocalRenewalAutoRecoveryServiceTests {
         when(uncertain.getSingleResult()).thenReturn(uncertainPayments);when(paid.getSingleResult()).thenReturn(0L);
         when(em.createQuery(contains("p.status in"),eq(Long.class))).thenReturn(uncertain);
         when(em.createQuery(contains("p.status=:paid"),eq(Long.class))).thenReturn(paid);
+        TypedQuery<Long> preparation=mock(TypedQuery.class,RETURNS_SELF);
+        when(preparation.getSingleResult()).thenReturn(0L);
+        when(em.createQuery(contains("p.failureCode=:code"),eq(Long.class))).thenReturn(preparation);
         when(receiver.atomic()).thenReturn(true);when(safety.atomic()).thenReturn(true);
         when(receiver.receive(eq(rental),anyString(),anyString(),anyString(),eq(now)))
             .thenReturn(new OverdueSources.Handoff(UUID.randomUUID(),"RECEIVED"));

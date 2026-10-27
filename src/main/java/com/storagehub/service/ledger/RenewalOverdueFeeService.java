@@ -1,5 +1,7 @@
 package com.storagehub.service.ledger;
 
+import com.storagehub.time.BusinessTime;
+
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.service.rental.period.RentalPeriodResolver;
@@ -24,10 +26,18 @@ public class RenewalOverdueFeeService {
     private record Daily(long days,BigDecimal accrued,Instant dayStart,Instant nextDay,String source,LocalDate lastPermittedDate) {}
 
     public BigDecimal estimate(Rental rental,Instant now) {return daily(rental,now).accrued();}
+    public BigDecimal estimateAtSigning(Rental rental,Instant now) {return daily(rental,now,true).accrued();}
     public Quote quote(Renewal renewal,LedgerStore.Snapshot snapshot,Instant now) {
-        var daily=daily(renewal.getRental(),now);
-        if(!snapshot.rentalId().equals(renewal.getRental().getId()))throw ApiExceptions.conflict("Overdue fee rental binding invalid");
-        String prefix="rental-overdue:"+renewal.getRental().getId()+":";
+        // The signing day belongs to the new rent period; only preceding days are overdue fees.
+        return quote(renewal.getRental(),snapshot,now,true);
+    }
+    public Quote quote(Rental rental,LedgerStore.Snapshot snapshot,Instant now) {
+        return quote(rental,snapshot,now,false);
+    }
+    private Quote quote(Rental rental,LedgerStore.Snapshot snapshot,Instant now,boolean signing) {
+        var daily=daily(rental,now,signing);
+        if(!snapshot.rentalId().equals(rental.getId()))throw ApiExceptions.conflict("Overdue fee rental binding invalid");
+        String prefix="rental-overdue:"+rental.getId()+":";
         var posted=snapshot.obligations().stream().filter(o->o.sourceRef().startsWith(prefix+daily.lastPermittedDate()+":")).toList();
         String source=prefix+daily.source();
         for(var o:posted)if(o.kind()!=LedgerStore.Kind.RENEWAL_REMAINDER||!o.sourceRef().startsWith(source+":"))
@@ -44,11 +54,13 @@ public class RenewalOverdueFeeService {
             &&obligation.sourceRef().startsWith("rental-overdue:"+renewal.getRental().getId()+":");
     }
     private Daily daily(Rental rental,Instant now) {
+        return daily(rental,now,false);
+    }
+    private Daily daily(Rental rental,Instant now,boolean signing) {
         var period=periods.require(rental);
-        var published=policies.read(rental.getFacility().getId(),now.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate())
-            .filter(p->p.policy().term()!=null).orElseThrow(()->ApiExceptions.conflict("DEFERRED_SOURCE: Overdue fee timezone policy missing"));
-        ZoneId zone=ZoneId.of(published.policy().term().timezone());LocalDate today=now.atZone(zone).toLocalDate();
-        long days=Math.max(0,ChronoUnit.DAYS.between(period.lastPermittedDate(),today));
+        // The fixed overdue timeline uses the business timezone independently of an optional renewal publication.
+        ZoneId zone=BusinessTime.ZONE;LocalDate today=now.atZone(zone).toLocalDate();
+        long days=Math.max(0,ChronoUnit.DAYS.between(period.lastPermittedDate(),today)-(signing?1:0));
         var settings=em.createQuery("select s from SystemSetting s where s.settingKey=:key",SystemSetting.class)
             .setParameter("key","lateFeeAmount").getResultList();
         BigDecimal rate=BigDecimal.ZERO;

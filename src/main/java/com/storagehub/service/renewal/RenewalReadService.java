@@ -14,24 +14,36 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service @RequiredArgsConstructor @Transactional(readOnly=true)
 public class RenewalReadService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.BusinessRecordCodes displayCodes;
     private final RenewalRepository repository;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RenewalWorkflowService> workflows;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<RenewalStatusProjection> statuses;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactions;
+    @Transactional(readOnly=true,propagation=org.springframework.transaction.annotation.Propagation.SUPPORTS)
     public PageResponse<RenewalResponse> list(ActorPrincipal actor,RenewalListQuery filter,boolean manager,String correlation) {
         authorize(actor,manager,false);
         if(manager && filter.facilityId()!=null) requireScope(actor,filter.facilityId(),FacilityScopeLevel.READ);
-        return PageResponse.from(repository.findAll(scope(actor,manager).and(filters(filter,manager)),filter.pageable()).map(n->project(n,actor,manager)),correlation);
+        var page=readCore(()->PageResponse.from(repository.findAll(scope(actor,manager).and(filters(filter,manager)),filter.pageable())
+            .map(n->project(n,actor,manager)),correlation));
+        return new PageResponse<>(page.data().stream().map(this::withStatuses).toList(),page.pagination(),page.correlationId());
     }
-    public RenewalResponse detail(ActorPrincipal actor,UUID id,boolean manager) { return project(find(actor,id,manager),actor,manager); }
+    @Transactional(readOnly=true,propagation=org.springframework.transaction.annotation.Propagation.SUPPORTS)
+    public RenewalResponse detail(ActorPrincipal actor,UUID id,boolean manager) {
+        return withStatuses(readCore(()->project(find(actor,id,manager),actor,manager)));
+    }
+    private <T> T readCore(java.util.function.Supplier<T> body) {
+        if(transactions==null)return body.get();
+        var transaction=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        transaction.setReadOnly(true);
+        return transaction.execute(status->body.get());
+    }
     public Renewal find(ActorPrincipal actor,UUID id,boolean manager) {
         authorize(actor,manager,false);
         return repository.findOne(scope(actor,manager).and((r,q,c)->c.equal(r.get("id"),id)))
-            .orElseThrow(()->ApiExceptions.notFound("Renewal was not found"));
-    }
-    public Renewal findForDecision(ActorPrincipal actor,UUID id) {
-        authorize(actor,true,true);
-        var ids=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.MANAGE)).map(Map.Entry::getKey).toList();
-        return repository.findOne((r,q,c)->c.and(c.equal(r.get("id"),id),r.get("rental").get("facility").get("id").in(ids)))
             .orElseThrow(()->ApiExceptions.notFound("Renewal was not found"));
     }
     public static void authorize(ActorPrincipal a,boolean manager,boolean write) {
@@ -60,9 +72,11 @@ public class RenewalReadService {
         if(f.status()!=null)p.add(c.equal(r.get("status"),f.status()));
         if(f.rentalId()!=null)p.add(c.equal(rental.get("id"),f.rentalId()));
         if(f.facilityId()!=null)p.add(c.equal(rental.get("facility").get("id"),f.facilityId()));
-        if(manager&&!f.search().isEmpty()){
+        if(!f.search().isEmpty()){
             String pattern="%"+f.search().toLowerCase(Locale.ROOT).replace("\\","\\\\").replace("%","\\%").replace("_","\\_")+"%";
             List<Predicate> matches=new ArrayList<>();
+            String codeKey=displayCodes==null?null:displayCodes.resource("GH",f.search());
+            if(codeKey!=null)matches.add(c.equal(r.get("id"),UUID.fromString(codeKey.substring(3))));
             matches.add(c.like(c.lower(rental.join("storageUnit",JoinType.LEFT).get("code")),pattern,'\\'));
             matches.add(c.like(c.lower(rental.join("customer",JoinType.LEFT).get("fullName")),pattern,'\\'));
             try{UUID id=UUID.fromString(f.search());matches.add(c.equal(r.get("id"),id));matches.add(c.equal(rental.get("id"),id));}catch(IllegalArgumentException ignored){}
@@ -72,6 +86,15 @@ public class RenewalReadService {
     private RenewalResponse project(Renewal n,ActorPrincipal actor,boolean manager){
         var service=workflows==null?null:workflows.getIfAvailable();
         return service==null?baseProjection(n):service.project(n,actor,manager);
+    }
+    private RenewalResponse withStatuses(RenewalResponse result) {
+        // Core GET data is fully materialized before optional financial probes. Do not hold an
+        // outer JDBC connection while each probe needs a new one (concurrent lists can exhaust the pool).
+        // Command finish/replay still uses the original projection, within its own transaction.
+        if(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())return result;
+        var statusSource=statuses==null?null:statuses.getIfAvailable();
+        return statusSource==null?result:result.withStatusSummary(RenewalStatusProjection.applyVerification(
+            statusSource.project(result.id(),java.time.Instant.now()),result.systemVerification(),result.reviewState()));
     }
     public RenewalResponse baseProjection(Renewal n){
         Rental r=n.getRental();
@@ -86,6 +109,7 @@ public class RenewalReadService {
             null,n.getNewEndDate(),n.getAmount(),"VND",n.getCreatedAt(),null,n.getRequestedBy().getId(),
             null,null,null,null,null,null,null,new RenewalResponse.FinancialCheck("UNKNOWN",null,null,null),
             new RenewalResponse.SystemVerification("UNKNOWN",null,List.of(),List.of()),
-            List.of(),List.of("Accepted snapshot, version and shared renewal integrations are not connected"),null,null);
+            List.of(),List.of("Accepted snapshot, version and shared renewal integrations are not connected"),null,null,
+            displayCodes==null?null:displayCodes.find("GH:"+n.getId()));
     }
 }

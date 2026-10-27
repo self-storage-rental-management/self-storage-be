@@ -1,5 +1,7 @@
 package com.storagehub.service.overdue;
 
+import com.storagehub.time.BusinessTime;
+
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.service.AuditLogService;
@@ -22,7 +24,7 @@ import org.springframework.transaction.annotation.*;
 @ConditionalOnProperty(name={"storagehub.integration.renewal-auto-recovery.enabled",
     "storagehub.integration.recovery-tasks.enabled"},havingValue="true")
 public class LocalRenewalAutoRecoveryService {
-    private static final ZoneId ZONE=ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final ZoneId ZONE=BusinessTime.ZONE;
     private final EntityManager em;
     private final RentalPeriodResolver periods;
     private final ObjectProvider<OverdueSources.TermSource> terms;
@@ -33,7 +35,7 @@ public class LocalRenewalAutoRecoveryService {
     private final NotificationService notifications;
     private final AuditLogService audit;
     @org.springframework.beans.factory.annotation.Autowired
-    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositSettlementService> depositSettlements;
+    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositSettlementService> preparationSettlements;
 
     @Transactional(readOnly=true)
     public List<UUID> candidates() {
@@ -85,7 +87,9 @@ public class LocalRenewalAutoRecoveryService {
             var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
             long paid=em.createQuery("select count(p) from Payment p where p.renewal.id=:id and p.status=:paid",Long.class)
                 .setParameter("id",renewal.getId()).setParameter("paid",PaymentStatus.PAID).getSingleResult();
-            if(paid>0&&(state==null||!state.hasVerifiedPayment()))
+            var preparation=preparationSettlements==null?null:preparationSettlements.getIfAvailable();
+            if(paid>0&&(state==null||!state.hasVerifiedPayment())
+                &&(preparation==null||!preparation.preparationPaymentReconciled(renewal)))
                 throw ApiExceptions.conflict("DEFERRED_SOURCE: Paid Renewal operation state is not reconciled");
             if(state!=null&&state.getPhase()==RenewalOperationState.Phase.COMPLETED)
                 throw ApiExceptions.conflict("Active Renewal has a completed operation state");
@@ -95,23 +99,19 @@ public class LocalRenewalAutoRecoveryService {
         var handoff=receiver.receive(rental,ref,"AUTO_OVERDUE_DAY_8",ref,now);
         if(handoff==null||handoff.reference()==null||!Set.of("RECEIVED","ALREADY_RECEIVED").contains(handoff.status()))
             throw ApiExceptions.conflict("Recovery receiver did not acknowledge");
-        for(var renewal:renewals) {
-            if(renewal.getStatus()==RenewalStatus.completed)continue;
-            var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
-            if(state!=null&&state.getDepositPaidAt()!=null) {
-                var settlement=depositSettlements==null?null:depositSettlements.getIfAvailable();
-                if(settlement==null)throw ApiExceptions.conflict("Deposit forfeiture accounting unavailable");
-                settlement.reconcile(renewal.getId());
-            }
-        }
+        // Deposit settlement has its own coordinator/transaction. Accounting failure must not roll back the work item.
         for(var renewal:renewals) {
             if(Set.of(RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.payment_expired,RenewalStatus.completed).contains(renewal.getStatus()))continue;
             var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
             var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
             if(workflow!=null&&workflow.getExtensionHoldRef()!=null)safety.release(renewal,workflow.getExtensionHoldRef());
-            if(state==null){state=new RenewalOperationState(renewal);em.persist(state);}
-            boolean paid=state.hasVerifiedPayment();
-            state.expire(paid);renewal.setStatus(RenewalStatus.cancelled);
+            boolean preparationHeld=em.createQuery("select count(p) from Payment p where p.renewal.id=:id and p.failureCode=:code",Long.class)
+                .setParameter("id",renewal.getId()).setParameter("code",com.storagehub.service.renewal.RenewalPreparationResolution.BLOCKED).getSingleResult()>0;
+            if(!preparationHeld) {
+                if(state==null){state=new RenewalOperationState(renewal);em.persist(state);}
+                state.expire(state.hasVerifiedPayment());
+            }
+            renewal.setStatus(RenewalStatus.cancelled);
             if(workflow!=null)workflow.cancelled("AUTO_RECOVERY_DAY_8");
             var calendar=calendars.getIfAvailable();if(calendar!=null)calendar.release(renewal,now);
             em.persist(new RenewalOperationEvent(renewal,"RECOVERY_CANCELLATION",now,null,

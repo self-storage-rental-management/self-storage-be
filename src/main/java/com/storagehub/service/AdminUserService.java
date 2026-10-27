@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -122,6 +123,7 @@ public class AdminUserService {
         }
 
         Set<RoleCode> roleCodes = normalizeRoles(request.roles());
+        validateRoleCombination(roleCodes);
         if (!(roleCodes.size() == 1 && roleCodes.contains(RoleCode.CUSTOMER))) {
             authorizationService.require(actor, SystemPermission.MANAGE_ROLES);
         }
@@ -193,7 +195,7 @@ public class AdminUserService {
         }
 
         User user = requiredUser(id);
-        assertEditableTarget(user);
+        assertEditableTarget(actor, user);
         AdminUserResponse before = toResponse(user);
         if (request.roles() != null || request.facilityScopes() != null) {
             assertNotCustomerSelfMutation(actor, user);
@@ -277,7 +279,7 @@ public class AdminUserService {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         authorizationService.require(actor, SystemPermission.MANAGE_ROLES);
         User user = requiredUser(id);
-        assertEditableTarget(user);
+        assertEditableTarget(actor, user);
         AdminUserResponse before = toResponse(user);
         assertNotCustomerSelfMutation(actor, user);
         Set<RoleCode> roleCodes = validateRoleAssignment(actor, user, request.roles());
@@ -309,7 +311,7 @@ public class AdminUserService {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         authorizationService.require(actor, SystemPermission.MANAGE_ROLES);
         User user = requiredUser(id);
-        assertEditableTarget(user);
+        assertEditableTarget(actor, user);
         AdminUserResponse before = toResponse(user);
         assertNotCustomerSelfMutation(actor, user);
         Map<UUID, FacilityScopeLevel> scopes = normalizeScopes(request.facilityScopes());
@@ -327,7 +329,12 @@ public class AdminUserService {
     public AdminUserResponse updateStatus(ActorPrincipal actor, UUID id, AdminStatusUpdateRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
-        assertEditableTarget(user);
+        assertEditableTarget(actor, user);
+        if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
+            && request.status() != UserStatus.ACTIVE
+            && userRepository.countByRoles_Code(RoleCode.ADMIN) <= 1) {
+            throw ApiExceptions.conflict("Không thể khóa hoặc vô hiệu hóa Admin cuối cùng");
+        }
         AdminUserResponse before = toResponse(user);
         user.setStatus(request.status());
         User saved = userRepository.saveAndFlush(user);
@@ -342,7 +349,7 @@ public class AdminUserService {
     public AdminUserResponse unlock(ActorPrincipal actor, UUID id) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
-        assertEditableTarget(user);
+        assertEditableTarget(actor, user);
         if (user.getStatus() != UserStatus.LOCKED) {
             throw ApiExceptions.conflict("Only LOCKED accounts can be unlocked");
         }
@@ -361,7 +368,7 @@ public class AdminUserService {
     public AdminUserResponse resetPassword(ActorPrincipal actor, UUID id, AdminPasswordResetRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
-        assertEditableTarget(user);
+        assertEditableTarget(actor, user);
         boolean wasRequiredToChangePassword = user.isMustChangePassword();
 
         String temporaryPassword;
@@ -400,9 +407,10 @@ public class AdminUserService {
             .orElseThrow(() -> ApiExceptions.notFound("User was not found"));
     }
 
-    private void assertEditableTarget(User user) {
-        if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)) {
-            throw ApiExceptions.forbidden("Administrator accounts are protected and cannot be modified");
+    private void assertEditableTarget(ActorPrincipal actor, User user) {
+        if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
+            && (!actor.hasRole(RoleCode.ADMIN) || actor.userId().equals(user.getId()))) {
+            throw ApiExceptions.forbidden("An Admin account requires a different Admin actor for this operation");
         }
     }
 
@@ -415,6 +423,15 @@ public class AdminUserService {
 
     private Set<RoleCode> validateRoleAssignment(ActorPrincipal actor, User target, Set<RoleCode> requestedRoles) {
         Set<RoleCode> roleCodes = normalizeRoles(requestedRoles);
+        validateRoleCombination(roleCodes);
+        boolean currentlyAdmin = target.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN);
+        if (roleCodes.contains(RoleCode.ADMIN) && !actor.hasRole(RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Only an Admin can grant the ADMIN role");
+        }
+        if (currentlyAdmin && !roleCodes.contains(RoleCode.ADMIN)
+            && userRepository.countByRoles_Code(RoleCode.ADMIN) <= 1) {
+            throw ApiExceptions.conflict("Không thể thu hồi ADMIN của Admin cuối cùng");
+        }
         if (actor.userId().equals(target.getId())
             && target.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
             && !roleCodes.contains(RoleCode.ADMIN)
@@ -422,6 +439,15 @@ public class AdminUserService {
             throw ApiExceptions.conflict("The last administrator cannot remove their own ADMIN role");
         }
         return roleCodes;
+    }
+
+    private void validateRoleCombination(Set<RoleCode> roleCodes) {
+        if (roleCodes.contains(RoleCode.ADMIN) && roleCodes.size() != 1) {
+            throw ApiExceptions.validation("ADMIN không được kết hợp với role khác", roleCodes);
+        }
+        if (roleCodes.contains(RoleCode.CUSTOMER) && roleCodes.size() != 1) {
+            throw ApiExceptions.validation("CUSTOMER không được kết hợp với role nội bộ", roleCodes);
+        }
     }
 
     private void assertNotCustomerSelfMutation(ActorPrincipal actor, User target) {
@@ -432,10 +458,12 @@ public class AdminUserService {
     }
 
     private void validateFacilityAssignment(Set<RoleCode> targetRoles, Map<UUID, FacilityScopeLevel> scopes) {
-        boolean hasFacilityRole = targetRoles.contains(RoleCode.STAFF) || targetRoles.contains(RoleCode.MANAGER);
+        boolean hasFacilityRole = targetRoles.contains(RoleCode.STAFF)
+            || targetRoles.contains(RoleCode.MANAGER)
+            || targetRoles.contains(RoleCode.BUSINESS);
         boolean hasCustomerRole = targetRoles.contains(RoleCode.CUSTOMER);
         if (!scopes.isEmpty() && (!hasFacilityRole || hasCustomerRole)) {
-            throw ApiExceptions.validation("Only Staff or Manager accounts can have facility scopes", null);
+            throw ApiExceptions.validation("Only Staff, Manager or Business accounts can have facility scopes", null);
         }
     }
 
@@ -488,6 +516,8 @@ public class AdminUserService {
     }
 
     private void revokeSessions(User user) {
+        user.setAuthzVersion(user.getAuthzVersion() + 1);
+        userRepository.saveAndFlush(user);
         sessionRepository.revokeActiveByUserId(user.getId(), Instant.now());
     }
 
@@ -533,73 +563,23 @@ public class AdminUserService {
         if (actor.userId().equals(user.getId())) {
             throw ApiExceptions.validation("Không thể tự xóa tài khoản của chính mình", null);
         }
-        assertEditableTarget(user);
-
-        // Kiểm tra hợp đồng lưu kho đang hoạt động
-        long activeRentals = (long) entityManager.createQuery(
-            "select count(r) from Rental r where r.customer = :user and r.status in (:activeStatuses)"
-        )
-        .setParameter("user", user)
-        .setParameter("activeStatuses", List.of(
-            com.storagehub.domain.model.RentalStatus.active,
-            com.storagehub.domain.model.RentalStatus.return_requested,
-            com.storagehub.domain.model.RentalStatus.return_inspection,
-            com.storagehub.domain.model.RentalStatus.closing
-        ))
-        .getSingleResult();
-        if (activeRentals > 0) {
-            throw ApiExceptions.conflict("Không thể xóa tài khoản người dùng đang có hợp đồng lưu kho đang hoạt động");
+        assertEditableTarget(actor, user);
+        if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
+            && userRepository.countByRoles_Code(RoleCode.ADMIN) <= 1) {
+            throw ApiExceptions.conflict("Không thể xóa Admin cuối cùng");
         }
 
-        // Đóng các phiên làm việc đang mở
-        revokeSessions(user);
-
-        // Xóa phân quyền cơ sở và vai trò
-        scopeRepository.deleteByUserId(user.getId());
-        user.getRoles().clear();
-        userRepository.saveAndFlush(user);
-
-        // Xóa các dữ liệu phụ thuộc
-        entityManager.createQuery("delete from LoginHistory h where h.user = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from Session s where s.user = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from AuthChallenge a where a.user = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from Notification n where n.user = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from ActivityLog l where l.actor = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-
-        entityManager.createQuery("delete from AccessCredential ac where ac.customer = :user or ac.issuedBy = :user or ac.revokedBy = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from SupportTicketMessage m where m.author = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from SupportTicket st where st.customer = :user or st.assignedTo = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from ReservationGoodsItem gi where gi.reservation.customer = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from Reservation res where res.customer = :user or res.goodsReviewedBy = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from ReservationQuote rq where rq.customer = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-        entityManager.createQuery("delete from Rental ren where ren.customer = :user")
-            .setParameter("user", user)
-            .executeUpdate();
-
-        userRepository.delete(user);
-        userRepository.flush();
+        String originalEmail = user.getEmail();
+        try {
+            deleteAccountOwnedData(user);
+            entityManager.remove(user);
+            entityManager.flush();
+        } catch (DataIntegrityViolationException exception) {
+            throw ApiExceptions.conflict(
+                "Không thể xóa tài khoản vì còn dữ liệu nghiệp vụ hoặc bằng chứng liên quan. "
+                    + "Hãy hoàn tất hoặc lưu trữ các hồ sơ đó trước khi xóa."
+            );
+        }
 
         auditLogService.recordMutation(
             userRepository.getReferenceById(actor.userId()),
@@ -607,8 +587,37 @@ public class AdminUserService {
             "USER",
             user.getId(),
             null,
-            user.getEmail(),
+            originalEmail,
             null
         );
+    }
+
+    /**
+     * Removes account-only rows before the user row is deleted. Business rows
+     * keep their foreign keys so deleting a user with reservations, rentals,
+     * payments, evidence or audit-owned files is rejected by the database.
+     */
+    private void deleteAccountOwnedData(User user) {
+        UUID userId = user.getId();
+
+        entityManager.createQuery("delete from Session session where session.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("delete from AuthChallenge challenge where challenge.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("delete from Notification notification where notification.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("update LoginHistory history set history.user = null where history.user.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+        entityManager.createQuery("update ActivityLog log set log.actor = null where log.actor.id = :userId")
+            .setParameter("userId", userId)
+            .executeUpdate();
+
+        scopeRepository.deleteByUserId(userId);
+        user.getRoles().clear();
+        entityManager.flush();
     }
 }

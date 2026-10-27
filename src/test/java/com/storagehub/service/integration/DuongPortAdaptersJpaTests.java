@@ -30,8 +30,8 @@ import org.springframework.test.context.*;
 /** Real isolated H2 persistence and real temporary file bytes; no runtime seed/test adapter. */
 @DataJpaTest @ActiveProfiles("test")
 @TestPropertySource(properties="storagehub.integration.rental-period.enabled=true")
-@Import({DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
-    RenewalPolicyPublicationService.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
+    RenewalPolicyPublicationService.class,EffectiveRenewalPolicySource.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
     ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,
     RenewalPersistence.class,com.storagehub.service.FileStorageService.class,
     com.storagehub.service.AdminAuthorizationService.class,com.storagehub.service.FacilityScopeService.class,
@@ -54,22 +54,31 @@ class DuongPortAdaptersJpaTests {
     @Autowired com.storagehub.service.FileStorageService storage;
     @Autowired com.storagehub.service.support.SupportService support;
     @TempDir Path root;
-    @Test void expiredPaymentCannotAcceptFaultReview() {
-        renewal.setStatus(RenewalStatus.payment_expired);em.flush();var a=actor(manager,RoleCode.MANAGER);
-        assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"expired-fault")).hasMessageContaining("Terminal");
+    @Test void completedRenewalCannotAcceptFaultReview() {
+        renewal.setStatus(RenewalStatus.completed);em.flush();var a=actor(manager,RoleCode.MANAGER);
+        assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"completed-fault")).hasMessageContaining("Completed Renewal");
         assertThat(em.createQuery("select count(e) from RenewalOperationEvent e",Long.class).getSingleResult()).isZero();
+    }
+    @Test void expiredPaymentCanRecordBoundFaultReviewWithoutReopeningPayment() {
+        renewal.setStatus(RenewalStatus.payment_expired);em.flush();var a=actor(manager,RoleCode.MANAGER);
+        var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW.minusSeconds(60),staff.getId(),"{}");em.persist(incident);em.flush();
+        assertThatThrownBy(()->operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(UUID.randomUUID(),true,"TEST",List.of(),0L),"missing-incident"))
+            .hasMessageContaining("Related event not found");
+        operations.reviewFault(a,renewal.getId(),new RenewalOperationCommands.FaultReview(incident.getId(),true,"TEST",List.of(),0L),"expired-fault");
+        assertThat(renewal.getStatus()).isEqualTo(RenewalStatus.payment_expired);
+        assertThat(em.createQuery("select count(e) from RenewalOperationEvent e where e.kind='FAULT_REVIEW'",Long.class).getSingleResult()).isEqualTo(1);
     }
     Facility facility;User customer,staff,manager,business;Rental rental;Renewal renewal;
     @BeforeEach void fixture() throws Exception {
         fileProperties.setStoragePath(root.toString());
         facility=new Facility();facility.setCode(UUID.randomUUID().toString().substring(0,8));facility.setName("TEST");facility.setAddress("TEST");facility.setCity("TEST");em.persist(facility);
         var permissions=new HashSet<Permission>();
-        for(var code:List.of(SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS,SystemPermission.VIEW_SUPPORT,SystemPermission.MANAGE_SUPPORT,SystemPermission.VIEW_POLICIES,SystemPermission.MANAGE_POLICIES)){var p=new Permission();p.setCode(code.code());p.setName(code.code());em.persist(p);permissions.add(p);}
+        for(var code:List.of(SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_RENTALS,SystemPermission.OPERATE_RENEWALS,SystemPermission.VIEW_PAYMENTS,SystemPermission.MANAGE_PAYMENTS,SystemPermission.VIEW_SUPPORT,SystemPermission.MANAGE_SUPPORT,SystemPermission.VIEW_POLICIES,SystemPermission.MANAGE_POLICIES)){var p=new Permission();p.setCode(code.code());p.setName(code.code());em.persist(p);permissions.add(p);}
         customer=user(RoleCode.CUSTOMER,Set.of());staff=user(RoleCode.STAFF,permissions);manager=user(RoleCode.MANAGER,permissions);business=user(RoleCode.BUSINESS,permissions);
         scope(staff,FacilityScopeLevel.OPERATE);scope(manager,FacilityScopeLevel.MANAGE);
         var type=new UnitType();type.setFacility(facility);type.setCode("TEST");type.setName("TEST");type.setLengthM(BigDecimal.ONE);type.setWidthM(BigDecimal.ONE);type.setHeightM(BigDecimal.ONE);type.setMonthlyPrice(BigDecimal.TEN);type.setMaxLoadKg(BigDecimal.ONE);type.setRackLengthM(BigDecimal.ONE);type.setRackWidthM(BigDecimal.ONE);type.setRackHeightM(BigDecimal.ONE);em.persist(type);
         var unit=new StorageUnit();unit.setFacility(facility);unit.setUnitType(type);unit.setCode("TEST");em.persist(unit);
-        var q=new ReservationQuote();q.setCustomer(customer);q.setFacility(facility);q.setUnitType(type);q.setPricingPackageCode("TEST");q.setPolicyVersion("TEST");q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,10,7));q.setRentalMonths(1);q.setMonthlyPrice(BigDecimal.TEN);q.setSubtotal(BigDecimal.TEN);q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(BigDecimal.TEN);q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(BigDecimal.TEN);q.setDueAtCheckIn(BigDecimal.TEN);q.setTotalInitialObligation(BigDecimal.TEN);q.setQuotedAt(NOW);q.setExpiresAt(NOW.plusSeconds(1800));em.persist(q);
+        var q=com.storagehub.testing.LegacyReservationQuoteFixture.create();q.setCustomer(customer);q.setFacility(facility);q.setUnitType(type);q.setPricingPackageCode("TEST");q.setPolicyVersion("TEST");q.setStartDate(LocalDate.of(2026,10,1));q.setEndDate(LocalDate.of(2026,10,7));q.setRentalMonths(1);q.setMonthlyPrice(BigDecimal.TEN);q.setSubtotal(BigDecimal.TEN);q.setDiscountRate(BigDecimal.ZERO);q.setDiscountAmount(BigDecimal.ZERO);q.setTotalAfterDiscount(BigDecimal.TEN);q.setReservationDepositAmount(BigDecimal.ZERO);q.setSecurityDepositAmount(BigDecimal.ZERO);q.setRemainingRentalAmount(BigDecimal.TEN);q.setDueAtCheckIn(BigDecimal.TEN);q.setTotalInitialObligation(BigDecimal.TEN);q.setQuotedAt(NOW);q.setExpiresAt(NOW.plusSeconds(1800));em.persist(q);
         var res=new Reservation();res.setCustomer(customer);res.setFacility(facility);res.setUnitType(type);res.setSourceQuote(q);res.setReservationCode("TEST");res.setIdempotencyKey("TEST");res.setAssignedUnit(unit);res.setStartDate(q.getStartDate());res.setEndDate(q.getEndDate());res.setStatus(ReservationStatus.COMPLETED);em.persist(res);
         rental=new Rental();rental.setCustomer(customer);rental.setFacility(facility);rental.setStorageUnit(unit);rental.setReservation(res);rental.setStartDate(q.getStartDate());rental.setContractEndDate(q.getEndDate());rental.setMonthlyPrice(BigDecimal.TEN);em.persist(rental);
         var checkin=new CheckIn();checkin.setReservation(res);checkin.setRental(rental);checkin.setPerformedBy(staff);checkin.setStatus(CheckInStatus.completed);em.persist(checkin);em.flush();
@@ -80,7 +89,13 @@ class DuongPortAdaptersJpaTests {
         em.persist(new RenewalWorkflow(renewal,revision));em.flush();
     }
     @Test void actualSpringDateSourceReadsPersistedHandoffAndExclusiveEnd(){assertThat(periods.read(rental).orElseThrow().inclusiveEndDate()).isEqualTo(LocalDate.of(2026,10,6));}
-    @Test void missingPolicyRemainsUnknownAndDoesNotSeed(){assertThat(adapters.read(rental,LocalDate.of(2026,10,7))).isEmpty();assertThat(adapters.read(renewal)).isEmpty();assertThat(adapters.term(rental,NOW)).isEmpty();assertThat(em.createQuery("select count(s) from SystemSetting s",Long.class).getSingleResult()).isZero();}
+    @Test void missingPolicyUsesExplicitEmptyCatalogFallbackWithoutSeedingPublication(){
+        var fallback=adapters.read(rental,LocalDate.of(2026,10,7)).orElseThrow();
+        assertThat(fallback.reference()).startsWith("facility-rental-packages:");assertThat(fallback.eligiblePackageIds()).isEmpty();
+        assertThat(adapters.read(renewal).orElseThrow().signingWindow()).isEqualTo(Duration.ofDays(3));
+        assertThat(adapters.term(rental,NOW).orElseThrow().lastPermittedDate()).isEqualTo(LocalDate.of(2026,10,6));
+        assertThat(em.createQuery("select count(s) from SystemSetting s",Long.class).getSingleResult()).isZero();
+    }
     @Test void publishedPolicySurvivesFlushClearAndMapsThreePorts(){
         var p=policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),input(0));UUID rid=rental.getId();em.flush();em.clear();rental=em.find(Rental.class,rid);renewal=em.find(Renewal.class,renewal.getId());
         assertThat(policies.get(actor(manager,RoleCode.MANAGER),facility.getId()).version()).isEqualTo(p.version());
@@ -95,10 +110,17 @@ class DuongPortAdaptersJpaTests {
     @Test void policyStaleRevisionRejectedAndVersionChanges(){var p=policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),input(0));assertThatThrownBy(()->policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),input(0))).hasMessageContaining("revision");assertThat(policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),input(1)).version()).isNotEqualTo(p.version());}
     @Test void wrongFacilityPackageAndMissingPrimitiveRejected() throws Exception {
         var p=input(0);assertThatThrownBy(()->policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),new PublishedRenewalPolicy.Input(0L,p.effectiveFrom(),null,30,24,30,p.depositRate(),Set.of(UUID.randomUUID()),p.signing(),p.term()))).hasMessageContaining("package");
-        policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),p);var setting=em.createQuery("select s from SystemSetting s",SystemSetting.class).getSingleResult();var tree=mapper.readTree(setting.getValue());((com.fasterxml.jackson.databind.node.ObjectNode)tree).remove("requestWindowDays");setting.setValue(mapper.writeValueAsString(tree));em.flush();
-        assertThatThrownBy(()->adapters.read(rental,LocalDate.of(2026,10,7))).hasMessageContaining("incomplete");
+        policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),p);var setting=em.createQuery("select s from SystemSetting s",SystemSetting.class).getSingleResult();var tree=mapper.readTree(setting.getValue());((com.fasterxml.jackson.databind.node.ObjectNode)tree).remove("paymentWindowHours");setting.setValue(mapper.writeValueAsString(tree));em.flush();
+        assertThatThrownBy(()->policies.read(facility.getId(),LocalDate.of(2026,10,7))).hasMessageContaining("incomplete");
+        assertThat(adapters.read(rental,LocalDate.of(2026,10,7)).orElseThrow().reference()).startsWith("facility-rental-packages:");
     }
-    @Test void policyOutsideEffectiveDatesAndOptionalSourcesAreEmpty(){var p=input(0);policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),new PublishedRenewalPolicy.Input(0L,p.effectiveFrom(),p.effectiveFrom(),30,24,30,p.depositRate(),Set.of(),null,null));assertThat(adapters.read(rental,LocalDate.of(2027,1,1))).isEmpty();assertThat(adapters.read(renewal)).isEmpty();assertThat(adapters.term(rental,NOW)).isEmpty();}
+    @Test void policyOutsideEffectiveDatesUsesCatalogFallbackRatherThanExpiredPublication(){
+        var p=input(0);policies.publish(actor(business,RoleCode.BUSINESS),facility.getId(),new PublishedRenewalPolicy.Input(0L,p.effectiveFrom(),p.effectiveFrom(),30,24,30,p.depositRate(),Set.of(),null,null));
+        assertThat(policies.read(facility.getId(),LocalDate.of(2027,1,1))).isEmpty();
+        assertThat(adapters.read(rental,LocalDate.of(2027,1,1)).orElseThrow().eligiblePackageIds()).isEmpty();
+        assertThat(adapters.read(renewal).orElseThrow().reference()).startsWith("facility-rental-packages:");
+        assertThat(adapters.term(rental,NOW).orElseThrow().policyRef()).startsWith("facility-rental-packages:");
+    }
     @Test void facilityFaultNeedsExplicitBoundManagerReview() throws Exception {var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW,staff.getId(),"{}");em.persist(incident);em.flush();assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),manager.getId())).hasMessageContaining("missing");em.persist(new RenewalOperationEvent(renewal,"FAULT_REVIEW",NOW.plusSeconds(1),manager.getId(),mapper.writeValueAsString(Map.of("incidentId",incident.getId(),"facilityFault",true))));em.flush();adapters.requireFacilityFault(renewal,incident.getId(),manager.getId());assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),staff.getId())).hasMessageContaining("reviewer");}
     @Test void faultReviewCommandPersistsVerdictNotJustNote(){var incident=new RenewalOperationEvent(renewal,"INCIDENT",NOW.minusSeconds(60),staff.getId(),"{}");em.persist(incident);em.flush();operations.reviewFault(actor(manager,RoleCode.MANAGER),renewal.getId(),new RenewalOperationCommands.FaultReview(incident.getId(),true,"TEST verified",List.of(),0L),"fault-test");adapters.requireFacilityFault(renewal,incident.getId(),manager.getId());}
     @Test void revokedFaultReviewerScopeCannotAuthorizeCustomerConfirmation() throws Exception {
@@ -112,10 +134,12 @@ class DuongPortAdaptersJpaTests {
         for(boolean verdict:List.of(true,false))em.persist(new RenewalOperationEvent(renewal,"FAULT_REVIEW",NOW.plusSeconds(1),manager.getId(),mapper.writeValueAsString(Map.of("incidentId",incident.getId(),"facilityFault",verdict))));em.flush();
         assertThatThrownBy(()->adapters.requireFacilityFault(renewal,incident.getId(),manager.getId())).hasMessageContaining("ambiguous");
     }
-    @Test void managerCannotUploadOrAttachSupportEvidenceButCanReadHistory() throws Exception {
+    @Test void managerCanAttachInternalSupportEvidenceButCannotPublishCustomerEvidence() throws Exception {
         var t=ticket();var f=file(manager,DuongFileEvidence.INTERNAL,t.getId());
-        assertThatThrownBy(()->files.requireUpload(actor(manager,RoleCode.MANAGER),DuongFileEvidence.INTERNAL,t.getId())).hasMessageContaining("read-only");
-        assertThatThrownBy(()->files.requireAttach(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()))).hasMessageContaining("read-only");
+        files.requireUpload(actor(manager,RoleCode.MANAGER),DuongFileEvidence.INTERNAL,t.getId());
+        files.requireAttach(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()));
+        assertThatThrownBy(()->files.requireUpload(actor(manager,RoleCode.MANAGER),DuongFileEvidence.PUBLIC,t.getId())).hasMessageContaining("only upload internal");
+        assertThatThrownBy(()->files.requireAttach(actor(manager,RoleCode.MANAGER),t,Visibility.PUBLIC,List.of(f.getId()))).hasMessageContaining("only attach internal");
         files.requireRead(actor(manager,RoleCode.MANAGER),t,Visibility.INTERNAL,List.of(f.getId()));
     }
     @Test void publicAttachmentBindsAndCanBeReadFromDb() throws Exception {var ticket=ticket();var f=file(customer,DuongFileEvidence.UPLOAD,customer.getId());files.requireAttach(actor(customer,RoleCode.CUSTOMER),ticket,Visibility.PUBLIC,List.of(f.getId()));em.flush();UUID id=f.getId();em.clear();f=em.find(FileAsset.class,id);ticket=em.find(SupportTicket.class,ticket.getId());assertThat(f.getEntityType()).isEqualTo(DuongFileEvidence.PUBLIC);assertThat(f.getEntityId()).isEqualTo(ticket.getId());files.requireRead(actor(customer,RoleCode.CUSTOMER),ticket,Visibility.PUBLIC,List.of(id));files.requireDownload(actor(customer,RoleCode.CUSTOMER),f);}

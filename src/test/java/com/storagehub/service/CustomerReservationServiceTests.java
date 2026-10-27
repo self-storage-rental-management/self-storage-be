@@ -9,12 +9,16 @@ import static org.mockito.Mockito.when;
 
 import com.storagehub.api.reservation.CancelReservationRequest;
 import com.storagehub.api.reservation.CheckInAppointmentRequest;
+import com.storagehub.api.reservation.GoodsItemRequest;
+import com.storagehub.api.reservation.UpdateSetupGoodsRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.CompatibilityResult;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.GoodsReviewStatus;
+import com.storagehub.domain.model.GoodsCategory;
+import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
@@ -25,6 +29,8 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
+import com.storagehub.domain.model.Rental;
+import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignment;
@@ -66,6 +72,7 @@ class CustomerReservationServiceTests {
     @Mock private UnitAssignmentRepository assignmentRepository;
     @Mock private ReservationPricingSnapshotRepository snapshotRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
+    @Mock private com.storagehub.domain.repo.FileAssetRepository fileAssetRepository;
     @Mock private AuditLogService auditLogService;
     @Mock private NotificationService notificationService;
 
@@ -78,7 +85,7 @@ class CustomerReservationServiceTests {
     void setUp() {
         service = new CustomerReservationService(
             reservationRepository, paymentRepository, checkInRepository, rentalRepository,
-            storageUnitRepository, assignmentRepository, null, snapshotRepository,
+            storageUnitRepository, assignmentRepository, fileAssetRepository, snapshotRepository,
             goodsItemRepository, auditLogService, notificationService
         );
 
@@ -89,7 +96,16 @@ class CustomerReservationServiceTests {
 
         Facility facility = entityWithId(new Facility());
         UnitType unitType = entityWithId(new UnitType());
-        ReservationQuote quote = entityWithId(new ReservationQuote());
+        unitType.setLengthM(new BigDecimal("4"));
+        unitType.setWidthM(new BigDecimal("4"));
+        unitType.setHeightM(new BigDecimal("4"));
+        unitType.setMaxLoadKg(new BigDecimal("500"));
+        unitType.setRackCount(4);
+        unitType.setRackLengthM(new BigDecimal("2"));
+        unitType.setRackWidthM(new BigDecimal("2"));
+        unitType.setRackHeightM(new BigDecimal("2"));
+        ReservationQuote quote = entityWithId(com.storagehub.testing.LegacyReservationQuoteFixture.create());
+        quote.setUnitTypeSnapshotJson("{\"lengthM\":4,\"widthM\":4,\"heightM\":4,\"maxLoadKg\":500,\"rackCount\":4,\"rackLengthM\":2,\"rackWidthM\":2,\"rackHeightM\":2}");
 
         reservation = entityWithId(new Reservation());
         ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
@@ -114,6 +130,67 @@ class CustomerReservationServiceTests {
         snapshot.setRemainingRentalAmount(new BigDecimal("9603000.00"));
         snapshot.setDueAtCheckIn(new BigDecimal("15103000.00"));
         snapshot.setTotalInitialObligation(new BigDecimal("21505000.00"));
+    }
+
+    @Test
+    void amendsSetupGoodsOnceInPlaceAndKeepsStableIdentity() {
+        Rental rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.setup);
+        rental.setSetupStartedAt(Instant.now().minusSeconds(60));
+        rental.setSetupEndsAt(Instant.now().plusSeconds(3600));
+        ReservationGoodsItem stored = entityWithId(new ReservationGoodsItem());
+        stored.setReservation(reservation);
+        stored.setGoodsCode("GDS-STABLE01");
+        stored.setCategory(GoodsCategory.FURNITURE);
+        stored.setCategoryCode("FURNITURE");
+        stored.setCategoryName("Đồ gia dụng");
+        stored.setMaterialName("Gỗ");
+        stored.setDescription("Khai báo ban đầu");
+        stored.setQuantity(1);
+        stored.setLengthCm(new BigDecimal("50"));
+        stored.setWidthCm(new BigDecimal("40"));
+        stored.setHeightCm(new BigDecimal("30"));
+        stored.setWeightKg(new BigDecimal("10"));
+        GoodsItemRequest changed = new GoodsItemRequest(
+            GoodsCategory.FURNITURE, null, "Gỗ", null, "Thông tin sau khi sửa", null,
+            2, new BigDecimal("60"), new BigDecimal("40"), new BigDecimal("30"),
+            new BigDecimal("12"), false
+        );
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of(stored));
+        when(snapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
+        when(reservationRepository.saveAndFlush(reservation)).thenReturn(reservation);
+
+        var response = service.updateSetupGoods(actor, reservation.getId(),
+            new UpdateSetupGoodsRequest(List.of(changed), "Đã đóng gói"));
+
+        assertThat(stored.getGoodsCode()).isEqualTo("GDS-STABLE01");
+        assertThat(stored.getCategoryCode()).isEqualTo("FURNITURE");
+        assertThat(stored.getDescription()).isEqualTo("Thông tin sau khi sửa");
+        assertThat(stored.getQuantity()).isEqualTo(2);
+        assertThat(reservation.getSetupGoodsRevisionUsedAt()).isNotNull();
+        assertThat(response.getGoodsItems()).hasSize(1);
+        verify(goodsItemRepository, org.mockito.Mockito.never()).deleteAll(any());
+    }
+
+    @Test
+    void blocksSetupGoodsAfterInventoryWasVerified() {
+        Rental rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.setup);
+        rental.setSetupStartedAt(Instant.now().minusSeconds(60));
+        rental.setSetupEndsAt(Instant.now().plusSeconds(3600));
+        rental.setInventoryVerifiedAt(Instant.now());
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+
+        assertThatThrownBy(() -> service.updateSetupGoods(actor, reservation.getId(),
+            new UpdateSetupGoodsRequest(List.of(new GoodsItemRequest()), null)))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("locked");
     }
 
     @Test
@@ -180,8 +257,11 @@ class CustomerReservationServiceTests {
             storageUnitRepository, snapshotRepository, goodsItemRepository, auditLogService,
             notificationService
         );
-        Instant previousAppointment = Instant.now().plusSeconds(3_600);
-        Instant newAppointment = previousAppointment.plusSeconds(7_200);
+        Instant registeredAt = Instant.parse("2026-10-19T01:00:00Z");
+        ReflectionTestUtils.setField(reservation, "createdAt", registeredAt);
+        reservation.setGoodsReviewStatus(com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED);
+        Instant previousAppointment = ReservationCheckInPolicy.plannedWindow(registeredAt, false).availableAt();
+        Instant newAppointment = previousAppointment.plusSeconds(1_800);
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setAppointmentAt(previousAppointment);
         CheckIn checkIn = new CheckIn();
@@ -215,7 +295,7 @@ class CustomerReservationServiceTests {
         assertThatThrownBy(() -> service.setCheckInAppointment(
             actor, reservation.getId(), new CheckInAppointmentRequest(invalidAppointment)
         )).isInstanceOf(ApiException.class)
-            .hasMessageContaining("rental start date");
+            .hasMessageContaining("permitted seven-day window");
     }
 
     @Test

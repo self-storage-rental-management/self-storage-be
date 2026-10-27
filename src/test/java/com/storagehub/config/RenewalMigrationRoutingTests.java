@@ -35,6 +35,27 @@ class RenewalMigrationRoutingTests {
         var versions=Arrays.stream(flyway.info().all()).filter(i->i.getVersion()!=null).map(i->i.getVersion().toString()).toList();
         assertThat(versions).doesNotHaveDuplicates().contains("2026101301","2026101302","2026101401","2026101402","2026101403","2026101404","2026101405","2026101406","2026101410","2026101411","2026101412","2026101413","2026101414","2026101415","2026101416");
     }
+    @Test void localGoodsSnapshotHistoryCoexistsWithDevelopSupportWithoutRepair() throws Exception {
+        var config = configure(null, null, null, Map.of(
+            "2026102401", new AppliedHistory("V2026102401__snapshot_goods_catalog_identity.sql", "SQL"),
+            "2026102402", new AppliedHistory("V2026102402__support_catalog_material_names.sql", "SQL")));
+        uniqueVersions(config);
+        assertThat(Arrays.stream(config.getLocations()).map(Object::toString).toList())
+            .contains("classpath:db/migration-history/legacy-goods-2401", "classpath:db/migration-history/legacy-goods-2402")
+            .doesNotContain("classpath:db/migration-history/develop-support-2401", "classpath:db/migration-history/develop-support-2402");
+        assertThat(config.isOutOfOrder()).isTrue();
+    }
+
+    @Test void developSupportHistoryKeepsItsOriginalScriptsWhenGoodsAreAdded() throws Exception {
+        var config = configure(null, null, null, Map.of(
+            "2026102401", new AppliedHistory("V2026102401__support_handoff_retention.sql", "SQL"),
+            "2026102402", new AppliedHistory("V2026102402__customer_chat_sessions.sql", "SQL")));
+        uniqueVersions(config);
+        assertThat(Arrays.stream(config.getLocations()).map(Object::toString).toList())
+            .contains("classpath:db/migration-history/develop-support-2401", "classpath:db/migration-history/develop-support-2402")
+            .doesNotContain("classpath:db/migration-history/legacy-goods-2401", "classpath:db/migration-history/legacy-goods-2402");
+        assertThat(config.isOutOfOrder()).isTrue();
+    }
     @Test void freshDatabaseResolvesDevelopAndNewFeatureVersionsWithoutCollision() throws Exception {
         var config=configure(null,null,null);uniqueVersions(config);
         assertThat(config.isOutOfOrder()).isFalse();
@@ -45,6 +66,14 @@ class RenewalMigrationRoutingTests {
     }
     @Test void appliedDevelopVersionsRemainImmutable() throws Exception {
         uniqueVersions(configure("V2026101301__deactivate_duplicate_effective_rental_packages.sql","V2026101302__add_facility_operating_details.sql","SQL"));
+    }
+    @Test void legacyReservationSequenceAt1901UsesAUniqueRenewalBridge() throws Exception {
+        var history=Map.of("2026101901",new AppliedHistory("V2026101901__add_reservation_code_sequence.sql","SQL"));
+        var config=configure(null,null,null,history);
+        uniqueVersions(config);
+        assertThat(Arrays.stream(config.getLocations()).map(Object::toString).toList())
+            .contains("classpath:db/migration-history/legacy-sequence-1901", "classpath:db/migration-history/bridge-renewal-1901")
+            .doesNotContain("classpath:db/migration-history/develop-renewal-1901");
     }
     @Test void legacyCalendarAndGatewayRetainOriginalVersionsAndAllowPendingDevelopMigrations() throws Exception {
         var config=configure("V2026101301__create_staff_renewal_signing_calendar.sql","db.sandboxpaymentmigration.V2026101302__ensure_gateway_ledger_evidence","JDBC");

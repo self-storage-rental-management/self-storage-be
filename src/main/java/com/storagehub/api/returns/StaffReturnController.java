@@ -68,4 +68,15 @@ public class StaffReturnController {
             CorrelationIdContext.current()
         );
     }
+    @PostMapping("/{returnId}/settlement-receipts")
+    public ApiResponse<ReturnCaseResponse> recordSettlement(@PathVariable UUID returnId,
+        @Valid @RequestBody StaffReturnSettlementRequest request) {
+        return new ApiResponse<>(returnSettlementService.recordSettlement(actorContext.required(),returnId,request),CorrelationIdContext.current());
+    }
+
+    @PostMapping("/scan-auto-settlement")
+    public ApiResponse<java.util.Map<String, Object>> scanAutoSettlement() {
+        int processed = returnSettlementService.autoSettleExpiredReturns();
+        return new ApiResponse<>(java.util.Map.of("processed", processed, "timestamp", java.time.Instant.now()), CorrelationIdContext.current());
+    }
 }

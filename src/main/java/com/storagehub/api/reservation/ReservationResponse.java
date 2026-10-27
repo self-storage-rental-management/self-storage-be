@@ -10,11 +10,25 @@ import java.util.UUID;
 
 public class ReservationResponse {
 
+    private String setupEarlyExitPolicyVersion;
+    private BigDecimal setupEarlyExitFee;
+    private UUID setupReturnRentalId;
+    private UUID setupReturnCaseId;
+    public String getSetupEarlyExitPolicyVersion() { return setupEarlyExitPolicyVersion; }
+    public void setSetupEarlyExitPolicyVersion(String value) { setupEarlyExitPolicyVersion = value; }
+    public BigDecimal getSetupEarlyExitFee() { return setupEarlyExitFee; }
+    public void setSetupEarlyExitFee(BigDecimal value) { setupEarlyExitFee = value; }
+    public UUID getSetupReturnRentalId() { return setupReturnRentalId; }
+    public void setSetupReturnRentalId(UUID value) { setupReturnRentalId = value; }
+    public UUID getSetupReturnCaseId() { return setupReturnCaseId; }
+    public void setSetupReturnCaseId(UUID value) { setupReturnCaseId = value; }
+
     private UUID id;
     private String reservationCode;
     private UUID quoteId;
     private UUID facilityId;
     private UUID unitTypeId;
+    private String unitTypeName;
     private ReservationStatus status;
     private GoodsReviewStatus goodsReviewStatus;
     private CompatibilityResult compatibilityResult;
@@ -30,6 +44,7 @@ public class ReservationResponse {
     private BigDecimal totalGoodsWeightKg;
     private Instant holdExpiresAt;
     private Instant appointmentAt;
+    public void setAppointmentAt(Instant value){appointmentAt=value;}
     private Instant createdAt;
     private UUID assignedUnitId;
     private String assignedUnitCode;
@@ -43,10 +58,37 @@ public class ReservationResponse {
     // Snapshot discount fields (bảo toàn lịch sử mã giảm giá trên hóa đơn / đơn đặt)
     private String pricingPackageCode;
     private int rentalMonths;
+    private Integer freeSetupDays;
+    private String pricingPolicyVersion;
+    private String pricingSnapshotStatus;
+    private Instant pricingQuotedAt;
+    private Instant pricingExpiresAt;
+    public Instant getPricingQuotedAt(){return pricingQuotedAt;}
+    public void setPricingQuotedAt(Instant value){pricingQuotedAt=value;}
+    public Instant getPricingExpiresAt(){return pricingExpiresAt;}
+    public void setPricingExpiresAt(Instant value){pricingExpiresAt=value;}
+    private java.util.List<String> snapshotWarnings = java.util.List.of();
+    private UnitTypeSnapshot unitTypeSnapshot;
+    public record UnitTypeSnapshot(String name,BigDecimal lengthM,BigDecimal widthM,BigDecimal heightM,
+        BigDecimal areaM2,BigDecimal volumeM3,BigDecimal maxLoadKg,int rackCount,BigDecimal rackLengthM,BigDecimal rackWidthM,BigDecimal rackHeightM) {}
+    public String getPricingPolicyVersion(){return pricingPolicyVersion;}
+    public void setPricingPolicyVersion(String value){pricingPolicyVersion=value;}
+    public String getPricingSnapshotStatus(){return pricingSnapshotStatus;}
+    public void setPricingSnapshotStatus(String value){pricingSnapshotStatus=value;}
+    public java.util.List<String> getSnapshotWarnings(){return snapshotWarnings;}
+    public void setSnapshotWarnings(java.util.List<String> value){snapshotWarnings=value;}
+    public UnitTypeSnapshot getUnitTypeSnapshot(){return unitTypeSnapshot;}
+    public void setUnitTypeSnapshot(UnitTypeSnapshot value){unitTypeSnapshot=value;}
+    private boolean setupExitReviewRequired;
+    private java.time.Instant setupGoodsRevisionUsedAt;
     private BigDecimal monthlyPrice;
     private BigDecimal grossRentalAmount;
     private BigDecimal discountRate;
     private BigDecimal discountAmount;
+    private int earlyTerminationFeeCapMonths = 1;
+    private BigDecimal earlyTerminationFeeCoefficient = BigDecimal.ONE;
+    private int earlyTerminationNoticeDays = 14;
+    private BigDecimal earlyTerminationFee = BigDecimal.ZERO;
     private String voucherCode;
     private BigDecimal voucherDiscountAmount;
 
@@ -131,6 +173,8 @@ public class ReservationResponse {
     public UUID getQuoteId() { return quoteId; }
     public UUID getFacilityId() { return facilityId; }
     public UUID getUnitTypeId() { return unitTypeId; }
+    public String getUnitTypeName() { return unitTypeName; }
+    public void setUnitTypeName(String unitTypeName) { this.unitTypeName = unitTypeName; }
     public ReservationStatus getStatus() { return status; }
     public GoodsReviewStatus getGoodsReviewStatus() { return goodsReviewStatus; }
     public CompatibilityResult getCompatibilityResult() { return compatibilityResult; }
@@ -166,6 +210,12 @@ public class ReservationResponse {
 
     public String getPricingPackageCode() { return pricingPackageCode; }
     public int getRentalMonths() { return rentalMonths; }
+    public Integer getFreeSetupDays() { return freeSetupDays; }
+    public void setFreeSetupDays(Integer freeSetupDays) { this.freeSetupDays = freeSetupDays; }
+    public boolean isSetupExitReviewRequired() { return setupExitReviewRequired; }
+    public void setSetupExitReviewRequired(boolean setupExitReviewRequired) { this.setupExitReviewRequired = setupExitReviewRequired; }
+    public java.time.Instant getSetupGoodsRevisionUsedAt() { return setupGoodsRevisionUsedAt; }
+    public void setSetupGoodsRevisionUsedAt(java.time.Instant value) { this.setupGoodsRevisionUsedAt = value; }
     public BigDecimal getMonthlyPrice() { return monthlyPrice; }
     public void setMonthlyPrice(BigDecimal monthlyPrice) { this.monthlyPrice = monthlyPrice; }
     public BigDecimal getGrossRentalAmount() { return grossRentalAmount; }
@@ -175,4 +225,12 @@ public class ReservationResponse {
     public void setVoucherCode(String voucherCode) { this.voucherCode = voucherCode; }
     public BigDecimal getVoucherDiscountAmount() { return voucherDiscountAmount; }
     public void setVoucherDiscountAmount(BigDecimal voucherDiscountAmount) { this.voucherDiscountAmount = voucherDiscountAmount; }
+    public int getEarlyTerminationFeeCapMonths() { return earlyTerminationFeeCapMonths; }
+    public void setEarlyTerminationFeeCapMonths(int value) { this.earlyTerminationFeeCapMonths = value; }
+    public BigDecimal getEarlyTerminationFeeCoefficient() { return earlyTerminationFeeCoefficient; }
+    public void setEarlyTerminationFeeCoefficient(BigDecimal value) { this.earlyTerminationFeeCoefficient = value; }
+    public int getEarlyTerminationNoticeDays() { return earlyTerminationNoticeDays; }
+    public void setEarlyTerminationNoticeDays(int value) { this.earlyTerminationNoticeDays = value; }
+    public BigDecimal getEarlyTerminationFee() { return earlyTerminationFee; }
+    public void setEarlyTerminationFee(BigDecimal value) { this.earlyTerminationFee = value; }
 }

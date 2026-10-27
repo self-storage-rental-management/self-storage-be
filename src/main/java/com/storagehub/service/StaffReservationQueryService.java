@@ -29,7 +29,8 @@ public class StaffReservationQueryService {
         ReservationStatus.CONFIRMED,
         ReservationStatus.UNIT_RESERVED,
         ReservationStatus.READY_FOR_CHECKIN,
-        ReservationStatus.AWAITING_CUSTOMER_RECEIPT
+        ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+        ReservationStatus.COMPLETED
     );
 
     private final ReservationRepository reservationRepository;
@@ -78,7 +79,7 @@ public class StaffReservationQueryService {
             reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
             reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), reservation.getUnitType().getId(),
-            reservation.getUnitType().getName(), unit == null ? null : unit.getId(),
+            ReservationSnapshotView.unitTypeName(reservation), unit == null ? null : unit.getId(),
             unit == null ? null : unit.getCode(), reservation.getStatus(),
             reservation.getGoodsReviewStatus(), reservation.getStartDate(), reservation.getEndDate(),
             reservation.getAppointmentAt(), reservation.getHoldExpiresAt(),

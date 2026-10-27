@@ -1,6 +1,8 @@
 package com.storagehub.api.unitassignment;
 
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.StorageUnitStatus;
+import com.storagehub.domain.model.UnitAssignmentStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -20,7 +22,12 @@ public record UnitAssignmentCandidateResponse(
     LocalDate startDate,
     LocalDate endDate,
     Instant confirmedAt,
+    Instant assignmentDueAt,
     BigDecimal totalGoodsVolumeM3,
-    BigDecimal totalGoodsWeightKg
+    BigDecimal totalGoodsWeightKg,
+    UUID assignedStorageUnitId,
+    String assignedStorageUnitCode,
+    StorageUnitStatus assignedStorageUnitStatus,
+    UnitAssignmentStatus assignmentStatus
 ) {
 }

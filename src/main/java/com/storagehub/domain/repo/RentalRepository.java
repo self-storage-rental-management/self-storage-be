@@ -27,6 +27,9 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
     java.util.Optional<Rental> findByIdAndCustomer_Id(UUID id, UUID customerId);
 
     Optional<Rental> findByReservation_Id(UUID reservationId);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from Rental r where r.reservation.id = :reservationId")
+    Optional<Rental> findByReservationIdForUpdate(@Param("reservationId") UUID reservationId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from Rental r where r.id = :id")
@@ -50,6 +53,10 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
     long countByFacility_IdAndStatus(UUID facilityId, RentalStatus status);
 
     java.util.List<Rental> findByStatus(RentalStatus status);
+
+    java.util.List<Rental> findByStatusAndSetupEndsAtIsNotNull(RentalStatus status);
+
+    java.util.List<Rental> findByStatusAndInventoryPendingTrue(RentalStatus status);
 
     long countByStatus(RentalStatus status);
 }

@@ -62,7 +62,9 @@ public class TransactionalRenewalExtensionHoldSource implements RenewalSources.E
     }
     private Instant verify(Rental r,LocalDate start,LocalDate end,Instant at) {
         guard.requireNoKnownConflict(r);
-        if(start==null||end==null||!end.isAfter(start)||!periods.require(r).endExclusive().equals(start))
+        var previous=periods.require(r);
+        if(start==null||end==null||!end.isAfter(start)||start.isBefore(previous.endExclusive())
+            ||start.isAfter(com.storagehub.service.rental.period.RenewalEffectivePeriod.start(previous,at)))
             throw ApiExceptions.conflict("Extension hold interval changed");
         var cutoff=protocol().lockAndCheck(r,start,end,at);
         if(cutoff==null)throw ApiExceptions.conflict("DEFERRED_SOURCE: Hold Recovery cutoff missing");
@@ -124,6 +126,20 @@ public class TransactionalRenewalExtensionHoldSource implements RenewalSources.E
         if(!h.state().equals("ACTIVE"))throw ApiExceptions.conflict("Consumed extension hold cannot be released");
         // Caller reconciles payment first. Do not mutate physical unit status or Recovery.
         transition(ref,"RELEASED",now());
+    }
+    @Override public void consumePeriod(Renewal renewal,Terms terms,UUID ref,LocalDate start,LocalDate end,Instant at) {
+        var r=lock(renewal.getRental());var h=load(ref);bind(h,renewal);active(h,at);
+        if(terms==null||!h.start().equals(terms.extensionStartDate())||!h.end().equals(terms.extensionEndExclusive()))
+            throw ApiExceptions.conflict("Accepted terms do not match extension hold");
+        var interval=com.storagehub.service.rental.period.RenewalEffectivePeriod.at(periods.require(r),terms,at);
+        if(!interval.startDate().equals(start)||!interval.endExclusive().equals(end))
+            throw ApiExceptions.conflict("Effective signing period changed");
+        verify(r,start,end,at);
+        var overlaps=jdbc.query("select id from renewal_extension_holds where unit_id=? and id<>? and state='ACTIVE' and start_date<? and end_exclusive>? order by id for update",
+            (rs,i)->uuid(rs.getBytes("id")),bytes(h.unit()),bytes(ref),java.sql.Date.valueOf(end),java.sql.Date.valueOf(start));
+        if(!overlaps.isEmpty())throw ApiExceptions.conflict("Another extension hold prevents effective signing period");
+        jdbc.update("update renewal_extension_holds set start_date=?,end_exclusive=?,state='CONSUMED',version=version+1,updated_at=? where id=?",
+            java.sql.Date.valueOf(start),java.sql.Date.valueOf(end),Timestamp.from(at),bytes(ref));
     }
     @Override public boolean restoreSigningWindow(Renewal renewal,Terms terms,UUID ref,Instant deadline) {
         var r=lock(renewal.getRental());var h=load(ref);bind(h,renewal);var at=now();

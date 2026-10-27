@@ -63,6 +63,7 @@ public class BusinessPolicyService {
         String bannerNotice = getStringSetting("bannerNotice", "");
         int autoInvoiceDays = getIntSetting("autoInvoiceDays", 7);
         boolean autoProrate = getBooleanSetting("autoProrate", true);
+        BigDecimal managerRefundApprovalLimit = getBigDecimalSetting("managerRefundApprovalLimit", new BigDecimal("5000000"));
 
         return new BusinessConfigResponse(
             gracePeriodDays,
@@ -73,7 +74,8 @@ public class BusinessPolicyService {
             maintenanceMode,
             bannerNotice,
             autoInvoiceDays,
-            autoProrate
+            autoProrate,
+            managerRefundApprovalLimit
         );
     }
 
@@ -109,6 +111,9 @@ public class BusinessPolicyService {
         }
         if (request.autoProrate() != null) {
             saveSetting("autoProrate", String.valueOf(request.autoProrate()));
+        }
+        if (request.managerRefundApprovalLimit() != null) {
+            saveSetting("managerRefundApprovalLimit", request.managerRefundApprovalLimit().toPlainString());
         }
 
         BusinessConfigResponse after = getBusinessConfig(actor);
@@ -183,9 +188,18 @@ public class BusinessPolicyService {
         policy.setCode(request.code().trim());
         policy.setName(request.name().trim());
         policy.setRentalMonths(months);
+        policy.setFreeSetupDays(request.freeSetupDays() != null
+            ? request.freeSetupDays() : ReservationQuoteService.defaultFreeSetupDays(months));
         policy.setRentalYears(years);
         policy.setDescription(request.description());
         policy.setDiscountRate(request.discountRate());
+        policy.setDepositRate(request.depositRate() != null ? request.depositRate() : new BigDecimal("0.2000"));
+        policy.setEarlyTerminationFeeCapMonths(request.earlyTerminationFeeCapMonths() != null
+            ? request.earlyTerminationFeeCapMonths() : EarlyTerminationPolicy.DEFAULT_FEE_CAP_MONTHS);
+        policy.setEarlyTerminationFeeCoefficient(request.earlyTerminationFeeCoefficient() != null
+            ? request.earlyTerminationFeeCoefficient() : EarlyTerminationPolicy.DEFAULT_FEE_COEFFICIENT);
+        policy.setEarlyTerminationNoticeDays(request.earlyTerminationNoticeDays() != null
+            ? request.earlyTerminationNoticeDays() : EarlyTerminationPolicy.DEFAULT_NOTICE_DAYS);
         policy.setPolicyVersion(request.policyVersion().trim());
         policy.setPublicationStatus(pubStatus);
 
@@ -240,9 +254,23 @@ public class BusinessPolicyService {
 
         policy.setName(request.name().trim());
         policy.setRentalMonths(months);
+        policy.setFreeSetupDays(request.freeSetupDays() != null
+            ? request.freeSetupDays() : ReservationQuoteService.defaultFreeSetupDays(months));
         policy.setRentalYears(years);
         policy.setDescription(request.description());
         policy.setDiscountRate(request.discountRate());
+        if (request.depositRate() != null) {
+            policy.setDepositRate(request.depositRate());
+        }
+        if (request.earlyTerminationFeeCapMonths() != null) {
+            policy.setEarlyTerminationFeeCapMonths(request.earlyTerminationFeeCapMonths());
+        }
+        if (request.earlyTerminationFeeCoefficient() != null) {
+            policy.setEarlyTerminationFeeCoefficient(request.earlyTerminationFeeCoefficient());
+        }
+        if (request.earlyTerminationNoticeDays() != null) {
+            policy.setEarlyTerminationNoticeDays(request.earlyTerminationNoticeDays());
+        }
         policy.setPolicyVersion(request.policyVersion().trim());
         if (request.publicationStatus() != null && request.publicationStatus() != PublicationStatus.PUBLISHED) {
             policy.setPublicationStatus(request.publicationStatus());
@@ -283,13 +311,18 @@ public class BusinessPolicyService {
             policy.getName(),
             policy.getRentalMonths(),
             policy.getRentalYears(),
+            policy.getFreeSetupDays(),
             policy.getDescription(),
             policy.getDiscountRate(),
+            policy.getDepositRate(),
             policy.getPolicyVersion(),
             PublicationStatus.PUBLISHED,
             true,
             policy.getEffectiveFrom(),
-            policy.getEffectiveTo()
+            policy.getEffectiveTo(),
+            policy.getEarlyTerminationFeeCapMonths(),
+            policy.getEarlyTerminationFeeCoefficient(),
+            policy.getEarlyTerminationNoticeDays()
         );
         validatePackagePeriod(validateReq, policy.getFacility().getId(), policy.getId());
 
@@ -506,8 +539,10 @@ public class BusinessPolicyService {
             p.getName(),
             p.getRentalMonths(),
             p.getRentalYears(),
+            p.getFreeSetupDays(),
             p.getDescription(),
             p.getDiscountRate(),
+            p.getDepositRate(),
             p.getPolicyVersion(),
             pub,
             runtimeStatus,
@@ -515,7 +550,10 @@ public class BusinessPolicyService {
             p.getEffectiveFrom(),
             p.getEffectiveTo(),
             p.getCreatedAt(),
-            p.getUpdatedAt()
+            p.getUpdatedAt(),
+            p.getEarlyTerminationFeeCapMonths(),
+            p.getEarlyTerminationFeeCoefficient(),
+            p.getEarlyTerminationNoticeDays()
         );
     }
 }

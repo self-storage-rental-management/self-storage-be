@@ -30,9 +30,11 @@ import org.springframework.test.context.ActiveProfiles;
 /** All records here exist ONLY in the rollback-isolated H2 test database. */
 @DataJpaTest
 @ActiveProfiles("test")
-@Import({SharedCatalogRenewalPricingSource.class, RenewalWorkflowService.class, RenewalReadService.class,
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,SharedCatalogRenewalPricingSource.class, RenewalWorkflowService.class, RenewalReadService.class,
     RenewalPersistence.class, AuditLogService.class, SharedCatalogRenewalPricingJpaTests.TestBeans.class})
 class SharedCatalogRenewalPricingJpaTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.NotificationService workflowNotifications;
     private static final LocalDate START = LocalDate.of(2026, 11, 1);
     @TestConfiguration
     static class TestBeans {
@@ -88,7 +90,7 @@ class SharedCatalogRenewalPricingJpaTests {
         assertThat(rental.getMonthlyPrice()).isEqualByComparingTo("100.00");
     }
 
-    @Test void catalogIsFacilityScopedAndEvaluatesFutureExtensionDate() {
+    @Test void catalogIsFacilityScopedAndIgnoresPackageDatesForActivePackages() {
         var rental = fixture();
         var own = persistPackage(rental.getFacility(), "BASE", 1, BigDecimal.ZERO);
         own.setEffectiveFrom(START); own.setEffectiveTo(START);
@@ -100,7 +102,7 @@ class SharedCatalogRenewalPricingJpaTests {
         inactive.setActive(false);
         em.flush(); em.clear();
         var prices = source.read(em.find(Rental.class, rental.getId()), START).orElseThrow();
-        assertThat(prices).extracting(p -> p.packageCode()).containsExactly("BASE");
+        assertThat(prices).extracting(p -> p.packageCode()).containsExactly("BASE", "EXPIRED");
     }
 
     @Test void emptyDatabaseCatalogDoesNotCreateDefaults() {
@@ -145,7 +147,7 @@ class SharedCatalogRenewalPricingJpaTests {
         t.setMonthlyPrice(new BigDecimal("5500000.00")); t.setMaxLoadKg(BigDecimal.ONE);
         t.setRackLengthM(BigDecimal.ONE); t.setRackWidthM(BigDecimal.ONE); t.setRackHeightM(BigDecimal.ONE); em.persist(t);
         var unit = new StorageUnit(); unit.setFacility(f); unit.setUnitType(t); unit.setCode("H2-TEST-1"); em.persist(unit);
-        var q = new ReservationQuote(); q.setCustomer(u); q.setFacility(f); q.setUnitType(t);
+        var q = com.storagehub.testing.LegacyReservationQuoteFixture.create(); q.setCustomer(u); q.setFacility(f); q.setUnitType(t);
         q.setPricingPackageCode("TEST"); q.setPolicyVersion("test-only"); q.setStartDate(START.minusMonths(1));
         q.setEndDate(START); q.setRentalMonths(1); q.setMonthlyPrice(new BigDecimal("100.00"));
         q.setSubtotal(new BigDecimal("100.00")); q.setDiscountRate(BigDecimal.ZERO); q.setDiscountAmount(BigDecimal.ZERO);

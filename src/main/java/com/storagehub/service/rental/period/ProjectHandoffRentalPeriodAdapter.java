@@ -8,25 +8,57 @@ import com.storagehub.domain.model.*;
 import com.storagehub.service.RentalReadSources;
 import com.storagehub.service.renewal.operations.*;
 import com.storagehub.service.renewal.persistence.RenewalWorkflow;
+import com.storagehub.service.renewal.persistence.RenewalIdempotency;
 import jakarta.persistence.EntityManager;
 import java.time.*;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Scoped, read-only proof adapter. Legacy, reused and ambiguous records remain UNKNOWN. */
+/** Uses the current Rental dates; historical documents are not prerequisites for reading a period. */
 @Component @RequiredArgsConstructor @Transactional(readOnly = true)
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
     name = "storagehub.integration.rental-period.enabled", havingValue = "true", matchIfMissing = false)
 public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.DateSource {
     private final EntityManager em;
     private final ObjectMapper mapper;
+    private final ObjectProvider<ConfirmedRentalPeriods> confirmedPeriods;
     /** Current project rule, explicitly enabled locally; historical evidence is not rewritten. */
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.rental-period.inclusive-end:false}")
     private boolean inclusiveEnd;
 
     public Optional<RentalReadSources.Dates> read(Rental r) {
+        if(r==null)return Optional.empty();
+        var confirmed = confirmedPeriods.getIfAvailable();
+        if (confirmed != null && r.getId() != null && confirmed.contains(r)) {
+            // A confirmed period carries its own date convention. Applying the
+            // facility's legacy inclusive setting to a new exclusive period
+            // would grant an extra paid day and shift the next renewal.
+            return confirmed.read(r).map(p -> new RentalReadSources.Dates(
+                p.rentalId(), p.startDate(), p.lastPermittedDate(), p.reference(),
+                p.storedEndDate(), p.convention()));
+        }
+        if (r.getTermsEffectiveAt() != null) {
+            // The new handover flow creates an exclusive period at setup start.
+            // Before customer receipt it is provisional; after receipt a missing
+            // confirmed row is an incomplete source, not a legacy inclusive one.
+            if (r.getReservation() == null || r.getSetupStartedAt() == null
+                || !r.getTermsEffectiveAt().equals(r.getSetupStartedAt())
+                || r.getReservation().getStatus() == ReservationStatus.COMPLETED) return Optional.empty();
+            return RentalPeriod.verified(r.getId(), r.getStartDate(), r.getContractEndDate(),
+                RentalPeriod.Convention.EXCLUSIVE, "provisional-handover:"+r.getId())
+                .map(p -> new RentalReadSources.Dates(p.rentalId(), p.startDate(),
+                    p.lastPermittedDate(), p.reference(), p.storedEndDate(), p.convention()));
+        }
+        return RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),
+            inclusiveEnd?RentalPeriod.Convention.INCLUSIVE:RentalPeriod.Convention.EXCLUSIVE,
+            "rental-record:"+r.getId())
+            .map(p->new RentalReadSources.Dates(p.rentalId(),p.startDate(),p.lastPermittedDate(),p.reference(),p.storedEndDate(),p.convention()));
+    }
+
+    public Optional<RentalReadSources.Dates> readHistorical(Rental r) {
         if (!linked(r)) return Optional.empty();
         var handovers = em.createQuery("select c from CheckIn c where c.reservation.id=:id", CheckIn.class)
             .setParameter("id", r.getReservation().getId()).setMaxResults(2).getResultList();
@@ -62,6 +94,23 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
             || !same(r.getFacility().getId(), log.getFacility())) return Optional.empty();
         var root = json(log.getAfterStateJson());
         var d = root.path("rentalPeriodEvidence");
+        if("CUSTOMER_HANDOVER_PERIOD_V2".equals(d.path("schema").asText())) {
+            var handovers=em.createQuery("select c from CheckIn c where c.reservation.id=:id",CheckIn.class)
+                .setParameter("id",r.getReservation().getId()).setMaxResults(2).getResultList();
+            if(handovers.size()!=1)return Optional.empty();
+            var handover=handovers.getFirst();
+            if(!"COMPLETED".equals(root.path("status").asText())||!id(root,"rentalId",r.getId())
+                ||d.path("rentalCreated").asBoolean(true)||!"EXCLUSIVE".equals(d.path("convention").asText())
+                ||!id(d,"checkInId",handover.getId())||handover.getStatus()!=CheckInStatus.completed||!same(r.getId(),handover.getRental())
+                ||r.getSetupStartedAt()==null||r.getSetupEndsAt()==null||r.getTermsEffectiveAt()==null||r.getInventoryVerifiedAt()==null
+                ||!r.getSetupStartedAt().equals(handover.getSetupStartedAt())||!r.getSetupEndsAt().equals(handover.getSetupDueAt())
+                ||!r.getInventoryVerifiedAt().equals(handover.getInventoryVerifiedAt())
+                ||!r.getSetupStartedAt().toString().equals(d.path("handoverAt").asText())
+                ||!r.getSetupEndsAt().toString().equals(d.path("setupEndsAt").asText())
+                ||!r.getTermsEffectiveAt().toString().equals(d.path("termsEffectiveAt").asText())
+                ||!r.getInventoryVerifiedAt().toString().equals(d.path("inventoryVerifiedAt").asText()))return Optional.empty();
+            return evidence(r,d,"handover-receipt:"+log.getId());
+        }
         // Approved current convention may apply to a legacy confirmed handover without versioned metadata.
         // It establishes today's rule, not a fabricated historical audit or a backfilled DB date.
         if (inclusiveEnd && d.isMissingNode() && "COMPLETED".equals(root.path("status").asText())
@@ -85,30 +134,36 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
         var wf = em.find(RenewalWorkflow.class, n.getId());
         if (event.getId() == null || n.getStatus() != RenewalStatus.completed || !same(r.getId(), n.getRental())
             || state == null || state.getPhase() != RenewalOperationState.Phase.COMPLETED || wf == null
-            || !Objects.equals(state.getCompletedAt(), event.getOccurredAt())
+            || !completionTimeLinked(n, state, event)
             || !Objects.equals(state.getCompletedBy(), event.getActorId()) || !same(r.getCustomer().getId(), n.getRequestedBy())) return Optional.empty();
         var d = json(event.getPayloadJson()).path("rentalPeriodEvidence");
         var rev = wf.getAcceptedRevision();
         if (rev == null || rev.getQuote() == null || !same(n.getId(), rev.getRenewal()) || !same(r.getId(), rev.getQuote().getRental())
             || !same(r.getCustomer().getId(), rev.getQuote().getCustomer())
-            || !"RENEWAL_COMPLETION_PERIOD_V1".equals(d.path("schema").asText())
+            || !java.util.Set.of("RENEWAL_COMPLETION_PERIOD_V1","RENEWAL_COMPLETION_PERIOD_V2").contains(d.path("schema").asText())
             || d.path("previousProof").asText().isBlank() || !id(d, "acceptedQuoteId", rev.getQuote().getId())) return Optional.empty();
         try {
             var t = mapper.readValue(rev.getQuote().getTermsJson(), RenewalQuoteResponse.Terms.class);
             if (t == null) return Optional.empty();
             var p = evidence(r, d, "completion:" + event.getId());
-            if (p.isEmpty() || !Objects.equals(n.getNewEndDate(), p.get().lastPermittedDate())
-                || !Objects.equals(t.newEndDate(), p.get().lastPermittedDate())
+            boolean effective="RENEWAL_COMPLETION_PERIOD_V2".equals(d.path("schema").asText());
+            if (p.isEmpty() || !Objects.equals(n.getNewEndDate(), t.newEndDate())
+                || !effective && !Objects.equals(t.newEndDate(), p.get().lastPermittedDate())
                 || !Objects.equals(t.oldEndDate(), date(d, "oldStoredEndDate"))
-                || !Objects.equals(t.extensionEndExclusive(), p.get().endExclusive())
+                || !effective && !Objects.equals(t.extensionEndExclusive(), p.get().endExclusive())
                 || !Objects.equals(t.storageUnitId(), r.getStorageUnit().getId())
                 || !Objects.equals(t.facilityId(), r.getFacility().getId())) return Optional.empty();
             var previous = RentalPeriod.verified(r.getId(), r.getStartDate(), t.oldEndDate(),
                 p.get().convention(), d.path("previousProof").asText());
-            if (previous.isEmpty() || !Objects.equals(previous.get().endExclusive(), t.extensionStartDate())
-                || t.rentalMonths() < 1 || !previous.get().endExclusive().plusMonths(t.rentalMonths()).equals(p.get().endExclusive()))
-                return Optional.empty();
+            if (previous.isEmpty()) return Optional.empty();
             RenewalPeriodCompatibility.require(previous.get(), t);
+            if(effective) {
+                var interval=RenewalEffectivePeriod.at(previous.get(),t,event.getOccurredAt());
+                if(!interval.startDate().equals(date(d,"effectiveExtensionStartDate"))
+                    ||!interval.endExclusive().equals(date(d,"effectiveExtensionEndExclusive"))
+                    ||!interval.endExclusive().equals(p.get().endExclusive()))return Optional.empty();
+            } else if(!Objects.equals(previous.get().endExclusive(),t.extensionStartDate())
+                ||!t.extensionEndExclusive().equals(p.get().endExclusive()))return Optional.empty();
             return p;
         } catch (JsonProcessingException | DateTimeException | com.storagehub.common.api.ApiException e) { return Optional.empty(); }
     }
@@ -121,6 +176,36 @@ public class ProjectHandoffRentalPeriodAdapter implements RentalReadSources.Date
             return RentalPeriod.verified(r.getId(), date(d, "startDate"), date(d, "storedEndDate"),
                 RentalPeriod.Convention.valueOf(d.path("convention").asText()), ref).filter(p -> p.matches(r));
         } catch (IllegalArgumentException e) { return Optional.empty(); }
+    }
+
+    /** Older commands sampled the clock twice. Bind both timestamps through their saved command result. */
+    private boolean completionTimeLinked(Renewal renewal, RenewalOperationState state, RenewalOperationEvent event) {
+        if (state.getCompletedAt() == null || event.getOccurredAt() == null || state.getCompletedBy() == null) return false;
+        if (Objects.equals(state.getCompletedAt(), event.getOccurredAt())) return true;
+        if (event.getOccurredAt().isBefore(state.getCompletedAt())) return false;
+        var commands = em.createQuery("select i from RenewalIdempotency i where i.resourceId=:id and i.operation='d3_complete' and i.actor.id=:actor", RenewalIdempotency.class)
+            .setParameter("id", renewal.getId()).setParameter("actor", state.getCompletedBy()).getResultList();
+        int matches = 0;
+        for (var command : commands) {
+            if (command.getHttpStatus() != 200) continue;
+            var result = json(command.getResultJson());
+            var savedState = result.path("state");
+            var savedEvent = result.path("event");
+            if (id(savedState,"renewalId",renewal.getId()) && "COMPLETED".equals(savedState.path("phase").asText())
+                && id(savedState,"completedBy",state.getCompletedBy()) && id(savedState,"arrivalRef",state.getArrivalRef())
+                && id(savedEvent,"id",event.getId()) && "COMPLETION".equals(savedEvent.path("kind").asText())
+                && id(savedEvent,"actorId",event.getActorId())
+                && persistedInstant(savedState.path("completedAt")).filter(state.getCompletedAt()::equals).isPresent()
+                && persistedInstant(savedEvent.path("occurredAt")).filter(event.getOccurredAt()::equals).isPresent()) matches++;
+        }
+        return matches == 1;
+    }
+
+    private Optional<Instant> persistedInstant(JsonNode value) {
+        try {
+            // MySQL TIMESTAMP(6) rounds sub-microsecond values persisted by older Java commands.
+            return Optional.of(Instant.parse(value.asText()).plusNanos(500).truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        } catch (DateTimeException | ArithmeticException e) { return Optional.empty(); }
     }
     private boolean linked(Rental r) {
         if (r == null || r.getId() == null || r.getStartDate() == null || r.getContractEndDate() == null

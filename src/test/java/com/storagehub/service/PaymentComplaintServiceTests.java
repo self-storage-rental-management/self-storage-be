@@ -173,6 +173,8 @@ class PaymentComplaintServiceTests {
         when(snapshotRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
         when(complaintRepository.saveAndFlush(complaint)).thenReturn(complaint);
 
+        ReflectionTestUtils.setField(reservation, "createdAt", Instant.parse("2026-10-12T03:00:00Z"));
+        reservation.setGoodsReviewStatus(com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED);
         service.decide(managerActor, complaint.getId(),
             new PaymentComplaintDecisionRequest(PaymentComplaintDecisionRequest.Decision.APPROVE, null));
 
@@ -180,10 +182,9 @@ class PaymentComplaintServiceTests {
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
         assertThat(reservation.getStartDate()).isEqualTo(
-            payment.getPaidAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
-                .toLocalDate().plusDays(1)
+            LocalDate.of(2026, 10, 12)
         );
-        assertThat(reservation.getEndDate()).isEqualTo(reservation.getStartDate().plusMonths(2));
+        assertThat(reservation.getEndDate()).isEqualTo(LocalDate.of(2026, 12, 12));
     }
 
     @Test

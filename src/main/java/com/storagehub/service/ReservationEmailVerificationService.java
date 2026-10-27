@@ -50,7 +50,7 @@ public class ReservationEmailVerificationService {
         ActorPrincipal actor,
         UUID reservationId
     ) {
-        Reservation reservation = findOwnedReservation(actor, reservationId);
+        Reservation reservation = findOwnedReservationForUpdate(actor, reservationId);
         validateWaitingForEmail(reservation);
         Instant now = Instant.now();
         validateHold(reservation, now);
@@ -69,7 +69,9 @@ public class ReservationEmailVerificationService {
         String otp = String.format("%06d", secureRandom.nextInt(1_000_000));
         verification.setReservation(reservation);
         verification.setOtpHash(jwtService.hash(otp));
-        verification.setExpiresAt(now.plus(OTP_VALID_MINUTES, ChronoUnit.MINUTES));
+        verification.setExpiresAt(earlierOf(
+            now.plus(OTP_VALID_MINUTES, ChronoUnit.MINUTES), reservation.getHoldExpiresAt()
+        ));
         verification.setLastSentAt(now);
         verification.setFailedAttempts(0);
         verification.setResendCount(verification.getResendCount() + 1);
@@ -85,7 +87,7 @@ public class ReservationEmailVerificationService {
         UUID reservationId,
         ReservationEmailVerificationRequest request
     ) {
-        Reservation reservation = findOwnedReservation(actor, reservationId);
+        Reservation reservation = findOwnedReservationForUpdate(actor, reservationId);
         validateWaitingForEmail(reservation);
         Instant now = Instant.now();
         validateHold(reservation, now);
@@ -133,9 +135,13 @@ public class ReservationEmailVerificationService {
         return toResponse(verification, null);
     }
 
-    private Reservation findOwnedReservation(ActorPrincipal actor, UUID reservationId) {
-        return reservationRepository.findByIdAndCustomer_Id(reservationId, actor.userId())
+    private Reservation findOwnedReservationForUpdate(ActorPrincipal actor, UUID reservationId) {
+        return reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+    }
+
+    private Instant earlierOf(Instant first, Instant second) {
+        return first.isBefore(second) ? first : second;
     }
 
     private void validateWaitingForEmail(Reservation reservation) {

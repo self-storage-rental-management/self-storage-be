@@ -10,7 +10,7 @@ import java.util.*;
 /** Owner-supplied integration contracts. No runtime mocks/default BO policy are installed. */
 public final class RenewalOperationSources {
     private RenewalOperationSources() {}
-    public enum Capability { READ, ARRIVAL, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND }
+    public enum Capability { READ, ARRIVAL, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND, REFUND_EXECUTION }
     public interface AuthorizationSource {
         /** Checks current permission, facility scope and evidence visibility, not just role. */
         void require(ActorPrincipal actor, Renewal renewal, Capability capability);
@@ -44,6 +44,12 @@ public final class RenewalOperationSources {
         Instant check(Renewal renewal, Terms acceptedTerms, UUID holdRef, Instant now);
         void retain(Renewal renewal, UUID holdRef, Instant deadline);
         void consume(Renewal renewal, UUID holdRef);
+        /** Rechecks and consumes the actual signed interval under the shared writer locks. */
+        default void consumePeriod(Renewal renewal,Terms acceptedTerms,UUID holdRef,LocalDate start,LocalDate end,Instant now) {
+            if(!start.equals(acceptedTerms.extensionStartDate())||!end.equals(acceptedTerms.extensionEndExclusive()))
+                throw com.storagehub.common.api.ApiExceptions.conflict("Effective renewal interval safety source unavailable");
+            consume(renewal,holdRef);
+        }
         void release(Renewal renewal, UUID holdRef);
         /** Explicit audited correction of the earlier appointment-end deadline rule. */
         default boolean restoreSigningWindow(Renewal renewal,Terms terms,UUID holdRef,Instant deadline) { return false; }
@@ -52,7 +58,14 @@ public final class RenewalOperationSources {
     public record Deposit(UUID paymentRef, UUID renewalId, Outcome outcome, BigDecimal amount, String currency, Instant paidAt) {}
     public record Statement(UUID reference, UUID renewalId, String version, Instant expiresAt,
         BigDecimal amount, String currency, List<UUID> requiredObligations,BigDecimal remainingRentalAmount,
-        BigDecimal overdueFee,BigDecimal unpostedOverdueFee) {
+        BigDecimal overdueFee,BigDecimal unpostedOverdueFee,LocalDate effectiveStartDate,LocalDate effectiveEndDate) {
+        public Statement(UUID reference,UUID renewalId,String version,Instant expiresAt,BigDecimal amount,String currency,
+            List<UUID> requiredObligations,BigDecimal remainingRentalAmount,BigDecimal overdueFee,BigDecimal unpostedOverdueFee) {
+            this(reference,renewalId,version,expiresAt,amount,currency,requiredObligations,remainingRentalAmount,overdueFee,unpostedOverdueFee,null,null);
+        }
+        public Statement withPeriod(LocalDate start,LocalDate end) {
+            return new Statement(reference,renewalId,version,expiresAt,amount,currency,requiredObligations,remainingRentalAmount,overdueFee,unpostedOverdueFee,start,end);
+        }
         public Statement(UUID reference,UUID renewalId,String version,Instant expiresAt,BigDecimal amount,String currency,List<UUID> obligations) {
             this(reference,renewalId,version,expiresAt,amount,currency,obligations,amount,BigDecimal.ZERO,BigDecimal.ZERO);
         }
@@ -87,6 +100,12 @@ public final class RenewalOperationSources {
         default boolean atomic() { return false; }
         /** Computes policy entitlement from actual paid less actual/pending refunds; reserves once. Not payout. */
         RefundReservation reserve(Renewal renewal, UUID incidentId, UUID approverId, String key, Instant now);
+        default RefundReservation reservePreparation(Renewal renewal,UUID paymentId,UUID actor,String key,Instant now) {
+            throw com.storagehub.common.api.ApiExceptions.conflict("Preparation refund source unavailable");
+        }
+        default void retryPreparation(Renewal renewal,UUID paymentId,Instant now) {
+            throw com.storagehub.common.api.ApiExceptions.conflict("Preparation retry source unavailable");
+        }
         default ExecutedRefund execute(Renewal renewal,UUID refundId,UUID evidenceFileId,String transactionReference,UUID actor,Instant now) {
             throw com.storagehub.common.api.ApiExceptions.conflict("Refund execution source unavailable");
         }

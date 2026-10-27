@@ -10,6 +10,22 @@ import java.util.UUID;
 public class ReservationGoodsItemResponse {
 
     private UUID id;
+    private java.util.UUID catalogCategoryId;
+    public java.util.UUID getCatalogCategoryId() { return catalogCategoryId; }
+    public void setCatalogCategoryId(java.util.UUID value) { this.catalogCategoryId = value; }
+    private java.util.UUID catalogMaterialId;
+    public java.util.UUID getCatalogMaterialId() { return catalogMaterialId; }
+    public void setCatalogMaterialId(java.util.UUID value) { this.catalogMaterialId = value; }
+    private String categoryCode;
+    public String getCategoryCode() { return categoryCode; }
+    public void setCategoryCode(String value) { this.categoryCode = value; }
+    private String categoryName;
+    public String getCategoryName() { return categoryName; }
+    public void setCategoryName(String value) { this.categoryName = value; }
+    private String materialCode;
+    public String getMaterialCode() { return materialCode; }
+    public void setMaterialCode(String value) { this.materialCode = value; }
+    private String goodsCode;
     private GoodsCategory category;
     private String customGoodsName;
     private String materialName;
@@ -32,6 +48,8 @@ public class ReservationGoodsItemResponse {
 
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
+    public String getGoodsCode() { return goodsCode; }
+    public void setGoodsCode(String goodsCode) { this.goodsCode = goodsCode; }
     public GoodsCategory getCategory() { return category; }
     public void setCategory(GoodsCategory category) { this.category = category; }
     public String getCustomGoodsName() { return customGoodsName; }

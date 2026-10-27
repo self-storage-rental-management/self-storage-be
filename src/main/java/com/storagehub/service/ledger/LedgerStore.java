@@ -26,6 +26,13 @@ public class LedgerStore {
         String sourceRef,BigDecimal allocated,BigDecimal refunded,BigDecimal outstanding) {}
     public record Receipt(UUID id,Method method,BigDecimal amount,String evidenceRef,UUID evidenceFileId,Instant receivedAt) {}
     public record Refund(UUID id,UUID receiptId,UUID obligationId,BigDecimal amount,String status,String decisionRef,String payoutRef) {}
+    public record Allocation(UUID receiptId,UUID obligationId,BigDecimal amount) {}
+    /** Read allocations only for this renewal, including its posted overdue fees. */
+    public List<Allocation> renewalAllocations(UUID rental,UUID renewal) {
+        required(rental);required(renewal);
+        return jdbc.query("select a.receipt_id,a.obligation_id,a.amount from rental_ledger_allocations a join rental_ledger_obligations o on o.id=a.obligation_id join rental_ledger_receipts p on p.id=a.receipt_id where a.rental_id=? and o.rental_id=? and (o.renewal_id=? or o.source_ref like ?) and p.method<>'SIMULATED'",
+            (r,i)->new Allocation(uuid(r.getString("receipt_id")),uuid(r.getString("obligation_id")),r.getBigDecimal("amount")),s(rental),s(rental),s(renewal),"rental-overdue:"+rental+":%");
+    }
     public record Snapshot(UUID rentalId,UUID customerId,UUID facilityId,long revision,List<Obligation> obligations,List<Receipt> receipts,List<Refund> refunds) {
         public BigDecimal knownOutstanding(){return obligations.stream().map(Obligation::outstanding).reduce(BigDecimal.ZERO,BigDecimal::add);}
     }
@@ -48,10 +55,10 @@ public class LedgerStore {
         if(accounts.isEmpty())return Optional.empty();var account=accounts.getFirst();long revision=Long.parseLong(value(account,"revision"));
         var adjustments=cancellationCredits==null?null:cancellationCredits.getIfAvailable();
         var credits=adjustments==null?Map.<UUID,BigDecimal>of():adjustments.credits(rental);
-        var obligations=jdbc.query("select o.*,coalesce((select sum(a.amount) from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where a.obligation_id=o.id and p.method<>'SIMULATED'),0) as allocated,coalesce((select sum(f.amount) from rental_ledger_refunds f where f.obligation_id=o.id and f.status='EXECUTED'),0) as refunded from rental_ledger_obligations o where o.rental_id=? order by o.due_at_ms,o.id",(r,i)->{
+        var obligations=jdbc.query("select o.*,coalesce((select d.due_at_ms from rental_ledger_due_changes d where d.obligation_id=o.id order by d.sequence_no desc limit 1),o.due_at_ms) as effective_due_at_ms,coalesce((select sum(a.amount) from rental_ledger_allocations a join rental_ledger_receipts p on p.id=a.receipt_id where a.obligation_id=o.id and p.method<>'SIMULATED'),0)+coalesce((select sum(a.amount) from return_ledger_allocations a join return_financial_snapshots f on f.return_id=a.return_id where a.obligation_id=o.id and f.settled_at_ms is not null),0) as allocated,coalesce((select sum(f.amount) from rental_ledger_refunds f where f.obligation_id=o.id and f.status='EXECUTED'),0) as refunded from rental_ledger_obligations o where o.rental_id=? order by o.due_at_ms,o.id",(r,i)->{
             var o=obligation(r);var outstanding=o.outstanding().subtract(credits.getOrDefault(o.id(),BigDecimal.ZERO));
             if(outstanding.signum()<0)throw ApiExceptions.conflict("Cancellation credit accounting is inconsistent");
-            return new Obligation(o.id(),o.renewalId(),o.kind(),o.amount(),o.dueAt(),o.sourceRef(),o.allocated(),o.refunded(),outstanding);
+            return new Obligation(o.id(),o.renewalId(),o.kind(),o.amount(),Instant.ofEpochMilli(r.getLong("effective_due_at_ms")),o.sourceRef(),o.allocated(),o.refunded(),outstanding);
         },s(rental));
         var receipts=jdbc.query("select * from rental_ledger_receipts where rental_id=? order by received_at_ms,id",(r,i)->receipt(r),s(rental));
         var refunds=jdbc.query("select * from rental_ledger_refunds where rental_id=? order by id",(r,i)->refund(r),s(rental));
@@ -64,6 +71,27 @@ public class LedgerStore {
         var rows=jdbc.queryForList("select rental_id from rental_ledger_receipts where evidence_ref=?",String.class,reference);
         if(rows.size()>1)throw ApiExceptions.conflict("Payment evidence has duplicate ledger receipts");
         return rows.isEmpty()?Optional.empty():Optional.of(UUID.fromString(rows.getFirst()));
+    }
+    /** Append a due-date change without rewriting the source charge or its idempotency proof. */
+    public void signingBalanceDue(UUID rental,UUID renewal,UUID acceptedRevision,Instant due,UUID actor,String decisionRef) {
+        lock(rental);required(renewal);required(acceptedRevision);required(due);required(actor);text(decisionRef,128);
+        var snapshot=read(rental).orElseThrow();
+        boolean changed=false;
+        for(var o:snapshot.obligations())if(renewal.equals(o.renewalId())&&o.sourceRef().endsWith(":REMAINDER")
+            &&o.sourceRef().startsWith("renewal-accepted:"+acceptedRevision+":")
+            &&o.kind()==Kind.RENEWAL_REMAINDER&&o.dueAt().toEpochMilli()!=due.toEpochMilli()) {
+            jdbc.update("insert into rental_ledger_due_changes(rental_id,obligation_id,old_due_at_ms,due_at_ms,actor_id,decision_ref,recorded_at_ms) values(?,?,?,?,?,?,?)",
+                s(rental),s(o.id()),o.dueAt().toEpochMilli(),due.toEpochMilli(),s(actor),decisionRef,Instant.now().toEpochMilli());changed=true;
+        }
+        if(changed)bump(rental);
+    }
+    private long originalDue(Obligation obligation) {
+        return jdbc.queryForObject("select due_at_ms from rental_ledger_obligations where id=?",Long.class,s(obligation.id()));
+    }
+    void lockForSettlement(UUID rental,long expectedRevision) {version(lock(rental),expectedRevision);}
+    void returnSettled(UUID rental) {lock(rental);bump(rental);}
+    BigDecimal releasedSecurityDeposit(UUID rental) {
+        return jdbc.queryForObject("select coalesce(sum(deposit_amount),0) from return_financial_snapshots where rental_id=? and settled_at_ms is not null",BigDecimal.class,s(rental));
     }
     /** Read-only proof and allocation binding; a receipt reference alone is not evidence. */
     boolean sandboxReceiptMatches(UUID rental,Receipt receipt,GatewayProof proof,String rentSource) {
@@ -86,6 +114,11 @@ public class LedgerStore {
         return renewalChargeCommandMatches(obligation,spec,customer,"renewal-full-rent:");
     }
     boolean renewalPaymentCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID customer) {
+        if(spec.dueDate()!=null) {
+            String fingerprint=hash(List.of(s(spec.rentalId()),s(spec.renewalId()),spec.kind().name(),spec.amount().toPlainString(),originalDue(obligation),spec.sourceReference()).toString());
+            var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from rental_ledger_commands where actor_id=? and operation='CHARGE' and key_hash=?",s(customer),hash(RenewalDepositObligationWriter.paymentKey(spec,UUID.fromString(spec.sourceReference().split(":")[1]))));
+            return rows.size()==1&&s(spec.rentalId()).equals(value(rows.getFirst(),"rental_id"))&&s(obligation.id()).equals(value(rows.getFirst(),"result_id"))&&fingerprint.equals(value(rows.getFirst(),"payload_hash"));
+        }
         String prefix=spec.kind()==Kind.RENEWAL_DEPOSIT?"renewal-prepayment:":
             spec.sourceReference().endsWith(":FULL_RENT")?"renewal-full-rent:":"renewal-remainder:";
         return renewalChargeCommandMatches(obligation,spec,customer,prefix);
@@ -113,7 +146,7 @@ public class LedgerStore {
         return amounts;
     }
     private boolean renewalChargeCommandMatches(Obligation obligation,FinancialContractSpecifications.Specification spec,UUID reviewer,String prefix) {
-        String fingerprint=hash(List.of(s(spec.rentalId()),s(spec.renewalId()),spec.kind().name(),spec.amount().toPlainString(),obligation.dueAt().toEpochMilli(),spec.sourceReference()).toString());
+        String fingerprint=hash(List.of(s(spec.rentalId()),s(spec.renewalId()),spec.kind().name(),spec.amount().toPlainString(),originalDue(obligation),spec.sourceReference()).toString());
         String acceptedId=spec.sourceReference().split(":")[1];
         var rows=jdbc.queryForList("select rental_id,payload_hash,result_id from rental_ledger_commands where actor_id=? and operation='CHARGE' and key_hash=?",s(reviewer),hash(prefix+acceptedId));
         return rows.size()==1&&s(spec.rentalId()).equals(value(rows.getFirst(),"rental_id"))

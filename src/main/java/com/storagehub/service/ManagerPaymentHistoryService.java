@@ -30,6 +30,10 @@ public class ManagerPaymentHistoryService {
     private final ReturnCaseRepository returnCaseRepository;
     private final AdminAuthorizationService authorizationService;
     private final FacilityScopeService facilityScopeService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private PaymentProvenance paymentProvenance;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.renewal.RenewalTransactionReader> renewalTransactions;
 
     @Transactional(readOnly = true)
     public PageResponse<ManagerPaymentHistoryResponse> list(
@@ -72,6 +76,8 @@ public class ManagerPaymentHistoryService {
     }
 
     private ManagerPaymentHistoryResponse paymentRow(Payment payment) {
+        var transactionReader=renewalTransactions==null?null:renewalTransactions.getIfAvailable();
+        var transaction=payment.getRenewal()==null||transactionReader==null?null:transactionReader.read(payment,Instant.now());
         String customerName = payment.getReservation() != null
             ? payment.getReservation().getCustomer().getFullName()
             : payment.getRenewal().getRental().getCustomer().getFullName();
@@ -87,7 +93,11 @@ public class ManagerPaymentHistoryService {
             payment.getId().toString(), reference, customerName, payment.getPurpose().name(),
             payment.getStatus().name(), payment.getAmount(), payment.getCurrency(),
             payment.getRefundedAmount() == null ? BigDecimal.ZERO : payment.getRefundedAmount(),
-            method, occurredAt
+            method, occurredAt,
+            payment.getRenewal()==null?null:payment.getRenewal().getId(),
+            paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null,
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
+            transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable()
         );
     }
 

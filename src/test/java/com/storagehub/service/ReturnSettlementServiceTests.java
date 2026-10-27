@@ -61,6 +61,8 @@ class ReturnSettlementServiceTests {
     @Mock FacilityScopeService facilityScopeService;
     @Mock NotificationService notificationService;
     @Mock AuditLogService auditLogService;
+    @Mock com.storagehub.service.ledger.ReturnFinancialReconciliation returnFinance;
+    @Mock jakarta.persistence.EntityManager settlementEntityManager;
 
     ObjectMapper objectMapper = new ObjectMapper();
     ReturnSettlementService service;
@@ -122,18 +124,34 @@ class ReturnSettlementServiceTests {
         rental.setStatus(RentalStatus.active);
         rental.setStartDate(LocalDate.now().minusMonths(3));
         rental.setContractEndDate(LocalDate.now().plusMonths(3));
+        var reservation = new com.storagehub.domain.model.Reservation();
+        ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
+        reservation.setReservationCode("RSV-SETUP-TEST");
+        var quote = new com.storagehub.domain.model.ReservationQuote();
+        quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        quote.setSetupEarlyExitFee(new BigDecimal("2000000"));
+        reservation.setSourceQuote(quote);
+        rental.setReservation(reservation);
 
         customerActor = new ActorPrincipal(
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Collections.emptySet(), Collections.emptyMap()
         );
         staffActor = new ActorPrincipal(
-            staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of("returns:process", "returns:read"),
+            staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of("returns:process", "returns:read", "refunds:execute"),
             Map.of(facility.getId(), com.storagehub.domain.model.FacilityScopeLevel.OPERATE)
         );
         managerActor = new ActorPrincipal(
             manager.getId(), UUID.randomUUID(), Set.of(RoleCode.MANAGER), Set.of("rentals:update", "returns:read"),
             Map.of(facility.getId(), com.storagehub.domain.model.FacilityScopeLevel.MANAGE)
         );
+        var sources = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        sources.addBean("returnFinance", returnFinance);
+        ReflectionTestUtils.setField(service, "returnFinances", sources.getBeanProvider(com.storagehub.service.ledger.ReturnFinancialReconciliation.class));
+        ReflectionTestUtils.setField(service, "settlementEntityManager", settlementEntityManager);
+        org.mockito.Mockito.lenient().when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        org.mockito.Mockito.lenient().when(returnFinance.deposit(rental)).thenReturn(new BigDecimal("2000000.00"));
+        org.mockito.Mockito.lenient().when(returnFinance.capture(any(ReturnCase.class))).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(new BigDecimal("2000000.00"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
     }
 
     @Test
@@ -144,7 +162,7 @@ class ReturnSettlementServiceTests {
         );
 
         when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
-        when(returnCaseRepository.existsByRental_IdAndStatusNotIn(eq(rental.getId()), any())).thenReturn(false);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
         when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
         when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
             ReturnCase rc = invocation.getArgument(0);
@@ -158,6 +176,19 @@ class ReturnSettlementServiceTests {
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.requested);
         assertThat(response.depositAmount()).isEqualByComparingTo(new BigDecimal("2000000.00"));
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
+        verify(returnFinance).deposit(rental);
+    }
+
+    @Test
+    void unavailableVerifiedDepositBlocksReturnWithoutInventingItFromMonthlyPrice() {
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(returnFinance.deposit(rental)).thenThrow(com.storagehub.common.api.ApiExceptions.conflict("Verified deposit unavailable"));
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "Return")))
+            .hasMessageContaining("Verified deposit unavailable");
+        org.mockito.Mockito.verify(returnCaseRepository,org.mockito.Mockito.never()).save(any());
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
     }
 
     @Test
@@ -292,6 +323,7 @@ class ReturnSettlementServiceTests {
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
         assertThat(response.customerConfirmed()).isTrue();
         assertThat(response.customerDecision()).isEqualTo(CustomerDecision.accepted);
+        verify(returnFinance).requireCurrent(returnCase);
     }
 
     @Test
@@ -375,7 +407,9 @@ class ReturnSettlementServiceTests {
         var response=service.customerConfirmSettlement(customerActor,rc.getId(),new CustomerConfirmSettlementRequest(CustomerDecision.accepted,"Accepted"));
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.completed);
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_inspection);assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.occupied);
-        org.mockito.Mockito.verifyNoInteractions(rentalRepository,storageUnitRepository);
+        verify(rentalRepository).findByIdForUpdate(rental.getId());
+        org.mockito.Mockito.verify(rentalRepository,org.mockito.Mockito.never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(storageUnitRepository);
     }
 
     @Test
@@ -393,11 +427,12 @@ class ReturnSettlementServiceTests {
 
         StaffCompleteRefundRequest request = new StaffCompleteRefundRequest(
             "BANK-REF-998877",
-            "Da chuyen khoan tra khach qua Vietcombank"
+            "Da chuyen khoan tra khach qua Vietcombank", UUID.randomUUID(), "BANK_TRANSFER", true,
+            new BigDecimal("1900000")
         );
 
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
-        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(returnCaseRepository.saveAndFlush(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         ReturnCaseResponse response = service.staffCompleteRefund(staffActor, returnCase.getId(), request);
 
@@ -407,5 +442,137 @@ class ReturnSettlementServiceTests {
         assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
         verify(rentalRepository).save(rental);
         verify(storageUnitRepository).save(unit);
+        verify(returnFinance).receipt(staffActor, returnCase, request.paymentMethod(), request.transactionReference(), request.receiptFileId());
+        verify(returnFinance).settle(returnCase, staffActor.userId(), request.transactionReference(), true);
+    }
+
+    @Test
+    void retryOfAnOpenRequestReturnsTheSameCaseAfterRentalStatusChanged() {
+        var rc = setupReturn(ReturnCaseStatus.requested);
+        rental.setStatus(RentalStatus.return_requested);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(List.of(rc));
+        var response = service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(LocalDate.now(), "Retry"));
+        assertThat(response.id()).isEqualTo(rc.getId());
+        org.mockito.Mockito.verify(returnCaseRepository, org.mockito.Mockito.never()).save(any());
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).deposit(any());
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+    }
+
+    @Test
+    void setupInspectionRequiresAnEmptyUnitBeforeAnyFinancialCapture() {
+        var rc = setupReturn(ReturnCaseStatus.requested);
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(false)))
+            .hasMessageContaining("kho trống");
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+        assertThat(rc.getSetupReturnedAt()).isNull();
+    }
+
+    @Test
+    void setupRefundIncludesVerifiedRentAndOneMonthFeeWithoutCountingPrepaymentAgain() {
+        var rc = setupReturn(ReturnCaseStatus.requested);
+        rental.setSetupStartedAt(Instant.now().minusSeconds(3600));
+        rental.setSetupEndsAt(Instant.now().plusSeconds(86400));
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setMonthlyPrice(new BigDecimal("2000000"));
+        pricing.setNetRentalAmount(new BigDecimal("6000000"));
+        pricing.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        pricing.setSetupEarlyExitFee(new BigDecimal("2000000"));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(returnCaseRepository.save(rc)).thenReturn(rc);
+        when(returnFinance.capture(rc)).thenAnswer(invocation -> {
+            SetupEarlyExitPolicy.capture(rc, pricing);
+            return new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(rc.getDepositAmount(),
+                BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO);
+        });
+        var fileId = UUID.randomUUID();
+        var asset = new com.storagehub.domain.model.FileAsset();
+        asset.setEntityType("RETURN_CASE"); asset.setEntityId(rc.getId());
+        asset.setStatus(com.storagehub.domain.model.FileAssetStatus.ACTIVE);
+        when(settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, fileId)).thenReturn(asset);
+        var inspection = new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.minor_damage,
+            new BigDecimal("300000"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            "Vết xước khi trả kho, có ảnh đối chiếu", List.of(fileId.toString()), true, true, true, StorageUnitStatus.available, true);
+        var response = service.performInspection(staffActor, rc.getId(), inspection);
+        assertThat(response.rentalRefundCredit()).isEqualByComparingTo("6000000");
+        assertThat(response.earlyTerminationFee()).isEqualByComparingTo("2000000");
+        assertThat(response.totalDeductions()).isEqualByComparingTo("2300000");
+        assertThat(response.netRefundAmount()).isEqualByComparingTo("5700000");
+        assertThat(response.amountDueFromCustomer()).isZero();
+        assertThat(response.setupReturnedAt().getNano() % 1000).isZero();
+    }
+
+    @Test
+    void financeFailureCannotCompleteRefundOrReleaseRental() {
+        var rc = setupReturn(ReturnCaseStatus.refund_pending);
+        rc.setNetRefundAmount(new BigDecimal("5700000"));
+        var file = UUID.randomUUID();
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.conflict("Receipt proof unavailable"))
+            .when(returnFinance).receipt(staffActor, rc, "CASH", "REFUND-FAIL", file);
+        assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, rc.getId(),
+            new StaffCompleteRefundRequest("REFUND-FAIL", "Refund", file, "CASH", true, new BigDecimal("5700000"))))
+            .hasMessageContaining("Receipt proof unavailable");
+        assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.refund_pending);
+        assertThat(rc.getCompletedAt()).isNull();
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).settle(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+        org.mockito.Mockito.verifyNoInteractions(storageUnitRepository);
+    }
+
+    @Test
+    void wrongAmountOrMissingConfirmationCannotRecordAPayout() {
+        var rc = setupReturn(ReturnCaseStatus.refund_pending);
+        rc.setNetRefundAmount(new BigDecimal("5700000"));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.recordSettlement(staffActor, rc.getId(),
+            new com.storagehub.api.returns.StaffReturnSettlementRequest("CASH", "WRONG", UUID.randomUUID(), true, new BigDecimal("6000000"))))
+            .hasMessageContaining("không khớp");
+        assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, rc.getId(), new StaffCompleteRefundRequest("REFERENCE-ONLY", "Refund")))
+            .hasMessageContaining("xác nhận số tiền");
+        assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.refund_pending);
+        org.mockito.Mockito.verifyNoInteractions(returnFinance);
+    }
+
+    @Test
+    void repeatedVerifiedReceiptReturnsCompletedResultWithoutAnotherPayout() {
+        var rc = setupReturn(ReturnCaseStatus.completed);
+        rc.setNetRefundAmount(new BigDecimal("5700000"));
+        var file = UUID.randomUUID();
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(returnFinance.recordedReceiptMatches(rc, "CASH", "SAME-REFUND", file)).thenReturn(true);
+        var response = service.recordSettlement(staffActor, rc.getId(),
+            new com.storagehub.api.returns.StaffReturnSettlementRequest("CASH", "SAME-REFUND", file, true, new BigDecimal("5700000")));
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.completed);
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).receipt(any(), any(), any(), any(), any());
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).settle(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+        org.mockito.Mockito.verifyNoInteractions(storageUnitRepository);
+    }
+
+    @Test
+    void customerPaymentDeclarationDoesNotSettleTheReturn() {
+        var rc = setupReturn(ReturnCaseStatus.payment_due);
+        when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.customerPaySettlement(customerActor, rc.getId(),
+            new CustomerPaySettlementRequest("CASH", "Customer declared paid"))).hasMessageContaining("thanh toán tại cơ sở");
+        assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.payment_due);
+        assertThat(rc.getSettlementPaidAt()).isNull();
+        org.mockito.Mockito.verifyNoInteractions(returnFinance, storageUnitRepository);
+    }
+
+    private ReturnCase setupReturn(ReturnCaseStatus status) {
+        var rc = new ReturnCase();
+        ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
+        rc.setRental(rental); rc.setFacility(facility); rc.setStorageUnit(unit); rc.setCustomer(customer);
+        rc.setStatus(status); rc.setSetupExitRequested(true); rc.setDepositAmount(new BigDecimal("2000000"));
+        rc.setScheduledDate(LocalDate.now());
+        return rc;
+    }
+
+    private ReturnInspectionRequest setupInspection(boolean vacated) {
+        return new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.no_damage,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            "Đã kiểm tra kho trống", List.of(), true, true, true, StorageUnitStatus.available, vacated);
     }
 }

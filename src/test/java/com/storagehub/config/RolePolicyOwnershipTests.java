@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 import com.storagehub.domain.model.*;
 import com.storagehub.domain.repo.PermissionRepository;
 import com.storagehub.domain.repo.RoleRepository;
+import com.storagehub.domain.repo.UserRepository;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 
@@ -33,15 +34,47 @@ class RolePolicyOwnershipTests {
         var runner = new RoleDataInitializer(roleRepository, permissionRepository).seedSystemRoles();
         runner.run();
         runner.run();
+        assertThat(manager.getParentRole()).isNull();
         assertThat(manager.getPermissions()).extracting(Permission::getCode)
-            .containsExactlyInAnyOrder("storage_units:read", "policies:read");
+            .contains("rentals:update", "payments:confirm", "refunds:approve", "fees:waive")
+            .doesNotContain("checkins:process", "returns:process", "refunds:execute", "support:update", "policies:update");
         assertThat(roles.get(RoleCode.BUSINESS).getPermissions()).extracting(Permission::getCode)
-            .containsExactlyInAnyOrder("storage_units:read", "policies:read", "policies:update",
-                "returns:read", "rentals:update");
+            .contains("policies:read", "policies:update", "refunds:approve", "fees:waive")
+            .doesNotContain("returns:process", "rentals:update");
         assertThat(roles.get(RoleCode.STAFF).getPermissions()).extracting(Permission::getCode)
-            .containsExactlyInAnyOrder("storage_units:read", "reservations:approve", "storage_units:assign",
-                "rentals:update", "payments:read", "payments:collect");
-        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(9));
+            .contains("reservations:approve", "payments:read", "payments:collect", "refunds:execute", "renewals:operate")
+            .doesNotContain("rentals:update", "refunds:approve", "fees:waive");
+        assertThat(roles.get(RoleCode.ADMIN).getPermissions()).extracting(Permission::getCode)
+            .contains("dashboard:read", "sessions:manage");
+        assertThat(roles.values()).allSatisfy(role -> assertThat(role.getPermissionsPolicyVersion()).isEqualTo(15));
+    }
+
+    @Test void startupRolePolicyChangeInvalidatesActiveUserTokensOnce() throws Exception {
+        var roleRepository = mock(RoleRepository.class);
+        var permissionRepository = mock(PermissionRepository.class);
+        var userRepository = mock(UserRepository.class);
+        var user = new User();
+        user.setAuthzVersion(7);
+        user.setStatus(UserStatus.ACTIVE);
+        when(permissionRepository.findByCode(any())).thenAnswer(call -> {
+            var permission = new Permission();
+            permission.setCode(call.getArgument(0));
+            return Optional.of(permission);
+        });
+        when(roleRepository.findByCode(any())).thenAnswer(call -> {
+            var role = new Role();
+            role.setCode(call.getArgument(0));
+            role.setPermissionsPolicyVersion(14);
+            return Optional.of(role);
+        });
+        when(userRepository.findByStatus(UserStatus.ACTIVE)).thenReturn(new ArrayList<>(List.of(user)));
+
+        var runner = new RoleDataInitializer(roleRepository, permissionRepository, userRepository).seedSystemRoles();
+        runner.run();
+        runner.run();
+
+        assertThat(user.getAuthzVersion()).isEqualTo(8);
+        verify(userRepository).saveAll(any());
     }
 
     @Test void newRolesGrantPolicyWritesOnlyToBusinessOperations() throws Exception {
@@ -61,8 +94,9 @@ class RolePolicyOwnershipTests {
                 .as("%s policy ownership", entry.getKey()).isEqualTo(entry.getKey() == RoleCode.BUSINESS);
         }
         assertThat(roles.get(RoleCode.MANAGER).getEffectivePermissions()).extracting(Permission::getCode)
-            .contains("policies:read", "checkins:process");
+            .contains("policies:read", "rentals:update")
+            .doesNotContain("checkins:process");
         assertThat(roles.get(RoleCode.STAFF).getEffectivePermissions()).extracting(Permission::getCode)
-            .contains("payments:read", "payments:collect");
+            .contains("payments:read", "payments:collect", "renewals:operate");
     }
 }

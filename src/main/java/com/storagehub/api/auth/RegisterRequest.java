@@ -1,6 +1,8 @@
 package com.storagehub.api.auth;
 
 import com.storagehub.security.PasswordPolicy;
+import com.storagehub.validation.PhoneNumberPolicy;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -13,9 +15,18 @@ public record RegisterRequest(
     @Pattern(regexp = PasswordPolicy.REGEX, message = PasswordPolicy.MESSAGE)
     String password,
     @NotBlank @Size(max = 160) String fullName,
-    @Size(max = 30) String phone,
+    @NotBlank @Size(max = 10)
+    @Pattern(regexp = "^(?:03[2-9]|05[25689]|07[06789]|08[1-9]|09[0-46-9])\\d{7}$", message = "phone must be a valid Vietnamese mobile number")
+    String phone,
     @NotBlank @Size(max = 500) String permanentAddress,
     @NotBlank @Size(max = 160) String emergencyContactName,
-    @NotBlank @Size(max = 30) String emergencyContactPhone
+    @NotBlank @Size(max = 10)
+    @Pattern(regexp = "^(?:03[2-9]|05[25689]|07[06789]|08[1-9]|09[0-46-9])\\d{7}$", message = "emergencyContactPhone must be a valid Vietnamese mobile number")
+    String emergencyContactPhone
 ) {
+    @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
+    public boolean isPhoneNumbersValid() {
+        return PhoneNumberPolicy.isOptionalValid(phone)
+            && PhoneNumberPolicy.isValid(emergencyContactPhone);
+    }
 }

@@ -20,6 +20,21 @@ import lombok.Setter;
 @NoArgsConstructor
 public class ReservationQuote extends BaseEntity {
 
+    @Column(length = 50)
+    private String setupEarlyExitPolicyVersion;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal setupEarlyExitFee;
+
+    @Column(name = "goods_snapshot_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String goodsSnapshotJson;
+
+    @Column(name = "unit_type_snapshot_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String unitTypeSnapshotJson;
+
+    @Column(name = "unit_type_revision", nullable = false)
+    private long unitTypeRevision;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false)
     private User customer;
@@ -47,6 +62,9 @@ public class ReservationQuote extends BaseEntity {
     @Column(nullable = false)
     private int rentalMonths;
 
+    @Column(nullable = false)
+    private int freeSetupDays;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal monthlyPrice;
 
@@ -67,6 +85,25 @@ public class ReservationQuote extends BaseEntity {
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal totalAfterDiscount;
+
+    @Column(name = "reservation_deposit_rate", nullable = false, precision = 5, scale = 4)
+    private BigDecimal reservationDepositRate = new BigDecimal("0.2000");
+
+    @Column(name = "early_termination_fee_cap_months", nullable = false)
+    private int earlyTerminationFeeCapMonths = 1;
+
+    @Column(name = "early_termination_fee_coefficient", nullable = false, precision = 5, scale = 4)
+    private BigDecimal earlyTerminationFeeCoefficient = BigDecimal.ONE;
+
+    @Column(name = "early_termination_notice_days", nullable = false)
+    private int earlyTerminationNoticeDays = 14;
+
+    @Column(name = "early_termination_fee", nullable = false, precision = 14, scale = 2)
+    private BigDecimal earlyTerminationFee = BigDecimal.ZERO;
+
+    /** Immutable 3/6/12/24-month repricing tiers captured with the quote. */
+    @Column(name = "early_termination_pricing_snapshot_json", nullable = false, columnDefinition = "LONGTEXT")
+    private String earlyTerminationPricingSnapshotJson = "[]";
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal reservationDepositAmount;

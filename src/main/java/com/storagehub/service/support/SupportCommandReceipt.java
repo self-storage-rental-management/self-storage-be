@@ -14,6 +14,7 @@ public class SupportCommandReceipt {
     @Column(name="key_hash",nullable=false,length=64) private String keyHash;
     @Column(nullable=false,length=64) private String payloadHash;
     @Column(nullable=false,columnDefinition="text") private String resultJson;
+    public void eraseExpiredResponse() { resultJson="{\"expired\":true}"; }
     public SupportCommandReceipt(UUID actor,String operation,String keyHash,String payloadHash,String result) {
         actorId=actor;this.operation=operation;this.keyHash=keyHash;this.payloadHash=payloadHash;resultJson=result;
     }

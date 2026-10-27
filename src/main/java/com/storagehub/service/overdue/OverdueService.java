@@ -1,5 +1,7 @@
 package com.storagehub.service.overdue;
 
+import com.storagehub.time.BusinessTime;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.overdue.*;
 import com.storagehub.common.api.*;
@@ -21,7 +23,9 @@ import static com.storagehub.service.overdue.OverdueSources.*;
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class OverdueService {
-    private static final ZoneId ZONE=ZoneId.of("Asia/Ho_Chi_Minh");
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.BusinessRecordCodes displayCodes;
+    private static final ZoneId ZONE=BusinessTime.ZONE;
     private final EntityManager em;private final ObjectMapper mapper;private final RenewalPersistence store;private final AuditLogService audit;
     private final ObjectProvider<Clock> clocks;private final ObjectProvider<FinancialSource> finances;
     private final ObjectProvider<TermSource> terms;private final ObjectProvider<ReminderSource> reminders;private final ObjectProvider<RecoverySource> recoveries;
@@ -29,31 +33,43 @@ public class OverdueService {
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.NotificationService notifications;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<RecoveryTaskSource> taskSources;
     private record Ref(String value,UUID rentalId,String kind,UUID obligationId) {}
     @Transactional(readOnly=true)
     public OverdueResponse.ListResult list(ActorPrincipal actor,OverdueQuery q,String correlation) {
         RenewalReadService.authorize(actor,true,false);if(q.facilityId()!=null)RenewalReadService.requireScope(actor,q.facilityId(),FacilityScopeLevel.READ);
         var scopes=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.READ)).map(Map.Entry::getKey).toList();
+        if(scopes.isEmpty())scopes=List.of(new UUID(0L,0L));
         var query=em.createQuery("select r from Rental r join fetch r.customer join fetch r.facility join fetch r.storageUnit where r.facility.id in :ids"+(q.facilityId()==null?"":" and r.facility.id=:facility"),Rental.class).setParameter("ids",scopes);
         if(q.facilityId()!=null)query.setParameter("facility",q.facilityId());
         Instant asOf=now();var missing=new TreeSet<String>();String search=q.search().toLowerCase(Locale.ROOT);
-        Comparator<OverdueResponse> order=switch(q.sort()){case "overdueDays"->Comparator.comparingLong(OverdueResponse::overdueDays);case "caseRef"->Comparator.comparing(OverdueResponse::caseRef);default->Comparator.comparingInt(r->priority(r.priority()));};
+        Comparator<OverdueResponse> order=switch(q.sort()){case "overdueDays"->Comparator.comparingLong(OverdueResponse::overdueDays);case "caseRef"->Comparator.comparing(r->r.displayCode()==null?r.caseRef():r.displayCode());default->Comparator.comparingInt(r->"COMPLETED".equals(r.workflowStatus())?0:priority(r.priority()));};
         if(q.descending())order=order.reversed();
         var page=new OverduePageCollector<OverdueResponse>(q.page(),q.size(),order.thenComparing(OverdueResponse::caseRef));
         // Do not paginate rentals before expanding/filtering cases: one rental may create several cases.
         // Closing the JPA stream releases cursor resources; managed entities/owner source work still require benchmarking.
         try(var rentals=query.getResultStream()) {
             rentals.forEach(rental->{for(var r:cases(rental,asOf,q.kind(),missing))
-                if(search.isEmpty()||r.caseRef().toLowerCase(Locale.ROOT).contains(search)||r.rentalId().toString().contains(search)||r.customerName().toLowerCase(Locale.ROOT).contains(search)||r.storageUnitCode().toLowerCase(Locale.ROOT).contains(search))page.accept(r);});
+                if(search.isEmpty()||r.displayCode()!=null&&r.displayCode().toLowerCase(Locale.ROOT).contains(search)||r.caseRef().toLowerCase(Locale.ROOT).contains(search)||r.rentalId().toString().contains(search)||r.customerName().toLowerCase(Locale.ROOT).contains(search)||r.storageUnitCode().toLowerCase(Locale.ROOT).contains(search))page.accept(r);});
         }
         return new OverdueResponse.ListResult(page.page(),new PageResponse.Pagination(q.page(),q.size(),page.total(),(int)((page.total()+q.size()-1)/q.size()),q.sort()+","+(q.descending()?"desc":"asc")),correlation,asOf,missing.isEmpty()?"COMPLETE":"PARTIAL",List.copyOf(missing));
     }
     @Transactional(readOnly=true)
-    public OverdueResponse detail(ActorPrincipal actor,String id){var ref=parse(id);var rental=visible(actor,ref,false);return current(rental,ref);}
+    public OverdueResponse detail(ActorPrincipal actor,String id){
+        if(id!=null&&id.toUpperCase(Locale.ROOT).matches("(?:SH-\\d{6}|QH-\\d{4}-\\d{6})")&&displayCodes!=null){
+            String resource=displayCodes.resource("QH",id);
+            if(resource==null)throw ApiExceptions.notFound("Không tìm thấy hồ sơ quá hạn.");
+            id=resource;
+        }
+        var ref=parse(id);var rental=visible(actor,ref,false);return current(rental,ref);
+    }
     public OverdueResponse.FollowUp followUp(ActorPrincipal actor,String id,OverdueCommands.FollowUp body,String key) {
         var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
         Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_follow_up",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
-        current(r,ref);var state=stream(id,body.expectedVersion());UUID notification=null;String policyRef=null,version=null;
+        var current=current(r,ref);
+        if(body.type()==OverdueCommands.Type.REMINDER&&"COMPLETED".equals(current.workflowStatus()))throw ApiExceptions.conflict("Hồ sơ thu hồi đã hoàn tất, không thể gửi nhắc quá hạn.");
+        var state=stream(id,body.expectedVersion());UUID notification=null;String policyRef=null,version=null;
         if(body.type()==OverdueCommands.Type.REMINDER){var source=reminders.getIfAvailable();if(source==null||!source.atomic())throw deferred("Reminder policy/delivery unavailable");var policy=source.policy(r).orElseThrow(()->deferred("Reminder policy UNKNOWN"));
             if(policy.reference()==null||policy.reference().isBlank()||policy.version()==null||policy.version().isBlank()||policy.cooldown()==null||policy.cooldown().isNegative()||policy.cooldown().isZero())throw deferred("Reminder policy incomplete");
             var previous=em.createQuery("select f from OverdueFollowUp f where f.caseRef=:id and f.type='REMINDER' order by f.recordedAt desc",OverdueFollowUp.class).setParameter("id",id).setMaxResults(1).getResultList();
@@ -84,7 +100,8 @@ public class OverdueService {
     private List<OverdueResponse> cases(Rental r,Instant at,String kind,Set<String> missing) {
         if(r.getCustomer()==null||r.getFacility()==null||r.getStorageUnit()==null||r.getCustomer().getFullName()==null||r.getStorageUnit().getCode()==null)throw ApiExceptions.conflict("Rental relationships inconsistent");
         var result=new ArrayList<OverdueResponse>();
-        if(!kind.equals("PAYMENT_DUE")&&r.getActualReturnedAt()==null&&r.getStatus()!=RentalStatus.completed){
+        var progress=kind.equals("PAYMENT_DUE")?Optional.<RecoveryTaskSource.Progress>empty():progress(r,at);
+        if(!kind.equals("PAYMENT_DUE")&&(progress.isPresent()||r.getActualReturnedAt()==null&&r.getStatus()!=RentalStatus.completed)){
             var source=terms.getIfAvailable();var t=source==null?null:source.term(r,at).orElse(null);
             var period=t==null||periods==null?Optional.<com.storagehub.service.rental.period.RentalPeriod>empty():periods.read(r);
             if(t==null||period.isEmpty())missing.add("RENTAL_TERM_POLICY_DATE_CUTOFF");else {
@@ -107,12 +124,24 @@ public class OverdueService {
         }
         return result;
     }
-    private OverdueResponse row(Rental r,String ref,String kind,long days,String priority,UUID obligation,Instant due,java.math.BigDecimal amount,String currency,String policy,String version,Instant cutoff,boolean recovery){return new OverdueResponse(ref,r.getId(),r.getFacility().getId(),r.getCustomer().getId(),r.getCustomer().getFullName(),r.getStorageUnit().getCode(),kind,days,priority,obligation,due,amount,currency,policy,version,cutoff,recovery,revision(ref));}
+    private Optional<RecoveryTaskSource.Progress> progress(Rental r,Instant at){
+        var source=taskSources==null?null:taskSources.getIfAvailable();
+        return source==null?Optional.empty():source.progress(r,at);
+    }
+    private OverdueResponse row(Rental r,String ref,String kind,long days,String priority,UUID obligation,Instant due,java.math.BigDecimal amount,String currency,String policy,String version,Instant cutoff,boolean recovery){
+        var progress=kind.equals("RENTAL_TERM")?progress(r,now()):Optional.<RecoveryTaskSource.Progress>empty();
+        String status=priority;
+        if(kind.equals("RENTAL_TERM")) {
+            if(progress.isPresent())status=switch(progress.get().status()){case "CLOSED"->"COMPLETED";case "IN_PROGRESS"->"RECOVERING";default->"WAITING_RECOVERY";};
+            else if(priority.equals("RECOVERY")||cutoff!=null&&!now().isBefore(cutoff))status="WAITING_RECOVERY";
+        }
+        return new OverdueResponse(ref,r.getId(),r.getFacility().getId(),r.getCustomer().getId(),r.getCustomer().getFullName(),r.getStorageUnit().getCode(),kind,days,priority,obligation,due,amount,currency,policy,version,cutoff,recovery&&progress.isEmpty(),revision(ref),status,progress.map(RecoveryTaskSource.Progress::taskId).orElse(null),displayCodes==null?null:displayCodes.find(ref));
+    }
     private OverdueResponse current(Rental r,Ref ref){var missing=new TreeSet<String>();var rows=cases(r,now(),ref.kind(),missing);if(!missing.isEmpty())throw deferred(String.join(",",missing));return rows.stream().filter(c->c.caseRef().equals(ref.value())).findFirst().orElseThrow(()->ApiExceptions.conflict("Case is no longer overdue"));}
     private Rental visible(ActorPrincipal actor,Ref ref,boolean write){RenewalReadService.authorize(actor,true,write);var r=em.find(Rental.class,ref.rentalId());if(r==null)throw ApiExceptions.notFound("Overdue case not found");var scope=actor.facilityScopes().get(r.getFacility().getId());if(scope==null||!scope.includes(write?FacilityScopeLevel.MANAGE:FacilityScopeLevel.READ))throw ApiExceptions.notFound("Overdue case not found");return r;}
     private OverdueFollowUpState stream(String ref,Long version){if(version==null||version<0)throw ApiExceptions.validation("expectedVersion required",null);var s=em.find(OverdueFollowUpState.class,ref,LockModeType.PESSIMISTIC_WRITE);if(s==null){if(version!=0)throw ApiExceptions.conflict("Follow-up revision stale");s=new OverdueFollowUpState(ref);em.persist(s);}else if(s.getRevision()!=version)throw ApiExceptions.conflict("Follow-up revision stale");return s;}
     private long revision(String ref){var state=em.find(OverdueFollowUpState.class,ref);return state==null?0:state.getRevision();}
-    private OverdueResponse.FollowUp finish(User user,Rental r,OverdueFollowUpState state,OverdueFollowUp event,String op,String key,Object payload){state.appended();em.persist(event);em.flush();var response=response(event,state.getRevision());audit.recordMutation(user,op,"Rental",r.getId(),r.getFacility().getId(),null,response);store.remember(user,op,key,r.getId(),payload,201,response);
+    private OverdueResponse.FollowUp finish(User user,Rental r,OverdueFollowUpState state,OverdueFollowUp event,String op,String key,Object payload){if(displayCodes!=null)displayCodes.assign("QH",event.getCaseRef(),event.getRecordedAt());state.appended();em.persist(event);em.flush();var response=response(event,state.getRevision());audit.recordMutation(user,op,"Rental",r.getId(),r.getFacility().getId(),null,response);store.remember(user,op,key,r.getId(),payload,201,response);
         if(notifications!=null&&Set.of("REMINDER","RECOVERY_HANDOFF").contains(event.getType()))notifications.createFacilityOperationsNotificationsExcept(
             r.getFacility().getId(),NotificationType.OVERDUE,"Hồ sơ quá hạn có cập nhật mới",
             "Hồ sơ thuê "+r.getId()+" tại cơ sở "+r.getFacility().getName()+" có cập nhật xử lý quá hạn.",r.getId(),user.getId());

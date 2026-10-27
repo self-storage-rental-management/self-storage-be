@@ -16,6 +16,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
+    boolean existsByReservationCode(String reservationCode);
     boolean existsByFacility_Id(UUID facilityId);
     boolean existsByUnitType_Id(UUID unitTypeId);
     Optional<Reservation> findByReservationCode(String reservationCode);
@@ -125,8 +126,11 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 
     @Query("""
         select reservation from Reservation reservation
-        where reservation.status = com.storagehub.domain.model.ReservationStatus.CONFIRMED
-          and reservation.assignedUnit is null
+        where reservation.status in (
+            com.storagehub.domain.model.ReservationStatus.CONFIRMED,
+            com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
+            com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN
+          )
           and (:facilityId is null or reservation.facility.id = :facilityId)
           and (:unitTypeId is null or reservation.unitType.id = :unitTypeId)
           and (:scoped = false or reservation.facility.id in :facilityIds)
@@ -134,11 +138,6 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
                or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
                or lower(reservation.customer.fullName) like lower(concat('%', :q, '%')))
-          and not exists (
-            select assignment.id from UnitAssignment assignment
-            where assignment.reservation.id = reservation.id
-              and assignment.status = com.storagehub.domain.model.UnitAssignmentStatus.ACTIVE
-          )
         """)
     Page<Reservation> findUnitAssignmentCandidates(
         @Param("facilityId") UUID facilityId,
@@ -154,7 +153,9 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         where (
             (:statusFilter = false and reservation.status in (
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
-                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN
+                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN,
+                com.storagehub.domain.model.ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+                com.storagehub.domain.model.ReservationStatus.COMPLETED
             ))
             or (:statusFilter = true and reservation.status in (
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,

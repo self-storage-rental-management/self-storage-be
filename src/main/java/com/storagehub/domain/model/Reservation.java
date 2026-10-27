@@ -30,7 +30,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class Reservation extends BaseEntity {
 
-    @Column(nullable = false, unique = true, length = 32)
+    @Column(nullable = false, updatable = false, unique = true, length = 32)
     private String reservationCode;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -104,6 +104,14 @@ public class Reservation extends BaseEntity {
     @Column(nullable = false)
     private LocalDate endDate;
 
+    /** Free setup benefit captured from the accepted quote. Never recalculate from a later policy. */
+    @Column(nullable = false)
+    private int setupDaysSnapshot;
+
+    /** The customer may amend the goods declaration once during setup, before inventory is locked. */
+    @Column
+    private Instant setupGoodsRevisionUsedAt;
+
     /** Customer-selected arrival time for storage handover. Staff can only consume this value. */
     @Column
     private Instant appointmentAt;
@@ -149,6 +157,16 @@ public class Reservation extends BaseEntity {
 
     @Column(length = 1000)
     private String cancelReason;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancellation_type", length = 40)
+    private ReservationCancellationType cancellationType;
+
+    @Column(name = "cancellation_refund_amount", precision = 14, scale = 2)
+    private BigDecimal cancellationRefundAmount = BigDecimal.ZERO;
+
+    @Column(name = "cancellation_charge_amount", precision = 14, scale = 2)
+    private BigDecimal cancellationChargeAmount = BigDecimal.ZERO;
 
     @Column(length = 1000)
     private String rejectionReason;

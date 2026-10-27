@@ -1,6 +1,7 @@
 package com.storagehub.service;
 
 import com.storagehub.api.unitassignment.AssignableUnitResponse;
+import com.storagehub.api.unitassignment.ChangeUnitAssignmentRequest;
 import com.storagehub.api.unitassignment.CreateUnitAssignmentRequest;
 import com.storagehub.api.unitassignment.UnitAssignmentCandidateResponse;
 import com.storagehub.api.unitassignment.UnitAssignmentResponse;
@@ -89,12 +90,90 @@ public class UnitAssignmentService {
         Reservation reservation = reservationRepository.findById(reservationId)
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanRead(actor, reservation.getFacility().getId());
-        assertAssignmentCandidate(reservation);
+        assertAssignmentCanShowUnits(reservation);
         Page<AssignableUnitResponse> result = storageUnitRepository.findAssignableUnits(
             reservation.getFacility().getId(), reservation.getUnitType().getId(), clean(q),
             pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "code"))
         ).map(this::toUnitResponse);
         return PageResponse.from(result, correlationId);
+    }
+
+    @Transactional
+    public UnitAssignmentResponse change(
+        ActorPrincipal actor,
+        UUID reservationId,
+        ChangeUnitAssignmentRequest request
+    ) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.ASSIGN_UNITS);
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (reservation.getStatus() != ReservationStatus.UNIT_RESERVED
+            && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
+            throw ApiExceptions.conflict("Only an assigned reservation can change storage unit");
+        }
+        UnitAssignment current = assignmentRepository.findByReservation_IdAndStatus(
+            reservationId, UnitAssignmentStatus.ACTIVE
+        ).orElseThrow(() -> ApiExceptions.conflict("Reservation has no active unit assignment"));
+        if (current.getStorageUnit().getId().equals(request.storageUnitId())) {
+            return toAssignmentResponse(current);
+        }
+
+        StorageUnit previousUnit = storageUnitRepository.findByIdForUpdate(current.getStorageUnit().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Current storage unit was not found"));
+        StorageUnit nextUnit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
+            .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
+        validateAssignableUnit(reservation, nextUnit);
+        if (assignmentRepository.existsByStorageUnit_IdAndStatus(
+            nextUnit.getId(), UnitAssignmentStatus.ACTIVE
+        )) {
+            throw ApiExceptions.conflict("Storage unit already has an active assignment");
+        }
+
+        User operator = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        Instant now = Instant.now();
+        current.setStatus(UnitAssignmentStatus.CANCELLED);
+        if (previousUnit.getStatus() == StorageUnitStatus.reserved) {
+            previousUnit.setStatus(StorageUnitStatus.available);
+        }
+        UnitAssignment replacement = new UnitAssignment();
+        replacement.setReservation(reservation);
+        replacement.setStorageUnit(nextUnit);
+        replacement.setStatus(UnitAssignmentStatus.ACTIVE);
+        replacement.setAssignedBy(operator);
+        replacement.setAssignedAt(now);
+        reservation.setAssignedUnit(nextUnit);
+        nextUnit.setStatus(StorageUnitStatus.reserved);
+        nextUnit.setAvailableFrom(null);
+
+        storageUnitRepository.saveAndFlush(previousUnit);
+        storageUnitRepository.saveAndFlush(nextUnit);
+        reservationRepository.saveAndFlush(reservation);
+        assignmentRepository.saveAndFlush(current);
+        UnitAssignment saved = assignmentRepository.saveAndFlush(replacement);
+        auditLogService.recordMutation(
+            operator, "UNIT_ASSIGNMENT_CHANGED", "UnitAssignment", saved.getId(),
+            reservation.getFacility().getId(),
+            Map.of(
+                "previousStorageUnitId", previousUnit.getId(),
+                "previousAssignmentStatus", UnitAssignmentStatus.ACTIVE
+            ),
+            Map.of(
+                "storageUnitId", nextUnit.getId(),
+                "assignmentStatus", UnitAssignmentStatus.ACTIVE,
+                "reason", request.reason().trim()
+            )
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.RESERVATION,
+            "Đã đổi gian kho cho đặt chỗ",
+            "Đơn " + reservation.getReservationCode() + " đã đổi sang gian "
+                + nextUnit.getCode() + ". Lý do: " + request.reason().trim(),
+            reservation.getId()
+        );
+        return toAssignmentResponse(saved);
     }
 
     @Transactional
@@ -121,6 +200,10 @@ public class UnitAssignmentService {
             throw ApiExceptions.conflict("Reservation already has an active unit assignment");
         }
         assertAssignmentCandidate(reservation);
+        if (reservation.getGoodsReviewedBy() != null
+            && reservation.getGoodsReviewedBy().getId().equals(actor.userId())) {
+            throw ApiExceptions.conflict("The goods approver cannot assign a storage unit to the same reservation");
+        }
 
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
@@ -196,21 +279,59 @@ public class UnitAssignmentService {
         }
     }
 
+    private void assertAssignmentCanShowUnits(Reservation reservation) {
+        if (reservation.getStatus() == ReservationStatus.CONFIRMED
+            && reservation.getAssignedUnit() == null) {
+            return;
+        }
+        if ((reservation.getStatus() == ReservationStatus.UNIT_RESERVED
+            || reservation.getStatus() == ReservationStatus.READY_FOR_CHECKIN)
+            && assignmentRepository.findByReservation_IdAndStatus(
+                reservation.getId(), UnitAssignmentStatus.ACTIVE
+            ).isPresent()) {
+            return;
+        }
+        throw ApiExceptions.conflict("Reservation is not ready to select or change a storage unit");
+    }
+
+    private void validateAssignableUnit(Reservation reservation, StorageUnit unit) {
+        if (!unit.getFacility().getId().equals(reservation.getFacility().getId())) {
+            throw ApiExceptions.conflict("Storage unit belongs to a different facility");
+        }
+        if (!unit.getUnitType().getId().equals(reservation.getUnitType().getId())) {
+            throw ApiExceptions.conflict("Storage unit type does not match the reservation");
+        }
+        if (unit.getStatus() != StorageUnitStatus.available) {
+            throw ApiExceptions.conflict("Storage unit is not available");
+        }
+    }
+
     private UnitAssignmentCandidateResponse toCandidateResponse(Reservation reservation) {
         return new UnitAssignmentCandidateResponse(
             reservation.getId(), reservation.getReservationCode(), reservation.getStatus(),
             reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
             reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), reservation.getUnitType().getId(),
-            reservation.getUnitType().getName(), reservation.getStartDate(), reservation.getEndDate(),
-            reservation.getConfirmedAt(), reservation.getTotalGoodsVolumeM3(),
-            reservation.getTotalGoodsWeightKg()
+            ReservationSnapshotView.unitTypeName(reservation), reservation.getStartDate(), reservation.getEndDate(),
+            reservation.getConfirmedAt(), ReservationCheckInPolicy.managerAssignmentDueAt(reservation.getConfirmedAt()),
+            reservation.getTotalGoodsVolumeM3(),
+            reservation.getTotalGoodsWeightKg(),
+            reservation.getAssignedUnit() == null ? null : reservation.getAssignedUnit().getId(),
+            reservation.getAssignedUnit() == null ? null : reservation.getAssignedUnit().getCode(),
+            reservation.getAssignedUnit() == null ? null : reservation.getAssignedUnit().getStatus(),
+            assignmentRepository.findByReservation_IdAndStatus(
+                reservation.getId(), UnitAssignmentStatus.ACTIVE
+            ).map(UnitAssignment::getStatus).orElse(null)
         );
     }
 
     private AssignableUnitResponse toUnitResponse(StorageUnit unit) {
         return new AssignableUnitResponse(
-            unit.getId(), unit.getCode(), unit.getFloor(), unit.getZone(), unit.getStatus()
+            unit.getId(), unit.getCode(), unit.getFloor(), unit.getZone(), unit.getStatus(),
+            unit.getUnitType().getName(), unit.getUnitType().getLengthM(),
+            unit.getUnitType().getWidthM(), unit.getUnitType().getHeightM(),
+            unit.getUnitType().getAreaM2(), unit.getUnitType().getVolumeM3(),
+            unit.getUnitType().getMaxLoadKg()
         );
     }
 

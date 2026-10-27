@@ -45,6 +45,8 @@ public class FacilityLifecycleService {
     private final com.storagehub.domain.repo.UserRepository users;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final com.storagehub.domain.repo.GoodsTypeCatalogRepository goodsTypes;
+    private final com.storagehub.domain.repo.GoodsMaterialCatalogRepository goodsMaterials;
 
     private static byte[] bytes(UUID id) {
         if (id == null) return null;
@@ -58,28 +60,12 @@ public class FacilityLifecycleService {
     public void deleteFacility(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
         Facility facility = facility(facilityId);
-        if (reservations.existsByFacility_Id(facilityId)) {
-            throw ApiExceptions.conflict("Cơ sở đã có hồ sơ đặt hoặc thuê kho. Vui lòng chuyển sang Ngừng hoạt động để giữ lịch sử.");
-        }
-
-        byte[] facBytes = bytes(facilityId);
-        jdbc.update("UPDATE activity_logs SET facility_id = NULL WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM support_ticket_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE facility_id = ?)", facBytes);
-        jdbc.update("DELETE FROM support_tickets WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM damage_incidents WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM maintenance_tasks WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM access_credentials WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM unit_assignments WHERE storage_unit_id IN (SELECT id FROM storage_units WHERE facility_id = ?)", facBytes);
-        jdbc.update("DELETE FROM storage_units WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM reservation_quotes WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM unit_type_change_requests WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM unit_types WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM discount_codes WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM rental_package_policies WHERE facility_id = ?", facBytes);
-        jdbc.update("DELETE FROM user_facility_scopes WHERE facility_id = ?", facBytes);
-
-        facilities.delete(facility);
-        facilities.flush();
+        FacilityResponse before = facilityResponse(facility);
+        facility.setStatus(FacilityStatus.inactive);
+        facilities.saveAndFlush(facility);
+        unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).forEach(type -> type.setStatus(UnitTypeStatus.archived));
+        unitTypes.flush();
+        audit.recordMutation("FACILITY_ARCHIVED", "Facility", facilityId, facilityId, before, facilityResponse(facility));
     }
 
     @Transactional
@@ -115,10 +101,7 @@ public class FacilityLifecycleService {
         if (facility.getStatus() == FacilityStatus.inactive) {
             throw ApiExceptions.conflict("Inactive facility cannot receive unit types");
         }
-        String code = request.code().trim().toUpperCase();
-        if (unitTypes.findByFacility_IdAndCode(facilityId, code).isPresent()) {
-            throw ApiExceptions.conflict("Unit type code already exists in this facility");
-        }
+        String code = generateUnitTypeCode(facilityId);
         UnitType type = new UnitType();
         type.setFacility(facility);
         applyTechnical(type, request);
@@ -139,36 +122,73 @@ public class FacilityLifecycleService {
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         UUID facilityId = type.getFacility().getId();
         requireManager(actor, facilityId);
-        if (!type.getCode().equalsIgnoreCase(request.code().trim())) {
+        if (request.code() != null && !request.code().isBlank()
+            && !type.getCode().equalsIgnoreCase(request.code().trim())) {
             throw ApiExceptions.conflict("Không thể đổi mã loại kho đã tạo.");
         }
         boolean technicalChanged = technicalChanged(type, request);
-        if (technicalChanged && reservations.existsByUnitType_Id(unitTypeId)) {
-            throw ApiExceptions.conflict("Loại kho đã có hồ sơ đặt/thuê. Không thể thay đổi thông số kỹ thuật; hãy tạo loại kho mới để giữ thông tin đã cam kết.");
-        }
+        boolean requiresRepricing = technicalChanged || goodsScopeChanged(type, request);
         if (changes.existsByUnitTypeIdAndStatus(unitTypeId, "PENDING")) {
             throw ApiExceptions.conflict("Loại kho đang có yêu cầu chờ BO duyệt. Vui lòng đợi xử lý trước khi gửi thay đổi mới.");
         }
         ManagerUnitTypeRequest before = technicalSnapshot(type);
         ManagerUnitTypeRequest after = normalizedChange(request);
-        if (!technicalChanged && java.util.Objects.equals(type.getName(), after.name())
-            && java.util.Objects.equals(type.getDescription(), after.description())
-            && java.util.Objects.equals(type.getImageUrl(), after.imageUrl())
-            && java.util.Objects.equals(type.getDetailImageUrl(), after.detailImageUrl())) {
+        long currentCount = units.countByFacility_IdAndUnitType_IdAndStatusIn(
+            facilityId, unitTypeId, StorageUnitStatus.operationalStatuses());
+        int requestedCount = request.physicalUnitCount();
+        boolean quantityChanged = requestedCount > 0 && requestedCount != currentCount;
+
+        if (quantityChanged) {
+            if (requestedCount > currentCount) {
+                int toAdd = (int) (requestedCount - currentCount);
+                createPhysicalUnits(type, toAdd, request.floor(), request.zone());
+            } else {
+                int toRemove = (int) (currentCount - requestedCount);
+                var availableUnits = units.findByFacility_Id(facilityId).stream()
+                    .filter(u -> u.getUnitType().getId().equals(unitTypeId))
+                    .filter(u -> u.getStatus() == StorageUnitStatus.available)
+                    .sorted((a, b) -> b.getCode().compareTo(a.getCode()))
+                    .toList();
+                if (availableUnits.size() < toRemove) {
+                    long inUse = currentCount - availableUnits.size();
+                    throw ApiExceptions.conflict("Không thể giảm xuống " + requestedCount + " gian kho vì hiện có " + inUse + " gian đang được thuê hoặc giữ chỗ.");
+                }
+                var unitsToArchive = availableUnits.subList(0, toRemove);
+                unitsToArchive.forEach(unit -> {
+                    unit.setStatus(StorageUnitStatus.archived);
+                    unit.setAvailableFrom(null);
+                });
+                units.saveAll(unitsToArchive);
+                units.flush();
+            }
+        }
+
+        boolean metadataChanged = !java.util.Objects.equals(type.getName(), after.name())
+            || !java.util.Objects.equals(type.getDescription(), after.description())
+            || !java.util.Objects.equals(type.getImageUrl(), after.imageUrl())
+            || !java.util.Objects.equals(type.getDetailImageUrl(), after.detailImageUrl());
+
+        if (!requiresRepricing && !metadataChanged && !quantityChanged) {
             throw ApiExceptions.conflict("Thông tin loại kho chưa có thay đổi.");
         }
-        var change = new com.storagehub.domain.model.UnitTypeChangeRequest();
-        change.setUnitTypeId(unitTypeId);
-        change.setFacilityId(facilityId);
-        change.setFacilityName(type.getFacility().getName());
-        change.setUnitTypeCode(type.getCode());
-        change.setRequestedBy(actor.userId());
-        change.setRequesterName(users.findById(actor.userId()).map(com.storagehub.domain.model.User::getFullName).orElse("Manager"));
-        change.setBeforeJson(json(before));
-        change.setAfterJson(json(after));
-        change = changes.saveAndFlush(change);
-        audit.recordMutation("UNIT_TYPE_CHANGE_REQUESTED", "UnitTypeChangeRequest", change.getId(), facilityId, before, after);
-        notifications.notifyBusinessOfUnitTypeReview(type, change.getId());
+
+        if (requiresRepricing || metadataChanged) {
+            var change = new com.storagehub.domain.model.UnitTypeChangeRequest();
+            change.setUnitTypeId(unitTypeId);
+            change.setFacilityId(facilityId);
+            change.setFacilityName(type.getFacility().getName());
+            change.setUnitTypeCode(type.getCode());
+            change.setRequestedBy(actor.userId());
+            change.setRequesterName(users.findById(actor.userId()).map(com.storagehub.domain.model.User::getFullName).orElse("Manager"));
+            change.setBeforeJson(json(before));
+            change.setAfterJson(json(after));
+            change.setRequiresRepricing(requiresRepricing);
+            change = changes.saveAndFlush(change);
+            audit.recordMutation("UNIT_TYPE_CHANGE_REQUESTED", "UnitTypeChangeRequest", change.getId(), facilityId, before, after);
+            notifications.notifyBusinessOfUnitTypeReview(type, change.getId());
+        } else if (quantityChanged) {
+            audit.recordMutation("UNIT_TYPE_QUANTITY_UPDATED", "UnitType", type.getId(), facilityId, before, unitTypeResponse(type));
+        }
         return unitTypeResponse(type);
     }
 
@@ -176,13 +196,15 @@ public class FacilityLifecycleService {
         return new ManagerUnitTypeRequest(t.getCode(), t.getName(), t.getDescription(), t.getLengthM(), t.getWidthM(),
             t.getHeightM(), t.getMaxLoadKg(), t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(),
             t.getAisleWidthM(), t.getTrolleyType(), t.getSmallBoxCapacity() == null ? 0 : t.getSmallBoxCapacity(),
-            t.getLargeBoxCapacity() == null ? 0 : t.getLargeBoxCapacity(), t.getImageUrl(), 0, null, null, t.getDetailImageUrl());
+            t.getLargeBoxCapacity() == null ? 0 : t.getLargeBoxCapacity(), t.getImageUrl(), 0, null, null, t.getDetailImageUrl(),
+            goodsScope(t).categoryIds(), goodsScope(t).materialIds());
     }
 
     private ManagerUnitTypeRequest normalizedChange(ManagerUnitTypeRequest r) {
-        return new ManagerUnitTypeRequest(r.code().trim(), r.name().trim(), clean(r.description()), r.lengthM(),
+        return new ManagerUnitTypeRequest(clean(r.code()), r.name().trim(), clean(r.description()), r.lengthM(),
             r.widthM(), r.heightM(), r.maxLoadKg(), r.rackCount(), r.rackLengthM(), r.rackWidthM(), r.rackHeightM(),
-            r.aisleWidthM(), r.trolleyType().trim(), r.smallBoxCapacity(), r.largeBoxCapacity(), clean(r.imageUrl()), 0, null, null, clean(r.detailImageUrl()));
+            r.aisleWidthM(), r.trolleyType().trim(), r.smallBoxCapacity(), r.largeBoxCapacity(), clean(r.imageUrl()), 0, null, null, clean(r.detailImageUrl()),
+            distinct(r.acceptedGoodsCategoryIds()), distinct(r.acceptedGoodsMaterialIds()));
     }
 
     private String json(Object value) {
@@ -196,9 +218,11 @@ public class FacilityLifecycleService {
     }
 
     private com.storagehub.api.facility.UnitTypeChangeResponse changeResponse(com.storagehub.domain.model.UnitTypeChangeRequest r) {
+        UnitType current = unitTypes.findById(r.getUnitTypeId()).orElse(null);
         return new com.storagehub.api.facility.UnitTypeChangeResponse(r.getId(), r.getUnitTypeId(), r.getFacilityId(),
             r.getFacilityName(), r.getUnitTypeCode(), r.getRequestedBy(), r.getRequesterName(), r.getCreatedAt(), r.getStatus(),
-            readChange(r.getBeforeJson()), readChange(r.getAfterJson()), r.getReviewedBy(), r.getReviewedAt(), r.getRejectionReason());
+            readChange(r.getBeforeJson()), readChange(r.getAfterJson()), r.getReviewedBy(), r.getReviewedAt(), r.getRejectionReason(), r.isRequiresRepricing(),
+            current == null ? null : current.getMonthlyPrice(), current == null ? null : current.getSecurityDepositAmount());
     }
 
     @Transactional(readOnly = true)
@@ -214,7 +238,8 @@ public class FacilityLifecycleService {
     }
 
     @Transactional
-    public com.storagehub.api.facility.UnitTypeChangeResponse reviewUnitTypeChange(ActorPrincipal actor, UUID id, boolean approved, String reason) {
+    public com.storagehub.api.facility.UnitTypeChangeResponse reviewUnitTypeChange(ActorPrincipal actor, UUID id, boolean approved, String reason,
+                                                                                  BigDecimal monthlyPrice, BigDecimal securityDepositAmount) {
         requireBusiness(actor);
         var change = changes.findLockedById(id).orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu duyệt."));
         if (!"PENDING".equals(change.getStatus())) throw ApiExceptions.conflict("Yêu cầu này đã được xử lý.");
@@ -223,15 +248,18 @@ public class FacilityLifecycleService {
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy loại kho."));
         if (approved) {
             ManagerUnitTypeRequest after = readChange(change.getAfterJson());
-            // Recheck at approval time: new reservations may have arrived while this request was pending.
-            if (technicalChanged(type, after) && reservations.existsByUnitType_Id(type.getId())) {
-                throw ApiExceptions.conflict("Loại kho đã có hồ sơ đặt/thuê; không thể duyệt thay đổi kỹ thuật. Hãy từ chối và tạo loại kho mới.");
-            }
             if (!json(technicalSnapshot(type)).equals(json(readChange(change.getBeforeJson())))) {
                 throw ApiExceptions.conflict("Thông tin gốc đã thay đổi. Hãy từ chối và yêu cầu Manager gửi lại.");
             }
             UnitTypeResponse before = unitTypeResponse(type);
+            if (change.isRequiresRepricing() && (monthlyPrice == null || monthlyPrice.signum() <= 0
+                || securityDepositAmount == null || securityDepositAmount.signum() < 0)) {
+                throw ApiExceptions.validation("Thay đổi này ảnh hưởng giá. BO phải xác nhận giá thuê và tiền đảm bảo trước khi duyệt.", null);
+            }
             applyTechnical(type, after);
+            if (monthlyPrice != null) type.setMonthlyPrice(monthlyPrice);
+            if (securityDepositAmount != null) type.setSecurityDepositAmount(securityDepositAmount);
+            type.setPublishedRevision(Math.max(1, type.getPublishedRevision() + 1));
             unitTypes.save(type);
             audit.recordMutation("UNIT_TYPE_CHANGE_APPROVED", "UnitType", type.getId(), change.getFacilityId(), before, unitTypeResponse(type));
         }
@@ -243,6 +271,11 @@ public class FacilityLifecycleService {
         audit.recordMutation("UNIT_TYPE_CHANGE_REVIEWED", "UnitTypeChangeRequest", id, change.getFacilityId(), null, changeResponse(change));
         notifications.notifyUnitTypeReviewResult(change);
         return changeResponse(change);
+    }
+
+    /** Compatibility overload retained for existing callers and tests. */
+    public com.storagehub.api.facility.UnitTypeChangeResponse reviewUnitTypeChange(ActorPrincipal actor, UUID id, boolean approved, String reason) {
+        return reviewUnitTypeChange(actor, id, approved, reason, null, null);
     }
 
     private boolean different(BigDecimal before, BigDecimal after) {
@@ -260,6 +293,51 @@ public class FacilityLifecycleService {
             || !java.util.Objects.equals(t.getLargeBoxCapacity(), r.largeBoxCapacity());
     }
 
+    private boolean goodsScopeChanged(UnitType type, ManagerUnitTypeRequest request) {
+        GoodsScope current = goodsScope(type);
+        return !current.categoryIds().equals(distinct(request.acceptedGoodsCategoryIds()))
+            || !current.materialIds().equals(distinct(request.acceptedGoodsMaterialIds()));
+    }
+
+    private List<UUID> distinct(List<UUID> values) {
+        return values == null ? List.of() : values.stream().filter(java.util.Objects::nonNull).distinct().sorted().toList();
+    }
+
+    private record GoodsScope(List<UUID> categoryIds, List<UUID> materialIds) {}
+
+    private GoodsScope goodsScope(UnitType type) {
+        try {
+            return objectMapper.readValue(type.getAcceptedGoodsJson(), GoodsScope.class);
+        } catch (Exception ignored) {
+            return new GoodsScope(List.of(), List.of());
+        }
+    }
+
+    private String approvedGoodsJson(ManagerUnitTypeRequest request) {
+        List<UUID> categoryIds = distinct(request.acceptedGoodsCategoryIds());
+        List<UUID> materialIds = distinct(request.acceptedGoodsMaterialIds());
+        // Backward-compatible requests created before scoped goods existed mean "all active".
+        if (categoryIds.isEmpty()) categoryIds = goodsTypes.findAllByStatusOrderByCodeAsc(com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
+            .stream().map(com.storagehub.domain.model.GoodsTypeCatalog::getId).sorted().toList();
+        List<UUID> selectedCategoryIds = categoryIds;
+        if (materialIds.isEmpty()) materialIds = goodsMaterials.findAll().stream()
+            .filter(value -> value.getStatus() == com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
+            .filter(value -> selectedCategoryIds.contains(value.getGoodsType().getId()))
+            .map(com.storagehub.domain.model.GoodsMaterialCatalog::getId).sorted().toList();
+        var categories = goodsTypes.findAllById(categoryIds);
+        var materials = goodsMaterials.findAllById(materialIds);
+        if (categories.size() != categoryIds.size() || categories.stream().anyMatch(v -> v.getStatus() != com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)) {
+            throw ApiExceptions.validation("Có loại hàng không tồn tại hoặc đã ngừng áp dụng.", null);
+        }
+        if (materials.size() != materialIds.size() || materials.stream().anyMatch(v -> v.getStatus() != com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)) {
+            throw ApiExceptions.validation("Có vật liệu không tồn tại hoặc đã ngừng áp dụng.", null);
+        }
+        if (materials.stream().anyMatch(v -> !selectedCategoryIds.contains(v.getGoodsType().getId()))) {
+            throw ApiExceptions.validation("Vật liệu được chọn phải thuộc một loại hàng được áp dụng.", null);
+        }
+        return json(new GoodsScope(categoryIds, materialIds));
+    }
+
     @Transactional
     public void deleteUnitType(ActorPrincipal actor, UUID unitTypeId) {
         UnitType type = unitTypes.findByIdForUpdate(unitTypeId)
@@ -269,25 +347,11 @@ public class FacilityLifecycleService {
         if (changes.existsByUnitTypeIdAndStatus(unitTypeId, "PENDING")) {
             throw ApiExceptions.conflict("Không thể xóa loại kho đang chờ BO duyệt thay đổi.");
         }
-        if (reservations.existsByUnitType_Id(unitTypeId)) {
-            throw ApiExceptions.conflict("Không thể xóa loại kho đã có hồ sơ đặt hoặc thuê.");
-        }
-        var physicalUnits = units.findByFacility_Id(facilityId).stream()
-            .filter(unit -> unit.getUnitType().getId().equals(unitTypeId))
-            .map(unit -> units.findByIdForUpdate(unit.getId()).orElseThrow()).toList();
-        if (physicalUnits.stream().anyMatch(unit -> unit.getStatus() != StorageUnitStatus.available)) {
-            throw ApiExceptions.conflict("Chỉ được xóa loại kho khi mọi gian kho đều trống và không có dữ liệu liên quan.");
-        }
         UnitTypeResponse before = unitTypeResponse(type);
-        try {
-            units.deleteAll(physicalUnits);
-            units.flush();
-            unitTypes.delete(type);
-            unitTypes.flush();
-        } catch (org.springframework.dao.DataIntegrityViolationException exception) {
-            throw ApiExceptions.conflict("Loại kho hoặc gian kho đã có hồ sơ liên quan, không thể xóa để bảo toàn lịch sử.");
-        }
-        audit.recordMutation("UNIT_TYPE_DELETED_BY_MANAGER", "UnitType", unitTypeId, facilityId, before, null);
+        type.setStatus(UnitTypeStatus.archived);
+        UnitType saved = unitTypes.saveAndFlush(type);
+        audit.recordMutation("UNIT_TYPE_ARCHIVED_BY_MANAGER", "UnitType", unitTypeId, facilityId,
+            before, unitTypeResponse(saved));
     }
 
     @Transactional
@@ -333,9 +397,10 @@ public class FacilityLifecycleService {
         boolean hasEffectivePackage = packages
             .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(facilityId, LocalDate.now())
             .stream().anyMatch(p -> p.getEffectiveTo() == null || !p.getEffectiveTo().isBefore(LocalDate.now()));
-        if (!hasEffectivePackage) throw ApiExceptions.conflict("Chưa thể công bố: cơ sở chưa được gán gói thuê đang áp dụng và còn hiệu lực. Vào Chính sách thuê để thêm cơ sở vào gói thuê.");
+        if (!hasEffectivePackage) throw ApiExceptions.conflict("Chưa thể công bố: cơ sở chưa được gán gói thuê đang áp dụng và còn hiệu lực. Vào Gói thuê để thêm cơ sở vào gói thuê.");
 
         candidates.forEach(type -> type.setStatus(UnitTypeStatus.active));
+        candidates.forEach(type -> { if (type.getPublishedRevision() == 0) type.setPublishedRevision(1); });
         unitTypes.saveAll(candidates);
         facility.setStatus(FacilityStatus.active);
     }
@@ -355,21 +420,64 @@ public class FacilityLifecycleService {
         type.setTrolleyType(request.trolleyType().trim());
         type.setSmallBoxCapacity(request.smallBoxCapacity());
         type.setLargeBoxCapacity(request.largeBoxCapacity());
+        type.setAcceptedGoodsJson(approvedGoodsJson(request));
         type.setImageUrl(request.imageUrl() == null || request.imageUrl().isBlank() ? null : request.imageUrl().trim());
         type.setDetailImageUrl(clean(request.detailImageUrl()));
     }
 
-    private void createPhysicalUnits(UnitType type, int count, String floor, String zone) {
-        for (int index = 1; index <= count; index++) {
-            StorageUnit unit = new StorageUnit();
-            unit.setFacility(type.getFacility());
-            unit.setUnitType(type);
-            unit.setCode("%s-%s-%03d".formatted(type.getFacility().getCode(), type.getCode(), index));
-            unit.setFloor(floor);
-            unit.setZone(zone);
-            unit.setStatus(StorageUnitStatus.available);
-            units.save(unit);
+    private String extractZonePrefix(String zone) {
+        if (zone == null || zone.isBlank()) return "A";
+        String clean = java.text.Normalizer.normalize(zone.trim(), java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "")
+            .replace('đ', 'd')
+            .replace('Đ', 'D');
+        String stripped = clean.replaceAll("(?i)^(khu\\s*vuc|khu|zone)\\s*", "").trim();
+        if (!stripped.isEmpty()) {
+            String alphanumeric = stripped.replaceAll("[^a-zA-Z0-9]", "");
+            if (!alphanumeric.isEmpty()) {
+                return alphanumeric.toUpperCase();
+            }
         }
+        return clean.substring(0, Math.min(2, clean.length())).toUpperCase();
+    }
+
+    private String extractFloorNumber(String floor) {
+        if (floor == null || floor.isBlank()) return "1";
+        String digits = floor.replaceAll("[^0-9]", "").trim();
+        if (!digits.isEmpty()) return digits;
+        return floor.trim().toUpperCase();
+    }
+
+    private void createPhysicalUnits(UnitType type, int count, String floor, String zone) {
+        String zonePrefix = extractZonePrefix(zone);
+        String floorNum = extractFloorNumber(floor);
+        int createdCount = 0;
+        int index = 1;
+        while (createdCount < count) {
+            String candidateCode = "%s-%s%02d".formatted(zonePrefix, floorNum, index);
+            if (!units.existsByCode(candidateCode)) {
+                StorageUnit unit = new StorageUnit();
+                unit.setFacility(type.getFacility());
+                unit.setUnitType(type);
+                unit.setCode(candidateCode);
+                unit.setFloor(floor);
+                unit.setZone(zone);
+                unit.setStatus(StorageUnitStatus.available);
+                units.save(unit);
+                createdCount++;
+            }
+            index++;
+            if (index > 999) break;
+        }
+    }
+
+    private String generateUnitTypeCode(UUID facilityId) {
+        for (int attempt = 0; attempt < 10; attempt++) {
+            String code = "UT-" + UUID.randomUUID().toString().replace("-", "")
+                .substring(0, 10).toUpperCase();
+            if (unitTypes.findByFacility_IdAndCode(facilityId, code).isEmpty()) return code;
+        }
+        throw ApiExceptions.conflict("Không thể sinh mã loại kho duy nhất. Vui lòng thử lại.");
     }
 
     private void requireBusiness(ActorPrincipal actor) {
@@ -415,7 +523,8 @@ public class FacilityLifecycleService {
             t.getAreaM2(), t.getVolumeM3(), t.getMonthlyPrice(), t.getSecurityDepositAmount(), t.getImageUrl(), t.getMaxLoadKg(),
             t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getAisleWidthM(), t.getTrolleyType(),
             t.getSmallBoxCapacity(), t.getLargeBoxCapacity(), t.getStatus(),
-            units.countByFacility_IdAndUnitType_Id(t.getFacility().getId(), t.getId()), available,
-            units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt(), t.getDetailImageUrl());
+            units.countByFacility_IdAndUnitType_IdAndStatusIn(t.getFacility().getId(), t.getId(), StorageUnitStatus.operationalStatuses()), available,
+            units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.occupied), t.getCreatedAt(), t.getUpdatedAt(), t.getDetailImageUrl(),
+            t.getPublishedRevision(), goodsScope(t).categoryIds(), goodsScope(t).materialIds());
     }
 }
