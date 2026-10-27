@@ -11,7 +11,8 @@ import org.springframework.stereotype.Service;
 public class FacilityScopeService {
 
     public boolean isFacilityScoped(ActorPrincipal actor) {
-        return !actor.hasRole(RoleCode.ADMIN)
+        return actor != null
+            && !hasGlobalScope(actor)
             && actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS);
     }
 
@@ -30,12 +31,12 @@ public class FacilityScopeService {
     public boolean hasGlobalScope(ActorPrincipal actor) {
         if (actor == null) return false;
         if (actor.hasRole(RoleCode.ADMIN)) return true;
-        return false;
+        return actor.hasRole(RoleCode.BUSINESS) && actor.facilityScopes().isEmpty();
     }
 
     public boolean canAccessFacility(ActorPrincipal actor, UUID facilityId, FacilityScopeLevel required) {
         if (actor == null) return false;
-        if (actor.hasRole(RoleCode.ADMIN)) return true;
+        if (hasGlobalScope(actor)) return true;
         if (actor.hasRole(RoleCode.CUSTOMER)) {
             return required == FacilityScopeLevel.READ;
         }
