@@ -292,18 +292,24 @@ public class ReservationCompatibilityService {
     }
 
     private void validateOtherItem(GoodsItemRequest item, int index, boolean validateCurrentCatalog) {
-        if (isOther(item)
-            && (isBlank(item.getCustomGoodsName()) || isBlank(item.getCustomMaterial()))) {
+        if (isOther(item) && isBlank(item.getCustomGoodsName())) {
             throw ApiExceptions.validation(
-                "goodsItems[" + index + "] requires customGoodsName and customMaterial for OTHER category", null
+                "goodsItems[" + index + "] requires customGoodsName for OTHER category", null
             );
         }
-        if (!isOther(item) && isBlank(item.getMaterialName())) {
+        if (!isOther(item) && !hasOptionalMaterial(item) && isBlank(item.getMaterialName())) {
             throw ApiExceptions.validation(
                 "goodsItems[" + index + "] requires materialName for a standard category", null
             );
         }
         // The database-backed catalog and per-unit-type scope are validated together by the caller.
+    }
+
+    private static boolean hasOptionalMaterial(GoodsItemRequest item) {
+        String code = item.getCategoryCode() == null ? item.getCategory().name() : item.getCategoryCode();
+        return "ELECTRONICS".equals(code)
+            || "CAMERA_EQUIPMENT".equals(code)
+            || "MUSICAL_INSTRUMENTS".equals(code);
     }
 
     private boolean fitsInsideRack(GoodsItemRequest item, UnitType unitType) {

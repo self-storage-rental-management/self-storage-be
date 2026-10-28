@@ -453,6 +453,11 @@ public class ReturnSettlementService {
         totalDeductions = totalDeductions.add(earlyTerminationCharge).setScale(2, RoundingMode.HALF_UP);
         BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
         BigDecimal netRefund = securityRefund.add(rentalRefund).setScale(2, RoundingMode.HALF_UP);
+        if (returnCase.isSetupEarlyExit()) {
+            BigDecimal setupBalance = deposit.add(rentalRefund).subtract(totalDeductions);
+            netRefund = setupBalance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+            amountDue = setupBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        }
         requireSettlementLimit(totalDeductions);
 
         returnCase.setInspectedBy(staff);
@@ -565,7 +570,6 @@ public class ReturnSettlementService {
         } else {
             // Decision accepted
             var reconciliation = requireFinance();
-            reconciliation.requireCurrent(returnCase);
             if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
                 returnCase.setStatus(ReturnCaseStatus.payment_due);
             } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
@@ -711,6 +715,11 @@ public class ReturnSettlementService {
         totalDeductions = totalDeductions.add(earlyTerminationCharge).setScale(2, RoundingMode.HALF_UP);
         BigDecimal netRefund = securityRefund.add(rentalRefund).setScale(2, RoundingMode.HALF_UP);
         BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        if (returnCase.isSetupEarlyExit()) {
+            BigDecimal setupBalance = deposit.add(rentalRefund).subtract(totalDeductions);
+            netRefund = setupBalance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+            amountDue = setupBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        }
 
         requireSettlementLimit(totalDeductions);
         returnCase.setReviewedBy(manager);
@@ -814,6 +823,14 @@ public class ReturnSettlementService {
                 finance().settle(returnCase, actor.userId(), settlementReference, true);
             }
         } else {
+            if (!Boolean.TRUE.equals(request.confirmed()) || request.amount() == null) {
+                throw ApiExceptions.validation("Vui lòng xác nhận số tiền thực hoàn và đối chiếu biên lai trước khi ghi nhận.", null);
+            }
+            if (returnCase.getStatus() != ReturnCaseStatus.refund_pending
+                || returnCase.getNetRefundAmount() == null || returnCase.getNetRefundAmount().signum() <= 0
+                || returnCase.getNetRefundAmount().compareTo(request.amount()) != 0) {
+                throw ApiExceptions.conflict("Số tiền thực hoàn không khớp với bảng kê đang chờ hoàn tiền.");
+            }
             if (request.transactionReference() == null || request.transactionReference().isBlank()
                 || request.paymentMethod() == null || request.paymentMethod().isBlank() || request.receiptFileId() == null) {
                 throw ApiExceptions.validation("A real refund transaction, payment method and receipt are required", null);
@@ -857,7 +874,7 @@ public class ReturnSettlementService {
 
     @Transactional
     public ReturnCaseResponse customerPaySettlement(ActorPrincipal actor,UUID returnId,CustomerPaySettlementRequest request) {
-        throw ApiExceptions.conflict("Customer payment must be completed through an approved payment gateway or Staff settlement receipt");
+        throw ApiExceptions.conflict("Vui lòng hoàn tất thanh toán tại cơ sở bằng biên lai do nhân viên xác nhận hoặc qua cổng thanh toán được chấp thuận.");
     }
 
     @Transactional
@@ -870,12 +887,21 @@ public class ReturnSettlementService {
         }
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
         facilityScopeService.assertCanOperate(actor, rc.getFacility().getId());
+        if (rc.getStatus() == ReturnCaseStatus.completed) {
+            BigDecimal settledAmount = zeroIfNull(rc.getAmountDueFromCustomer()).signum() > 0
+                ? rc.getAmountDueFromCustomer() : rc.getNetRefundAmount();
+            if (settledAmount == null || request.amount() == null || settledAmount.compareTo(request.amount()) != 0
+                || !requireFinance().recordedReceiptMatches(rc, request.paymentMethod(), request.transactionReference(), request.receiptFileId())) {
+                throw ApiExceptions.conflict("Yêu cầu gửi lại không khớp với biên lai quyết toán đã hoàn tất.");
+            }
+            return toResponse(rc);
+        }
         if (rc.getStatus() != ReturnCaseStatus.payment_due && rc.getStatus() != ReturnCaseStatus.refund_pending) {
             throw ApiExceptions.conflict("The return case has no outstanding collection or refund");
         }
         BigDecimal expectedAmount = rc.getStatus() == ReturnCaseStatus.payment_due ? rc.getAmountDueFromCustomer() : rc.getNetRefundAmount();
         if (expectedAmount == null || request.amount() == null || expectedAmount.compareTo(request.amount()) != 0) {
-            throw ApiExceptions.conflict("The settlement amount does not match the server calculation");
+            throw ApiExceptions.conflict("Số tiền quyết toán không khớp với bảng kê đã xác nhận.");
         }
         lockRecoveryReturn(rc);
         var guard=recoveryGuard();

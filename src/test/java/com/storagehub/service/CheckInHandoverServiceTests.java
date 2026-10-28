@@ -27,6 +27,8 @@ import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.Role;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignment;
@@ -156,6 +158,14 @@ class CheckInHandoverServiceTests {
 
     @Test
     void schedulesCheckInAndMarksReservationReady() {
+        var staffRole = new Role();
+        staffRole.setCode(RoleCode.STAFF);
+        staff.setStatus(UserStatus.ACTIVE);
+        staff.getRoles().add(staffRole);
+        when(userRepository.findEligibleStaff(
+            UserStatus.ACTIVE, RoleCode.STAFF, reservation.getFacility().getId(),
+            List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
+        )).thenReturn(List.of(staff));
         when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
         when(assignmentRepository.findByReservation_IdAndStatus(

@@ -104,9 +104,20 @@ class ReservationCompatibilityServiceTests {
     }
 
     @Test
+    void acceptsElectronicsWithoutPrimaryMaterial() {
+        stubAvailableUnitType(1);
+        CompatibilityCheckRequest request = request(GoodsCategory.ELECTRONICS, null, null);
+        request.getGoodsItems().getFirst().setMaterialName(null);
+
+        var response = service.check(customer, request);
+
+        assertThat(response.getResult()).isEqualTo(CompatibilityResult.COMPATIBLE);
+    }
+
+    @Test
     void requiresStaffReviewForValidOtherGoods() {
         stubAvailableUnitType(1);
-        CompatibilityCheckRequest request = request(GoodsCategory.OTHER, "Custom item", "Mixed material");
+        CompatibilityCheckRequest request = request(GoodsCategory.OTHER, "Custom item", null);
 
         var response = service.check(customer, request);
 
@@ -121,7 +132,7 @@ class ReservationCompatibilityServiceTests {
 
         assertThatThrownBy(() -> service.check(customer, request))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("customGoodsName and customMaterial");
+            .hasMessageContaining("customGoodsName");
     }
 
     @Test
