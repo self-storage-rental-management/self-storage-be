@@ -78,7 +78,7 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false)
     private LocalDate scheduledDate;
 
-    @Column(length = 2000)
+    @Column(columnDefinition = "TEXT")
     private String customerNotes;
 
     // Inspection
@@ -97,10 +97,10 @@ public class ReturnCase extends BaseEntity {
     @Column(length = 32)
     private DamageClassification damageClassification;
 
-    @Column(length = 4000)
+    @Column(columnDefinition = "TEXT")
     private String inspectionNotes;
 
-    @Column(length = 4000)
+    @Column(columnDefinition = "TEXT")
     private String evidencePhotosJson;
 
     @Column(nullable = false)
@@ -126,7 +126,7 @@ public class ReturnCase extends BaseEntity {
     @Column(name = "legacy_pricing_evidence_file_id", columnDefinition = "BINARY(16)")
     private java.util.UUID legacyPricingEvidenceFileId;
 
-    @Column(name = "legacy_pricing_decision_reason", length = 2000)
+    @Column(name = "legacy_pricing_decision_reason", columnDefinition = "TEXT")
     private String legacyPricingDecisionReason;
 
     @Enumerated(EnumType.STRING)
@@ -182,7 +182,7 @@ public class ReturnCase extends BaseEntity {
     @Column(length = 20)
     private CustomerDecision customerDecision;
 
-    @Column(length = 2000)
+    @Column(columnDefinition = "TEXT")
     private String customerDecisionNote;
 
     // Manager Review
@@ -193,7 +193,7 @@ public class ReturnCase extends BaseEntity {
     @Column
     private Instant reviewedAt;
 
-    @Column(length = 2000)
+    @Column(columnDefinition = "TEXT")
     private String managerResolutionNote;
 
     // Settlement completion & payment / refund
