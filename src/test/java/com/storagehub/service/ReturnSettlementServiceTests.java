@@ -432,7 +432,7 @@ class ReturnSettlementServiceTests {
         );
 
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
-        when(returnCaseRepository.saveAndFlush(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         ReturnCaseResponse response = service.staffCompleteRefund(staffActor, returnCase.getId(), request);
 
@@ -469,8 +469,10 @@ class ReturnSettlementServiceTests {
         assertThat(rc.getSetupReturnedAt()).isNull();
     }
 
-    @Test
-    void setupRefundIncludesVerifiedRentAndOneMonthFeeWithoutCountingPrepaymentAgain() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"300000,2300000,5700000,0", "8000000,10000000,0,2000000"})
+    void setupRefundIncludesVerifiedRentAndOneMonthFeeWithoutCountingPrepaymentAgain(
+        String damage, String deductions, String refund, String due) {
         var rc = setupReturn(ReturnCaseStatus.requested);
         rental.setSetupStartedAt(Instant.now().minusSeconds(3600));
         rental.setSetupEndsAt(Instant.now().plusSeconds(86400));
@@ -493,15 +495,36 @@ class ReturnSettlementServiceTests {
         asset.setStatus(com.storagehub.domain.model.FileAssetStatus.ACTIVE);
         when(settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, fileId)).thenReturn(asset);
         var inspection = new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.minor_damage,
-            new BigDecimal("300000"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            new BigDecimal(damage), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             "Vết xước khi trả kho, có ảnh đối chiếu", List.of(fileId.toString()), true, true, true, StorageUnitStatus.available, true);
         var response = service.performInspection(staffActor, rc.getId(), inspection);
         assertThat(response.rentalRefundCredit()).isEqualByComparingTo("6000000");
         assertThat(response.earlyTerminationFee()).isEqualByComparingTo("2000000");
+        assertThat(response.totalDeductions()).isEqualByComparingTo(deductions);
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(refund);
+        assertThat(response.amountDueFromCustomer()).isEqualByComparingTo(due);
+        assertThat(response.setupReturnedAt().getNano() % 1000).isZero();
+    }
+
+    @Test
+    void setupDisputeReviewDeductsEarlyExitFeeFromCombinedVerifiedFunds() {
+        var rc = setupReturn(ReturnCaseStatus.disputed);
+        rc.setSetupEarlyExit(true);
+        rc.setDamageFee(new BigDecimal("500000"));
+        rc.setCleaningFee(BigDecimal.ZERO);
+        rc.setLostItemFee(BigDecimal.ZERO);
+        rc.setEarlyTerminationFee(new BigDecimal("2000000"));
+        rc.setRentalRefundCredit(new BigDecimal("6000000"));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
+        when(returnCaseRepository.save(rc)).thenReturn(rc);
+        var response = service.managerReviewDispute(managerActor, rc.getId(),
+            new ManagerReviewDisputeRequest("Giảm phí theo bằng chứng kiểm kê", new BigDecimal("300000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, StorageUnitStatus.available));
         assertThat(response.totalDeductions()).isEqualByComparingTo("2300000");
         assertThat(response.netRefundAmount()).isEqualByComparingTo("5700000");
         assertThat(response.amountDueFromCustomer()).isZero();
-        assertThat(response.setupReturnedAt().getNano() % 1000).isZero();
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
     }
 
     @Test
@@ -553,12 +576,30 @@ class ReturnSettlementServiceTests {
     @Test
     void customerPaymentDeclarationDoesNotSettleTheReturn() {
         var rc = setupReturn(ReturnCaseStatus.payment_due);
-        when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
         assertThatThrownBy(() -> service.customerPaySettlement(customerActor, rc.getId(),
             new CustomerPaySettlementRequest("CASH", "Customer declared paid"))).hasMessageContaining("thanh toán tại cơ sở");
         assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.payment_due);
         assertThat(rc.getSettlementPaidAt()).isNull();
         org.mockito.Mockito.verifyNoInteractions(returnFinance, storageUnitRepository);
+    }
+
+    @Test
+    void completedSettlementRejectsChangedAmountOrReceiptWithoutAnotherPayout() {
+        var rc = setupReturn(ReturnCaseStatus.completed);
+        rc.setNetRefundAmount(new BigDecimal("5700000"));
+        var file = UUID.randomUUID();
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.recordSettlement(staffActor, rc.getId(),
+            new com.storagehub.api.returns.StaffReturnSettlementRequest("CASH", "SAME-REFUND", file, true, new BigDecimal("6000000"))))
+            .hasMessageContaining("không khớp");
+        org.mockito.Mockito.verifyNoInteractions(returnFinance);
+        assertThatThrownBy(() -> service.recordSettlement(staffActor, rc.getId(),
+            new com.storagehub.api.returns.StaffReturnSettlementRequest("CASH", "DIFFERENT-REFUND", file, true, new BigDecimal("5700000"))))
+            .hasMessageContaining("không khớp");
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).receipt(any(), any(), any(), any(), any());
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).settle(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+        org.mockito.Mockito.verifyNoInteractions(storageUnitRepository);
+        org.mockito.Mockito.verify(returnCaseRepository, org.mockito.Mockito.never()).save(any());
     }
 
     private ReturnCase setupReturn(ReturnCaseStatus status) {
