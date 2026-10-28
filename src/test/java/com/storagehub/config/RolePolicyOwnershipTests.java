@@ -56,21 +56,28 @@ class RolePolicyOwnershipTests {
         var user = new User();
         user.setAuthzVersion(7);
         user.setStatus(UserStatus.ACTIVE);
+        var storedRoles = new EnumMap<RoleCode, Role>(RoleCode.class);
         when(permissionRepository.findByCode(any())).thenAnswer(call -> {
             var permission = new Permission();
             permission.setCode(call.getArgument(0));
             return Optional.of(permission);
         });
         when(roleRepository.findByCode(any())).thenAnswer(call -> {
-            var role = new Role();
-            role.setCode(call.getArgument(0));
-            role.setPermissionsPolicyVersion(14);
-            return Optional.of(role);
+            RoleCode code = call.getArgument(0);
+            return Optional.of(storedRoles.computeIfAbsent(code, key -> {
+                var role = new Role();
+                role.setCode(key);
+                role.setPermissionsPolicyVersion(14);
+                return role;
+            }));
         });
         when(userRepository.findByStatus(UserStatus.ACTIVE)).thenReturn(new ArrayList<>(List.of(user)));
 
         var runner = new RoleDataInitializer(roleRepository, permissionRepository, userRepository).seedSystemRoles();
         runner.run();
+        assertThat(user.getAuthzVersion()).isEqualTo(8);
+        assertThat(storedRoles.values()).allSatisfy(role ->
+            assertThat(role.getPermissionsPolicyVersion()).isEqualTo(15));
         runner.run();
 
         assertThat(user.getAuthzVersion()).isEqualTo(8);

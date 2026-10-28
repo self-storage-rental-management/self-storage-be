@@ -69,7 +69,7 @@ class PolicyOwnershipAuthorizationTests {
             when(roles.findByCode(code)).thenReturn(Optional.of(role));
             Set<String> grants = code == RoleCode.MANAGER
                 ? managerPermissions()
-                : Set.of("policies:read", "policies:update", "refunds:approve", "refunds:execute", "fees:waive");
+                : Set.of("policies:read", "policies:update", "refunds:approve", "fees:waive");
             var response = service.updatePermissions(actor(RoleCode.ADMIN), code, new AdminUpdateRolePermissionsRequest(grants));
             assertThat(response.permissions()).containsExactlyInAnyOrderElementsOf(grants);
         }
