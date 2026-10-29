@@ -79,6 +79,9 @@ class SimulatedPaymentServiceTests {
         snapshot.setReservation(reservation);
         snapshot.setRentalMonths(3);
         snapshot.setReservationDepositAmount(new BigDecimal("400000.00"));
+        snapshot.setTermsAcceptedAt(Instant.now().minusSeconds(60));
+        snapshot.setTermsAcceptanceHash("accepted-terms-test-hash");
+        snapshot.setTermsSnapshotJson("{\"accepted\":true}");
         when(paymentRepository.findByIdempotencyKey(any())).thenReturn(Optional.empty());
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), customer.getId()))
             .thenReturn(Optional.of(reservation));
@@ -137,6 +140,22 @@ class SimulatedPaymentServiceTests {
         assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.PAYMENT_GRACE);
         assertThat(reservation.getComplaintExpiresAt()).isAfter(Instant.now().plusSeconds(29 * 60));
         verify(reservationRepository).saveAndFlush(reservation);
+    }
+
+    @Test
+    void missingAcceptedTermsCannotCreatePayment() {
+        reset(paymentRepository, reservationRepository, snapshotRepository, userRepository, auditLogService);
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), customer.getId()))
+            .thenReturn(Optional.of(reservation));
+        when(snapshotRepository.findByReservation_Id(reservation.getId()))
+            .thenReturn(Optional.of(new ReservationPricingSnapshot()));
+        assertThatThrownBy(() -> service.pay(actor, reservation.getId(), "missing-terms"))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("terms acceptance");
+        verify(paymentRepository, never()).saveAndFlush(any());
+        verify(reservationRepository, never()).saveAndFlush(any());
+        org.mockito.Mockito.verifyNoInteractions(userRepository, auditLogService, notificationService);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
     }
 
     @Test

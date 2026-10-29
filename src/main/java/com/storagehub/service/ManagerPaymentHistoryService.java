@@ -96,6 +96,7 @@ public class ManagerPaymentHistoryService {
             method, occurredAt,
             payment.getRenewal()==null?null:payment.getRenewal().getId(),
             paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null,
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
             transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable()
         );
     }

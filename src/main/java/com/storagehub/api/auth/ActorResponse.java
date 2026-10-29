@@ -21,6 +21,7 @@ public record ActorResponse(
     Map<UUID, FacilityScopeLevel> facilityScopes,
     Map<UUID, String> facilityNames,
     boolean mustChangePassword,
-    Set<String> permissions
+    Set<String> permissions,
+    long authzVersion
 ) {
 }

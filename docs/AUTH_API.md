@@ -124,5 +124,6 @@ Endpoints:
 - `PATCH /api/admin/users/{id}/facilities`
 - `PATCH /api/admin/users/{id}/status`
 - `POST /api/admin/users/{id}/password-reset`
+- `DELETE /api/admin/users/{id}` — xóa account thật; giữ audit record nhưng từ chối nếu còn FK dữ liệu nghiệp vụ
 
 Responses include `id`, `fullName`, `email`, `phone`, `status`, `roles`, `facilityScopes`, `mustChangePassword`, `createdAt`, and `updatedAt`. `passwordHash` and previous passwords are never returned. Account removal is represented by an inactive, suspended, locked, or disabled status so audit history remains intact.

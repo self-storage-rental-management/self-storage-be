@@ -36,9 +36,12 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
             try {
                 UUID sessionId = UUID.fromString(jwt.getClaimAsString("sid"));
                 UUID userId = UUID.fromString(jwt.getSubject());
+                Number tokenAuthzVersion = jwt.getClaim("authzVersion");
                 Session session = sessionRepository.findByIdAndRevokedAtIsNull(sessionId).orElse(null);
                 if (session == null || !session.isActive(Instant.now()) || !session.getUser().getId().equals(userId)
-                    || session.getUser().getStatus() != UserStatus.ACTIVE) {
+                    || session.getUser().getStatus() != UserStatus.ACTIVE
+                    || tokenAuthzVersion == null
+                    || tokenAuthzVersion.longValue() != session.getUser().getAuthzVersion()) {
                     SecurityContextHolder.clearContext();
                     ApiErrorWriter.write(response, objectMapper, 401, ErrorCode.UNAUTHORIZED, "The session is invalid or expired");
                     return;

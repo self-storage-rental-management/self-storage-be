@@ -40,6 +40,10 @@ public class CheckIn extends BaseEntity {
     @JoinColumn(name = "performed_by", nullable = false)
     private User performedBy;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "assigned_staff_id")
+    private User assignedStaff;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 24)
     private CheckInStatus status = CheckInStatus.scheduled;

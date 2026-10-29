@@ -7,6 +7,8 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.math.BigDecimal;
@@ -96,6 +98,16 @@ public class Payment extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal refundedAmount = BigDecimal.ZERO;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "invoice_status", nullable = false, length = 16)
+    private InvoiceStatus invoiceStatus = InvoiceStatus.DRAFT;
+
+    @Column(name = "invoice_number", unique = true, length = 64)
+    private String invoiceNumber;
+
+    @Column(name = "invoice_issued_at")
+    private Instant invoiceIssuedAt;
+
     @Column
     private Instant processedAt;
 
@@ -110,4 +122,30 @@ public class Payment extends BaseEntity {
 
     @Version
     private long version;
+
+    @PrePersist
+    @PreUpdate
+    private void synchronizeInvoiceContract() {
+        invoiceStatus = resolveInvoiceStatus();
+        if ((invoiceStatus == InvoiceStatus.PAID || invoiceStatus == InvoiceStatus.REFUNDED)
+            && invoiceNumber == null) {
+            invoiceNumber = "INV-" + java.util.UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT);
+        }
+        if ((invoiceStatus == InvoiceStatus.PAID || invoiceStatus == InvoiceStatus.REFUNDED)
+            && invoiceIssuedAt == null) {
+            invoiceIssuedAt = paidAt != null ? paidAt : Instant.now();
+        }
+    }
+
+    /** Always expose the contract value even before a dirty entity is flushed. */
+    public InvoiceStatus getInvoiceStatus() {
+        return resolveInvoiceStatus();
+    }
+
+    private InvoiceStatus resolveInvoiceStatus() {
+        if (refundedAmount != null && refundedAmount.signum() > 0) return InvoiceStatus.REFUNDED;
+        if (status == PaymentStatus.PAID) return InvoiceStatus.PAID;
+        if (status == PaymentStatus.FAILED || status == PaymentStatus.CANCELLED) return InvoiceStatus.VOID;
+        return InvoiceStatus.DRAFT;
+    }
 }

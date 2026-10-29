@@ -13,6 +13,7 @@ import com.storagehub.domain.model.UnitTypeStatus;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.UserFacilityScope;
 import com.storagehub.domain.model.UserStatus;
+import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.RoleRepository;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
@@ -20,6 +21,9 @@ import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.api.renewal.PublishedRenewalPolicy;
+import com.storagehub.security.ActorPrincipal;
+import com.storagehub.service.renewal.integration.RenewalPolicyPublicationService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -50,6 +54,7 @@ public class LocalDemoDataInitializer {
     private final RoleRepository roleRepository;
     private final UserFacilityScopeRepository userFacilityScopeRepository;
     private final PasswordEncoder passwordEncoder;
+    private final RenewalPolicyPublicationService renewalPolicyPublicationService;
 
     @Bean
     @Order(20)
@@ -63,15 +68,20 @@ public class LocalDemoDataInitializer {
         int unitCount = seedStorageUnits(facilities, unitTypes);
         int packageCount = seedRentalPackagePolicies(facilities);
         int userCount = seedUsers(facilities);
+        int renewalPolicyCount = seedRenewalPolicies(facilities);
 
         log.info(
-            "Local demo data ready: {} facilities, {} unit types, {} storage units, {} rental packages, {} demo users",
-            facilities.size(), unitTypes.size(), unitCount, packageCount, userCount
+            "Local demo data ready: {} facilities, {} unit types, {} storage units, {} rental packages, {} demo users, {} renewal policies",
+            facilities.size(), unitTypes.size(), unitCount, packageCount, userCount, renewalPolicyCount
         );
     }
 
     private Map<String, Facility> seedFacilities() {
-        return new HashMap<>();
+        Map<String, Facility> result = new HashMap<>();
+        facilityRepository.findAll().stream()
+            .filter(facility -> facility.getStatus() == FacilityStatus.active)
+            .forEach(facility -> result.put(facility.getCode(), facility));
+        return result;
     }
 
     private Map<String, UnitType> seedUnitTypes(Map<String, Facility> facilities) {
@@ -209,6 +219,49 @@ public class LocalDemoDataInitializer {
             }
         }
         return seededCount;
+    }
+
+    private int seedRenewalPolicies(Map<String, Facility> facilities) {
+        User business = userRepository.findByEmailIgnoreCase("business@storagehub.demo").orElse(null);
+        if (business == null || facilities.isEmpty()) return 0;
+
+        ActorPrincipal actor = new ActorPrincipal(
+            business.getId(),
+            java.util.UUID.randomUUID(),
+            Set.of(RoleCode.BUSINESS),
+            Set.of(SystemPermission.VIEW_POLICIES.code(), SystemPermission.MANAGE_POLICIES.code()),
+            Map.of()
+        );
+        int createdCount = 0;
+        for (Facility facility : facilities.values()) {
+            if (renewalPolicyPublicationService.read(facility.getId(), null).isPresent()) continue;
+            Set<java.util.UUID> packageIds = new HashSet<>(
+                rentalPackagePolicyRepository.findByFacility_IdOrderByRentalMonthsAsc(facility.getId()).stream()
+                    .filter(RentalPackagePolicy::isActive)
+                    .map(RentalPackagePolicy::getId)
+                    .toList()
+            );
+            if (packageIds.isEmpty()) continue;
+
+            renewalPolicyPublicationService.publish(
+                actor,
+                facility.getId(),
+                new PublishedRenewalPolicy.Input(
+                    0L,
+                    LocalDate.of(2026, 1, 1),
+                    null,
+                    0,
+                    24,
+                    0,
+                    BigDecimal.ZERO,
+                    packageIds,
+                    new PublishedRenewalPolicy.Signing(120, 60),
+                    com.storagehub.service.overdue.RenewalOverdueTimeline.policy()
+                )
+            );
+            createdCount++;
+        }
+        return createdCount;
     }
 
     private List<UnitTypeDefinition> unitTypeDefinitions() {

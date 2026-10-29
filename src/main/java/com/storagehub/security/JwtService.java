@@ -70,6 +70,7 @@ public class JwtService {
             .claim("sid", session.getId().toString())
             .claim("roles", roles)
             .claim("permissions", permissions)
+            .claim("authzVersion", user.getAuthzVersion())
             .claim("mustChangePassword", user.isMustChangePassword())
             .claim("facilityIds", scopes.keySet().stream().map(Object::toString).sorted().toList())
             .claim("facilityScopes", encodedScopes)

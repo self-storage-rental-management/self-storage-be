@@ -6,6 +6,7 @@ public enum PaymentType {
     MONTHLY_RENT,
     RENEWAL,
     RENEWAL_INSTALLMENT,
+    EARLY_TERMINATION_FEE,
     DAMAGE_FEE,
     OTHER
 }

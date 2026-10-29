@@ -15,7 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** Payment rows are the persistent work queue. Each stage commits independently. */
 @Service
-@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled"},havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled","storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
 public class RenewalPaymentReconciler {
     public record Verified(UUID paymentId) {}
     private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(RenewalPaymentReconciler.class);

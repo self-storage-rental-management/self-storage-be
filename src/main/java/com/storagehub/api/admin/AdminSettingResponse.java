@@ -1,6 +1,5 @@
 package com.storagehub.api.admin;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.util.List;
 
@@ -10,7 +9,7 @@ public record AdminSettingResponse(
     String description,
     String label,
     String type,
-    JsonNode value,
+    Object value,
     List<String> options,
     Instant updatedAt
 ) {

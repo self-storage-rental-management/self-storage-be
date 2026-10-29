@@ -13,7 +13,8 @@ class GoodsCatalogIdentityTests {
     void managerDefinedCategoryUsesCatalogIdentityAndDoesNotRequireOtherGoodsReview() {
         var types = mock(GoodsTypeCatalogRepository.class);
         var materials = mock(GoodsMaterialCatalogRepository.class);
-        var service = new GoodsCatalogService(types, materials, null, null);
+        var service = new GoodsCatalogService(types, materials, null, null,
+            mock(org.springframework.context.ApplicationEventPublisher.class));
         var type = new GoodsTypeCatalog();
         org.springframework.test.util.ReflectionTestUtils.setField(type, "id", UUID.randomUUID());
         type.setCode("CAT-ABC123");
@@ -25,6 +26,7 @@ class GoodsCatalogIdentityTests {
         material.setCode("MAT-ABC123");
         material.setDisplayName("Hợp kim");
         material.setStatus(GoodsCatalogStatus.ACTIVE);
+        material.setFragile(true);
         when(types.findById(type.getId())).thenReturn(Optional.of(type));
         when(materials.findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE))
             .thenReturn(List.of(material));
@@ -38,6 +40,7 @@ class GoodsCatalogIdentityTests {
         service.validateForUnitType(unit, request, 0);
         assertThat(request.getCategoryName()).isEqualTo(type.getDisplayName());
         assertThat(request.getMaterialName()).isEqualTo(material.getDisplayName());
+        assertThat(request.isFragile()).isFalse();
         assertThat(ReservationCompatibilityService.isOther(request)).isFalse();
         var snapshot = GoodsSnapshotCodec.decode(GoodsSnapshotCodec.encode(List.of(request))).getFirst();
         type.setDisplayName("Tên mới");

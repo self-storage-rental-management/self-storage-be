@@ -85,6 +85,10 @@ public class ReservationResponse {
     private BigDecimal grossRentalAmount;
     private BigDecimal discountRate;
     private BigDecimal discountAmount;
+    private int earlyTerminationFeeCapMonths = 1;
+    private BigDecimal earlyTerminationFeeCoefficient = BigDecimal.ONE;
+    private int earlyTerminationNoticeDays = 14;
+    private BigDecimal earlyTerminationFee = BigDecimal.ZERO;
     private String voucherCode;
     private BigDecimal voucherDiscountAmount;
 
@@ -221,4 +225,12 @@ public class ReservationResponse {
     public void setVoucherCode(String voucherCode) { this.voucherCode = voucherCode; }
     public BigDecimal getVoucherDiscountAmount() { return voucherDiscountAmount; }
     public void setVoucherDiscountAmount(BigDecimal voucherDiscountAmount) { this.voucherDiscountAmount = voucherDiscountAmount; }
+    public int getEarlyTerminationFeeCapMonths() { return earlyTerminationFeeCapMonths; }
+    public void setEarlyTerminationFeeCapMonths(int value) { this.earlyTerminationFeeCapMonths = value; }
+    public BigDecimal getEarlyTerminationFeeCoefficient() { return earlyTerminationFeeCoefficient; }
+    public void setEarlyTerminationFeeCoefficient(BigDecimal value) { this.earlyTerminationFeeCoefficient = value; }
+    public int getEarlyTerminationNoticeDays() { return earlyTerminationNoticeDays; }
+    public void setEarlyTerminationNoticeDays(int value) { this.earlyTerminationNoticeDays = value; }
+    public BigDecimal getEarlyTerminationFee() { return earlyTerminationFee; }
+    public void setEarlyTerminationFee(BigDecimal value) { this.earlyTerminationFee = value; }
 }

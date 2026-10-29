@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Business Operations may read returns and execute an already approved refund only. */
+/** Business Operations may read returns and decide setup-exit refunds; Staff executes receipts. */
 @RestController
 @RequestMapping("/api/business/returns")
 @RequiredArgsConstructor
@@ -49,14 +49,35 @@ public class BusinessReturnController {
         );
     }
 
+    @PostMapping("/{returnId}/setup-exit-decision")
+    public ApiResponse<ReturnCaseResponse> decideSetupExit(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody BusinessSetupExitDecisionRequest request
+    ) {
+        return new ApiResponse<>(
+            returnSettlementService.businessReviewSetupExit(businessActor(), returnId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{returnId}/legacy-pricing-decision")
+    public ApiResponse<ReturnCaseResponse> decideLegacyPricing(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody BusinessLegacyPricingDecisionRequest request
+    ) {
+        return new ApiResponse<>(
+            returnSettlementService.businessReviewLegacyPricing(businessActor(), returnId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{returnId}/complete-refund")
     public ApiResponse<ReturnCaseResponse> completeRefund(
         @PathVariable UUID returnId,
-        @Valid @RequestBody(required = false) StaffCompleteRefundRequest request
+        @Valid @RequestBody StaffCompleteRefundRequest request
     ) {
-        StaffCompleteRefundRequest safeRequest = request != null ? request : new StaffCompleteRefundRequest(null, null);
         return new ApiResponse<>(
-            returnSettlementService.staffCompleteRefund(businessActor(), returnId, safeRequest),
+            returnSettlementService.staffCompleteRefund(businessActor(), returnId, request),
             CorrelationIdContext.current()
         );
     }

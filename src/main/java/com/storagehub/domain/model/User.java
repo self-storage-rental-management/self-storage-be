@@ -59,6 +59,13 @@ public class User extends BaseEntity {
     @Column(nullable = false, columnDefinition = "boolean default false")
     private boolean mustChangePassword = false;
 
+    /**
+     * Monotonic authorization version. Any role or facility-scope mutation
+     * invalidates tokens carrying an older version.
+     */
+    @Column(name = "authz_version", nullable = false)
+    private long authzVersion = 0L;
+
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
         name = "user_roles",

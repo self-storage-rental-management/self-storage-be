@@ -56,7 +56,8 @@ public class SimulatedPaymentService {
         return new SimulatedPaymentResponse(
             response.paymentId(), response.reservationId(), response.amount(), response.currency(),
             response.outcome(), response.paymentStatus(), response.reservationStatus(),
-            messageFor(outcome), response.processedAt()
+            messageFor(outcome), response.processedAt(), response.invoiceNumber(), response.invoiceStatus(),
+            response.invoiceIssuedAt()
         );
     }
 
@@ -90,6 +91,10 @@ public class SimulatedPaymentService {
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (snapshot.getTermsAcceptedAt() == null || snapshot.getTermsAcceptanceHash() == null
+            || snapshot.getTermsSnapshotJson() == null || snapshot.getTermsSnapshotJson().isBlank()) {
+            throw ApiExceptions.conflict("Customer terms acceptance is required before payment");
+        }
         User initiator = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
         Instant now = Instant.now();
@@ -149,7 +154,7 @@ public class SimulatedPaymentService {
         return new SimulatedPaymentResponse(
             response.paymentId(), response.reservationId(), response.amount(), response.currency(),
             response.outcome(), response.paymentStatus(), response.reservationStatus(), message,
-            response.processedAt()
+            response.processedAt(), response.invoiceNumber(), response.invoiceStatus(), response.invoiceIssuedAt()
         );
     }
 
@@ -205,7 +210,8 @@ public class SimulatedPaymentService {
             payment.getId(), payment.getReservation().getId(), payment.getAmount(),
             payment.getCurrency(), outcome, payment.getStatus(),
             payment.getReservation().getStatus(), null,
-            processedAt == null ? payment.getCreatedAt() : processedAt
+            processedAt == null ? payment.getCreatedAt() : processedAt,
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt()
         );
     }
 }

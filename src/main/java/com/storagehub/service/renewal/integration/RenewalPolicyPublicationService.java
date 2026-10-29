@@ -24,6 +24,7 @@ public class RenewalPolicyPublicationService {
     private final AuditLogService audit;
     public static String key(UUID facility){return "rentalRenewalPolicy:"+facility;}
     public record Stored(String reference,PublishedRenewalPolicy policy) {}
+    @Transactional(readOnly = true)
     public Optional<Stored> read(UUID facility,LocalDate applicableDate) {
         if(facility==null)return Optional.empty();
         var query=em.createQuery("select s from SystemSetting s where s.settingKey=:key",SystemSetting.class).setParameter("key",key(facility));

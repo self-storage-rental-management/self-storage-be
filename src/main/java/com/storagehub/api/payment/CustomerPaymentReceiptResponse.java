@@ -3,6 +3,7 @@ package com.storagehub.api.payment;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.InvoiceStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -28,6 +29,9 @@ public record CustomerPaymentReceiptResponse(
     Instant lastReconciledAt,
     String initiatedByName,
     Instant createdAt,
-    String reservationCode
+    String reservationCode,
+    String invoiceNumber,
+    InvoiceStatus invoiceStatus,
+    Instant invoiceIssuedAt
 ) {
 }

@@ -4,6 +4,8 @@ import com.storagehub.domain.model.CustomerDecision;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.InventoryMatch;
 import com.storagehub.domain.model.ReturnCaseStatus;
+import com.storagehub.domain.model.ReturnType;
+import com.storagehub.domain.model.SettlementMode;
 import com.storagehub.domain.model.StorageUnitStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -23,6 +25,8 @@ public record ReturnCaseResponse(
     String customerEmail,
     String customerPhone,
     ReturnCaseStatus status,
+    ReturnType returnType,
+    SettlementMode settlementMode,
     Instant requestedAt,
     LocalDate scheduledDate,
     String customerNotes,
@@ -67,9 +71,16 @@ public record ReturnCaseResponse(
     UUID recoveryTaskId,
     String recoveryTaskStatus,
     Instant recoveryCompletedAt,
+    boolean setupExitReviewRequired,
+    Instant moveInCompletedAt,
     SettlementReceipt settlementReceipt,
     OverdueSettlement overdueSettlement,
     String settlementBlocker,
+    EarlyTerminationSummary earlyTerminationPolicy,
+    ActiveReturnSummary activeReturnPolicy,
+    boolean legacyPricingReviewRequired,
+    boolean legacyPricingSnapshotAvailable,
+    UUID legacyPricingEvidenceFileId,
     boolean setupExitRequested,
     boolean setupEarlyExit,
     Instant setupReturnedAt,
@@ -133,7 +144,7 @@ public record ReturnCaseResponse(
         OverdueSettlement overdueSettlement,
         String settlementBlocker
     ) {
-        this(id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName, customerEmail, customerPhone, status, requestedAt, scheduledDate, customerNotes, inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount, damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount, amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision, customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote, settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus, recoveryCompletedAt, settlementReceipt, overdueSettlement, settlementBlocker, false, false, null, null, null, null);
+        this(id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName, customerEmail, customerPhone, status, null, null, requestedAt, scheduledDate, customerNotes, inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount, damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount, amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision, customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote, settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus, recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker, null, null, false, false, null, false, false, null, null, null, null);
     }
 
     public record SettlementReceipt(
@@ -145,4 +156,29 @@ public record ReturnCaseResponse(
         Instant recordedAt
     ) {}
     public record OverdueSettlement(BigDecimal accruedAmount,BigDecimal settlementAmount,Long overdueDays,Instant calculatedAt,boolean requiresReconciliation) {}
+    public record EarlyTerminationSummary(
+        String type,
+        BigDecimal earlyTerminationFee,
+        int billableSetupDays,
+        BigDecimal usedGoodsCharge,
+        BigDecimal totalRentalCharge,
+        BigDecimal rentalRefundAmount,
+        int noticeDays
+    ) {}
+
+    public record ActiveReturnSummary(
+        boolean recalculationRequired,
+        int completedRentalMonths,
+        Integer pricingTierMonths,
+        int setupDaysUsed,
+        int chargeableSetupDays,
+        int rentalDaysUsed,
+        int noticeShortfallDays,
+        BigDecimal dailyPrice,
+        BigDecimal earlyTerminationFee,
+        BigDecimal noticeCharge,
+        BigDecimal totalRentalCharge,
+        BigDecimal rentalRefundAmount,
+        int noticeDays
+    ) {}
 }

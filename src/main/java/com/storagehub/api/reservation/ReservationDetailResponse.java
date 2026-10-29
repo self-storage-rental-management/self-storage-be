@@ -3,6 +3,8 @@ package com.storagehub.api.reservation;
 import java.time.Instant;
 import java.util.List;
 import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
+import com.storagehub.domain.model.ReservationCancellationType;
+import java.math.BigDecimal;
 
 public class ReservationDetailResponse {
 
@@ -15,6 +17,9 @@ public class ReservationDetailResponse {
     private Instant confirmedAt;
     private Instant cancelledAt;
     private String cancelReason;
+    private ReservationCancellationType cancellationType;
+    private BigDecimal cancellationRefundAmount;
+    private BigDecimal cancellationChargeAmount;
     private List<ReservationGoodsItemResponse> goodsItems;
     private List<CustomerPaymentReceiptResponse> payments;
 
@@ -39,6 +44,12 @@ public class ReservationDetailResponse {
     public void setCancelledAt(Instant cancelledAt) { this.cancelledAt = cancelledAt; }
     public String getCancelReason() { return cancelReason; }
     public void setCancelReason(String cancelReason) { this.cancelReason = cancelReason; }
+    public ReservationCancellationType getCancellationType() { return cancellationType; }
+    public void setCancellationType(ReservationCancellationType cancellationType) { this.cancellationType = cancellationType; }
+    public BigDecimal getCancellationRefundAmount() { return cancellationRefundAmount; }
+    public void setCancellationRefundAmount(BigDecimal cancellationRefundAmount) { this.cancellationRefundAmount = cancellationRefundAmount; }
+    public BigDecimal getCancellationChargeAmount() { return cancellationChargeAmount; }
+    public void setCancellationChargeAmount(BigDecimal cancellationChargeAmount) { this.cancellationChargeAmount = cancellationChargeAmount; }
     public List<ReservationGoodsItemResponse> getGoodsItems() { return goodsItems; }
     public void setGoodsItems(List<ReservationGoodsItemResponse> goodsItems) { this.goodsItems = goodsItems; }
     public List<CustomerPaymentReceiptResponse> getPayments() { return payments; }

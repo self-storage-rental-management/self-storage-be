@@ -9,6 +9,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.time.Instant;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -40,4 +41,17 @@ public class Refund extends BaseEntity {
 
     @Column(length = 1000)
     private String reason;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "approved_by")
+    private User approvedBy;
+
+    @Column(name = "approved_at")
+    private Instant approvedAt;
+
+    @Column(name = "gateway_response_code", length = 16)
+    private String gatewayResponseCode;
+
+    @Column(name = "gateway_transaction_no", length = 100)
+    private String gatewayTransactionNo;
 }

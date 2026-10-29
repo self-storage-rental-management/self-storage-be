@@ -158,6 +158,7 @@ public class AuthChallengeService {
         user.setMustChangePassword(false);
         challenge.setConsumedAt(Instant.now());
         challengeRepository.save(challenge);
+        user.setAuthzVersion(user.getAuthzVersion() + 1);
         User saved = userRepository.saveAndFlush(user);
         sessionRepository.revokeActiveByUserId(saved.getId(), Instant.now());
         auditLogService.recordMutation(saved, "PASSWORD_RESET", "User", saved.getId(), null,

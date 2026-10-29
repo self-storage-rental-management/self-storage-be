@@ -14,6 +14,7 @@ public record RentalPackagePolicyResponse(
     String name,
     int rentalMonths,
     Integer rentalYears,
+    Integer freeSetupDays,
     String description,
     BigDecimal discountRate,
     BigDecimal depositRate,
@@ -24,7 +25,10 @@ public record RentalPackagePolicyResponse(
     LocalDate effectiveFrom,
     LocalDate effectiveTo,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    int earlyTerminationFeeCapMonths,
+    BigDecimal earlyTerminationFeeCoefficient,
+    int earlyTerminationNoticeDays
 ) {
     public RentalPackagePolicyResponse(
         UUID id,
@@ -43,10 +47,10 @@ public record RentalPackagePolicyResponse(
     ) {
         this(
             id, facilityId, facilityName, code, name, rentalMonths,
-            null, null, discountRate, new BigDecimal("0.20"), policyVersion,
+            null, null, null, discountRate, new BigDecimal("0.20"), policyVersion,
             active ? PublicationStatus.PUBLISHED : PublicationStatus.INACTIVE,
             active ? "ACTIVE" : "INACTIVE",
-            active, effectiveFrom, effectiveTo, createdAt, updatedAt
+            active, effectiveFrom, effectiveTo, createdAt, updatedAt, 1, BigDecimal.ONE, 14
         );
     }
 }

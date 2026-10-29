@@ -158,6 +158,16 @@ public class Reservation extends BaseEntity {
     @Column(length = 1000)
     private String cancelReason;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancellation_type", length = 40)
+    private ReservationCancellationType cancellationType;
+
+    @Column(name = "cancellation_refund_amount", precision = 14, scale = 2)
+    private BigDecimal cancellationRefundAmount = BigDecimal.ZERO;
+
+    @Column(name = "cancellation_charge_amount", precision = 14, scale = 2)
+    private BigDecimal cancellationChargeAmount = BigDecimal.ZERO;
+
     @Column(length = 1000)
     private String rejectionReason;
 

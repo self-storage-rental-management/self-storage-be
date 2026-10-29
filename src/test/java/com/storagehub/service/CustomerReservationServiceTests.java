@@ -362,6 +362,7 @@ class CustomerReservationServiceTests {
         assignment.setStorageUnit(assignedUnit);
         assignment.setStatus(UnitAssignmentStatus.ACTIVE);
         Payment payment = new Payment();
+        payment.setAmount(snapshot.getReservationDepositAmount());
         payment.setStatus(PaymentStatus.PAID);
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
