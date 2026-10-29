@@ -40,6 +40,16 @@ import org.springframework.test.util.ReflectionTestUtils;
 @ExtendWith(MockitoExtension.class)
 class ReservationQuoteServiceTests {
 
+    @Test
+    void mapsRentalDurationsToShortenedFreeSetupPeriods() {
+        assertThat(ReservationQuoteService.defaultFreeSetupDays(1)).isZero();
+        assertThat(ReservationQuoteService.defaultFreeSetupDays(3)).isEqualTo(1);
+        assertThat(ReservationQuoteService.defaultFreeSetupDays(6)).isEqualTo(3);
+        assertThat(ReservationQuoteService.defaultFreeSetupDays(12)).isEqualTo(6);
+        assertThat(ReservationQuoteService.defaultFreeSetupDays(24)).isEqualTo(6);
+        assertThat(ReservationQuoteService.defaultFreeSetupDays(18)).isZero();
+    }
+
     @Mock private ReservationCompatibilityService compatibilityService;
     @Mock private RentalPackagePolicyRepository policyRepository;
     @Mock private ReservationQuoteRepository quoteRepository;
