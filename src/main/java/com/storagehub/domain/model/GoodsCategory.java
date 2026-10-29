@@ -4,6 +4,7 @@ public enum GoodsCategory {
     FURNITURE,
     KITCHENWARE,
     DECOR,
+    DOCUMENTS,
     ELECTRONICS,
     OFFICE,
     TOYS,

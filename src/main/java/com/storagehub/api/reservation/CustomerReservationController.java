@@ -61,6 +61,16 @@ public class CustomerReservationController {
         );
     }
 
+    @PostMapping("/recommendation")
+    public ApiResponse<ReservationRecommendationResponse> recommendUnitType(
+        @Valid @RequestBody ReservationRecommendationRequest request
+    ) {
+        return new ApiResponse<>(
+            compatibilityService.recommend(actorContext.required(), request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/quote")
     public ApiResponse<ReservationQuoteResponse> createQuote(
         @Valid @RequestBody ReservationQuoteRequest request

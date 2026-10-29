@@ -64,13 +64,21 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false, length = 48)
     private ReturnCaseStatus status = ReturnCaseStatus.requested;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "return_type", nullable = false, length = 32)
+    private ReturnType returnType = ReturnType.NORMAL;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "settlement_mode", nullable = false, length = 20)
+    private SettlementMode settlementMode = SettlementMode.AUTO;
+
     @Column(nullable = false)
     private Instant requestedAt;
 
     @Column(nullable = false)
     private LocalDate scheduledDate;
 
-    @Column(length = 2000)
+    @Column(columnDefinition = "TEXT")
     private String customerNotes;
 
     // Inspection
@@ -89,10 +97,10 @@ public class ReturnCase extends BaseEntity {
     @Column(length = 32)
     private DamageClassification damageClassification;
 
-    @Column(length = 4000)
+    @Column(columnDefinition = "TEXT")
     private String inspectionNotes;
 
-    @Column(length = 4000)
+    @Column(columnDefinition = "TEXT")
     private String evidencePhotosJson;
 
     @Column(nullable = false)
@@ -103,6 +111,23 @@ public class ReturnCase extends BaseEntity {
 
     @Column(nullable = false)
     private boolean returnedLock = false;
+
+    /** Whether this return was requested after the rental had become ACTIVE. */
+    @Column(nullable = false)
+    private boolean activeReturnRepricingRequired = false;
+
+    /** Old reservations without a tier snapshot require an explicit Business decision. */
+    @Column(name = "legacy_pricing_review_required", nullable = false)
+    private boolean legacyPricingReviewRequired = false;
+
+    @Column(name = "legacy_pricing_snapshot_json", columnDefinition = "LONGTEXT")
+    private String legacyPricingSnapshotJson;
+
+    @Column(name = "legacy_pricing_evidence_file_id", columnDefinition = "BINARY(16)")
+    private java.util.UUID legacyPricingEvidenceFileId;
+
+    @Column(name = "legacy_pricing_decision_reason", columnDefinition = "TEXT")
+    private String legacyPricingDecisionReason;
 
     @Enumerated(EnumType.STRING)
     @Column(length = 32)
@@ -136,6 +161,13 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amountDueFromCustomer = BigDecimal.ZERO;
 
+    /** Rental-only charge/refund; the security deposit remains separate. */
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal earlyTerminationCharge = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal rentalRefundAmount = BigDecimal.ZERO;
+
     @Column
     private Integer overdueDays;
 
@@ -150,7 +182,7 @@ public class ReturnCase extends BaseEntity {
     @Column(length = 20)
     private CustomerDecision customerDecision;
 
-    @Column(length = 2000)
+    @Column(columnDefinition = "TEXT")
     private String customerDecisionNote;
 
     // Manager Review
@@ -161,7 +193,7 @@ public class ReturnCase extends BaseEntity {
     @Column
     private Instant reviewedAt;
 
-    @Column(length = 2000)
+    @Column(columnDefinition = "TEXT")
     private String managerResolutionNote;
 
     // Settlement completion & payment / refund

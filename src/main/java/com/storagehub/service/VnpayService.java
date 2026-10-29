@@ -18,14 +18,22 @@ import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.Renewal;
+import com.storagehub.domain.model.Refund;
+import com.storagehub.domain.model.RefundRequest;
+import com.storagehub.domain.model.RefundRequestStatus;
+import com.storagehub.domain.model.RefundStatus;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
+import com.storagehub.domain.model.SystemSetting;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.PaymentComplaintRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.domain.repo.RefundRepository;
+import com.storagehub.domain.repo.RefundRequestRepository;
+import com.storagehub.domain.repo.SystemSettingRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.renewal.RenewalWorkflowService;
 import com.storagehub.service.ledger.RenewalVnpaySettlementService;
@@ -45,7 +53,9 @@ import java.time.format.DateTimeParseException;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import javax.crypto.Mac;
@@ -65,6 +75,12 @@ public class VnpayService {
     private ObjectProvider<com.storagehub.service.renewal.RenewalTransactionReader> renewalTransactionReaders;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.RenewalInstallmentService> installments;
+    @Autowired(required = false)
+    private RefundRepository refundRepository;
+    @Autowired(required = false)
+    private RefundRequestRepository refundRequestRepository;
+    @Autowired(required = false)
+    private SystemSettingRepository systemSettingRepository;
 
     @Transactional(readOnly=true)
     public RenewalVnpayPaymentResponse installmentPayment(ActorPrincipal actor,UUID renewalId,UUID paymentId,String audience){
@@ -183,6 +199,10 @@ public class VnpayService {
 
         ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (snapshot.getTermsAcceptedAt() == null || snapshot.getTermsAcceptanceHash() == null
+            || snapshot.getTermsSnapshotJson() == null || snapshot.getTermsSnapshotJson().isBlank()) {
+            throw ApiExceptions.conflict("Customer terms acceptance is required before payment");
+        }
         User initiator = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
         Payment payment = new Payment();
@@ -548,10 +568,10 @@ public class VnpayService {
         String clientIp
     ) {
         requireConfigured();
-        if (actor == null || !actor.hasAnyRole(RoleCode.BUSINESS)) {
-            throw ApiExceptions.forbidden("Business Operations execution is required for VNPAY refunds");
+        if (actor == null || !actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Manager or Business approval is required for VNPAY refunds");
         }
-        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
+        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
         if (payment.getStatus() != PaymentStatus.PAID || payment.getGatewayTransactionNo() == null) {
@@ -570,12 +590,40 @@ public class VnpayService {
         if (request.amount().compareTo(remaining) > 0) {
             throw ApiExceptions.validation("Refund amount exceeds the refundable amount", null);
         }
+        if (actor.hasRole(RoleCode.MANAGER)
+            && request.amount().compareTo(managerRefundApprovalLimit()) > 0) {
+            UUID requestId = createEscalatedRefundRequest(actor, payment, request);
+            throw ApiExceptions.conflict(
+                "Refund exceeds the Manager approval limit; Business approval is required. requestId=" + requestId
+            );
+        }
         User user = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        Refund refund = null;
+        if (refundRepository != null) {
+            refund = new Refund();
+            refund.setPayment(payment);
+            refund.setRequestedBy(user);
+            refund.setApprovedBy(user);
+            refund.setApprovedAt(Instant.now());
+            refund.setAmount(request.amount());
+            refund.setReason(request.reason());
+            refund.setStatus(RefundStatus.PROCESSING);
+            refund = refundRepository.saveAndFlush(refund);
+        }
         Map<String, String> payload = refundRequest(payment, request, user.getEmail(), clientIp);
         Map<String, String> gateway = post(payload);
-        if ("00".equals(gateway.get("vnp_ResponseCode"))) {
+        boolean successful = "00".equals(gateway.get("vnp_ResponseCode"));
+        if (successful) {
             payment.setRefundedAmount(payment.getRefundedAmount().add(request.amount()));
+        }
+        if (refund != null) {
+            refund.setStatus(successful ? RefundStatus.COMPLETED : RefundStatus.FAILED);
+            refund.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
+            refund.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
+            refund.setGatewayRefundId(gateway.get("vnp_TransactionNo") != null
+                ? gateway.get("vnp_TransactionNo") : gateway.get("vnp_TxnRef"));
+            refundRepository.save(refund);
         }
         payment.setLastReconciledAt(Instant.now());
         paymentRepository.saveAndFlush(payment);
@@ -583,9 +631,250 @@ public class VnpayService {
             user, "VNPAY_REFUND_REQUESTED", "Payment", payment.getId(),
             payment.getReservation().getFacility().getId(), null,
             Map.of("amount", request.amount(), "reason", request.reason(),
-                "responseCode", gateway.getOrDefault("vnp_ResponseCode", "99"))
+                "responseCode", gateway.getOrDefault("vnp_ResponseCode", "99"),
+                "refundStatus", successful ? RefundStatus.COMPLETED.name() : RefundStatus.FAILED.name())
         );
         return response(payment, gateway.getOrDefault("vnp_Message", "Refund request completed"));
+    }
+
+    @Transactional(readOnly = true)
+    public List<com.storagehub.api.payment.RefundRequestResponse> listRefundRequests(
+        ActorPrincipal actor, RefundRequestStatus status
+    ) {
+        if (actor == null || !actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Business approval is required");
+        }
+        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
+        if (refundRequestRepository == null) return List.of();
+        List<RefundRequest> rows = status == null
+            ? refundRequestRepository.findAll()
+            : refundRequestRepository.findByStatusOrderByCreatedAtAsc(status);
+        return rows.stream()
+            .filter(row -> {
+                try {
+                    if (row.getPayment() == null || row.getPayment().getReservation() == null) return false;
+                    facilityScopeService.assertCanManage(actor, row.getPayment().getReservation().getFacility().getId());
+                    return true;
+                } catch (RuntimeException ignored) {
+                    return false;
+                }
+            })
+            .map(this::refundRequestResponse)
+            .toList();
+    }
+
+    @Transactional
+    public VnpayTransactionResponse approveRefundRequest(
+        ActorPrincipal actor, UUID requestId, String resolutionNote, String clientIp
+    ) {
+        requireConfigured();
+        if (actor == null || !actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Business approval is required");
+        }
+        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
+        if (refundRequestRepository == null) {
+            throw ApiExceptions.conflict("Refund request workflow is unavailable");
+        }
+        RefundRequest request = refundRequestRepository.findById(requestId)
+            .orElseThrow(() -> ApiExceptions.notFound("Refund request was not found"));
+        if (request.getStatus() != RefundRequestStatus.REQUESTED
+            && request.getStatus() != RefundRequestStatus.PENDING_ESCALATION) {
+            throw ApiExceptions.conflict("Refund request is not awaiting Business approval");
+        }
+        Payment payment = paymentRepository.findByIdForUpdate(request.getPayment().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
+        if (payment.getReservation() == null || payment.getGatewayTransactionNo() == null
+            || payment.getStatus() != PaymentStatus.PAID) {
+            throw ApiExceptions.conflict("Only a successful original VNPay payment can be refunded");
+        }
+        facilityScopeService.assertCanManage(actor, payment.getReservation().getFacility().getId());
+        if (request.getRequestedBy() != null && request.getRequestedBy().getId().equals(actor.userId())) {
+            throw ApiExceptions.forbidden("The requester cannot approve the same refund request");
+        }
+        BigDecimal remaining = payment.getAmount().subtract(payment.getRefundedAmount());
+        if (request.getAmount().compareTo(remaining) > 0) {
+            throw ApiExceptions.conflict("Refund request exceeds the remaining refundable amount");
+        }
+
+        User approver = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        request.setApprovedBy(approver);
+        request.setApprovedAt(Instant.now());
+        request.setStatus(RefundRequestStatus.APPROVED);
+        if (resolutionNote != null && !resolutionNote.isBlank()) {
+            request.setReason(request.getReason() + " | Business: " + resolutionNote.trim());
+        }
+        request.setStatus(RefundRequestStatus.PROCESSING);
+        refundRequestRepository.saveAndFlush(request);
+
+        Refund execution = null;
+        if (refundRepository != null) {
+            execution = new Refund();
+            execution.setPayment(payment);
+            execution.setRequestedBy(request.getRequestedBy());
+            execution.setApprovedBy(approver);
+            execution.setApprovedAt(request.getApprovedAt());
+            execution.setAmount(request.getAmount());
+            execution.setReason(request.getReason());
+            execution.setStatus(RefundStatus.PROCESSING);
+            execution = refundRepository.saveAndFlush(execution);
+        }
+
+        Map<String, String> gateway = post(refundRequest(
+            payment,
+            new VnpayRefundRequest(request.getAmount(), request.getReason()),
+            approver.getEmail(), clientIp
+        ));
+        boolean successful = "00".equals(gateway.get("vnp_ResponseCode"));
+        String gatewayReference = gateway.get("vnp_TransactionNo") != null
+            ? gateway.get("vnp_TransactionNo") : gateway.get("vnp_TxnRef");
+        request.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
+        request.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
+        request.setGatewayRefundId(gatewayReference);
+        request.setProcessedAt(Instant.now());
+        request.setStatus(successful ? RefundRequestStatus.REFUNDED : RefundRequestStatus.FAILED);
+        refundRequestRepository.save(request);
+        if (execution != null) {
+            execution.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
+            execution.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
+            execution.setGatewayRefundId(gatewayReference);
+            execution.setStatus(successful ? RefundStatus.COMPLETED : RefundStatus.FAILED);
+            refundRepository.save(execution);
+        }
+        if (successful) {
+            payment.setRefundedAmount(payment.getRefundedAmount().add(request.getAmount()));
+            payment.setLastReconciledAt(Instant.now());
+            paymentRepository.saveAndFlush(payment);
+        }
+        auditLogService.recordMutation(
+            approver, "VNPAY_ESCALATED_REFUND_PROCESSED", "RefundRequest", request.getId(),
+            payment.getReservation().getFacility().getId(), null,
+            Map.of("requestStatus", request.getStatus().name(),
+                "amount", request.getAmount(),
+                "gatewayReference", gatewayReference == null ? "" : gatewayReference)
+        );
+        return response(payment, gateway.getOrDefault("vnp_Message", "Refund request processed"));
+    }
+
+    private UUID createEscalatedRefundRequest(ActorPrincipal actor, Payment payment, VnpayRefundRequest request) {
+        if (refundRequestRepository == null) {
+            throw ApiExceptions.conflict("Refund request workflow is unavailable");
+        }
+        User requester = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        List<RefundRequest> existing = refundRequestRepository.findByPayment_IdAndStatusIn(
+            payment.getId(), Set.of(RefundRequestStatus.REQUESTED, RefundRequestStatus.PENDING_ESCALATION,
+                RefundRequestStatus.APPROVED, RefundRequestStatus.PROCESSING)
+        );
+        BigDecimal reserved = refundRequestRepository.sumAmountsByPaymentIdAndStatusIn(
+            payment.getId(), Set.of(RefundRequestStatus.REQUESTED, RefundRequestStatus.PENDING_ESCALATION,
+                RefundRequestStatus.APPROVED, RefundRequestStatus.PROCESSING)
+        );
+        if (reserved.add(request.amount()).compareTo(managerRefundApprovalLimit()) > 0) {
+            throw ApiExceptions.conflict("Refund requests exceed the Manager approval limit cumulatively");
+        }
+        return existing.stream()
+            .filter(row -> row.getRequestedBy() != null
+                && row.getRequestedBy().getId().equals(requester.getId())
+                && row.getAmount().compareTo(request.amount()) == 0
+                && row.getStatus() == RefundRequestStatus.PENDING_ESCALATION)
+            .map(RefundRequest::getId)
+            .findFirst()
+            .orElseGet(() -> {
+                RefundRequest row = new RefundRequest();
+                row.setPayment(payment);
+                row.setRequestedBy(requester);
+                row.setAmount(request.amount());
+                row.setReason(request.reason());
+                row.setStatus(RefundRequestStatus.PENDING_ESCALATION);
+                return refundRequestRepository.saveAndFlush(row).getId();
+            });
+    }
+
+    private com.storagehub.api.payment.RefundRequestResponse refundRequestResponse(RefundRequest request) {
+        return new com.storagehub.api.payment.RefundRequestResponse(
+            request.getId(),
+            request.getPayment() == null ? null : request.getPayment().getId(),
+            request.getReturnCase() == null ? null : request.getReturnCase().getId(),
+            request.getRequestedBy() == null ? null : request.getRequestedBy().getId(),
+            request.getApprovedBy() == null ? null : request.getApprovedBy().getId(),
+            request.getAmount(), request.getReason(), request.getStatus(), request.getCreatedAt(),
+            request.getApprovedAt(), request.getProcessedAt(), request.getGatewayRefundId(),
+            request.getGatewayTransactionNo(), request.getGatewayResponseCode(), request.getRejectionReason()
+        );
+    }
+
+    private BigDecimal managerRefundApprovalLimit() {
+        if (systemSettingRepository == null) return new BigDecimal("5000000");
+        return systemSettingRepository.findBySettingKey("managerRefundApprovalLimit")
+            .map(SystemSetting::getValue)
+            .map(value -> {
+                try { return new BigDecimal(value); }
+                catch (NumberFormatException ignored) { return new BigDecimal("5000000"); }
+            })
+            .orElse(new BigDecimal("5000000"));
+    }
+
+    /** Executes a previously approved return refund using the payment's original VNPay transaction. */
+    @Transactional
+    public String executeApprovedReturnRefund(
+        ActorPrincipal actor, UUID paymentId, BigDecimal amount, String reason, String clientIp
+    ) {
+        requireConfigured();
+        if (actor == null || !actor.hasAnyRole(RoleCode.STAFF, RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Staff execution is required for an approved return refund");
+        }
+        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+            .orElseThrow(() -> ApiExceptions.notFound("Original payment was not found"));
+        if (payment.getStatus() != PaymentStatus.PAID || payment.getGatewayTransactionNo() == null
+            || payment.getRenewal() != null || payment.getReservation() == null) {
+            throw ApiExceptions.conflict("The original payment is not refundable through VNPay");
+        }
+        BigDecimal remaining = payment.getAmount().subtract(payment.getRefundedAmount());
+        if (amount == null || amount.signum() <= 0 || amount.compareTo(remaining) > 0) {
+            throw ApiExceptions.validation("Refund amount exceeds the original payment's refundable amount", null);
+        }
+        User user = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
+        VnpayRefundRequest request = new VnpayRefundRequest(amount, reason);
+        Refund refund = null;
+        if (refundRepository != null) {
+            refund = new Refund();
+            refund.setPayment(payment);
+            refund.setRequestedBy(user);
+            refund.setApprovedBy(user);
+            refund.setApprovedAt(Instant.now());
+            refund.setAmount(amount);
+            refund.setReason(reason);
+            refund.setStatus(RefundStatus.PROCESSING);
+            refund = refundRepository.saveAndFlush(refund);
+        }
+        Map<String, String> gateway = post(refundRequest(payment, request, user.getEmail(), clientIp));
+        if (!"00".equals(gateway.get("vnp_ResponseCode"))) {
+            if (refund != null) {
+                refund.setStatus(RefundStatus.FAILED);
+                refund.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
+                refundRepository.save(refund);
+            }
+            throw ApiExceptions.conflict("VNPay did not confirm the return refund");
+        }
+        payment.setRefundedAmount(payment.getRefundedAmount().add(amount));
+        payment.setLastReconciledAt(Instant.now());
+        paymentRepository.saveAndFlush(payment);
+        String reference = gateway.get("vnp_TransactionNo") != null
+            ? gateway.get("vnp_TransactionNo") : gateway.get("vnp_TxnRef");
+        if (refund != null) {
+            refund.setStatus(RefundStatus.COMPLETED);
+            refund.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
+            refund.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
+            refund.setGatewayRefundId(reference);
+            refundRepository.save(refund);
+        }
+        auditLogService.recordMutation(user, "VNPAY_RETURN_REFUND_COMPLETED", "Payment", payment.getId(),
+            payment.getReservation().getFacility().getId(), null,
+            Map.of("amount", amount, "reference", reference == null ? payment.getGatewayIntentId() : reference));
+        return reference == null ? payment.getGatewayIntentId() : reference;
     }
 
     @Transactional(readOnly = true)
@@ -669,6 +958,7 @@ public class VnpayService {
             payment.getAmount(),payment.getCurrency(),payment.getStatus(),payment.getPaymentDeadline(),payment.getPaidAt(),
             payment.getStatus()==PaymentStatus.PAID&&(payment.getFailureCode()!=null&&!preparationHeldAndReconciled
                 ||"RECONCILIATION_REQUIRED".equals(renewalSettlementStage(payment))),message,url,renewalSettlementStage(payment),
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
             transaction==null?com.storagehub.service.renewal.RenewalTransactionStatus.resolve(payment,false,BigDecimal.ZERO,Instant.now()):transaction.status(),
             transaction!=null&&transaction.receiptAvailable());
     }
@@ -1040,7 +1330,8 @@ public class VnpayService {
             payment.getGatewayPayDate(), message, payment.getProcessedAt(), payment.getLastReconciledAt(),
             payment.getPurpose(), payment.getGatewayBankCode() == null || payment.getGatewayBankCode().isBlank()
                 ? "VNPAY" : payment.getGatewayBankCode(),
-            payment.getPaidAt(), payment.getInitiatedBy()==null?null:payment.getInitiatedBy().getFullName());
+            payment.getPaidAt(), payment.getInitiatedBy()==null?null:payment.getInitiatedBy().getFullName(),
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt());
     }
     private String message(Payment payment) {
         return payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully"

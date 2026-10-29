@@ -15,6 +15,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> findDistinctByRoles_CodeAndStatus(RoleCode role, UserStatus status);
+    List<User> findByStatus(UserStatus status);
     Optional<User> findByEmailIgnoreCase(String email);
     boolean existsByEmailIgnoreCase(String email);
     long countByRoles_Code(RoleCode code);

@@ -57,7 +57,8 @@ public class RentalBookingEvidenceReader {
         for(var p:rows)if(!"VND".equals(p.getCurrency()) || !money(p.getAmount()) || p.getPurpose()==null || p.getStatus()==null)
             throw ApiExceptions.conflict("Booking payment record is inconsistent");
         var payments=rows.stream().limit(20).map(p->{var classification=provenance.classify(p);return new RentalBookingEvidence.PaymentRecord(p.getId(),p.getPurpose().name(),p.getStatus().name(),
-            p.getAmount(),p.getProcessedAt(),classification.name(),preflight.read(p,rental,snapshots.isEmpty()?null:snapshots.getFirst(),classification),sandboxPolicy.evaluate(p,classification));}).toList();
+            p.getAmount(),p.getProcessedAt(),classification.name(),p.getInvoiceNumber(),p.getInvoiceStatus(),p.getInvoiceIssuedAt(),
+            preflight.read(p,rental,snapshots.isEmpty()?null:snapshots.getFirst(),classification),sandboxPolicy.evaluate(p,classification));}).toList();
         // Do not return gateway intent, idempotency key, failure details or other internal identifiers.
         return Optional.of(new RentalBookingEvidence(rental.getId(),reservation.getId(),"VND",amounts,payments,rows.size()>20));
     }

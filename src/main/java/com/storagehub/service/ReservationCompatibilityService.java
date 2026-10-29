@@ -3,15 +3,20 @@ package com.storagehub.service;
 import com.storagehub.api.reservation.CompatibilityCheckRequest;
 import com.storagehub.api.reservation.CompatibilityCheckResponse;
 import com.storagehub.api.reservation.GoodsItemRequest;
+import com.storagehub.api.reservation.ReservationRecommendationRequest;
+import com.storagehub.api.reservation.ReservationRecommendationResponse;
 import com.storagehub.common.api.ApiExceptions;
+import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.CompatibilityResult;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
 import com.storagehub.domain.repo.FacilityRepository;
+import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
@@ -20,6 +25,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +38,7 @@ public class ReservationCompatibilityService {
 
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
+    private final RentalPackagePolicyRepository policyRepository;
     private final ReservationCapacityService capacityService;
     private final GoodsCatalogService goodsCatalogService;
 
@@ -39,11 +46,13 @@ public class ReservationCompatibilityService {
     public ReservationCompatibilityService(
         FacilityRepository facilityRepository,
         UnitTypeRepository unitTypeRepository,
+        RentalPackagePolicyRepository policyRepository,
         ReservationCapacityService capacityService,
         GoodsCatalogService goodsCatalogService
     ) {
         this.facilityRepository = facilityRepository;
         this.unitTypeRepository = unitTypeRepository;
+        this.policyRepository = policyRepository;
         this.capacityService = capacityService;
         this.goodsCatalogService = goodsCatalogService;
     }
@@ -54,7 +63,7 @@ public class ReservationCompatibilityService {
         UnitTypeRepository unitTypeRepository,
         ReservationCapacityService capacityService
     ) {
-        this(facilityRepository, unitTypeRepository, capacityService, null);
+        this(facilityRepository, unitTypeRepository, null, capacityService, null);
     }
 
     @Transactional(readOnly = true)
@@ -66,6 +75,122 @@ public class ReservationCompatibilityService {
     public CompatibilityCheckResponse checkQuotedSnapshot(ActorPrincipal actor, CompatibilityCheckRequest request) {
         return check(actor, request, false);
     }
+
+    @Transactional(readOnly = true)
+    public ReservationRecommendationResponse recommend(
+        ActorPrincipal actor,
+        ReservationRecommendationRequest request
+    ) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customers can request reservation recommendations");
+        }
+        validateDates(request.getStartDate(), request.getEndDate());
+
+        Facility facility = facilityRepository.findById(request.getFacilityId())
+            .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
+        if (facility.getStatus() != FacilityStatus.active) {
+            throw ApiExceptions.conflict("Facility is not available for reservations");
+        }
+        RentalPackagePolicy policy = policyRepository == null ? null : policyRepository
+            .findByFacility_IdAndCode(facility.getId(), request.getPricingPackageCode().trim())
+            .filter(candidate -> candidate.isActive())
+            .filter(candidate -> !candidate.getEffectiveFrom().isAfter(request.getStartDate()))
+            .filter(candidate -> candidate.getEffectiveTo() == null
+                || !candidate.getEffectiveTo().isBefore(request.getEndDate()))
+            .orElseThrow(() -> ApiExceptions.conflict("Rental package is not effective for the selected facility and date"));
+        int rentalMonths = ReservationQuoteService.calculateRentalMonths(
+            request.getStartDate(), request.getEndDate()
+        );
+        if (policy != null && policy.getRentalMonths() != rentalMonths) {
+            throw ApiExceptions.validation("Rental period does not match the selected package", null);
+        }
+
+        List<UnitType> candidates = unitTypeRepository
+            .findByFacility_IdOrderByCodeAsc(facility.getId())
+            .stream()
+            .filter(unitType -> unitType.getStatus() == UnitTypeStatus.active)
+            .toList();
+        List<UUID> evaluatedIds = candidates.stream().map(UnitType::getId).toList();
+        List<UUID> incompatibleIds = new ArrayList<>();
+        List<String> issues = new ArrayList<>();
+        List<RecommendationCandidate> compatibleCandidates = new ArrayList<>();
+
+        for (UnitType candidate : candidates) {
+            CompatibilityCheckResponse result;
+            try {
+                result = check(actor, new CompatibilityCheckRequest(
+                    facility.getId(), candidate.getId(), request.getStartDate(), request.getEndDate(),
+                    request.getGoodsCondition(), copyItems(request.getGoodsItems())
+                ));
+            } catch (ApiException exception) {
+                incompatibleIds.add(candidate.getId());
+                addIssue(issues, exception.getMessage());
+                continue;
+            }
+
+            if (result.getResult() == CompatibilityResult.INCOMPATIBLE || result.getAvailableUnitCount() <= 0) {
+                incompatibleIds.add(candidate.getId());
+                result.getIssues().forEach(issue -> addIssue(issues, issue));
+                continue;
+            }
+            compatibleCandidates.add(new RecommendationCandidate(candidate, result));
+        }
+
+        compatibleCandidates.sort(Comparator
+            .comparingInt((RecommendationCandidate item) -> recommendationRank(item.result().getResult()))
+            .thenComparing(item -> item.unitType().getVolumeM3())
+            .thenComparing(item -> item.unitType().getCode()));
+
+        RecommendationCandidate selected = compatibleCandidates.isEmpty() ? null : compatibleCandidates.get(0);
+        if (selected == null && candidates.isEmpty()) {
+            addIssue(issues, "No active unit type is available at the selected facility");
+        }
+        if (selected == null && issues.isEmpty()) {
+            addIssue(issues, "No unit type is compatible with the declared goods and rental period");
+        }
+
+        CompatibilityCheckResponse selectedResult = selected == null ? null : selected.result();
+        return new ReservationRecommendationResponse(
+            facility.getId(),
+            selected == null ? null : selected.unitType().getId(),
+            policy == null ? request.getPricingPackageCode() : policy.getCode(),
+            policy == null ? null : policy.getPolicyVersion(),
+            rentalMonths,
+            selectedResult == null ? CompatibilityResult.INCOMPATIBLE : selectedResult.getResult(),
+            selectedResult == null ? null : selectedResult.getTotalGoodsVolumeM3(),
+            selectedResult == null ? null : selectedResult.getTotalGoodsWeightKg(),
+            selectedResult == null ? 0 : selectedResult.getAvailableUnitCount(),
+            evaluatedIds,
+            List.copyOf(incompatibleIds),
+            List.copyOf(issues)
+        );
+    }
+
+    private int recommendationRank(CompatibilityResult result) {
+        return result == CompatibilityResult.COMPATIBLE ? 0 : 1;
+    }
+
+    private void addIssue(List<String> issues, String issue) {
+        if (issue != null && !issue.isBlank() && !issues.contains(issue)) issues.add(issue);
+    }
+
+    private List<GoodsItemRequest> copyItems(List<GoodsItemRequest> items) {
+        return items.stream().map(item -> {
+            GoodsItemRequest copy = new GoodsItemRequest(
+                item.getCategory(), item.getCustomGoodsName(), item.getMaterialName(), item.getCustomMaterial(),
+                item.getDescription(), item.getCustomerNote(), item.getQuantity(), item.getLengthCm(),
+                item.getWidthCm(), item.getHeightCm(), item.getWeightPerItemKg(), item.isFragile()
+            );
+            copy.setCatalogCategoryId(item.getCatalogCategoryId());
+            copy.setCatalogMaterialId(item.getCatalogMaterialId());
+            copy.setCategoryCode(item.getCategoryCode());
+            copy.setCategoryName(item.getCategoryName());
+            copy.setMaterialCode(item.getMaterialCode());
+            return copy;
+        }).toList();
+    }
+
+    private record RecommendationCandidate(UnitType unitType, CompatibilityCheckResponse result) {}
 
     private CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request, boolean validateCurrentCatalog) {
         if (!actor.hasRole(RoleCode.CUSTOMER)) {
@@ -167,18 +292,24 @@ public class ReservationCompatibilityService {
     }
 
     private void validateOtherItem(GoodsItemRequest item, int index, boolean validateCurrentCatalog) {
-        if (isOther(item)
-            && (isBlank(item.getCustomGoodsName()) || isBlank(item.getCustomMaterial()))) {
+        if (isOther(item) && isBlank(item.getCustomGoodsName())) {
             throw ApiExceptions.validation(
-                "goodsItems[" + index + "] requires customGoodsName and customMaterial for OTHER category", null
+                "goodsItems[" + index + "] requires customGoodsName for OTHER category", null
             );
         }
-        if (!isOther(item) && isBlank(item.getMaterialName())) {
+        if (!isOther(item) && !hasOptionalMaterial(item) && isBlank(item.getMaterialName())) {
             throw ApiExceptions.validation(
                 "goodsItems[" + index + "] requires materialName for a standard category", null
             );
         }
         // The database-backed catalog and per-unit-type scope are validated together by the caller.
+    }
+
+    private static boolean hasOptionalMaterial(GoodsItemRequest item) {
+        String code = item.getCategoryCode() == null ? item.getCategory().name() : item.getCategoryCode();
+        return "ELECTRONICS".equals(code)
+            || "CAMERA_EQUIPMENT".equals(code)
+            || "MUSICAL_INSTRUMENTS".equals(code);
     }
 
     private boolean fitsInsideRack(GoodsItemRequest item, UnitType unitType) {

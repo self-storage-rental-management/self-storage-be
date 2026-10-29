@@ -96,13 +96,21 @@ public class AdminSettingsService {
                 setting.getDescription(),
                 setting.getLabel(),
                 setting.getSettingType(),
-                objectMapper.readTree(setting.getValue()),
+                toApiValue(objectMapper.readTree(setting.getValue())),
                 readOptions(setting),
                 setting.getUpdatedAt()
             );
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Stored setting value is invalid", exception);
         }
+    }
+
+    private Object toApiValue(JsonNode value) {
+        if (value.isTextual()) return value.textValue();
+        if (value.isBoolean()) return value.booleanValue();
+        if (value.isIntegralNumber()) return value.longValue();
+        if (value.isFloatingPointNumber()) return value.decimalValue();
+        return value;
     }
 
     private List<String> readOptions(SystemSetting setting) {
