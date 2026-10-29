@@ -130,6 +130,15 @@ INSERT INTO rental_package_policies (id, created_at, updated_at, facility_id, co
 SELECT UUID_TO_BIN('dddddddd-9999-0006-0000-000000000006'), NOW(6), NOW(6), f.id, 'PKG-TD-6M', 'Gói Tiêu Chuẩn 6 Tháng Thủ Đức (Giảm 10%)', 6, 0.1000, 'v1.0', '2026-01-01', '2026-12-31', 1 FROM facilities f WHERE f.code='HCM-TD-F01'
 ON DUPLICATE KEY UPDATE name=VALUES(name), discount_rate=VALUES(discount_rate), active=1;
 
+UPDATE rental_package_policies
+SET free_setup_days = CASE rental_months
+    WHEN 3 THEN 1
+    WHEN 6 THEN 3
+    WHEN 12 THEN 6
+    WHEN 24 THEN 6
+    ELSE 0
+END;
+
 -- ------------------------------------------------------------------------------
 -- 5. DỌN DẸP & TẠO ĐƠN ĐẶT KHO TEST (BO RESERVATIONS & QUOTES)
 -- ------------------------------------------------------------------------------
@@ -232,6 +241,21 @@ SELECT
 FROM users u, facilities f, unit_types ut
 WHERE u.email='customer@storagehub.demo' AND f.code='HCM-TD-F01' AND ut.facility_id=f.id AND ut.code='M' LIMIT 1;
 
+UPDATE reservation_quotes
+SET free_setup_days = CASE rental_months
+    WHEN 3 THEN 1
+    WHEN 6 THEN 3
+    WHEN 12 THEN 6
+    WHEN 24 THEN 6
+    ELSE 0
+END
+WHERE id IN (
+    UUID_TO_BIN('88888888-b001-0001-0000-000000000001'),
+    UUID_TO_BIN('88888888-b001-0002-0000-000000000002'),
+    UUID_TO_BIN('88888888-b001-0003-0000-000000000003'),
+    UUID_TO_BIN('88888888-b001-0004-0000-000000000004')
+);
+
 -- Reservations với UUID riêng
 INSERT INTO reservations (
     id, created_at, updated_at, customer_id, facility_id, unit_type_id,
@@ -292,6 +316,21 @@ SELECT
     5700000.00, 'IDEMP-RES-BO-TD-001', 1
 FROM users u, facilities f, unit_types ut, storage_units su
 WHERE u.email='customer@storagehub.demo' AND f.code='HCM-TD-F01' AND ut.facility_id=f.id AND ut.code='M' AND su.code='HCM-TD-F01-M-001' LIMIT 1;
+
+UPDATE reservations
+SET setup_days_snapshot = CASE id
+    WHEN UUID_TO_BIN('99999999-b001-0001-0000-000000000001') THEN 3
+    WHEN UUID_TO_BIN('99999999-b001-0002-0000-000000000002') THEN 3
+    WHEN UUID_TO_BIN('99999999-b001-0003-0000-000000000003') THEN 3
+    WHEN UUID_TO_BIN('99999999-b001-0004-0000-000000000004') THEN 1
+    ELSE setup_days_snapshot
+END
+WHERE id IN (
+    UUID_TO_BIN('99999999-b001-0001-0000-000000000001'),
+    UUID_TO_BIN('99999999-b001-0002-0000-000000000002'),
+    UUID_TO_BIN('99999999-b001-0003-0000-000000000003'),
+    UUID_TO_BIN('99999999-b001-0004-0000-000000000004')
+);
 
 -- ------------------------------------------------------------------------------
 -- 6. GIAO DỊCH THANH TOÁN DOANH THU 6 THÁNG (PAYMENTS TỪ 05/2026 ĐẾN 10/2026)
