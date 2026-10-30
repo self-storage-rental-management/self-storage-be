@@ -32,7 +32,7 @@ Phạm vi thực hiện hiện tại: đọc code gia hạn, quá hạn, thanh t
 
 ## Các việc cần sửa theo ưu tiên
 
-### 1. Chặn đường approve/reject bỏ qua workflow chuẩn — ưu tiên cao
+### 1. Chặn đường approve/reject bỏ qua workflow chuẩn - ưu tiên cao
 
 Vị trí: `self-storage-be/src/main/java/com/storagehub/service/renewal/RenewalWorkflowService.java:368` và `:390`; endpoint trong `api/renewal/ManagerRenewalController.java`.
 
@@ -45,7 +45,7 @@ Vị trí: `self-storage-be/src/main/java/com/storagehub/service/renewal/Renewal
 
 Hướng sửa: dùng một đường hoàn tất có đầy đủ điều kiện cho mọi phương án thanh toán; nếu tiếp tục có duyệt/từ chối thì phải quy định rõ giai đoạn được phép, quyền ghi, khóa/version và xử lý tài chính/hold đi kèm.
 
-### 2. Phân biệt trả trước một phần và trả toàn kỳ trong xử lý ngoại lệ — ưu tiên cao
+### 2. Phân biệt trả trước một phần và trả toàn kỳ trong xử lý ngoại lệ - ưu tiên cao
 
 Chuỗi code hiện tại:
 

@@ -68,7 +68,7 @@ public class AccessCredentialService {
     private static final Pattern ACCESS_WINDOW = Pattern.compile("(\\d{1,2}:\\d{2}).*?(\\d{1,2}:\\d{2})");
     private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final Pattern ACCESS_HOURS_PATTERN = Pattern.compile(
-        "(\\d{1,2})(?::|h)?(\\d{2})?\\s*[-–]\\s*(\\d{1,2})(?::|h)?(\\d{2})?",
+        "(\\d{1,2})(?::|h)?(\\d{2})?\\s*[--]\\s*(\\d{1,2})(?::|h)?(\\d{2})?",
         Pattern.CASE_INSENSITIVE
     );
 

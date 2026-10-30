@@ -186,7 +186,7 @@ public class RecoveryTaskOperationService {
             uuid(rs.getBytes("return_case_id")),rs.getString("inspection_json"),instant(rs.getTimestamp("assets_cleared_at")),uuid(rs.getBytes("completion_file_id")),instant(rs.getTimestamp("completed_at"))),bytes(task)).stream().findFirst().orElse(null);
     }
     private Optional<View> replay(Context c,String key,String operation,Object body) {
-        if(key==null||key.isBlank()||key.length()>100)throw ApiExceptions.validation("Idempotency-Key (1–100 characters) required",null);
+        if(key==null||key.isBlank()||key.length()>100)throw ApiExceptions.validation("Idempotency-Key (1-100 characters) required",null);
         var rows=jdbc.queryForList("select task_id,operation,payload_hash,result_json from recovery_task_commands where actor_id=? and key_hash=?",bytes(c.actor().getId()),hash(key));
         if(rows.isEmpty())return Optional.empty();var row=rows.getFirst();
         if(!c.task().id().equals(uuid((byte[])row.get("task_id")))||!operation.equals(row.get("operation"))||!hash(json(body)).equals(row.get("payload_hash")))

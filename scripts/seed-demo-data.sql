@@ -16,8 +16,8 @@ START TRANSACTION;
 
 INSERT INTO facilities (id, created_at, updated_at, code, name, address, city, status)
 VALUES
-    (UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), NOW(6), NOW(6), 'HCM-Q1-F01', 'Kho Việt – Cơ sở Quận 1', '125 Nguyễn Bỉnh Khiêm, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh', 'TP. Hồ Chí Minh', 'active'),
-    (UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), NOW(6), NOW(6), 'BD-F01', 'Kho Việt – Cơ sở Bình Dương', '468 Đại lộ Bình Dương, Phường Lái Thiêu, TP. Thuận An, Bình Dương', 'Bình Dương', 'active')
+    (UUID_TO_BIN('11111111-1111-1111-1111-111111111111'), NOW(6), NOW(6), 'HCM-Q1-F01', 'Kho Việt - Cơ sở Quận 1', '125 Nguyễn Bỉnh Khiêm, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh', 'TP. Hồ Chí Minh', 'active'),
+    (UUID_TO_BIN('11111111-1111-1111-1111-111111111112'), NOW(6), NOW(6), 'BD-F01', 'Kho Việt - Cơ sở Bình Dương', '468 Đại lộ Bình Dương, Phường Lái Thiêu, TP. Thuận An, Bình Dương', 'Bình Dương', 'active')
 ON DUPLICATE KEY UPDATE name=VALUES(name), address=VALUES(address), city=VALUES(city), status='active';
 
 INSERT INTO unit_types (id, created_at, updated_at, facility_id, code, name, length_m, width_m, height_m, monthly_price, max_load_kg, rack_count, rack_length_m, rack_width_m, rack_height_m, status, published_revision, accepted_goods_json, version)

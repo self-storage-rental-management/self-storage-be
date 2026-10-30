@@ -4,7 +4,7 @@
 
 Báo giá mới dùng cọc 20%. Với `FULL_TERM`, áp dụng giảm giá của gói trước khi tính cọc, phần còn lại thu khi ký. Với `MONTHLY`, không áp dụng giảm giá cả kỳ, cọc tính trên tiền thuê một tháng. Quy tắc này thay thế tỷ lệ 40%/60% trong mô tả lịch sử bên dưới. Công thức và ví dụ xem [Renewal API contract](RENEWAL_API_CONTRACT.md#cách-tính-báo-giá-hiện-hành-21102026). Snapshot đã chấp nhận và các khoản đã thanh toán được giữ nguyên.
 
-## Bộ ghi nhận dùng chung — 13/10/2026
+## Bộ ghi nhận dùng chung - 13/10/2026
 
 Reservation và Renewal dùng chung `ManualRentalPaymentService` khi Staff thu tiền còn lại: `CASH` hoặc `BANK_TRANSFER`, lưu Payment purpose `RENTAL_BALANCE`, provider `MANUAL`, trạng thái PAID và audit binding `MANUAL_RENTAL_BALANCE_RECORDED_V1`. Đây là Staff xác nhận khoản thu thực tế, không phải gọi ngân hàng hoặc tự tạo giao dịch chuyển tiền.
 
