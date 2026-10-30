@@ -579,6 +579,14 @@ public class CustomerReservationService {
         }
         Instant previousAppointmentAt = reservation.getAppointmentAt();
         reservation.setAppointmentAt(request.appointmentAt());
+        var pricing = snapshotRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+        if (pricing.getRentalMonths() > 0) {
+            var estimatedStart = request.appointmentAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+                .toLocalDate().plusDays(pricing.getFreeSetupDays());
+            reservation.setStartDate(estimatedStart);
+            reservation.setEndDate(estimatedStart.plusMonths(pricing.getRentalMonths()));
+        }
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
         if (checkIn != null && checkIn.getStatus() != CheckInStatus.scheduled) {
             throw ApiExceptions.conflict("Check-in has already started or been closed");
@@ -816,6 +824,9 @@ public class CustomerReservationService {
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
         response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
         ReservationSnapshotView.describe(response,reservation,snapshot);
+        response.setRentalPeriodConfirmed(reservation.getStatus() == ReservationStatus.COMPLETED
+            || checkInRepository != null && checkInRepository.findByReservation_Id(reservation.getId())
+                .map(checkIn -> checkIn.getSetupStartedAt() != null).orElse(false));
         response.setSetupGoodsRevisionUsedAt(reservation.getSetupGoodsRevisionUsedAt());
         if (rentalRepository != null) {
             rentalRepository.findByReservation_Id(reservation.getId()).ifPresent(rental -> {
