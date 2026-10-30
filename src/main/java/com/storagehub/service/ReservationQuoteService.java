@@ -328,10 +328,9 @@ public class ReservationQuoteService {
 
     public static int defaultFreeSetupDays(int rentalMonths) {
         return switch (rentalMonths) {
-            case 3 -> 3;
-            case 6 -> 7;
-            case 12 -> 15;
-            case 24 -> 30;
+            case 3 -> 1;
+            case 6 -> 3;
+            case 12, 24 -> 6;
             default -> 0;
         };
     }
