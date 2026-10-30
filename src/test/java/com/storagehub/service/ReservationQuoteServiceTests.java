@@ -113,14 +113,31 @@ class ReservationQuoteServiceTests {
         assertThat(response.getSubtotal()).isEqualByComparingTo("16500000.00");
         assertThat(response.getDiscountAmount()).isEqualByComparingTo("495000.00");
         assertThat(response.getTotalAfterDiscount()).isEqualByComparingTo("16005000.00");
-        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("4301000.00");
         assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("5500000.00");
-        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
-        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
+        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("11704000.00");
+        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("21505000.00");
         assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
         assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
         assertThat(response.getQuoteId()).isNotNull();
+    }
+
+    @Test
+    void depositIncludesSecurityDepositWithoutDiscount() {
+        unitType.setMonthlyPrice(new BigDecimal("9500000"));
+        unitType.setSecurityDepositAmount(new BigDecimal("9500000"));
+        policy.setDiscountRate(BigDecimal.ZERO);
+        var request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 10));
+        stubCompatible(request);
+        when(policyRepository.findByFacility_IdAndCode(facility.getId(), "PKG-3M")).thenReturn(Optional.of(policy));
+        when(unitTypeRepository.findById(unitType.getId())).thenReturn(Optional.of(unitType));
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(quoteRepository.saveAndFlush(any(ReservationQuote.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        var response = service.createQuote(actor, request);
+        assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("38000000");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("7600000");
+        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("30400000");
     }
 
     @Test
@@ -137,8 +154,8 @@ class ReservationQuoteServiceTests {
         var response = service.createQuote(actor, request);
 
         assertThat(response.getReservationDepositRate()).isEqualByComparingTo("0.1000");
-        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("1600500.00");
-        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("14404500.00");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("2150500.00");
+        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("13854500.00");
     }
 
     @Test
