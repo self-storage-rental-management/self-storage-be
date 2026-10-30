@@ -23,6 +23,10 @@ public class ReservationResponse {
     public UUID getSetupReturnCaseId() { return setupReturnCaseId; }
     public void setSetupReturnCaseId(UUID value) { setupReturnCaseId = value; }
 
+    private boolean rentalPeriodConfirmed;
+    public boolean isRentalPeriodConfirmed() { return rentalPeriodConfirmed; }
+    public void setRentalPeriodConfirmed(boolean value) { rentalPeriodConfirmed = value; }
+
     private UUID id;
     private String reservationCode;
     private UUID quoteId;
