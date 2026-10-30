@@ -471,14 +471,14 @@ public class CheckInHandoverService {
         Rental rental = rentalRepository.findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Setup rental timeline is missing"));
         Instant inventoryNow = Instant.now();
-        if (rental.getSetupEndsAt() == null || rental.getSetupEndsAt().isAfter(inventoryNow)) {
-            throw ApiExceptions.conflict("Chỉ được kiểm kê sau khi thời gian setup miễn phí kết thúc.");
+        if (rental.getSetupEndsAt() == null) {
+            throw ApiExceptions.conflict("Setup rental timeline is missing");
         }
-        if (rental.getStatus() == RentalStatus.setup) {
+        if (rental.getStatus() == RentalStatus.setup && !rental.getSetupEndsAt().isAfter(inventoryNow)) {
             rental.setStatus(RentalStatus.active);
         }
-        if (rental.getStatus() != RentalStatus.active) {
-            throw ApiExceptions.conflict("Hồ sơ thuê chưa ở trạng thái đang hoạt động để kiểm kê.");
+        if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
+            throw ApiExceptions.conflict("Hồ sơ thuê chưa sẵn sàng để kiểm kê.");
         }
         if (!request.checklist().identityVerified()) {
             throw ApiExceptions.conflict("Customer identity verification is required");
