@@ -48,5 +48,5 @@ public class SupportPersistence {
         if(node.isArray()){ArrayNode result=mapper.createArrayNode();node.forEach(n->result.add(sort(n)));return result;}return node;
     }
     private static String hash(String value){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException(e);}}
-    private static void validate(String key){if(key==null||key.isBlank()||key.length()>100)throw ApiExceptions.validation("Idempotency-Key of 1–100 characters required",null);}
+    private static void validate(String key){if(key==null||key.isBlank()||key.length()>100)throw ApiExceptions.validation("Idempotency-Key of 1-100 characters required",null);}
 }

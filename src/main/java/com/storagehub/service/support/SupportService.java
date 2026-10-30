@@ -573,7 +573,7 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
     private void notifyManagers(SupportTicket ticket,String title,String content){var managers=em.createQuery("select distinct s.user from UserFacilityScope s where s.facility.id=:facility and s.scopeLevel=:level and s.user.status=:active",User.class).setParameter("facility",ticket.getFacility().getId()).setParameter("level",FacilityScopeLevel.MANAGE).setParameter("active",UserStatus.ACTIVE).getResultList();for(var u:managers)if(hasRole(u,RoleCode.MANAGER)&&hasPermission(u,SystemPermission.VIEW_SUPPORT))notify(u.getId(),ticket,title,content);}
     private <T> PageResponse<T> page(List<T> rows,SupportQuery q,long total,String correlation){return new PageResponse<>(List.copyOf(rows),new PageResponse.Pagination(q.page(),q.size(),total,(int)((total+q.size()-1)/q.size()),q.sort()+","+(q.descending()?"desc":"asc")),correlation);}
     private Object payload(UUID id,Object body){return Arrays.asList(id,body);}
-    private String text(String value,int limit){if(value==null||value.isBlank()||value.length()>limit)throw ApiExceptions.validation("Text must contain 1–"+limit+" characters",null);return value.trim();}
+    private String text(String value,int limit){if(value==null||value.isBlank()||value.length()>limit)throw ApiExceptions.validation("Text must contain 1-"+limit+" characters",null);return value.trim();}
     private Instant now(){var clock=clocks.getIfAvailable();return (clock==null?Clock.systemUTC():clock).instant();}
     private static RuntimeException deferred(String reason){return ApiExceptions.conflict("DEFERRED_SOURCE: "+reason);}
 }

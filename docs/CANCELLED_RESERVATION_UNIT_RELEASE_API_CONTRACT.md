@@ -315,8 +315,8 @@ Không dùng `StorageUnit.status = held` làm đầu ra của flow này.
 
 | Trường hợp | HTTP | Code/message định hướng |
 |---|---:|---|
-| Đọc danh sách/chi tiết thành công | `200` | — |
-| Release thành công hoặc retry hợp lệ | `200` | — |
+| Đọc danh sách/chi tiết thành công | `200` | - |
+| Release thành công hoặc retry hợp lệ | `200` | - |
 | Payload/disposition/maintenance không hợp lệ | `400` | `VALIDATION_ERROR` |
 | Chưa đăng nhập | `401` | `UNAUTHORIZED` |
 | Thiếu permission hoặc facility scope | `403` | `FORBIDDEN` |

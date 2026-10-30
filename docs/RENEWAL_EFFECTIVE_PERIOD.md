@@ -7,7 +7,7 @@
 - Ngày cuối kỳ mới = ngày bắt đầu cộng số tháng thuê rồi trừ một ngày. Backend vẫn lưu ngày kết thúc hợp đồng theo quy ước inclusive/exclusive đã xác minh của hồ sơ.
 - Không cộng ngày setup miễn phí.
 
-Ví dụ kỳ cũ dùng đến hết 31/10: ký ngày 26/10 thì kỳ mới bắt đầu 01/11. Hoàn tất ký ngày 05/11 thì kỳ mới bắt đầu 05/11; 01–04/11 được xử lý bằng nghĩa vụ quá hạn. Ngày 05/11 không đồng thời tính phí quá hạn trong bảng kê gia hạn.
+Ví dụ kỳ cũ dùng đến hết 31/10: ký ngày 26/10 thì kỳ mới bắt đầu 01/11. Hoàn tất ký ngày 05/11 thì kỳ mới bắt đầu 05/11; 01-04/11 được xử lý bằng nghĩa vụ quá hạn. Ngày 05/11 không đồng thời tính phí quá hạn trong bảng kê gia hạn.
 
 ## Cách áp dụng
 

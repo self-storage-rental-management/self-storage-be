@@ -5,7 +5,7 @@
 
 ## 1. Executive Summary (Tóm Tắt Tổng Quan)
 
-Dự án **StorageHub — Hệ thống Quản lý Cho thuê Kho Tự Quản (Self-Storage Rental Management System)** là giải pháp toàn trình phục vụ vận hành chuỗi cơ sở lưu trữ tự quản. Toàn bộ mã nguồn hiện hữu của hệ thống đã được phân tích và trích xuất dựa trên bằng chứng kỹ thuật (evidence-based) tại cả hai kho lưu trữ mã nguồn:
+Dự án **StorageHub - Hệ thống Quản lý Cho thuê Kho Tự Quản (Self-Storage Rental Management System)** là giải pháp toàn trình phục vụ vận hành chuỗi cơ sở lưu trữ tự quản. Toàn bộ mã nguồn hiện hữu của hệ thống đã được phân tích và trích xuất dựa trên bằng chứng kỹ thuật (evidence-based) tại cả hai kho lưu trữ mã nguồn:
 - **Backend (BE)**: `d:\SWP391\BE\self-storage-BE` (Java 21, Spring Boot 4.1.1, Spring Data JPA / Hibernate, Spring Security, MySQL 8, Flyway Migrations).
 - **Frontend (FE)**: `d:\SWP391\FE\self-storage-FE` (React 19, TypeScript 5.7, Vite 8.3, TailwindCSS 4, Vitest 5.0).
 
@@ -938,7 +938,7 @@ stateDiagram-v2
 
 ---
 
-## 11. Frontend–Backend Integration (Tích Hợp Giao Diện & Máy Chủ)
+## 11. Frontend-Backend Integration (Tích Hợp Giao Diện & Máy Chủ)
 
 ### 11.1 Cấu hình Tầng Truyền Thông (`apiClient.ts`)
 - **HTTP Client**: Axios instance trỏ vào Base URL `http://localhost:8080/api`.

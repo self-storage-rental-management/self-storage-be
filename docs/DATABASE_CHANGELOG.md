@@ -1,14 +1,14 @@
 # Database changelog
 
-## 2026-10-20 — Bổ sung loại thông báo gia hạn
+## 2026-10-20 - Bổ sung loại thông báo gia hạn
 
 `V2026102005__add_renewal_notification_type.sql` thêm `RENEWAL` vào cuối ENUM `notifications.type`, giữ các giá trị cũ và dữ liệu hiện có. DB khôi phục cũ thiếu loại này khiến bước tạo thông báo lỗi và hoàn tác yêu cầu gia hạn. Áp dụng trên local qua Flyway; DB chung cần triển khai migration riêng.
 
-## 2026-10-20 — Đồng bộ trạng thái gia hạn cho database cũ
+## 2026-10-20 - Đồng bộ trạng thái gia hạn cho database cũ
 
 `V2026102004__extend_renewal_status_values.sql` bổ sung `accepted` và `full_rent_paid` vào `renewals.status`, đồng bộ đầy đủ với `RenewalStatus`. Giữ thứ tự 10 giá trị ENUM cũ, thêm hai giá trị ở cuối; không cập nhật trạng thái hoặc tiền của hồ sơ hiện có. Migration nằm trong `db/migration`, không phụ thuộc Hibernate tự cập nhật schema. Cần chạy bằng Flyway trên từng database đích; commit/push code không tự áp dụng vào DB chung. Bản sao lưu local trước cập nhật: `.local/before-renewal-status-2026102004.sql`, xuất ID nhị phân dưới dạng hex.
 
-## 2026-10-11 — Ưu tiên version develop, tương thích lịch sử đã áp dụng
+## 2026-10-11 - Ưu tiên version develop, tương thích lịch sử đã áp dụng
 
 Mục này thay thế phương án reconcile bên dưới. DB mới dùng `2026100909=add_vnpay_payment_fields` và `2026101001=add_customer_checkin_appointment` của develop. Ledger/outbox dùng Java version mới `2026101103`; `2026101102` giữ nguyên để bổ sung cột thiếu cho DB cũ.
 
@@ -18,7 +18,7 @@ SQL đã áp dụng được chuyển nguyên nội dung sang từng thư mục 
 
 Chi tiết triển khai và điều kiện rollout: [RENTAL_SUPPORT_SCHEMA_ROLLOUT.md](RENTAL_SUPPORT_SCHEMA_ROLLOUT.md) và [PAYMENT_GATEWAY_MIGRATION.md](PAYMENT_GATEWAY_MIGRATION.md).
 
-## 2026-10-11 — Reconcile migration trùng sau merge develop (DB test)
+## 2026-10-11 - Reconcile migration trùng sau merge develop (DB test)
 
 Giữ nguyên migration đã kiểm chứng `2026100909=remove legacy rental end date`, `2026101001=create rental ledger and notification outbox`, cùng version/script/checksum. Ba SQL develop trùng được lưu nguyên nội dung ngoài default location tại `db/migration-archive/develop`, không tự thực thi.
 
@@ -36,16 +36,16 @@ spring.jpa.hibernate.ddl-auto=update
 
 Các thay đổi schema cần được ghi nhận bằng migration SQL có version và kiểm thử trên bản sao dữ liệu.
 
-## 2026-09-30 — Chuẩn hóa trạng thái Reservation và Payment
+## 2026-09-30 - Chuẩn hóa trạng thái Reservation và Payment
 
-- Đổi trạng thái Reservation sang chữ hoa thống nhất FE–BE.
+- Đổi trạng thái Reservation sang chữ hoa thống nhất FE-BE.
 - Bỏ `DEPOSIT_PAID`; dùng `CONFIRMED` sau khi payment hợp lệ.
 - Thêm `AWAITING_CUSTOMER_RECEIPT` và `REJECTED`.
 - Chuẩn hóa Payment status và đổi purpose từ `DEPOSIT` thành `RESERVATION_DEPOSIT`.
 - Đổi tên cột vật lý `system_settings.value` thành `setting_value` để tránh xung đột từ khóa H2.
 - Nếu database cũ đã có reservation/payment, cần cập nhật giá trị enum cũ trước khi chạy phiên bản mới.
 
-## 2026-09-30 — Mở rộng Reservation và khai báo hàng hóa
+## 2026-09-30 - Mở rộng Reservation và khai báo hàng hóa
 
 ### Bảng `reservations`
 
@@ -94,7 +94,7 @@ Khi upload, BE kiểm tra dòng hàng tồn tại, thuộc Reservation của Cus
 - Manager/Staff không sửa trực tiếp tổng thể tích hoặc tổng khối lượng.
 - Nếu Hibernate không thể bổ sung cột `reservation_code NOT NULL` do database local đã có dữ liệu cũ, cần sao lưu dữ liệu cần thiết rồi tạo lại database local hoặc điền mã cho các dòng cũ trước.
 
-## 2026-10-01 — Xác minh email của Reservation
+## 2026-10-01 - Xác minh email của Reservation
 
 Tạo bảng `reservation_email_verifications`, mỗi Reservation có tối đa một bản ghi xác minh:
 
@@ -108,7 +108,7 @@ Tạo bảng `reservation_email_verifications`, mỗi Reservation có tối đa 
 
 Không tạo riêng `locked_at`, `disabled_at`, `last_failed_at`, `consumed_at` hoặc `last_resend_at`. `created_at` và `updated_at` đã được kế thừa từ `BaseEntity`; trạng thái khóa có thể xác định bằng `failed_attempts` trong service.
 
-## 2026-10-01 — Chụp giá tại thời điểm đặt kho
+## 2026-10-01 - Chụp giá tại thời điểm đặt kho
 
 Tạo bảng `reservation_pricing_snapshots`, mỗi Reservation có một bản chụp giá:
 
@@ -122,7 +122,7 @@ Tạo bảng `reservation_pricing_snapshots`, mỗi Reservation có một bản 
 
 Không lưu mã giảm giá, loại giảm giá, lý do giảm, phụ phí hoặc currency vì không có trong luồng booking hiện tại và hệ thống chỉ dùng VND. Tỷ lệ cọc không lưu trong snapshot vì chính sách của bài cố định 40%; snapshot chỉ lưu số tiền cọc đã tính để giá cũ không thay đổi.
 
-## 2026-10-01 — Duyệt hàng OTHER không dùng bảng lịch sử riêng
+## 2026-10-01 - Duyệt hàng OTHER không dùng bảng lịch sử riêng
 
 Không tạo bảng `reservation_goods_reviews` vì mỗi Reservation trong phạm vi đồ án chỉ cần một kết quả duyệt hàng hiện tại. Bổ sung trực tiếp vào `reservations`:
 
@@ -135,7 +135,7 @@ Không tạo bảng `reservation_goods_reviews` vì mỗi Reservation trong ph�
 
 Nếu sau này cần lưu nhiều vòng duyệt hoặc audit chi tiết, mới tách thành bảng lịch sử riêng. Hiện tại ActivityLog chung vẫn ghi nhận thao tác thay đổi quan trọng.
 
-## 2026-10-01 — Payment liên kết trực tiếp Reservation
+## 2026-10-01 - Payment liên kết trực tiếp Reservation
 
 - Thay `Payment.reservationId` dạng UUID rời bằng quan hệ JPA `ManyToOne` tới `Reservation`.
 - Cột `payments.reservation_id` trở thành khóa ngoại bắt buộc trong model.
@@ -144,13 +144,13 @@ Nếu sau này cần lưu nhiều vòng duyệt hoặc audit chi tiết, mới t
 
 Nếu database local đã có payment không có `reservation_id` hợp lệ, cần xóa dữ liệu payment demo cũ hoặc gắn lại đúng Reservation trước khi chạy backend.
 
-## 2026-10-01 — Hoàn tất các bảng nền tảng booking
+## 2026-10-01 - Hoàn tất các bảng nền tảng booking
 
 ### `rental_package_policies`
 
 Lưu gói thuê do BO cấu hình theo cơ sở: mã/tên gói, số tháng, tỷ lệ giảm, phiên bản chính sách, trạng thái và thời gian hiệu lực. Unique `(facility_id, code)` là ràng buộc nghiệp vụ, không phải index tối ưu hóa bổ sung.
 
-### `payment_webhook_events` — đã loại bỏ ngày 2026-10-02
+### `payment_webhook_events` - đã loại bỏ ngày 2026-10-02
 
 Bảng này từng được tạo cho contract cổng thanh toán cũ. Model/repository/API webhook đã bị xóa khi chuyển hoàn toàn sang payment mô phỏng nội bộ. Với database local đang dùng `ddl-auto=update`, Hibernate không tự drop bảng cũ; có thể xóa thủ công sau khi xác nhận không cần dữ liệu demo.
 
@@ -170,7 +170,7 @@ Ngày 2026-10-02 đã bổ sung service/API phát hành idempotent. File PDF đ�
 
 Các cột cũ như `timezone`, `price_per_m3`, `area_m2`, `volume_m3` hoặc `rentals.end_date` có thể vẫn còn trong MySQL khi dùng `ddl-auto=update`, nhưng code không còn sử dụng. Nếu dựng database demo sạch, Hibernate chỉ tạo schema theo entity mới.
 
-## 2026-10-02 — Payment mô phỏng và payment grace
+## 2026-10-02 - Payment mô phỏng và payment grace
 
 - Thêm `PAYMENT_GRACE`, `PAYMENT_REVIEW` vào `ReservationStatus`.
 - Thêm `NOT_RECEIVED` vào `PaymentStatus`.
@@ -183,7 +183,7 @@ Các cột cũ như `timezone`, `price_per_m3`, `area_m2`, `volume_m3` hoặc `r
 
 Các cột/bảng thanh toán cũ có thể vẫn tồn tại trong MySQL local vì `ddl-auto=update` không drop schema; chúng không còn được map hoặc sử dụng và có thể xóa thủ công sau khi sao lưu dữ liệu cần thiết.
 
-## 2026-10-02 — Payment complaint và Manager review
+## 2026-10-02 - Payment complaint và Manager review
 
 Tạo bảng `payment_complaints` với quan hệ duy nhất tới Reservation, Payment và Customer. Bảng lưu trạng thái `PENDING`, `APPROVED`, `REJECTED`, `WITHDRAWN`, `REVIEW_OVERDUE`, lý do, hạn review, người/thời điểm xử lý, lý do quyết định và `version`.
 
@@ -191,14 +191,14 @@ Tạo bảng `payment_complaints` với quan hệ duy nhất tới Reservation, 
 
 Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuyển Payment `PAID` và Reservation `CONFIRMED`; reject hoặc Customer withdraw đặt `archived_at` và giải phóng capacity. Scheduler chỉ đánh dấu complaint quá 24 giờ là `REVIEW_OVERDUE`, không tự giải phóng capacity.
 
-## 2026-10-04 — Reservation request fingerprint cho idempotency
+## 2026-10-04 - Reservation request fingerprint cho idempotency
 
 - Thêm cột nullable `reservations.request_fingerprint` dài 64 ký tự để lưu SHA-256 của payload tạo Reservation đã chuẩn hóa.
 - Reservation mới luôn lưu fingerprint gồm quote, goods condition, notes và toàn bộ goods items theo thứ tự request.
 - Retry cùng `Idempotency-Key` và cùng payload trả lại Reservation cũ; cùng key nhưng payload khác trả `409 CONFLICT`.
 - Cột giữ nullable để Hibernate `ddl-auto=update` tương thích với dữ liệu local đã tồn tại. Khi retry bản ghi cũ chưa có fingerprint, service tái dựng fingerprint từ Reservation và goods items đã lưu để so sánh.
 
-## 2026-10-08 — Renewal operations / overdue coordination (rollout pending)
+## 2026-10-08 - Renewal operations / overdue coordination (rollout pending)
 
 - Additive entities: `renewal_operation_states`, `renewal_operation_events`, `overdue_follow_up_states`, `overdue_follow_ups`.
 - Shared Rental/Reservation/Payment/Refund/policy/permission table structures unchanged; no seed, rewrite or backfill.
@@ -207,7 +207,7 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - `ddl-auto=update` can create additive tables on startup. Do not start against team/shared DB until schema/lock/permission owners approve. H2 test schema creation is isolated and not production migration evidence.
 - Contracts: `RENEWAL_API_CONTRACT.md#signing-and-operations-api`, `OVERDUE_API_CONTRACT.md`.
 
-## 2026-10-08 — Support workflow (rollout pending)
+## 2026-10-08 - Support workflow (rollout pending)
 
 - Five additive tables: `support_workflow_states`, `support_messages`, `support_workflow_events`, `support_escalations`, `support_command_receipts`.
 - Reuse existing `support_tickets` / `SupportTicketStatus` unchanged; no shared table ALTER, policy/permission seed, delete, rewrite or legacy backfill.
@@ -217,7 +217,7 @@ Reservation `PAYMENT_REVIEW` tiếp tục giữ capacity. Manager approve chuy�
 - `ddl-auto=update` may create additive tables on startup. Shared DB startup remains subject to schema/permission owner approval; isolated H2 tests are not MySQL/TiDB migration evidence.
 - API contract: `SUPPORT_API_CONTRACT.md`. No public auto-close endpoint or automatically enabled scheduler.
 
-## 2026-10-11 — Sổ tài chính hồ sơ thuê và hàng đợi thông báo
+## 2026-10-11 - Sổ tài chính hồ sơ thuê và hàng đợi thông báo
 
 Migration: `src/main/resources/db/integration-migration/V2026101001__create_rental_ledger_and_notification_outbox.sql`.
 Đã áp dụng vào DB test `storagehub_local` ngày 10/10/2026; **chưa áp dụng/xác minh trên DB chung của team**. Không sửa nội dung hoặc checksum migration đã áp dụng.
@@ -242,7 +242,7 @@ Profile yêu cầu `STORAGEHUB_DB_URL`, `STORAGEHUB_DB_USERNAME`, `STORAGEHUB_DB
 
 Quy trình và lệnh: [RENTAL_SUPPORT_SCHEMA_ROLLOUT.md](RENTAL_SUPPORT_SCHEMA_ROLLOUT.md). Test: `RentalSupportSchemaRolloutTests` (profile/identity/engine), `RentalIntegrationMySqlSchemaTests` (MySQL thật, migration/guard/FK/retry). Kết quả từng lần chạy phải ghi trong báo cáo, không coi test SKIP là PASS.
 
-## 2026-10-11 — Payment gateway intent (migration opt-in)
+## 2026-10-11 - Payment gateway intent (migration opt-in)
 
 Entity Payment yêu cầu gatewayIntentId nhưng migration nền chưa tạo cột. Bổ sung Java migration 2026101101 tại src/main/java/db/paymentmigration, location classpath:db/paymentmigration; profile rental-support-schema dùng đủ ba locations, không thay defaults/staging/prod hoặc migration cũ.
 
@@ -253,7 +253,7 @@ Entity Payment yêu cầu gatewayIntentId nhưng migration nền chưa tạo c�
 
 Chi tiết dữ liệu cũ/rollout: [PAYMENT_GATEWAY_MIGRATION.md](PAYMENT_GATEWAY_MIGRATION.md). Test: 8 ca Payment migration MySQL và 6 ca full schema, cùng regression writer/profile/reader. Startup/API và giới hạn E2E ghi riêng trong báo cáo FE.
 
-## 2026-10-11 — Đưa 7 bảng ledger/outbox vào Flyway chung
+## 2026-10-11 - Đưa 7 bảng ledger/outbox vào Flyway chung
 
 Theo phê duyệt, chuyển nguyên V2026101001__create_rental_ledger_and_notification_outbox.sql từ db/integration-migration vào db/migration. Version, checksum Flyway -1198625055 và SHA256 0E7AD29986D1CFB6E5E5DD3380CC464067EF16E83A13A52B3D0EAF370426766F không đổi. Không giữ SQL trùng, ALTER/DROP/seed/backfill số dư hoặc cấp quyền. Comment opt-in trong SQL là lịch sử, giữ để không sửa checksum.
 
