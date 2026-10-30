@@ -432,10 +432,19 @@ public class CustomerReservationService {
             reservationId, actor.userId()
         ).orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
 
-        // A completed reservation is already finalized. Treat a repeated customer
-        // confirmation as an idempotent read so it cannot create another rental,
-        // reopen a ledger account, or emit duplicate handover side effects.
+        // Repeated confirmation never recreates a rental, ledger or notifications.
+        // Older early receipts may still need their verified setup rental activated.
         if (reservation.getStatus() == ReservationStatus.COMPLETED) {
+            var existing = rentalRepository.findByReservationIdForUpdate(reservationId);
+            if (existing.isPresent() && existing.get().getStatus() == RentalStatus.setup) {
+                CheckIn completedCheckIn = checkInRepository.findByReservation_Id(reservationId)
+                    .filter(item -> item.getStatus() == CheckInStatus.completed)
+                    .orElseThrow(() -> ApiExceptions.conflict("Completed handover record was not found"));
+                ReservationPricingSnapshot acceptedSnapshot = snapshotRepository.findByReservation_Id(reservationId)
+                    .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
+                requireReceiptTimeline(reservation, completedCheckIn, existing.get(), acceptedSnapshot);
+                activateReceivedRental(existing.get());
+            }
             return toDetailResponse(reservation);
         }
 
@@ -461,6 +470,7 @@ public class CustomerReservationService {
         Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê từ bàn giao thực tế, cần đối soát trước khi xác nhận nhận kho."));
         requireReceiptTimeline(reservation,checkIn,rental,snapshot);
+        activateReceivedRental(rental);
 
         reservation.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
@@ -498,7 +508,14 @@ public class CustomerReservationService {
         return toDetailResponse(saved);
     }
 
-    /** A receipt acknowledges an existing handover; it cannot invent a rental or its dates. */
+    private void activateReceivedRental(Rental rental) {
+        if (rental.getStatus() == RentalStatus.setup) {
+            rental.setStatus(RentalStatus.active);
+            rentalRepository.saveAndFlush(rental);
+        }
+    }
+
+    /** Receipt activates a verified handover, including early inventory, without changing paid dates. */
     private void requireReceiptTimeline(Reservation reservation,CheckIn checkIn,Rental rental,ReservationPricingSnapshot snapshot) {
         String missing="Thiếu hoặc lệch chứng cứ bàn giao/setup, cần đối soát trước khi xác nhận nhận kho.";
         if(rental.getId()==null||rental.getReservation()==null||rental.getCustomer()==null||rental.getFacility()==null||rental.getStorageUnit()==null
@@ -507,7 +524,8 @@ public class CustomerReservationService {
             ||!java.util.Objects.equals(rental.getCustomer().getId(),reservation.getCustomer().getId())
             ||!java.util.Objects.equals(rental.getFacility().getId(),reservation.getFacility().getId())
             ||!java.util.Objects.equals(rental.getStorageUnit().getId(),reservation.getAssignedUnit().getId())
-            ||rental.getStatus()!=RentalStatus.active||rental.getActualReturnedAt()!=null||rental.getCompletedAt()!=null
+            ||(rental.getStatus()!=RentalStatus.setup&&rental.getStatus()!=RentalStatus.active)
+            ||rental.getActualReturnedAt()!=null||rental.getCompletedAt()!=null
             ||rental.getSetupStartedAt()==null||rental.getSetupEndsAt()==null||rental.getTermsEffectiveAt()==null
             ||rental.getStartDate()==null||rental.getContractEndDate()==null||rental.getInventoryVerifiedAt()==null
             ||checkIn.getContractSignedAt()==null||checkIn.getPaymentCollectedAt()==null||checkIn.getInventoryVerifiedAt()==null)
@@ -525,9 +543,9 @@ public class CustomerReservationService {
                 ||!rental.getContractEndDate().equals(paidStart.plusMonths(snapshot.getRentalMonths()))
                 ||checkIn.getContractSignedAt().isAfter(rental.getSetupStartedAt())
                 ||checkIn.getPaymentCollectedAt().isAfter(rental.getSetupStartedAt())
-                ||rental.getSetupStartedAt().isAfter(now)||rental.getSetupEndsAt().isAfter(now)
+                ||rental.getSetupStartedAt().isAfter(now)
                 ||rental.getInventoryVerifiedAt().isBefore(rental.getSetupStartedAt())
-                ||rental.getInventoryVerifiedAt().isBefore(rental.getSetupEndsAt())||rental.getInventoryVerifiedAt().isAfter(now))
+                ||rental.getInventoryVerifiedAt().isAfter(now))
                 throw ApiExceptions.conflict(missing);
         } catch(java.time.DateTimeException invalid){throw ApiExceptions.conflict(missing);}
     }
