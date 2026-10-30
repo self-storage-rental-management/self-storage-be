@@ -19,6 +19,10 @@ import static com.storagehub.service.renewal.operations.RenewalOperationService.
 @io.swagger.v3.oas.annotations.responses.ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409",description="Stale version/phase/deadline or DEFERRED_SOURCE"))
 public class StaffRenewalOperationController {
     private final ActorContext actors;private final RenewalOperationService service;
+    @GetMapping("/customer-identity") @Operation(summary="Read customer identity from the original booking for assigned Staff arrival checks")
+    public ApiResponse<RenewalOperationService.CustomerIdentity> customerIdentity(@PathVariable UUID id) {
+        return new ApiResponse<>(service.customerIdentity(actors.required(), id), CorrelationIdContext.current());
+    }
     @GetMapping @Operation(summary="Read assigned Renewal operational detail")
     public ApiResponse<RenewalOperationResponse> detail(@PathVariable UUID id,@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){RenewalOperationQuery.none(query);return new ApiResponse<>(service.detail(actors.required(),id,STAFF),CorrelationIdContext.current());}
     @PostMapping("/arrival") @ResponseStatus(org.springframework.http.HttpStatus.CREATED) @Operation(summary="Record arrival with server clock",description="No backdating, automatic completion or deadline extension.")
