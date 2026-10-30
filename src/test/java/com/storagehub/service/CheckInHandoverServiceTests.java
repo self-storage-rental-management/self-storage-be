@@ -462,6 +462,7 @@ class CheckInHandoverServiceTests {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
+        "2026-10-30T03:00:00Z,6,2026-11-05,2026-12-05",
         "2026-10-26T03:00:00Z,3,2026-10-29,2026-11-29",
         "2026-10-31T16:59:59Z,3,2026-11-03,2026-12-03",
         "2026-10-31T17:00:00Z,3,2026-11-04,2026-12-04",
