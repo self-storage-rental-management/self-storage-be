@@ -58,6 +58,24 @@ public class RenewalOperationService {
     public RenewalOperationResponse detail(ActorPrincipal actor,UUID id,Audience audience) {
         return projection(visible(actor,id,audience,false,Capability.READ));
     }
+    public record CustomerIdentity(UUID renewalId, UUID customerId, String fullName, String identityDocumentNumber) {}
+
+    @Transactional(readOnly=true)
+    public CustomerIdentity customerIdentity(ActorPrincipal actor, UUID id) {
+        var renewal = visible(actor, id, Audience.STAFF, false, Capability.ARRIVAL);
+        var rental = renewal.getRental();
+        var customer = rental.getCustomer();
+        var reservation = rental.getReservation();
+        if (customer == null || reservation == null || reservation.getCustomer() == null
+            || !Objects.equals(customer.getId(), reservation.getCustomer().getId())
+            || reservation.getFacility() == null
+            || !Objects.equals(rental.getFacility().getId(), reservation.getFacility().getId())) {
+            throw ApiExceptions.conflict("Renewal customer identity binding is incomplete");
+        }
+        var number = reservation.getIdentityDocumentNumber();
+        return new CustomerIdentity(id, customer.getId(), customer.getFullName(),
+            number == null || number.isBlank() ? null : number.trim());
+    }
     @Transactional(readOnly=true)
     public RenewalExceptionProposalResponse exceptionProposal(ActorPrincipal actor,UUID id) {
         var n=visible(actor,id,Audience.CUSTOMER,false,Capability.READ);

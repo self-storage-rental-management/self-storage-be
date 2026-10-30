@@ -33,6 +33,40 @@ class RenewalOperationIntegrationTests {
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.storagehub.service.ledger.LedgerStore signingLedger;
     static final Instant NOW=Instant.parse("2026-10-08T02:00:00Z");
+
+    @Test void assignedStaffReadsIdentityFromOriginalBooking() {
+        var renewal = fixture();
+        renewal.getRental().getReservation().setIdentityDocumentNumber("079203009988");
+        var identity = service.customerIdentity(actor(renewal, RoleCode.STAFF), renewal.getId());
+        assertThat(identity.renewalId()).isEqualTo(renewal.getId());
+        assertThat(identity.customerId()).isEqualTo(renewal.getRental().getCustomer().getId());
+        assertThat(identity.identityDocumentNumber()).isEqualTo("079203009988");
+    }
+
+    @Test void missingBookingIdentityRemainsUnknown() {
+        var renewal = fixture();
+        renewal.getRental().getReservation().setIdentityDocumentNumber(" ");
+        assertThat(service.customerIdentity(actor(renewal, RoleCode.STAFF), renewal.getId())
+            .identityDocumentNumber()).isNull();
+    }
+
+    @Test void customerIdentityRequiresStaffRoleAndCurrentAssignment() {
+        var renewal = fixture();
+        assertThatThrownBy(() -> service.customerIdentity(actor(renewal, RoleCode.CUSTOMER), renewal.getId()))
+            .hasMessageContaining("Staff role");
+        assertThatThrownBy(() -> service.customerIdentity(actor(renewal, RoleCode.MANAGER), renewal.getId()))
+            .hasMessageContaining("Staff role");
+        ops.authorized = false;
+        assertThatThrownBy(() -> service.customerIdentity(actor(renewal, RoleCode.STAFF), renewal.getId()))
+            .hasMessageContaining("revoked");
+    }
+
+    @Test void changedBookingCustomerCannotExposeIdentity() {
+        var renewal = fixture();
+        renewal.getRental().getReservation().setCustomer(new User());
+        assertThatThrownBy(() -> service.customerIdentity(actor(renewal, RoleCode.STAFF), renewal.getId()))
+            .hasMessageContaining("identity binding");
+    }
     @TestConfiguration static class Sources {
         @Bean TestDateEvidence dateEvidence(){return new TestDateEvidence();}
         @Bean com.storagehub.service.rental.period.RentalPeriodResolver periods(org.springframework.beans.factory.ObjectProvider<com.storagehub.service.RentalReadSources.DateSource> sources){return new com.storagehub.service.rental.period.RentalPeriodResolver(sources);}
