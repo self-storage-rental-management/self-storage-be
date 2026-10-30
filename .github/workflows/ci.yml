@@ -24,6 +24,19 @@ jobs:
           java-version: '21'
           cache: maven
       - run: chmod +x mvnw
+      - name: Prepare Maven Wrapper
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if ./mvnw -B --version; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Maven setup failed on attempt $attempt. Retrying in 5 seconds."
+              sleep 5
+            fi
+          done
+          exit 1
       - name: Compile and test
         run: ./mvnw -B clean test
       - name: JUnit reports
@@ -63,6 +76,19 @@ jobs:
           java-version: '21'
           cache: maven
       - run: chmod +x mvnw
+      - name: Prepare Maven Wrapper
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if ./mvnw -B --version; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Maven setup failed on attempt $attempt. Retrying in 5 seconds."
+              sleep 5
+            fi
+          done
+          exit 1
       - name: Display code migration and concurrency on MySQL
         run: ./mvnw -B -Dtest=BusinessRecordCodesMySqlTests test
       - name: MySQL test reports
