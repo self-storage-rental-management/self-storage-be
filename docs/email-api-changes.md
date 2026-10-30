@@ -14,7 +14,7 @@ Tài liệu này ghi nhận các thay đổi hợp đồng API (API Contracts), 
 - **Thay đổi đối với trường `password`**:
   - Trường `password` trong body hiện là **optional** (không bắt buộc).
   - **Trường hợp 1 (Để trống/null/khoảng trắng)**: Backend tự động sinh mật khẩu tạm thời an toàn gồm **12 ký tự** ngẫu nhiên (chứa chữ hoa, chữ thường, số, ký tự đặc biệt). Sau đó, hệ thống đặt `mustChangePassword = true` và tự động gửi email thông báo tạo tài khoản kèm mật khẩu tạm thời đến địa chỉ email của người dùng mới bằng mẫu email `account-created`.
-  - **Trường hợp 2 (Nhập thủ công)**: Nếu Admin nhập mật khẩu, mật khẩu phải tuân thủ chính sách `PasswordPolicy` (8–128 ký tự, bao gồm chữ hoa, chữ thường, chữ số, ký tự đặc biệt). Hệ thống vẫn đặt `mustChangePassword = true` và gửi mật khẩu này qua email cho người dùng.
+  - **Trường hợp 2 (Nhập thủ công)**: Nếu Admin nhập mật khẩu, mật khẩu phải tuân thủ chính sách `PasswordPolicy` (8-128 ký tự, bao gồm chữ hoa, chữ thường, chữ số, ký tự đặc biệt). Hệ thống vẫn đặt `mustChangePassword = true` và gửi mật khẩu này qua email cho người dùng.
 - **Dữ liệu trả về (Response 200 OK)**:
   - `data.mustChangePassword`: `true`
   - Response **không trả về mật khẩu thô** nhằm đảm bảo an toàn thông tin.

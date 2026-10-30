@@ -25,7 +25,7 @@ Mỗi flow có một contract chính. Khi bổ sung hoặc sửa API, cập nh�
 ## Kịch bản demo và kiểm thử thủ công
 
 - [Happy path 4 flow chính](HAPPY_PATH_ALL_FLOWS.md): đặt kho và nhận kho, trả kho, gia hạn, hỗ trợ khách hàng; gồm điều kiện, thao tác và kết quả mong đợi.
-- [Gia hạn, quá hạn và hỗ trợ — chi tiết](HAPPY_PATH_RENEWAL_OVERDUE_SUPPORT.md): thao tác, kết quả từng bước và phiếu ghi nhận cho ba flow này.
+- [Gia hạn, quá hạn và hỗ trợ - chi tiết](HAPPY_PATH_RENEWAL_OVERDUE_SUPPORT.md): thao tác, kết quả từng bước và phiếu ghi nhận cho ba flow này.
 
 Các kịch bản là hướng dẫn chạy, không thay thế contract và không phải bằng chứng đã kiểm thử thành công trên môi trường triển khai.
 

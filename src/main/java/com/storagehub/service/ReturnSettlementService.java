@@ -983,7 +983,7 @@ public class ReturnSettlementService {
         var rc=new ReturnCase();rc.setRental(rental);rc.setFacility(rental.getFacility());rc.setStorageUnit(rental.getStorageUnit());
         rc.setCustomer(rental.getCustomer());rc.setRequestedBy(userRepository.findById(actor.userId()).orElseThrow(()->ApiExceptions.notFound("Staff not found")));
         rc.setRequestedAt(Instant.now());rc.setScheduledDate(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")));
-        rc.setCustomerNotes("OVERDUE_REPOSSESSION — hồ sơ do nhân viên lập từ nhiệm vụ thu hồi");
+        rc.setCustomerNotes("OVERDUE_REPOSSESSION - hồ sơ do nhân viên lập từ nhiệm vụ thu hồi");
         rc.setDepositAmount(securityDeposit(rental));
         return returnCaseRepository.saveAndFlush(rc);
     }
