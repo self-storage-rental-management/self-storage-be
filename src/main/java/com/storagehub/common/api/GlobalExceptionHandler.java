@@ -3,7 +3,8 @@ package com.storagehub.common.api;
 import jakarta.validation.ConstraintViolationException;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -11,21 +12,19 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler({org.springframework.web.servlet.resource.NoResourceFoundException.class,
-        org.springframework.web.servlet.NoHandlerFoundException.class})
-    public ResponseEntity<ApiErrorResponse> handleMissingEndpoint(Exception exception) {
-        return error(HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "Requested endpoint was not found", null);
-    }
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiErrorResponse> handleApiException(ApiException exception) {
@@ -47,8 +46,9 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiErrorResponse> handleUnreadableBody(HttpMessageNotReadableException exception) {
+        log.warn("Unreadable request body: {}", exception.getMessage());
         return error(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
-            "Thông tin gửi lên chưa đúng định dạng. Vui lòng kiểm tra lại các mục đã nhập.", null);
+            "Thông tin gửi lên chưa đúng định dạng. Vui lòng kiểm tra lại các mục đã nhập.", exception.getMessage());
     }
 
     @ExceptionHandler({
@@ -71,14 +71,40 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ApiErrorResponse> handleAccessDenied() {
-        return error(HttpStatus.FORBIDDEN, ErrorCode.FORBIDDEN, "You do not have permission for this resource", null);
+    public ResponseEntity<ApiErrorResponse> handleAccessDenied(AccessDeniedException exception) {
+        return error(HttpStatus.FORBIDDEN, ErrorCode.FORBIDDEN, "Access is denied", null);
+    }
+
+    @ExceptionHandler({ NoResourceFoundException.class, NoHandlerFoundException.class })
+    public ResponseEntity<ApiErrorResponse> handleNotFound(Exception exception) {
+        return error(HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "The requested endpoint does not exist", null);
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiErrorResponse> handleMaxUploadSizeExceeded() {
+        return error(HttpStatus.PAYLOAD_TOO_LARGE, ErrorCode.VALIDATION_ERROR,
+            "Tệp đính kèm vượt quá dung lượng tối đa cho phép (tối đa 30MB). Vui lòng chọn tệp nhỏ hơn.", null);
+    }
+
+    @ExceptionHandler(org.springframework.web.context.request.async.AsyncRequestNotUsableException.class)
+    public void handleDisconnectedResponse(org.springframework.web.context.request.async.AsyncRequestNotUsableException exception) {
+        // The response is no longer writable. Do not serialize JSON into a closed SSE stream.
+        log.debug("Client disconnected from async response: {}", exception.getMessage());
+    }
+
+    @ExceptionHandler(org.springframework.dao.ConcurrencyFailureException.class)
+    public ResponseEntity<ApiErrorResponse> handleConcurrency(Exception exception) {
+        log.warn("Database concurrency conflict: {}", exception.getMessage());
+        return error(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Hệ thống đang bận xử lý dữ liệu đồng thời. Vui lòng thử lại.", null);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception exception) {
         log.error("Unhandled API error, correlationId={}", CorrelationIdContext.current(), exception);
-        return error(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR, "An unexpected error occurred", null);
+        String msg = exception.getMessage() != null && !exception.getMessage().isBlank()
+            ? exception.getMessage()
+            : "An unexpected error occurred";
+        return error(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR, msg, null);
     }
 
     private ResponseEntity<ApiErrorResponse> error(
@@ -87,8 +113,8 @@ public class GlobalExceptionHandler {
         String message,
         Object details
     ) {
-        return ResponseEntity.status(status).body(
-            new ApiErrorResponse(new ApiError(code.name(), message, details, CorrelationIdContext.current()))
-        );
+        return ResponseEntity.status(status).body(new ApiErrorResponse(
+            new ApiError(code.name(), message, details, CorrelationIdContext.current())
+        ));
     }
 }

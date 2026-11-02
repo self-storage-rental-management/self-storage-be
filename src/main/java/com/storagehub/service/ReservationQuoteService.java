@@ -159,8 +159,13 @@ public class ReservationQuoteService {
         }
 
         BigDecimal totalAfterDiscount = money(baseEligibleAmount.subtract(voucherDiscountAmount));
+        BigDecimal securityDepositAmount = money(
+            (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
+                ? monthlyPrice
+                : unitType.getSecurityDepositAmount()
+        );
         BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
-        BigDecimal reservationDepositAmount = money(totalAfterDiscount.multiply(depositRate));
+        BigDecimal reservationDepositAmount = money(totalAfterDiscount.add(securityDepositAmount).multiply(depositRate));
         int earlyTerminationFeeCapMonths = policy.getEarlyTerminationFeeCapMonths() > 0
             ? policy.getEarlyTerminationFeeCapMonths() : EarlyTerminationPolicy.DEFAULT_FEE_CAP_MONTHS;
         BigDecimal earlyTerminationFeeCoefficient = policy.getEarlyTerminationFeeCoefficient() != null
@@ -171,11 +176,7 @@ public class ReservationQuoteService {
             reservationDepositAmount, totalAfterDiscount, rentalMonths,
             earlyTerminationFeeCoefficient, earlyTerminationFeeCapMonths
         );
-        BigDecimal securityDepositAmount = money(
-            (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
-                ? monthlyPrice
-                : unitType.getSecurityDepositAmount()
-        );
+
         BigDecimal remainingRentalAmount = money(totalAfterDiscount.subtract(reservationDepositAmount));
         BigDecimal dueAtCheckIn = money(remainingRentalAmount.add(securityDepositAmount));
         BigDecimal totalInitialObligation = money(totalAfterDiscount.add(securityDepositAmount));

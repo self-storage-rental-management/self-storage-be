@@ -9,5 +9,5 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "app.files")
 public class FileProperties {
     private String storagePath = "./uploads";
-    private long maxSizeBytes = 10 * 1024 * 1024;
+    private long maxSizeBytes = 30 * 1024 * 1024;
 }
