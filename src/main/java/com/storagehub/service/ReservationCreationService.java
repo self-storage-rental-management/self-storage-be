@@ -145,9 +145,28 @@ public class ReservationCreationService {
             throw ApiExceptions.conflict("Goods declaration changed after quote creation; please create a new quote");
         }
 
+        Instant now = Instant.now();
+        boolean quotedReviewRequired = quotedGoodsItems.stream().anyMatch(ReservationCompatibilityService::isOther);
+        if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
+            String message = "Lịch nhận kho đã qua. Vui lòng chọn ngày giờ mới.";
+            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
+        }
+        ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
+            now, quotedReviewRequired
+        );
+        if (request.getAppointmentAt() != null
+            && !checkInWindow.contains(request.getAppointmentAt())) {
+            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép hoặc giờ sớm nhất đã thay đổi. Vui lòng chọn lại lịch nhận kho.";
+            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
+        }
+        java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
+            .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(quote.getFreeSetupDays());
+        java.time.LocalDate handoverDate = rentalStartDate.minusDays(quote.getFreeSetupDays());
+        java.time.LocalDate rentalEndDate = rentalStartDate.plusMonths(quote.getRentalMonths());
+
         CompatibilityCheckRequest compatibilityRequest = new CompatibilityCheckRequest(
-            quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
-            quote.getEndDate(), request.getGoodsCondition(), quotedGoodsItems
+            quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate,
+            rentalEndDate, request.getGoodsCondition(), quotedGoodsItems
         );
         CompatibilityCheckResponse compatibility = compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
         if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
@@ -157,9 +176,8 @@ public class ReservationCreationService {
 
         capacityService.lockAndRequireAvailableCapacity(
             quote.getFacility().getId(), quote.getUnitType().getId(),
-            quote.getStartDate(), quote.getEndDate()
+            handoverDate, rentalEndDate
         );
-        Instant now = Instant.now();
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
         reservation.setReservationCode(uniqueReservationCode(reservationRepository,
@@ -178,20 +196,6 @@ public class ReservationCreationService {
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setGoodsReviewStatus(reviewRequired ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
         reservation.setCompatibilityResult(compatibility.getResult());
-        if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
-            String message = "Lịch nhận kho đã qua. Vui lòng chọn ngày giờ mới.";
-            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
-        }
-        ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
-            now, reviewRequired
-        );
-        if (request.getAppointmentAt() != null
-            && !checkInWindow.contains(request.getAppointmentAt())) {
-            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép hoặc giờ sớm nhất đã thay đổi. Vui lòng chọn lại lịch nhận kho và lấy báo giá mới.";
-            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
-        }
-        java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
-            .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(quote.getFreeSetupDays());
         reservation.setStartDate(rentalStartDate);
         reservation.setEndDate(rentalStartDate.plusMonths(quote.getRentalMonths()));
         reservation.setSetupDaysSnapshot(quote.getFreeSetupDays());
