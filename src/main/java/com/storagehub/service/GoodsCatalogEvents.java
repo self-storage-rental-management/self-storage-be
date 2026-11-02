@@ -22,7 +22,7 @@ public class GoodsCatalogEvents {
         SseEmitter emitter = new SseEmitter(30 * 60 * 1000L);
         subscribers.put(id, emitter);
         emitter.onCompletion(() -> subscribers.remove(id));
-        emitter.onTimeout(() -> { subscribers.remove(id); emitter.complete(); });
+        emitter.onTimeout(() -> subscribers.remove(id));
         emitter.onError(error -> subscribers.remove(id));
         send(id, emitter, "ready");
         return emitter;
@@ -44,7 +44,7 @@ public class GoodsCatalogEvents {
             emitter.send(SseEmitter.event().name(event).data(Map.of("revision", revision)));
         } catch (IOException | IllegalStateException error) {
             subscribers.remove(id);
-            emitter.complete();
+            // Spring handles the failed async write. Do not flush this response again.
         }
     }
 }

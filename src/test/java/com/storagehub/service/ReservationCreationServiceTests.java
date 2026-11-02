@@ -116,13 +116,14 @@ class ReservationCreationServiceTests {
         policy.setEffectiveFrom(LocalDate.of(2026, 1, 1));
     }
 
-    @Test
-    void createsReservationAndCopiesPricingSnapshot() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 3, 6})
+    void createsReservationAndCopiesPricingSnapshot(int handoverOffsetDays) {
         CreateReservationRequest request = request();
         quote.getFacility().setAccessHours("06:00 - 22:00 hàng ngày");
         quote.setFreeSetupDays(6);
         policy.setFreeSetupDays(6);
-        request.setAppointmentAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.DAYS).plus(2, java.time.temporal.ChronoUnit.DAYS).plusSeconds(20 * 3600));
+        request.setAppointmentAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.DAYS).plus(handoverOffsetDays, java.time.temporal.ChronoUnit.DAYS).plusSeconds(20 * 3600));
         when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-1"))
             .thenReturn(Optional.empty());
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
@@ -151,6 +152,16 @@ class ReservationCreationServiceTests {
 
         var response = service.create(actor, request, "create-1");
 
+        var handoverDate = request.getAppointmentAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
+        var expectedEnd = handoverDate.plusDays(6).plusMonths(quote.getRentalMonths());
+        org.mockito.Mockito.verify(capacityService).lockAndRequireAvailableCapacity(
+            quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate, expectedEnd);
+        var checkedPeriod = org.mockito.ArgumentCaptor.forClass(com.storagehub.api.reservation.CompatibilityCheckRequest.class);
+        org.mockito.Mockito.verify(compatibilityService).checkQuotedSnapshot(org.mockito.ArgumentMatchers.eq(actor), checkedPeriod.capture());
+        assertThat(checkedPeriod.getValue().getStartDate()).isEqualTo(handoverDate);
+        assertThat(checkedPeriod.getValue().getEndDate()).isEqualTo(expectedEnd);
+        assertThat(response.getTotalInitialObligation()).isEqualByComparingTo(quote.getTotalInitialObligation());
+        assertThat(quote.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 10));
         assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("4301000.00");
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("11704000.00");
@@ -175,9 +186,6 @@ class ReservationCreationServiceTests {
     void rejectsStaleAndOutOfWindowAppointmentsWithActionableFieldDetails() {
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
-        when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), "THREE_MONTHS"))
-            .thenReturn(Optional.of(policy));
         for (long offsetSeconds : new long[] {-60, 6 * 3600, 9 * 24 * 3600}) {
             var input = request();
             input.setAppointmentAt(Instant.now().plusSeconds(offsetSeconds));
