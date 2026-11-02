@@ -260,6 +260,8 @@ class CustomerReservationServiceTests {
         Instant registeredAt = Instant.parse("2026-10-19T01:00:00Z");
         ReflectionTestUtils.setField(reservation, "createdAt", registeredAt);
         reservation.setGoodsReviewStatus(com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED);
+        snapshot.setFreeSetupDays(6);
+        snapshot.setRentalMonths(3);
         Instant previousAppointment = ReservationCheckInPolicy.plannedWindow(registeredAt, false).availableAt();
         Instant newAppointment = previousAppointment.plusSeconds(1_800);
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
@@ -281,6 +283,10 @@ class CustomerReservationServiceTests {
 
         assertThat(response.getAppointmentAt()).isEqualTo(newAppointment);
         assertThat(checkIn.getScheduledAt()).isEqualTo(newAppointment);
+        var expectedStart = newAppointment.atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(6);
+        assertThat(reservation.getStartDate()).isEqualTo(expectedStart);
+        assertThat(reservation.getEndDate()).isEqualTo(expectedStart.plusMonths(3));
+        assertThat(response.isRentalPeriodConfirmed()).isFalse();
         verify(notificationService).notifyStaffOfCheckInAppointmentChange(reservation, previousAppointment);
     }
 

@@ -103,7 +103,8 @@ public class ReservationCreationService {
     public ReservationResponse create(ActorPrincipal actor, CreateReservationRequest request,
                                       String idempotencyKey) {
         if (request == null || !Boolean.TRUE.equals(request.getAcceptedTerms())) {
-            throw ApiExceptions.validation("Customer must accept the quoted terms before creating a reservation", null);
+            String message = "Vui lòng đồng ý điều khoản đã báo giá trước khi xác nhận đặt kho.";
+            throw ApiExceptions.validation(message, Map.of("acceptedTerms", message));
         }
         String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
         String requestFingerprint = requestFingerprint(request);
@@ -144,9 +145,28 @@ public class ReservationCreationService {
             throw ApiExceptions.conflict("Goods declaration changed after quote creation; please create a new quote");
         }
 
+        Instant now = Instant.now();
+        boolean quotedReviewRequired = quotedGoodsItems.stream().anyMatch(ReservationCompatibilityService::isOther);
+        if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
+            String message = "Lịch nhận kho đã qua. Vui lòng chọn ngày giờ mới.";
+            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
+        }
+        ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
+            now, quotedReviewRequired
+        );
+        if (request.getAppointmentAt() != null
+            && !checkInWindow.contains(request.getAppointmentAt())) {
+            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép hoặc giờ sớm nhất đã thay đổi. Vui lòng chọn lại lịch nhận kho.";
+            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
+        }
+        java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
+            .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(quote.getFreeSetupDays());
+        java.time.LocalDate handoverDate = rentalStartDate.minusDays(quote.getFreeSetupDays());
+        java.time.LocalDate rentalEndDate = rentalStartDate.plusMonths(quote.getRentalMonths());
+
         CompatibilityCheckRequest compatibilityRequest = new CompatibilityCheckRequest(
-            quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
-            quote.getEndDate(), request.getGoodsCondition(), quotedGoodsItems
+            quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate,
+            rentalEndDate, request.getGoodsCondition(), quotedGoodsItems
         );
         CompatibilityCheckResponse compatibility = compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
         if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
@@ -156,9 +176,8 @@ public class ReservationCreationService {
 
         capacityService.lockAndRequireAvailableCapacity(
             quote.getFacility().getId(), quote.getUnitType().getId(),
-            quote.getStartDate(), quote.getEndDate()
+            handoverDate, rentalEndDate
         );
-        Instant now = Instant.now();
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
         reservation.setReservationCode(uniqueReservationCode(reservationRepository,
@@ -177,21 +196,6 @@ public class ReservationCreationService {
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setGoodsReviewStatus(reviewRequired ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
         reservation.setCompatibilityResult(compatibility.getResult());
-        if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
-            throw ApiExceptions.validation("appointmentAt must be in the present or future", null);
-        }
-        ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
-            now, reviewRequired
-        );
-        if (request.getAppointmentAt() != null
-            && !checkInWindow.contains(request.getAppointmentAt())) {
-            throw ApiExceptions.validation(
-                "appointmentAt must be within the permitted seven-day check-in window", null
-            );
-        }
-        FacilityAppointmentHours.validate(request.getAppointmentAt(), quote.getFacility().getAccessHours());
-        java.time.LocalDate rentalStartDate = checkInWindow.availableAt()
-            .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         reservation.setStartDate(rentalStartDate);
         reservation.setEndDate(rentalStartDate.plusMonths(quote.getRentalMonths()));
         reservation.setSetupDaysSnapshot(quote.getFreeSetupDays());
@@ -258,13 +262,14 @@ public class ReservationCreationService {
             }
         }
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
-        BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
-        BigDecimal reservationDeposit = money(totalAfterDiscount.multiply(depositRate));
         BigDecimal securityDeposit = money(
             (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
                 ? currentMonthlyPrice
                 : quote.getUnitType().getSecurityDepositAmount()
         );
+        BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
+        BigDecimal reservationDeposit = money(totalAfterDiscount.add(securityDeposit).multiply(depositRate));
+
 
         boolean policyInvalid = !policy.isActive()
             || !policy.getPolicyVersion().equals(quote.getPolicyVersion())

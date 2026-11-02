@@ -1,0 +1,500 @@
+erDiagram
+    access_credentials {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        binary reservation_id "FK"
+        binary rental_id "FK"
+        binary facility_id "FK"
+        binary storage_unit_id "FK"
+        binary customer_id "FK"
+        varchar credential_type 
+        varchar status 
+        varchar reference 
+        varchar secret_hash 
+        binary issued_by "FK"
+        datetime issued_at 
+        binary revoked_by "FK"
+        datetime revoked_at 
+        varchar note 
+    }
+    check_ins {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        datetime checked_in_at 
+        varchar checklist_json 
+        enum status 
+        binary performed_by "FK"
+        binary rental_id "FK"
+        binary reservation_id "FK"
+        datetime scheduled_at 
+        varchar readiness_note 
+        varchar rejection_reason 
+        varchar rejection_disposition 
+        integer version 
+        datetime identity_verified_at 
+        varchar verified_identity_document 
+        varchar identity_verification_note 
+        datetime contract_signed_at 
+        varchar contract_evidence_reference 
+        datetime payment_collected_at 
+        datetime setup_started_at 
+        datetime setup_due_at 
+        datetime setup_completed_at 
+        datetime inventory_verified_at 
+        varchar lock_reference 
+    }
+    contracts {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        varchar contract_number 
+        datetime expires_at 
+        datetime sent_at 
+        datetime signed_at 
+        varchar signed_by 
+        enum status 
+        binary rental_id "FK"
+    }
+    facilities {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        varchar address 
+        varchar city 
+        varchar phone 
+        varchar access_hours 
+        varchar image_url 
+        integer climate_controlled 
+        varchar security_description 
+        varchar code 
+        varchar name 
+        integer status 
+    }
+    maintenance_tasks {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        datetime completed_at 
+        varchar reason 
+        enum status 
+        binary assigned_to "FK"
+        binary facility_id "FK"
+        binary reported_by "FK"
+        binary storage_unit_id "FK"
+        enum damage_classification 
+        date due_at 
+        varchar evidence_photos_json 
+        enum priority 
+        varchar result_report 
+        datetime started_at 
+        varchar title 
+        binary return_case_id "FK"
+    }
+    payments {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        decimal amount 
+        varchar currency 
+        varchar failure_code 
+        varchar failure_reason 
+        varchar idempotency_key 
+        datetime paid_at 
+        datetime processed_at 
+        enum purpose 
+        enum status 
+        integer version 
+        binary initiated_by "FK"
+        binary reservation_id "FK"
+        binary renewal_id "FK"
+        binary renewal_revision_id "FK"
+        datetime payment_deadline 
+        varchar gateway_intent_id 
+        varchar gateway_provider 
+        varchar gateway_transaction_no 
+        varchar gateway_bank_code 
+        varchar gateway_card_type 
+        varchar gateway_response_code 
+        varchar gateway_transaction_status 
+        varchar gateway_pay_date 
+        datetime last_reconciled_at 
+        decimal refunded_amount 
+        binary renewal_evidence_ref "FK"
+        binary renewal_ledger_receipt_ref 
+        datetime renewal_allocated_at 
+        datetime renewal_signing_prepared_at 
+        datetime renewal_next_retry_at 
+        integer renewal_reconciliation_attempts 
+    }
+    refunds {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        decimal amount 
+        varchar gateway_refund_id 
+        varchar reason 
+        enum status 
+        binary payment_id "FK"
+        binary requested_by "FK"
+    }
+    renewal_quotes {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        binary rental_id "FK"
+        binary customer_id "FK"
+        varchar terms_json 
+        varchar terms_hash 
+        datetime quoted_at 
+        datetime expires_at 
+    }
+    renewal_workflows {
+        binary id "PK"
+        integer version 
+        binary accepted_revision_id "FK"
+        binary reviewer_id "FK"
+        datetime reviewed_at 
+        varchar review_reason 
+        varchar cancellation_reason 
+        datetime payment_deadline 
+        binary extension_hold_ref 
+        datetime signing_balance_due_at 
+    }
+    renewals {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        decimal amount 
+        date new_end_date 
+        integer status 
+        binary rental_id "FK"
+        binary requested_by "FK"
+    }
+    rentals {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        datetime actual_returned_at 
+        datetime completed_at 
+        date contract_end_date 
+        decimal monthly_price 
+        date start_date 
+        enum status 
+        binary customer_id "FK"
+        binary facility_id "FK"
+        binary reservation_id "FK"
+        binary storage_unit_id "FK"
+        datetime setup_started_at 
+        datetime setup_ends_at 
+        datetime terms_effective_at 
+        datetime move_in_completed_at 
+        datetime inventory_verified_at 
+        datetime inventory_due_at 
+        integer inventory_pending 
+        integer setup_exit_review_required 
+        datetime setup_reminder_two_days_at 
+        datetime setup_reminder_last_day_at 
+        datetime inventory_escalated_at 
+        datetime inventory_task_created_at 
+    }
+    reservation_goods_items {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        enum category 
+        varchar custom_goods_name 
+        varchar custom_material 
+        varchar customer_note 
+        varchar description 
+        bit fragile 
+        decimal height_cm 
+        decimal length_cm 
+        varchar material_name 
+        integer quantity 
+        bit requires_staff_review 
+        varchar review_note 
+        enum review_status 
+        decimal weight_kg 
+        decimal width_cm 
+        binary reservation_id "FK"
+        varchar goods_code 
+        binary catalog_category_id 
+        binary catalog_material_id 
+        varchar category_code 
+        varchar category_name 
+        varchar material_code 
+    }
+    reservation_quotes {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        decimal discount_amount 
+        decimal discount_rate 
+        decimal due_at_check_in 
+        date end_date 
+        datetime expires_at 
+        decimal monthly_price 
+        varchar policy_version 
+        varchar pricing_package_code 
+        datetime quoted_at 
+        decimal remaining_rental_amount 
+        integer rental_months 
+        decimal reservation_deposit_amount 
+        decimal security_deposit_amount 
+        date start_date 
+        decimal subtotal 
+        decimal total_after_discount 
+        decimal total_initial_obligation 
+        binary customer_id "FK"
+        binary facility_id "FK"
+        binary unit_type_id "FK"
+        varchar voucher_code 
+        decimal voucher_discount_amount 
+        decimal reservation_deposit_rate 
+        varchar goods_snapshot_json 
+        varchar unit_type_snapshot_json 
+        integer unit_type_revision 
+        integer free_setup_days 
+    }
+    reservations {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        decimal amount 
+        datetime archived_at 
+        varchar cancel_reason 
+        datetime cancelled_at 
+        enum compatibility_result 
+        datetime complaint_expires_at 
+        datetime confirmed_at 
+        datetime deposit_paid_at 
+        date end_date 
+        datetime expired_at 
+        varchar goods_condition 
+        datetime goods_review_due_at 
+        varchar goods_review_note 
+        enum goods_review_status 
+        datetime goods_review_submitted_at 
+        datetime goods_reviewed_at 
+        datetime hold_expires_at 
+        varchar idempotency_key 
+        varchar notes 
+        datetime payment_expires_at 
+        datetime rejected_at 
+        varchar rejection_reason 
+        varchar reservation_code 
+        date start_date 
+        enum status 
+        decimal total_goods_volume_m3 
+        decimal total_goods_weight_kg 
+        integer version 
+        binary assigned_unit_id "FK"
+        binary customer_id "FK"
+        binary facility_id "FK"
+        binary goods_reviewed_by "FK"
+        binary source_quote_id "FK"
+        binary unit_type_id "FK"
+        varchar request_fingerprint 
+        varchar identity_document_number 
+        varchar customer_phone 
+        varchar customer_address 
+        datetime appointment_at 
+        integer setup_days_snapshot 
+        datetime setup_goods_revision_used_at 
+    }
+    return_cases {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        varchar damage_classification 
+        varchar inspection_notes 
+        decimal refund_amount 
+        datetime scheduled_at 
+        enum status 
+        binary rental_id "FK"
+        binary requested_by "FK"
+        decimal amount_due_from_customer 
+        decimal cleaning_fee 
+        datetime completed_at 
+        bit customer_confirmed 
+        datetime customer_confirmed_at 
+        enum customer_decision 
+        varchar customer_decision_note 
+        varchar customer_notes 
+        decimal damage_fee 
+        decimal deposit_amount 
+        varchar evidence_photos_json 
+        datetime inspected_at 
+        enum inventory_match 
+        decimal lost_item_fee 
+        varchar manager_resolution_note 
+        decimal net_refund_amount 
+        decimal outstanding_fee 
+        integer overdue_days 
+        decimal overdue_fee 
+        integer proposed_unit_status 
+        datetime requested_at 
+        bit returned_card 
+        bit returned_key 
+        bit returned_lock 
+        datetime reviewed_at 
+        date scheduled_date 
+        datetime settlement_paid_at 
+        varchar settlement_payment_id 
+        decimal total_deductions 
+        binary customer_id "FK"
+        binary facility_id "FK"
+        binary inspected_by "FK"
+        binary reviewed_by "FK"
+        binary storage_unit_id "FK"
+    }
+    return_settlement_receipts {
+        varchar return_id "PK"
+        varchar direction 
+        decimal amount 
+        varchar payment_method 
+        varchar transaction_reference 
+        varchar receipt_file_id 
+        varchar recorded_by 
+        integer recorded_at_ms 
+    }
+    roles {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        enum code 
+        varchar name 
+        binary parent_role_id "FK"
+        integer permissions_policy_version 
+    }
+    storage_units {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        datetime available_from 
+        varchar code 
+        varchar floor 
+        datetime last_released_at 
+        integer status 
+        integer version 
+        varchar zone 
+        binary facility_id "FK"
+        binary unit_type_id "FK"
+    }
+    support_tickets {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        varchar description 
+        enum status 
+        varchar subject 
+        binary assigned_to "FK"
+        binary customer_id "FK"
+        binary facility_id "FK"
+    }
+    unit_types {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        varchar code 
+        decimal height_m 
+        varchar image_url 
+        decimal length_m 
+        decimal max_load_kg 
+        decimal monthly_price 
+        decimal security_deposit_amount 
+        varchar name 
+        varchar description 
+        integer rack_count 
+        decimal rack_height_m 
+        decimal aisle_width_m 
+        varchar trolley_type 
+        integer small_box_capacity 
+        integer large_box_capacity 
+        decimal rack_length_m 
+        decimal rack_width_m 
+        enum status 
+        integer version 
+        decimal width_m 
+        binary facility_id "FK"
+        varchar detail_image_url 
+        integer published_revision 
+        varchar accepted_goods_json 
+    }
+    user_roles {
+        binary user_id "PK"
+        binary role_id "PK"
+    }
+    users {
+        binary id "PK"
+        datetime created_at 
+        datetime updated_at 
+        varchar avatar_url 
+        varchar email 
+        varchar full_name 
+        integer must_change_password 
+        varchar password_hash 
+        varchar phone 
+        enum status 
+        varchar emergency_contact_name 
+        varchar emergency_contact_phone 
+    }
+    users ||--o{ access_credentials : "has (customer_id)"
+    facilities ||--o{ access_credentials : "has (facility_id)"
+    users ||--o{ access_credentials : "has (issued_by)"
+    rentals ||--o{ access_credentials : "has (rental_id)"
+    reservations ||--o{ access_credentials : "has (reservation_id)"
+    users ||--o{ access_credentials : "has (revoked_by)"
+    storage_units ||--o{ access_credentials : "has (storage_unit_id)"
+    rentals ||--o{ check_ins : "has (rental_id)"
+    users ||--o{ check_ins : "has (performed_by)"
+    reservations ||--o{ check_ins : "has (reservation_id)"
+    rentals ||--o{ contracts : "has (rental_id)"
+    users ||--o{ maintenance_tasks : "has (assigned_to)"
+    return_cases ||--o{ maintenance_tasks : "has (return_case_id)"
+    users ||--o{ maintenance_tasks : "has (reported_by)"
+    facilities ||--o{ maintenance_tasks : "has (facility_id)"
+    storage_units ||--o{ maintenance_tasks : "has (storage_unit_id)"
+    users ||--o{ payments : "has (initiated_by)"
+    reservations ||--o{ payments : "has (reservation_id)"
+    renewals ||--o{ payments : "has (renewal_id)"
+    users ||--o{ refunds : "has (requested_by)"
+    payments ||--o{ refunds : "has (payment_id)"
+    users ||--o{ renewal_quotes : "has (customer_id)"
+    rentals ||--o{ renewal_quotes : "has (rental_id)"
+    renewals ||--o{ renewal_workflows : "has (id)"
+    users ||--o{ renewal_workflows : "has (reviewer_id)"
+    users ||--o{ renewals : "has (requested_by)"
+    rentals ||--o{ renewals : "has (rental_id)"
+    reservations ||--o{ rentals : "has (reservation_id)"
+    users ||--o{ rentals : "has (customer_id)"
+    facilities ||--o{ rentals : "has (facility_id)"
+    storage_units ||--o{ rentals : "has (storage_unit_id)"
+    reservations ||--o{ reservation_goods_items : "has (reservation_id)"
+    facilities ||--o{ reservation_quotes : "has (facility_id)"
+    users ||--o{ reservation_quotes : "has (customer_id)"
+    unit_types ||--o{ reservation_quotes : "has (unit_type_id)"
+    users ||--o{ reservations : "has (customer_id)"
+    facilities ||--o{ reservations : "has (facility_id)"
+    users ||--o{ reservations : "has (goods_reviewed_by)"
+    unit_types ||--o{ reservations : "has (unit_type_id)"
+    storage_units ||--o{ reservations : "has (assigned_unit_id)"
+    reservation_quotes ||--o{ reservations : "has (source_quote_id)"
+    storage_units ||--o{ return_cases : "has (storage_unit_id)"
+    users ||--o{ return_cases : "has (inspected_by)"
+    users ||--o{ return_cases : "has (reviewed_by)"
+    users ||--o{ return_cases : "has (customer_id)"
+    users ||--o{ return_cases : "has (requested_by)"
+    facilities ||--o{ return_cases : "has (facility_id)"
+    rentals ||--o{ return_cases : "has (rental_id)"
+    roles ||--o{ roles : "has (parent_role_id)"
+    unit_types ||--o{ storage_units : "has (unit_type_id)"
+    facilities ||--o{ storage_units : "has (facility_id)"
+    users ||--o{ support_tickets : "has (customer_id)"
+    users ||--o{ support_tickets : "has (assigned_to)"
+    facilities ||--o{ support_tickets : "has (facility_id)"
+    facilities ||--o{ unit_types : "has (facility_id)"
+    roles ||--o{ user_roles : "has (role_id)"
+    users ||--o{ user_roles : "has (user_id)"
