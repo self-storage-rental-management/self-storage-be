@@ -17,8 +17,8 @@ import org.springframework.context.annotation.*;
 
 /** Shared Staff-attested balance recording and Payment/Ledger proof checks; never initiates gateway transfers. */
 @Configuration(proxyBeanMethods=false)
-@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled",
-    "storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled"},havingValue="true")
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("${storagehub.integration.renewal-payment-lifecycle.enabled:false} or ${storagehub.integration.sandbox-reconciliation.enabled:false}")
 public class RenewalLedgerAccountingConfiguration {
     @Bean @ConditionalOnMissingBean(RenewalOperationSources.AccountingSource.class)
     RenewalOperationSources.AccountingSource renewalLedgerAccounting(EntityManager em,LedgerStore ledger,

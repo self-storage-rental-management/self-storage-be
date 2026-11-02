@@ -8,7 +8,9 @@ import org.springframework.stereotype.Component;
 
 /** Fail startup when gateway credit is enabled against an incomplete MySQL schema. Read-only. */
 @Component
-@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
+@org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization
+@ConditionalOnProperty(name="storagehub.integration.ledger.enabled",havingValue="true")
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("${storagehub.integration.renewal-payment-lifecycle.enabled:false} or ${storagehub.integration.sandbox-reconciliation.enabled:false}")
 public class SandboxGatewaySchemaGuard implements InitializingBean {
     private final JdbcTemplate jdbc;
     public SandboxGatewaySchemaGuard(JdbcTemplate jdbc) { this.jdbc = jdbc; }
