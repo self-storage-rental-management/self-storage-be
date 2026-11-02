@@ -63,6 +63,7 @@ public class FacilityManagementService {
         facility.setStatus(FacilityStatus.setup);
 
         Facility saved = facilityRepository.saveAndFlush(facility);
+        RentalPackagePolicyProvisioner.provisionRentalPackages(rentalPackagePolicyRepository, saved);
 
         return new FacilityResponse(
             saved.getId(),
@@ -185,34 +186,7 @@ public class FacilityManagementService {
     }
 
     private void provisionRentalPackages(Facility facility) {
-        List<RentalPackagePolicy> existing = rentalPackagePolicyRepository.findByFacility_IdOrderByRentalMonthsAsc(facility.getId());
-        if (existing.isEmpty()) {
-            List<RentalPackagePolicy> policies = List.of(
-                createPackage(facility, "ONE_MONTH", "Gói thuê 1 tháng", 1, BigDecimal.ZERO),
-                createPackage(facility, "THREE_MONTHS", "Gói thuê 3 tháng (Tiết kiệm 5%)", 3, new BigDecimal("0.05")),
-                createPackage(facility, "SIX_MONTHS", "Gói thuê 6 tháng (Tiết kiệm 10%)", 6, new BigDecimal("0.10")),
-                createPackage(facility, "TWELVE_MONTHS", "Gói thuê 12 tháng (Tiết kiệm 15%)", 12, new BigDecimal("0.15")),
-                createPackage(facility, "PKG-1M", "Gói thuê 1 tháng", 1, BigDecimal.ZERO),
-                createPackage(facility, "PKG-3M", "Gói thuê 3 tháng", 3, new BigDecimal("0.05")),
-                createPackage(facility, "PKG-6M", "Gói thuê 6 tháng", 6, new BigDecimal("0.10")),
-                createPackage(facility, "PKG-12M", "Gói thuê 12 tháng", 12, new BigDecimal("0.15"))
-            );
-            rentalPackagePolicyRepository.saveAll(policies);
-        }
-    }
-
-    private RentalPackagePolicy createPackage(Facility facility, String code, String name, int months, BigDecimal discountRate) {
-        RentalPackagePolicy p = new RentalPackagePolicy();
-        p.setFacility(facility);
-        p.setCode(code);
-        p.setName(name);
-        p.setRentalMonths(months);
-        p.setFreeSetupDays(ReservationQuoteService.defaultFreeSetupDays(months));
-        p.setDiscountRate(discountRate);
-        p.setPolicyVersion("v1.0");
-        p.setActive(true);
-        p.setEffectiveFrom(LocalDate.of(2026, 1, 1));
-        return p;
+        RentalPackagePolicyProvisioner.provisionRentalPackages(rentalPackagePolicyRepository, facility);
     }
 
     private record DefaultSpec(
