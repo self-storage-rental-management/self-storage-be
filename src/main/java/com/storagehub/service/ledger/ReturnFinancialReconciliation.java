@@ -234,7 +234,17 @@ public class ReturnFinancialReconciliation {
         var amount=direction.equals("COLLECTION")?rc.getAmountDueFromCustomer():rc.getNetRefundAmount();
         try{jdbc.update("insert into return_settlement_receipts(return_id,direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_by,recorded_at_ms) values(?,?,?,?,?,?,?,?)",
             rc.getId().toString(),direction,amount,method,reference,file.toString(),actor.userId().toString(),Instant.now().toEpochMilli());}
-        catch(org.springframework.dao.DuplicateKeyException duplicate){throw ApiExceptions.conflict("Biên lai hoặc giao dịch đã được sử dụng.");}
+        catch(org.springframework.dao.DuplicateKeyException duplicate){
+            String msg = duplicate.getMessage();
+            if (msg != null && msg.contains("transaction_reference")) {
+                throw ApiExceptions.conflict("Mã giao dịch hoặc số biên nhận này đã được sử dụng trên hệ thống. Vui lòng nhập mã giao dịch khác.");
+            } else if (msg != null && msg.contains("receipt_file_id")) {
+                throw ApiExceptions.conflict("Tệp biên lai này đã được sử dụng cho một quyết toán khác. Vui lòng chọn tệp biên lai hợp lệ.");
+            } else if (msg != null && msg.contains("PRIMARY")) {
+                throw ApiExceptions.conflict("Hồ sơ trả kho này đã được ghi nhận biên lai quyết toán trước đó.");
+            }
+            throw ApiExceptions.conflict("Biên lai hoặc mã giao dịch đã được sử dụng. Vui lòng kiểm tra lại thông tin.");
+        }
     }
 
     /** External transfers must already have a bound Staff receipt (ordinary return or Recovery). */

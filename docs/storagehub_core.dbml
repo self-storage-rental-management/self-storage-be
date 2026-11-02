@@ -1,0 +1,525 @@
+// StorageHub - Core Business ERD (DBML)
+// Ideal for SWP391 Report & Visual ERD Diagrams
+
+Table access_credentials {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  reservation_id binary [not null]
+  rental_id binary
+  facility_id binary [not null]
+  storage_unit_id binary [not null]
+  customer_id binary [not null]
+  credential_type varchar [not null]
+  status varchar [not null]
+  reference varchar [not null]
+  secret_hash varchar
+  issued_by binary [not null]
+  issued_at datetime [not null]
+  revoked_by binary
+  revoked_at datetime
+  note varchar
+}
+
+Table check_ins {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  checked_in_at datetime
+  checklist_json varchar
+  status enum [not null]
+  performed_by binary [not null]
+  rental_id binary
+  reservation_id binary [not null, unique]
+  scheduled_at datetime
+  readiness_note varchar
+  rejection_reason varchar
+  rejection_disposition varchar
+  version integer [not null]
+  identity_verified_at datetime
+  verified_identity_document varchar
+  identity_verification_note varchar
+  contract_signed_at datetime
+  contract_evidence_reference varchar
+  payment_collected_at datetime
+  setup_started_at datetime
+  setup_due_at datetime
+  setup_completed_at datetime
+  inventory_verified_at datetime
+  lock_reference varchar
+}
+
+Table contracts {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  contract_number varchar [not null, unique]
+  expires_at datetime
+  sent_at datetime
+  signed_at datetime
+  signed_by varchar
+  status enum [not null]
+  rental_id binary [not null]
+}
+
+Table facilities {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  address varchar [not null]
+  city varchar [not null]
+  phone varchar
+  access_hours varchar
+  image_url varchar
+  climate_controlled integer [not null]
+  security_description varchar
+  code varchar [not null, unique]
+  name varchar [not null]
+  status integer [not null]
+}
+
+Table maintenance_tasks {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  completed_at datetime
+  reason varchar [not null]
+  status enum [not null]
+  assigned_to binary
+  facility_id binary [not null]
+  reported_by binary [not null]
+  storage_unit_id binary [not null]
+  damage_classification enum
+  due_at date
+  evidence_photos_json varchar
+  priority enum [not null]
+  result_report varchar
+  started_at datetime
+  title varchar [not null]
+  return_case_id binary
+}
+
+Table payments {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  amount decimal [not null]
+  currency varchar [not null]
+  failure_code varchar
+  failure_reason varchar
+  idempotency_key varchar [not null, unique]
+  paid_at datetime
+  processed_at datetime
+  purpose enum [not null]
+  status enum [not null]
+  version integer [not null]
+  initiated_by binary [not null]
+  reservation_id binary
+  renewal_id binary
+  renewal_revision_id binary
+  payment_deadline datetime
+  gateway_intent_id varchar [not null]
+  gateway_provider varchar
+  gateway_transaction_no varchar
+  gateway_bank_code varchar
+  gateway_card_type varchar
+  gateway_response_code varchar
+  gateway_transaction_status varchar
+  gateway_pay_date varchar
+  last_reconciled_at datetime
+  refunded_amount decimal [not null]
+  renewal_evidence_ref binary [unique]
+  renewal_ledger_receipt_ref binary [unique]
+  renewal_allocated_at datetime
+  renewal_signing_prepared_at datetime
+  renewal_next_retry_at datetime
+  renewal_reconciliation_attempts integer [not null]
+}
+
+Table refunds {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  amount decimal [not null]
+  gateway_refund_id varchar
+  reason varchar
+  status enum [not null]
+  payment_id binary [not null]
+  requested_by binary [not null]
+}
+
+Table renewal_quotes {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  rental_id binary [not null]
+  customer_id binary [not null]
+  terms_json varchar [not null]
+  terms_hash varchar [not null]
+  quoted_at datetime [not null]
+  expires_at datetime
+}
+
+Table renewal_workflows {
+  id binary [pk]
+  version integer [not null]
+  accepted_revision_id binary [not null]
+  reviewer_id binary
+  reviewed_at datetime
+  review_reason varchar
+  cancellation_reason varchar
+  payment_deadline datetime
+  extension_hold_ref binary
+  signing_balance_due_at datetime
+}
+
+Table renewals {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  amount decimal [not null]
+  new_end_date date [not null]
+  status integer [not null]
+  rental_id binary [not null]
+  requested_by binary [not null]
+}
+
+Table rentals {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  actual_returned_at datetime
+  completed_at datetime
+  contract_end_date date [not null]
+  monthly_price decimal [not null]
+  start_date date [not null]
+  status enum [not null]
+  customer_id binary [not null]
+  facility_id binary [not null]
+  reservation_id binary [not null]
+  storage_unit_id binary [not null]
+  setup_started_at datetime
+  setup_ends_at datetime
+  terms_effective_at datetime
+  move_in_completed_at datetime
+  inventory_verified_at datetime
+  inventory_due_at datetime
+  inventory_pending integer [not null]
+  setup_exit_review_required integer [not null]
+  setup_reminder_two_days_at datetime
+  setup_reminder_last_day_at datetime
+  inventory_escalated_at datetime
+  inventory_task_created_at datetime
+}
+
+Table reservation_goods_items {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  category enum [not null]
+  custom_goods_name varchar
+  custom_material varchar
+  customer_note varchar
+  description varchar
+  fragile bit [not null]
+  height_cm decimal [not null]
+  length_cm decimal [not null]
+  material_name varchar
+  quantity integer [not null]
+  requires_staff_review bit [not null]
+  review_note varchar
+  review_status enum [not null]
+  weight_kg decimal [not null]
+  width_cm decimal [not null]
+  reservation_id binary [not null]
+  goods_code varchar [not null, unique]
+  catalog_category_id binary
+  catalog_material_id binary
+  category_code varchar
+  category_name varchar
+  material_code varchar
+}
+
+Table reservation_quotes {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  discount_amount decimal [not null]
+  discount_rate decimal [not null]
+  due_at_check_in decimal [not null]
+  end_date date [not null]
+  expires_at datetime [not null]
+  monthly_price decimal [not null]
+  policy_version varchar [not null]
+  pricing_package_code varchar [not null]
+  quoted_at datetime [not null]
+  remaining_rental_amount decimal [not null]
+  rental_months integer [not null]
+  reservation_deposit_amount decimal [not null]
+  security_deposit_amount decimal [not null]
+  start_date date [not null]
+  subtotal decimal [not null]
+  total_after_discount decimal [not null]
+  total_initial_obligation decimal [not null]
+  customer_id binary [not null]
+  facility_id binary [not null]
+  unit_type_id binary [not null]
+  voucher_code varchar
+  voucher_discount_amount decimal [not null]
+  reservation_deposit_rate decimal [not null]
+  goods_snapshot_json varchar [not null]
+  unit_type_snapshot_json varchar [not null]
+  unit_type_revision integer [not null]
+  free_setup_days integer [not null]
+}
+
+Table reservations {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  amount decimal [not null]
+  archived_at datetime
+  cancel_reason varchar
+  cancelled_at datetime
+  compatibility_result enum [not null]
+  complaint_expires_at datetime
+  confirmed_at datetime
+  deposit_paid_at datetime
+  end_date date [not null]
+  expired_at datetime
+  goods_condition varchar
+  goods_review_due_at datetime
+  goods_review_note varchar
+  goods_review_status enum [not null]
+  goods_review_submitted_at datetime
+  goods_reviewed_at datetime
+  hold_expires_at datetime
+  idempotency_key varchar [not null]
+  notes varchar
+  payment_expires_at datetime
+  rejected_at datetime
+  rejection_reason varchar
+  reservation_code varchar [not null, unique]
+  start_date date [not null]
+  status enum [not null]
+  total_goods_volume_m3 decimal [not null]
+  total_goods_weight_kg decimal [not null]
+  version integer [not null]
+  assigned_unit_id binary
+  customer_id binary [not null]
+  facility_id binary [not null]
+  goods_reviewed_by binary
+  source_quote_id binary [not null]
+  unit_type_id binary [not null]
+  request_fingerprint varchar
+  identity_document_number varchar
+  customer_phone varchar
+  customer_address varchar
+  appointment_at datetime
+  setup_days_snapshot integer [not null]
+  setup_goods_revision_used_at datetime
+}
+
+Table return_cases {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  damage_classification varchar
+  inspection_notes varchar
+  refund_amount decimal
+  scheduled_at datetime
+  status enum [not null]
+  rental_id binary [not null]
+  requested_by binary [not null]
+  amount_due_from_customer decimal [not null]
+  cleaning_fee decimal [not null]
+  completed_at datetime
+  customer_confirmed bit [not null]
+  customer_confirmed_at datetime
+  customer_decision enum
+  customer_decision_note varchar
+  customer_notes varchar
+  damage_fee decimal [not null]
+  deposit_amount decimal [not null]
+  evidence_photos_json varchar
+  inspected_at datetime
+  inventory_match enum
+  lost_item_fee decimal [not null]
+  manager_resolution_note varchar
+  net_refund_amount decimal [not null]
+  outstanding_fee decimal [not null]
+  overdue_days integer
+  overdue_fee decimal [not null]
+  proposed_unit_status integer
+  requested_at datetime [not null]
+  returned_card bit [not null]
+  returned_key bit [not null]
+  returned_lock bit [not null]
+  reviewed_at datetime
+  scheduled_date date [not null]
+  settlement_paid_at datetime
+  settlement_payment_id varchar
+  total_deductions decimal [not null]
+  customer_id binary [not null]
+  facility_id binary [not null]
+  inspected_by binary
+  reviewed_by binary
+  storage_unit_id binary [not null]
+}
+
+Table return_settlement_receipts {
+  return_id varchar [pk]
+  direction varchar [not null]
+  amount decimal [not null]
+  payment_method varchar [not null]
+  transaction_reference varchar [not null, unique]
+  receipt_file_id varchar [not null, unique]
+  recorded_by varchar [not null]
+  recorded_at_ms integer [not null]
+}
+
+Table roles {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  code enum [not null, unique]
+  name varchar [not null]
+  parent_role_id binary
+  permissions_policy_version integer
+}
+
+Table storage_units {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  available_from datetime
+  code varchar [not null, unique]
+  floor varchar
+  last_released_at datetime
+  status integer [not null]
+  version integer [not null]
+  zone varchar
+  facility_id binary [not null]
+  unit_type_id binary [not null]
+}
+
+Table support_tickets {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  description varchar [not null]
+  status enum [not null]
+  subject varchar [not null]
+  assigned_to binary
+  customer_id binary [not null]
+  facility_id binary
+}
+
+Table unit_types {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  code varchar [not null]
+  height_m decimal [not null]
+  image_url varchar
+  length_m decimal [not null]
+  max_load_kg decimal [not null]
+  monthly_price decimal [not null]
+  security_deposit_amount decimal [not null]
+  name varchar [not null]
+  description varchar
+  rack_count integer [not null]
+  rack_height_m decimal [not null]
+  aisle_width_m decimal
+  trolley_type varchar
+  small_box_capacity integer
+  large_box_capacity integer
+  rack_length_m decimal [not null]
+  rack_width_m decimal [not null]
+  status enum [not null]
+  version integer [not null]
+  width_m decimal [not null]
+  facility_id binary [not null]
+  detail_image_url varchar
+  published_revision integer [not null]
+  accepted_goods_json varchar [not null]
+}
+
+Table user_roles {
+  user_id binary [pk]
+  role_id binary [pk]
+}
+
+Table users {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  avatar_url varchar
+  email varchar [not null, unique]
+  full_name varchar [not null]
+  must_change_password integer [not null]
+  password_hash varchar [not null]
+  phone varchar
+  status enum [not null]
+  emergency_contact_name varchar
+  emergency_contact_phone varchar
+}
+
+// Core Relationships
+Ref: access_credentials.customer_id > users.id
+Ref: access_credentials.facility_id > facilities.id
+Ref: access_credentials.issued_by > users.id
+Ref: access_credentials.rental_id > rentals.id
+Ref: access_credentials.reservation_id > reservations.id
+Ref: access_credentials.revoked_by > users.id
+Ref: access_credentials.storage_unit_id > storage_units.id
+Ref: check_ins.rental_id > rentals.id
+Ref: check_ins.performed_by > users.id
+Ref: check_ins.reservation_id > reservations.id
+Ref: contracts.rental_id > rentals.id
+Ref: maintenance_tasks.assigned_to > users.id
+Ref: maintenance_tasks.return_case_id > return_cases.id
+Ref: maintenance_tasks.reported_by > users.id
+Ref: maintenance_tasks.facility_id > facilities.id
+Ref: maintenance_tasks.storage_unit_id > storage_units.id
+Ref: payments.initiated_by > users.id
+Ref: payments.reservation_id > reservations.id
+Ref: payments.renewal_id > renewals.id
+Ref: refunds.requested_by > users.id
+Ref: refunds.payment_id > payments.id
+Ref: renewal_quotes.customer_id > users.id
+Ref: renewal_quotes.rental_id > rentals.id
+Ref: renewal_workflows.id > renewals.id
+Ref: renewal_workflows.reviewer_id > users.id
+Ref: renewals.requested_by > users.id
+Ref: renewals.rental_id > rentals.id
+Ref: rentals.reservation_id > reservations.id
+Ref: rentals.customer_id > users.id
+Ref: rentals.facility_id > facilities.id
+Ref: rentals.storage_unit_id > storage_units.id
+Ref: reservation_goods_items.reservation_id > reservations.id
+Ref: reservation_quotes.facility_id > facilities.id
+Ref: reservation_quotes.customer_id > users.id
+Ref: reservation_quotes.unit_type_id > unit_types.id
+Ref: reservations.customer_id > users.id
+Ref: reservations.facility_id > facilities.id
+Ref: reservations.goods_reviewed_by > users.id
+Ref: reservations.unit_type_id > unit_types.id
+Ref: reservations.assigned_unit_id > storage_units.id
+Ref: reservations.source_quote_id > reservation_quotes.id
+Ref: return_cases.storage_unit_id > storage_units.id
+Ref: return_cases.inspected_by > users.id
+Ref: return_cases.reviewed_by > users.id
+Ref: return_cases.customer_id > users.id
+Ref: return_cases.requested_by > users.id
+Ref: return_cases.facility_id > facilities.id
+Ref: return_cases.rental_id > rentals.id
+Ref: roles.parent_role_id > roles.id
+Ref: storage_units.unit_type_id > unit_types.id
+Ref: storage_units.facility_id > facilities.id
+Ref: support_tickets.customer_id > users.id
+Ref: support_tickets.assigned_to > users.id
+Ref: support_tickets.facility_id > facilities.id
+Ref: unit_types.facility_id > facilities.id
+Ref: user_roles.role_id > roles.id
+Ref: user_roles.user_id > users.id
