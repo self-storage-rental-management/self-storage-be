@@ -115,7 +115,13 @@ public class ReturnFinancialReconciliation {
             }
             var renewal=em.find(Renewal.class,o.renewalId());
             if(renewal==null||!renewal.getRental().getId().equals(rental.getId()))throw ApiExceptions.conflict("Nguồn công nợ gia hạn không hợp lệ.");
-            if(renewal.getStatus()!=RenewalStatus.completed)throw ApiExceptions.conflict("Cần đối soát hoặc đóng yêu cầu gia hạn chưa hoàn tất trước khi quyết toán trả kho.");
+            if(renewal.getStatus()!=RenewalStatus.completed) {
+                if (renewal.getStatus() != RenewalStatus.cancelled && renewal.getStatus() != RenewalStatus.rejected) {
+                    renewal.setStatus(RenewalStatus.cancelled);
+                    em.merge(renewal);
+                }
+                continue;
+            }
             if(o.dueAt().isAfter(Instant.now()))continue; // Future monthly termination policy is intentionally unchanged.
             var workflow=em.find(RenewalWorkflow.class,renewal.getId());
             if(!fee) {
