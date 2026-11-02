@@ -92,10 +92,19 @@ public class GlobalExceptionHandler {
         log.debug("Client disconnected from async response: {}", exception.getMessage());
     }
 
+    @ExceptionHandler(org.springframework.dao.ConcurrencyFailureException.class)
+    public ResponseEntity<ApiErrorResponse> handleConcurrency(Exception exception) {
+        log.warn("Database concurrency conflict: {}", exception.getMessage());
+        return error(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Hệ thống đang bận xử lý dữ liệu đồng thời. Vui lòng thử lại.", null);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception exception) {
         log.error("Unhandled API error, correlationId={}", CorrelationIdContext.current(), exception);
-        return error(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR, "An unexpected error occurred", null);
+        String msg = exception.getMessage() != null && !exception.getMessage().isBlank()
+            ? exception.getMessage()
+            : "An unexpected error occurred";
+        return error(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR, msg, null);
     }
 
     private ResponseEntity<ApiErrorResponse> error(
