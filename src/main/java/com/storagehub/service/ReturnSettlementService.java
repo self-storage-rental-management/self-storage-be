@@ -596,6 +596,65 @@ public class ReturnSettlementService {
         return toResponse(saved);
     }
 
+    @Transactional
+    public ReturnCaseResponse staffConfirmSettlement(
+        ActorPrincipal actor,
+        UUID returnId,
+        CustomerConfirmSettlementRequest request
+    ) {
+        authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
+        ReturnCase returnCase = returnCaseRepository.findById(returnId)
+            .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
+        facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
+        lockRecoveryReturn(returnCase);
+        if (returnCase.getStatus() == ReturnCaseStatus.completed) {
+            return toResponse(returnCase);
+        }
+        if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation) {
+            throw ApiExceptions.conflict("Return is not awaiting customer confirmation");
+        }
+        requireFinance().requireCurrent(returnCase);
+
+        String decisionNote = request != null && request.note() != null && !request.note().isBlank()
+            ? request.note()
+            : "Xác nhận quyết toán trực tiếp tại quầy bởi nhân viên cơ sở.";
+
+        returnCase.setCustomerConfirmed(true);
+        returnCase.setCustomerConfirmedAt(Instant.now());
+        returnCase.setCustomerDecision(CustomerDecision.accepted);
+        returnCase.setCustomerDecisionNote(decisionNote);
+
+        var reconciliation = requireFinance();
+        if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
+            returnCase.setStatus(ReturnCaseStatus.payment_due);
+        } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
+            returnCase.setStatus(ReturnCaseStatus.refund_pending);
+        } else {
+            reconciliation.settle(returnCase, actor.userId(), "STAFF_OFFSET:" + returnCase.getId(), false);
+            returnCase.setStatus(ReturnCaseStatus.completed);
+            returnCase.setCompletedAt(Instant.now());
+            finalizeRentalAndUnit(returnCase);
+        }
+
+        ReturnCase saved = returnCaseRepository.save(returnCase);
+        auditLogService.recordMutation(
+            "RETURN_SETTLEMENT_CONFIRMED_BY_STAFF",
+            "return",
+            saved.getId(),
+            saved.getFacility().getId(),
+            null,
+            toResponse(saved)
+        );
+        notificationService.createNotification(
+            saved.getCustomer().getId(),
+            NotificationType.RETURN,
+            "Quyết toán trả kho đã được xác nhận",
+            "Nhân viên cơ sở đã hỗ trợ xác nhận quyết toán trực tiếp tại quầy cho gian " + saved.getStorageUnit().getCode(),
+            saved.getId()
+        );
+        return toResponse(saved);
+    }
+
     public int autoSettleExpiredReturns() {
         Instant cutoff = Instant.now().minus(java.time.Duration.ofHours(autoSettlementSlaHours));
         List<ReturnCase> expired = returnCaseRepository.findExpiredAwaitingConfirmation(cutoff);

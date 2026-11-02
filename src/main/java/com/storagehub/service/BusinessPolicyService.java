@@ -165,7 +165,7 @@ public class BusinessPolicyService {
         return toResponse(policy);
     }
 
-    @Transactional(isolation = Isolation.SERIALIZABLE)
+    @Transactional
     public RentalPackagePolicyResponse createPackagePolicy(ActorPrincipal actor, RentalPackagePolicyRequest request) {
         requirePolicyOwner(actor);
 
@@ -228,7 +228,7 @@ public class BusinessPolicyService {
         return toResponse(saved);
     }
 
-    @Transactional(isolation = Isolation.SERIALIZABLE)
+    @Transactional
     public RentalPackagePolicyResponse updatePackagePolicy(
         ActorPrincipal actor,
         UUID policyId,
@@ -294,7 +294,7 @@ public class BusinessPolicyService {
         return after;
     }
 
-    @Transactional(isolation = Isolation.SERIALIZABLE)
+    @Transactional
     public RentalPackagePolicyResponse publishPackagePolicy(ActorPrincipal actor, UUID policyId) {
         requirePolicyOwner(actor);
 
@@ -347,7 +347,7 @@ public class BusinessPolicyService {
         return after;
     }
 
-    @Transactional(isolation = Isolation.SERIALIZABLE)
+    @Transactional
     public RentalPackagePolicyResponse inactivePackagePolicy(ActorPrincipal actor, UUID policyId) {
         requirePolicyOwner(actor);
 
@@ -377,6 +377,47 @@ public class BusinessPolicyService {
     }
 
     @Transactional
+    public void deleteAllPackagePolicies(ActorPrincipal actor, UUID facilityId) {
+        requirePolicyOwner(actor);
+
+        List<RentalPackagePolicy> targets;
+        if (facilityId != null) {
+            facilityScopeService.assertCanManage(actor, facilityId);
+            targets = policyRepository.findByFacility_IdOrderByRentalMonthsAsc(facilityId);
+        } else {
+            targets = policyRepository.findAll();
+            for (RentalPackagePolicy p : targets) {
+                facilityScopeService.assertCanManage(actor, p.getFacility().getId());
+            }
+        }
+
+        if (targets.isEmpty()) {
+            return;
+        }
+
+        try {
+            policyRepository.deleteAll(targets);
+            policyRepository.flush();
+        } catch (Exception e) {
+            for (RentalPackagePolicy p : targets) {
+                p.setPublicationStatus(PublicationStatus.INACTIVE);
+                p.setActive(false);
+            }
+            policyRepository.saveAll(targets);
+        }
+
+        for (RentalPackagePolicy p : targets) {
+            auditLogService.recordMutation(
+                "RENTAL_PACKAGE_POLICY_DELETED_ALL",
+                "RentalPackagePolicy",
+                p.getId(),
+                p.getFacility().getId(),
+                toResponse(p),
+                null
+            );
+        }
+    }
+
     public void deletePackagePolicy(ActorPrincipal actor, UUID policyId) {
         requirePolicyOwner(actor);
 

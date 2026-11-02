@@ -1,0 +1,403 @@
+// BẢN 2: ERD CÁC LUỒNG NGHIỆP VỤ (Business Operations)
+// Minh họa 5 luồng nghiệp vụ: Gia hạn, Trả kho & Hoàn cọc, Xử lý khiếu nại hoàn tiền, Quá hạn & Bảo trì sự cố, Hỗ trợ CSKH
+
+TableGroup "0. Thực thể Trung tâm" {
+  users
+  facilities
+  storage_units
+  rentals
+  payments
+}
+
+TableGroup "1. Nghiệp vụ Gia hạn Kho (Renewal)" {
+  renewals
+  renewal_quotes
+  renewal_workflows
+  renewal_signing_reservations
+}
+
+TableGroup "2. Nghiệp vụ Trả kho & Quyết toán (Return)" {
+  return_cases
+  return_settlement_receipts
+}
+
+TableGroup "3. Nghiệp vụ Khiếu nại & Hoàn tiền" {
+  refunds
+  payment_complaints
+}
+
+TableGroup "4. Quá hạn, Sự cố & Bảo trì (Operations)" {
+  overdue_follow_ups
+  damage_incidents
+  maintenance_tasks
+}
+
+TableGroup "5. Hỗ trợ CSKH (Customer Support)" {
+  support_tickets
+  support_ticket_messages
+}
+
+Table users {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  avatar_url varchar
+  email varchar [not null, unique]
+  full_name varchar [not null]
+  must_change_password integer [not null]
+  password_hash varchar [not null]
+  phone varchar
+  status enum [not null]
+  emergency_contact_name varchar
+  emergency_contact_phone varchar
+}
+
+Table facilities {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  address varchar [not null]
+  city varchar [not null]
+  phone varchar
+  access_hours varchar
+  image_url varchar
+  climate_controlled integer [not null]
+  security_description varchar
+  code varchar [not null, unique]
+  name varchar [not null]
+  status integer [not null]
+}
+
+Table storage_units {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  available_from datetime
+  code varchar [not null, unique]
+  floor varchar
+  last_released_at datetime
+  status integer [not null]
+  version integer [not null]
+  zone varchar
+  facility_id binary [not null]
+  unit_type_id binary [not null]
+}
+
+Table rentals {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  actual_returned_at datetime
+  completed_at datetime
+  contract_end_date date [not null]
+  monthly_price decimal [not null]
+  start_date date [not null]
+  status enum [not null]
+  customer_id binary [not null]
+  facility_id binary [not null]
+  reservation_id binary [not null]
+  storage_unit_id binary [not null]
+  setup_started_at datetime
+  setup_ends_at datetime
+  terms_effective_at datetime
+  move_in_completed_at datetime
+  inventory_verified_at datetime
+  inventory_due_at datetime
+  inventory_pending integer [not null]
+  setup_exit_review_required integer [not null]
+  setup_reminder_two_days_at datetime
+  setup_reminder_last_day_at datetime
+  inventory_escalated_at datetime
+  inventory_task_created_at datetime
+}
+
+Table payments {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  amount decimal [not null]
+  currency varchar [not null]
+  failure_code varchar
+  failure_reason varchar
+  idempotency_key varchar [not null, unique]
+  paid_at datetime
+  processed_at datetime
+  purpose enum [not null]
+  status enum [not null]
+  version integer [not null]
+  initiated_by binary [not null]
+  reservation_id binary
+  renewal_id binary
+  renewal_revision_id binary
+  payment_deadline datetime
+  gateway_intent_id varchar [not null]
+  gateway_provider varchar
+  gateway_transaction_no varchar
+  gateway_bank_code varchar
+  gateway_card_type varchar
+  gateway_response_code varchar
+  gateway_transaction_status varchar
+  gateway_pay_date varchar
+  last_reconciled_at datetime
+  refunded_amount decimal [not null]
+  renewal_evidence_ref binary [unique]
+  renewal_ledger_receipt_ref binary [unique]
+  renewal_allocated_at datetime
+  renewal_signing_prepared_at datetime
+  renewal_next_retry_at datetime
+  renewal_reconciliation_attempts integer [not null]
+}
+
+Table renewals {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  amount decimal [not null]
+  new_end_date date [not null]
+  status integer [not null]
+  rental_id binary [not null]
+  requested_by binary [not null]
+}
+
+Table renewal_quotes {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  rental_id binary [not null]
+  customer_id binary [not null]
+  terms_json varchar [not null]
+  terms_hash varchar [not null]
+  quoted_at datetime [not null]
+  expires_at datetime
+}
+
+Table renewal_workflows {
+  id binary [pk]
+  version integer [not null]
+  accepted_revision_id binary [not null]
+  reviewer_id binary
+  reviewed_at datetime
+  review_reason varchar
+  cancellation_reason varchar
+  payment_deadline datetime
+  extension_hold_ref binary
+  signing_balance_due_at datetime
+}
+
+Table renewal_signing_reservations {
+  renewal_id binary [pk]
+  facility_id binary [not null]
+  staff_id binary [not null]
+  accepted_quote_id binary [not null]
+  appointment_start datetime [not null]
+  appointment_end datetime [not null]
+  status varchar [not null]
+  updated_at datetime [not null]
+  version integer [not null]
+}
+
+Table return_cases {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  damage_classification varchar
+  inspection_notes varchar
+  refund_amount decimal
+  scheduled_at datetime
+  status enum [not null]
+  rental_id binary [not null]
+  requested_by binary [not null]
+  amount_due_from_customer decimal [not null]
+  cleaning_fee decimal [not null]
+  completed_at datetime
+  customer_confirmed bit [not null]
+  customer_confirmed_at datetime
+  customer_decision enum
+  customer_decision_note varchar
+  customer_notes varchar
+  damage_fee decimal [not null]
+  deposit_amount decimal [not null]
+  evidence_photos_json varchar
+  inspected_at datetime
+  inventory_match enum
+  lost_item_fee decimal [not null]
+  manager_resolution_note varchar
+  net_refund_amount decimal [not null]
+  outstanding_fee decimal [not null]
+  overdue_days integer
+  overdue_fee decimal [not null]
+  proposed_unit_status integer
+  requested_at datetime [not null]
+  returned_card bit [not null]
+  returned_key bit [not null]
+  returned_lock bit [not null]
+  reviewed_at datetime
+  scheduled_date date [not null]
+  settlement_paid_at datetime
+  settlement_payment_id varchar
+  total_deductions decimal [not null]
+  customer_id binary [not null]
+  facility_id binary [not null]
+  inspected_by binary
+  reviewed_by binary
+  storage_unit_id binary [not null]
+}
+
+Table return_settlement_receipts {
+  return_id varchar [pk]
+  direction varchar [not null]
+  amount decimal [not null]
+  payment_method varchar [not null]
+  transaction_reference varchar [not null, unique]
+  receipt_file_id varchar [not null, unique]
+  recorded_by varchar [not null]
+  recorded_at_ms integer [not null]
+}
+
+Table refunds {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  amount decimal [not null]
+  gateway_refund_id varchar
+  reason varchar
+  status enum [not null]
+  payment_id binary [not null]
+  requested_by binary [not null]
+}
+
+Table payment_complaints {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  decision_reason varchar
+  reason varchar [not null]
+  review_due_at datetime [not null]
+  reviewed_at datetime
+  status enum [not null]
+  submitted_at datetime [not null]
+  version integer [not null]
+  withdrawn_at datetime
+  customer_id binary [not null]
+  payment_id binary [not null]
+  reservation_id binary [not null, unique]
+  reviewed_by binary
+}
+
+Table overdue_follow_ups {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  case_ref varchar [not null]
+  rental_id binary [not null]
+  type varchar [not null]
+  content varchar [not null]
+  actor_id binary [not null]
+  recorded_at datetime [not null]
+  external_ref binary
+  policy_ref varchar
+  policy_version varchar
+}
+
+Table damage_incidents {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  incident_code varchar [not null, unique]
+  facility_id binary [not null]
+  storage_unit_id binary
+  cause varchar [not null]
+  severity varchar [not null]
+  description varchar [not null]
+  occurred_at datetime [not null]
+  reported_at datetime [not null]
+  reported_by binary [not null]
+  status varchar [not null]
+  resolution_notes varchar
+  evidence_photos_json varchar
+}
+
+Table maintenance_tasks {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  completed_at datetime
+  reason varchar [not null]
+  status enum [not null]
+  assigned_to binary
+  facility_id binary [not null]
+  reported_by binary [not null]
+  storage_unit_id binary [not null]
+  damage_classification enum
+  due_at date
+  evidence_photos_json varchar
+  priority enum [not null]
+  result_report varchar
+  started_at datetime
+  title varchar [not null]
+  return_case_id binary
+}
+
+Table support_tickets {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  description varchar [not null]
+  status enum [not null]
+  subject varchar [not null]
+  assigned_to binary
+  customer_id binary [not null]
+  facility_id binary
+}
+
+Table support_ticket_messages {
+  id binary [pk]
+  created_at datetime [not null]
+  updated_at datetime [not null]
+  ticket_id binary [not null]
+  author_id binary [not null]
+  body varchar [not null]
+}
+
+// Các mối quan hệ (Relationships)
+Ref: damage_incidents.facility_id > facilities.id
+Ref: damage_incidents.reported_by > users.id
+Ref: damage_incidents.storage_unit_id > storage_units.id
+Ref: maintenance_tasks.assigned_to > users.id
+Ref: maintenance_tasks.return_case_id > return_cases.id
+Ref: maintenance_tasks.reported_by > users.id
+Ref: maintenance_tasks.facility_id > facilities.id
+Ref: maintenance_tasks.storage_unit_id > storage_units.id
+Ref: overdue_follow_ups.rental_id > rentals.id
+Ref: payment_complaints.reviewed_by > users.id
+Ref: payment_complaints.customer_id > users.id
+Ref: payment_complaints.payment_id > payments.id
+Ref: payments.initiated_by > users.id
+Ref: payments.renewal_id > renewals.id
+Ref: refunds.requested_by > users.id
+Ref: refunds.payment_id > payments.id
+Ref: renewal_quotes.customer_id > users.id
+Ref: renewal_quotes.rental_id > rentals.id
+Ref: renewal_signing_reservations.facility_id > facilities.id
+Ref: renewal_signing_reservations.renewal_id > renewals.id
+Ref: renewal_signing_reservations.staff_id > users.id
+Ref: renewal_workflows.id > renewals.id
+Ref: renewal_workflows.reviewer_id > users.id
+Ref: renewals.requested_by > users.id
+Ref: renewals.rental_id > rentals.id
+Ref: rentals.customer_id > users.id
+Ref: rentals.facility_id > facilities.id
+Ref: rentals.storage_unit_id > storage_units.id
+Ref: return_cases.storage_unit_id > storage_units.id
+Ref: return_cases.inspected_by > users.id
+Ref: return_cases.reviewed_by > users.id
+Ref: return_cases.customer_id > users.id
+Ref: return_cases.requested_by > users.id
+Ref: return_cases.facility_id > facilities.id
+Ref: return_cases.rental_id > rentals.id
+Ref: storage_units.facility_id > facilities.id
+Ref: support_ticket_messages.author_id > users.id
+Ref: support_ticket_messages.ticket_id > support_tickets.id
+Ref: support_tickets.customer_id > users.id
+Ref: support_tickets.assigned_to > users.id
+Ref: support_tickets.facility_id > facilities.id

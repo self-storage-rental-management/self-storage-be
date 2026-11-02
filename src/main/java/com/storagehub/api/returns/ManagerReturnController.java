@@ -57,6 +57,17 @@ public class ManagerReturnController {
         );
     }
 
+    @PostMapping("/{returnId}/confirm")
+    public ApiResponse<ReturnCaseResponse> confirmSettlement(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody(required = false) CustomerConfirmSettlementRequest request
+    ) {
+        return new ApiResponse<>(
+            returnSettlementService.staffConfirmSettlement(actorContext.required(), returnId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{returnId}/complete-refund")
     public ApiResponse<ReturnCaseResponse> completeRefund(
         @PathVariable UUID returnId,

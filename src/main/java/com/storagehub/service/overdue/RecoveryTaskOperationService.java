@@ -125,7 +125,15 @@ public class RecoveryTaskOperationService {
         try {
             jdbc.update("insert into recovery_settlement_receipts(task_id,return_case_id,direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_by,recorded_at) values(?,?,?,?,?,?,?,?,?)",
                 bytes(id),bytes(rc.getId()),direction,amount,body.paymentMethod().name(),transactionReference,bytes(body.receiptFileId()),bytes(actor.userId()),Timestamp.from(now()));
-        }catch(DuplicateKeyException used){throw ApiExceptions.conflict("Recovery settlement or transaction evidence was already recorded");}
+        }catch(DuplicateKeyException used){
+            String msg = used.getMessage();
+            if (msg != null && msg.contains("transaction_reference")) {
+                throw ApiExceptions.conflict("Mã giao dịch hoặc số biên nhận này đã được sử dụng trên hệ thống. Vui lòng nhập mã giao dịch khác.");
+            } else if (msg != null && msg.contains("receipt_file_id")) {
+                throw ApiExceptions.conflict("Tệp biên lai này đã được sử dụng cho một quyết toán khác. Vui lòng chọn tệp biên lai hợp lệ.");
+            }
+            throw ApiExceptions.conflict("Recovery settlement or transaction evidence was already recorded");
+        }
         returns.completeRecoverySettlement(actor,rc.getId(),transactionReference);
         jdbc.update("update recovery_task_operations set version=version+1 where task_id=?",bytes(id));
         return finish(c,key,"SETTLEMENT",body);

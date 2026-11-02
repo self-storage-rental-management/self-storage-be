@@ -397,6 +397,12 @@ public class FacilityLifecycleService {
         boolean hasEffectivePackage = packages
             .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(facilityId, LocalDate.now())
             .stream().anyMatch(p -> p.getEffectiveTo() == null || !p.getEffectiveTo().isBefore(LocalDate.now()));
+        if (!hasEffectivePackage) {
+            RentalPackagePolicyProvisioner.provisionRentalPackages(packages, facility);
+            hasEffectivePackage = packages
+                .findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(facilityId, LocalDate.now())
+                .stream().anyMatch(p -> p.getEffectiveTo() == null || !p.getEffectiveTo().isBefore(LocalDate.now()));
+        }
         if (!hasEffectivePackage) throw ApiExceptions.conflict("Chưa thể công bố: cơ sở chưa được gán gói thuê đang áp dụng và còn hiệu lực. Vào Gói thuê để thêm cơ sở vào gói thuê.");
 
         candidates.forEach(type -> type.setStatus(UnitTypeStatus.active));
