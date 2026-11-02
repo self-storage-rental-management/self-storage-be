@@ -11,6 +11,9 @@ import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.storagehub.domain.repo.ReservationGoodsItemRepository;
+import com.storagehub.domain.repo.FileAssetRepository;
+import com.storagehub.api.file.FileAssetResponse;
 
 /** Reads existing shared records without posting/backfilling ledger or inventing coverage/access. */
 @Service @RequiredArgsConstructor @Transactional(readOnly=true)
@@ -19,6 +22,8 @@ public class RentalBookingEvidenceReader {
     private final com.storagehub.service.PaymentProvenance provenance;
     private final com.storagehub.service.ledger.PaymentReconciliationPreflight preflight;
     private final com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy sandboxPolicy;
+    private final ReservationGoodsItemRepository goodsItems;
+    private final FileAssetRepository files;
     public Optional<RentalBookingEvidence> read(ActorPrincipal actor,Rental rental,boolean manager) {
         if(actor==null)throw ApiExceptions.unauthorized("Authentication required");
         if(rental==null || rental.getCustomer()==null || rental.getFacility()==null || rental.getReservation()==null)
@@ -60,7 +65,19 @@ public class RentalBookingEvidenceReader {
             p.getAmount(),p.getProcessedAt(),classification.name(),p.getInvoiceNumber(),p.getInvoiceStatus(),p.getInvoiceIssuedAt(),
             preflight.read(p,rental,snapshots.isEmpty()?null:snapshots.getFirst(),classification),sandboxPolicy.evaluate(p,classification));}).toList();
         // Do not return gateway intent, idempotency key, failure details or other internal identifiers.
-        return Optional.of(new RentalBookingEvidence(rental.getId(),reservation.getId(),"VND",amounts,payments,rows.size()>20));
+        var customer = new RentalBookingEvidence.CustomerSnapshot(
+            reservation.getCustomer().getFullName(), reservation.getCustomer().getEmail(),
+            reservation.getCustomerPhone(), reservation.getCustomerAddress(), reservation.getIdentityDocumentNumber());
+        var goods = goodsItems.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()).stream().map(item -> {
+            var images = files.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("RESERVATION_GOODS_ITEM", item.getId()).stream()
+                .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
+                .map(asset -> new FileAssetResponse(asset.getId(),asset.getOriginalName(),asset.getContentType(),asset.getSizeBytes(),
+                    asset.getChecksumSha256(),asset.getEntityType(),asset.getEntityId(),asset.getStatus(),asset.getCreatedAt())).toList();
+            return new RentalBookingEvidence.GoodsItem(item.getId(),item.getGoodsCode(),
+                item.getCategoryName(),item.getMaterialName(),item.getCustomGoodsName(),item.getDescription(),item.getQuantity(),
+                item.getLengthCm(),item.getWidthCm(),item.getHeightCm(),item.getWeightKg(),item.isFragile(),item.getCustomerNote(),images);
+        }).toList();
+        return Optional.of(new RentalBookingEvidence(rental.getId(),reservation.getId(),"VND",amounts,payments,rows.size()>20,customer,goods));
     }
     private static boolean money(BigDecimal value){return value!=null && value.signum()>=0;}
 }
