@@ -35,7 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** Real H2 JPA/JDBC commits and concurrent workers. No external gateway or shared database. */
 @DataJpaTest(properties={"storagehub.integration.ledger.enabled=true","storagehub.integration.renewal-obligations.enabled=true",
-    "storagehub.integration.sandbox-reconciliation.enabled=true","spring.jpa.show-sql=false",
+    "storagehub.integration.sandbox-reconciliation.enabled=false","storagehub.integration.renewal-payment-lifecycle.enabled=true","spring.jpa.show-sql=false",
     "spring.test.database.replace=NONE","spring.datasource.url=jdbc:h2:mem:renewal-payment-transactions;MODE=MySQL;DB_CLOSE_DELAY=-1",
     "logging.level.com.storagehub.service.ledger.RenewalPaymentReconciler=DEBUG"})
 @ActiveProfiles("test") @Transactional(propagation=Propagation.NOT_SUPPORTED)
@@ -385,13 +385,41 @@ class RenewalPaymentTransactionTests {
         var mac=Mac.getInstance("HmacSHA512");mac.init(new SecretKeySpec("test-only".getBytes(java.nio.charset.StandardCharsets.UTF_8),"HmacSHA512"));
         q.put("vnp_SecureHash",HexFormat.of().formatHex(mac.doFinal(data.getBytes(java.nio.charset.StandardCharsets.UTF_8))));return q;
     }
+    @Test void paidThreeMillionThreeHundredThousandRecoversExactlyOnceWithoutChangingAcceptedTerms() throws Exception {
+        UUID id=fixture(true,false,true);
+        when(safety.atomic()).thenReturn(true);when(calendar.atomic()).thenReturn(true);
+        when(safety.check(any(),any(),any(),any())).thenReturn(NOW.plus(Duration.ofDays(7)));
+        when(calendar.feasible(any(Renewal.class),any(),any())).thenReturn(true);
+        when(finance.consistentThroughApproval()).thenReturn(true);
+        when(finance.read(any())).thenReturn(Optional.of(new RenewalSources.Financial(NOW,List.of(),false)));
+        String accepted=tx.execute(s->payments.findById(id).orElseThrow().getRenewalRevision().getQuote().getTermsJson());
+        tx.executeWithoutResult(s->gateway.processCallback(callbackUnchecked(id)));
+        worker.reconcile(id);worker.reconcile(id);worker.retryPending();
+        var paid=read(id);
+        assertThat(paid.getFailureCode()).as(paid.getFailureReason()).isNull();
+        assertThat(paid.getRenewalSigningPreparedAt()).isNotNull();
+        assertThat(receiptCount(id)).isEqualTo(1);
+        tx.executeWithoutResult(s->{
+            var payment=payments.findById(id).orElseThrow();var renewal=payment.getRenewal();
+            assertThat(renewal.getStatus()).isEqualTo(RenewalStatus.deposit_paid);
+            assertThat(payment.getRenewalRevision().getQuote().getTermsJson()).isEqualTo(accepted);
+            assertThat(renewal.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
+            var account=ledger.read(renewal.getRental().getId()).orElseThrow();
+            assertThat(account.receipts()).hasSize(1);
+            assertThat(account.receipts().getFirst().amount()).isEqualByComparingTo("3300000");
+            assertThat(account.knownOutstanding()).isEqualByComparingTo("13200000");
+        });
+    }
+
     UUID fixture() throws Exception {return fixture(false,false);}
-    UUID fixture(boolean deposit,boolean overdue) throws Exception {
+    UUID fixture(boolean deposit,boolean overdue) throws Exception { return fixture(deposit,overdue,false); }
+    UUID fixture(boolean deposit,boolean overdue,boolean customerPayment) throws Exception {
         return tx.execute(s->{
             var rental=rentalFixture();if(overdue)rental.setContractEndDate(LocalDate.of(2026,10,10));
-            var start=rental.getContractEndDate().plusDays(1);var end=start.plusMonths(1);
-            var n=new Renewal();n.setRental(rental);n.setRequestedBy(rental.getCustomer());n.setStatus(RenewalStatus.accepted);n.setAmount(new BigDecimal("100"));n.setNewEndDate(end.minusDays(1));em.persist(n);
+            var start=rental.getContractEndDate().plusDays(1);var end=start.plusMonths(customerPayment?3:1);
+            var n=new Renewal();n.setRental(rental);n.setRequestedBy(rental.getCustomer());n.setStatus(RenewalStatus.accepted);n.setAmount(new BigDecimal(customerPayment?"16500000":"100"));n.setNewEndDate(end.minusDays(1));em.persist(n);
             var terms=new RenewalQuoteResponse.Terms(rental.getContractEndDate(),start,end,n.getNewEndDate(),rental.getStorageUnit().getUnitType().getId(),"TEST",UUID.randomUUID(),"v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),deposit?new BigDecimal("40"):BigDecimal.ZERO,deposit?new BigDecimal("60"):new BigDecimal("100"),"VND","test","v1",rental.getStorageUnit().getId(),rental.getFacility().getId());
+            if(customerPayment) terms=new RenewalQuoteResponse.Terms(rental.getContractEndDate(),start,end,n.getNewEndDate(),rental.getStorageUnit().getUnitType().getId(),"TEST",UUID.randomUUID(),"v1",3,new BigDecimal("5500000"),BigDecimal.ZERO,new BigDecimal("16500000"),BigDecimal.ZERO,new BigDecimal("16500000"),new BigDecimal("3300000"),new BigDecimal("13200000"),"VND","test","v1",rental.getStorageUnit().getId(),rental.getFacility().getId(),"EXCLUSIVE",rental.getStartDate(),com.storagehub.api.renewal.RenewalPaymentPlan.FULL_TERM,5);
             try {
                 String json=mapper.writeValueAsString(terms);String hash=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
                 var quote=new RenewalQuote(rental,rental.getCustomer(),json,hash,NOW.minusSeconds(120),NOW.plusSeconds(120));em.persist(quote);
@@ -404,7 +432,7 @@ class RenewalPaymentTransactionTests {
                     workflow.signingBalanceDue(NOW.plusSeconds(9000));
                     ledger.charge(rental.getId(),n.getId(),remainder.kind(),remainder.amount(),workflow.getSigningBalanceDueAt(),remainder.sourceReference(),rental.getCustomer().getId(),"renewal-remainder:"+revision.getId(),1);
                 }
-                var p=new Payment();p.setInitiatedBy(rental.getCustomer());p.setRenewal(n);p.setRenewalRevision(revision);p.setPaymentDeadline(workflow.getPaymentDeadline());p.setAmount(new BigDecimal(deposit?"40":"100"));p.setCurrency("VND");p.setPurpose(PaymentType.RENEWAL);p.setGatewayProvider("VNPAY");p.setGatewayIntentId("test-"+UUID.randomUUID());p.setIdempotencyKey(UUID.randomUUID().toString());payments.saveAndFlush(p);return p.getId();
+                var p=new Payment();p.setInitiatedBy(rental.getCustomer());p.setRenewal(n);p.setRenewalRevision(revision);p.setPaymentDeadline(workflow.getPaymentDeadline());p.setAmount(new BigDecimal(customerPayment?"3300000":deposit?"40":"100"));p.setCurrency("VND");p.setPurpose(PaymentType.RENEWAL);p.setGatewayProvider("VNPAY");p.setGatewayIntentId("test-"+UUID.randomUUID());p.setIdempotencyKey(UUID.randomUUID().toString());payments.saveAndFlush(p);return p.getId();
             } catch(Exception e){throw new IllegalStateException(e);}
         });
     }

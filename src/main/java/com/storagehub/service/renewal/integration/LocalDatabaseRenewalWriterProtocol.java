@@ -15,14 +15,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
-import org.springframework.context.annotation.Profile;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Local Payment rollout only: existing DB conflicts and published cutoff, not external Recovery coverage. */
 @Component
-@Profile("shared-payment-schema")
 @RequiredArgsConstructor
 @ConditionalOnProperty(name={"storagehub.integration.renewal-simple-payment.enabled",
     "storagehub.integration.renewal-extension-holds.enabled",
