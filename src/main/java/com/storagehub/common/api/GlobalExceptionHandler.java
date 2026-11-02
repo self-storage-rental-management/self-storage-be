@@ -75,6 +75,12 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.FORBIDDEN, ErrorCode.FORBIDDEN, "You do not have permission for this resource", null);
     }
 
+    @ExceptionHandler(org.springframework.web.context.request.async.AsyncRequestNotUsableException.class)
+    public void handleDisconnectedResponse(org.springframework.web.context.request.async.AsyncRequestNotUsableException exception) {
+        // The response is no longer writable. Do not serialize JSON into a closed SSE stream.
+        log.debug("Client disconnected from async response: {}", exception.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception exception) {
         log.error("Unhandled API error, correlationId={}", CorrelationIdContext.current(), exception);
