@@ -24,7 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /** Converts an authenticated Renewal VNPay callback into one exact FULL_RENT subledger receipt. */
 @Service @RequiredArgsConstructor
-@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled","storagehub.integration.sandbox-reconciliation.enabled"},havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-obligations.enabled"},havingValue="true")
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("${storagehub.integration.renewal-payment-lifecycle.enabled:false} or ${storagehub.integration.sandbox-reconciliation.enabled:false}")
 public class RenewalVnpaySettlementService {
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<RenewalInstallmentService> installments;
