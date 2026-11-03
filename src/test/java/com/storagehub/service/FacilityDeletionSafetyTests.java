@@ -79,6 +79,35 @@ class FacilityDeletionSafetyTests {
             Set.of(SystemPermission.MANAGE_INVENTORY.code()), Map.of(id, FacilityScopeLevel.MANAGE));
     }
 
+    @Test void newUnitTypeRejectsInvalidGeometryBeforeWriting() {
+        Facility facility = new Facility();
+        facility.setStatus(FacilityStatus.setup);
+        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        assertThatThrownBy(() -> service.createUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("2"))))
+            .hasMessageContaining("khung kệ");
+        assertThatThrownBy(() -> service.createUnitType(manager(), id, technicalRequest(new java.math.BigDecimal("4"))))
+            .hasMessageContaining("lối đi");
+        verify(facilities, never()).save(any());
+        verifyNoInteractions(unitTypes, units);
+    }
+
+    @Test void newUnitTypeRequiresAtLeastOnePhysicalUnit() {
+        Facility facility = new Facility();
+        facility.setStatus(FacilityStatus.setup);
+        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        var original = technicalRequest(new java.math.BigDecimal("8"));
+        var request = new com.storagehub.api.facility.ManagerUnitTypeRequest(
+            original.code(), original.name(), original.description(), original.lengthM(), original.widthM(),
+            original.heightM(), original.maxLoadKg(), original.rackCount(), original.rackLengthM(),
+            original.rackWidthM(), original.rackHeightM(), original.aisleWidthM(), original.trolleyType(),
+            original.smallBoxCapacity(), original.largeBoxCapacity(), original.imageUrl(), 0,
+            original.floor(), original.zone(), original.detailImageUrl());
+        assertThatThrownBy(() -> service.createUnitType(manager(), id, request))
+            .hasMessageContaining("ít nhất một gian kho");
+        verify(facilities, never()).save(any());
+        verifyNoInteractions(unitTypes, units);
+    }
+
     private UnitType mockType() {
         UnitType type = mock(UnitType.class);
         Facility facility = mock(Facility.class);

@@ -101,6 +101,7 @@ public class FacilityLifecycleService {
         if (facility.getStatus() == FacilityStatus.inactive) {
             throw ApiExceptions.conflict("Inactive facility cannot receive unit types");
         }
+        validateUnitTypeGeometry(request);
         String code = generateUnitTypeCode(facilityId);
         UnitType type = new UnitType();
         type.setFacility(facility);
@@ -409,6 +410,20 @@ public class FacilityLifecycleService {
         candidates.forEach(type -> { if (type.getPublishedRevision() == 0) type.setPublishedRevision(1); });
         unitTypes.saveAll(candidates);
         facility.setStatus(FacilityStatus.active);
+    }
+
+    private void validateUnitTypeGeometry(ManagerUnitTypeRequest request) {
+        if (request.physicalUnitCount() < 1) {
+            throw ApiExceptions.validation("Cần tạo ít nhất một gian kho.", null);
+        }
+        if (request.rackLengthM().compareTo(request.lengthM()) > 0
+            || request.rackWidthM().compareTo(request.widthM()) > 0
+            || request.rackHeightM().compareTo(request.heightM()) > 0) {
+            throw ApiExceptions.validation("Kích thước khung kệ không được lớn hơn kích thước gian kho.", null);
+        }
+        if (request.aisleWidthM().compareTo(request.widthM()) >= 0) {
+            throw ApiExceptions.validation("Chiều rộng lối đi phải nhỏ hơn chiều rộng gian kho.", null);
+        }
     }
 
     private void applyTechnical(UnitType type, ManagerUnitTypeRequest request) {
