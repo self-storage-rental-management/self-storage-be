@@ -73,14 +73,9 @@ public final class RentalPackagePolicyProvisioner {
             return repository.saveAll(toSave);
         }
 
-        // 3. Fallback: Nếu toàn hệ thống chưa có gói active nào, tạo bộ gói chuẩn (1, 3, 6, 12 tháng)
-        List<RentalPackagePolicy> defaults = List.of(
-            createPackage(facility, "PKG-1M", "Gói thuê 1 tháng", 1, BigDecimal.ZERO, now, usedCodes, repository),
-            createPackage(facility, "PKG-3M", "Gói thuê 3 tháng (Tiết kiệm 5%)", 3, new BigDecimal("0.0500"), now, usedCodes, repository),
-            createPackage(facility, "PKG-6M", "Gói thuê 6 tháng (Tiết kiệm 10%)", 6, new BigDecimal("0.1000"), now, usedCodes, repository),
-            createPackage(facility, "PKG-12M", "Gói thuê 12 tháng (Tiết kiệm 15%)", 12, new BigDecimal("0.1500"), now, usedCodes, repository)
-        );
-        return repository.saveAll(defaults);
+        // 3. Nếu toàn hệ thống chưa có gói active nào (ví dụ BO đã xóa toàn bộ gói để tự cấu hình lại từ đầu):
+        // Không tự ý sinh gói mặc định để tránh ghi đè hoặc gây xung đột với gói thuê mới mà BO muốn tạo.
+        return List.of();
     }
 
     private static RentalPackagePolicy clonePolicy(
