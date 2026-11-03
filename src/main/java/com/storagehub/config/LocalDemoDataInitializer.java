@@ -155,29 +155,9 @@ public class LocalDemoDataInitializer {
     }
 
     private int seedRentalPackagePolicies(Map<String, Facility> facilities) {
-        int createdCount = 0;
-        LocalDate effectiveFrom = LocalDate.of(2020, 1, 1);
-        for (Facility facility : facilities.values()) {
-            for (RentalPackageDefinition definition : rentalPackageDefinitions()) {
-                if (rentalPackagePolicyRepository.findByFacility_IdAndCode(facility.getId(), definition.code()).isPresent()) {
-                    continue;
-                }
-
-                RentalPackagePolicy policy = new RentalPackagePolicy();
-                policy.setFacility(facility);
-                policy.setCode(definition.code());
-                policy.setName(definition.name());
-                policy.setRentalMonths(definition.rentalMonths());
-                policy.setFreeSetupDays(com.storagehub.service.ReservationQuoteService.defaultFreeSetupDays(definition.rentalMonths()));
-                policy.setDiscountRate(definition.discountRate());
-                policy.setPolicyVersion("demo-v1");
-                policy.setActive(true);
-                policy.setEffectiveFrom(effectiveFrom);
-                rentalPackagePolicyRepository.saveAndFlush(policy);
-                createdCount++;
-            }
-        }
-        return createdCount;
+        // Không tự động seed các gói demo DEMO_3M, DEMO_6M, DEMO_12M, DEMO_24M
+        // để BO toàn quyền quản lý danh sách gói thuê thực tế
+        return 0;
     }
 
     private int seedUsers(Map<String, Facility> facilities) {
