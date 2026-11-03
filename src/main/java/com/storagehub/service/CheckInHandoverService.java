@@ -577,9 +577,6 @@ public class CheckInHandoverService {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
         authorizationService.require(actor, SystemPermission.MANAGE_PAYMENTS);
-        if (actor.hasRole(RoleCode.STAFF) && !"CASH".equalsIgnoreCase(request.paymentMethod())) {
-            throw ApiExceptions.forbidden("Staff may collect only cash payments during an active collection session");
-        }
         CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
             .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
         Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
