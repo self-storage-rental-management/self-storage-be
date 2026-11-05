@@ -65,10 +65,10 @@ public class ReturnFinancialReconciliation {
         if(checkIn==null||pricing.getNetRentalAmount()==null
             ||paid.compareTo(pricing.getNetRentalAmount().add(pricing.getSecurityDepositAmount()))!=0)throw unknownDeposit();
         BigDecimal released=jdbc.queryForObject("select coalesce(sum(deposit_amount),0) from return_financial_snapshots where rental_id=? and settled_at_ms is not null",BigDecimal.class,rental.getId().toString());
-        if(released.signum()!=0)throw ApiExceptions.conflict("Cọc bảo đảm đã được quyết toán; không thể sử dụng lần nữa.");
+        if(released.signum()!=0)throw ApiExceptions.conflict("Tiền cọc đảm bảo thuê đã được quyết toán; không thể sử dụng lần nữa.");
         Long historical=em.createQuery("select count(r) from ReturnCase r where r.rental.id=:id and r.status=:status",Long.class)
             .setParameter("id",rental.getId()).setParameter("status",ReturnCaseStatus.completed).getSingleResult();
-        if(historical>0)throw ApiExceptions.conflict("Hồ sơ có quyết toán cũ cần đối soát cọc trước khi xử lý tiếp.");
+        if(historical>0)throw ApiExceptions.conflict("Hồ sơ có quyết toán cũ cần đối soát tiền cọc đảm bảo thuê trước khi xử lý tiếp.");
         return new Security(checkIn,pricing.getSecurityDepositAmount(),pricing);
     }
     private RuntimeException unknownDeposit() {
@@ -169,12 +169,12 @@ public class ReturnFinancialReconciliation {
         var proof=security(rc.getRental());
         if (rc.isSetupExitRequested()) {
             if (!Objects.equals(row.get("setup_statement_json"), setupStatement(rc)))
-                throw ApiExceptions.conflict("Bảng kê trả kho trong setup đã thay đổi; cần đối soát lại.");
+                throw ApiExceptions.conflict("Bảng kê trả kho trong thời gian chuẩn bị đã thay đổi; cần đối soát lại.");
             if (rc.isSetupEarlyExit() && (!SetupEarlyExitPolicy.applies(rc)
                 || !Objects.equals(proof.pricing().getSetupEarlyExitPolicyVersion(), rc.getSetupEarlyExitPolicyVersion())
                 || proof.pricing().getSetupEarlyExitFee().compareTo(rc.getEarlyTerminationFee()) != 0
                 || proof.pricing().getNetRentalAmount().compareTo(rc.getRentalRefundCredit()) != 0))
-                throw ApiExceptions.conflict("Điều khoản hoặc tiền thuê thực thu không khớp bảng kê setup.");
+                throw ApiExceptions.conflict("Điều khoản hoặc tiền thuê thực thu không khớp bảng kê thời gian chuẩn bị.");
         }
         if(!proof.payment().getId().toString().equals(row.get("security_payment_id"))
             ||proof.amount().compareTo(rc.getDepositAmount())!=0||new BigDecimal(row.get("debt_amount").toString()).compareTo(rc.getOutstandingFee())!=0)

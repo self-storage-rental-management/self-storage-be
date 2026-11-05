@@ -44,7 +44,6 @@ public class ReservationCreationService {
 
     private static final long HOLD_MINUTES = 10;
     private static final java.security.SecureRandom PUBLIC_CODE_RANDOM = new java.security.SecureRandom();
-    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -134,7 +133,7 @@ public class ReservationCreationService {
         }
         if (!SetupEarlyExitPolicy.VERSION.equals(quote.getSetupEarlyExitPolicyVersion())
             || !quote.getSetupEarlyExitPolicyVersion().equals(request.getAcceptedSetupEarlyExitPolicyVersion())) {
-            throw ApiExceptions.conflict("Vui lòng lấy báo giá mới và xác nhận điều khoản trả kho trong setup trước khi đặt kho.");
+            throw ApiExceptions.conflict("Vui lòng lấy báo giá mới và xác nhận điều khoản trả kho trong thời gian chuẩn bị trước khi đặt kho.");
         }
 
         if(quote.getGoodsSnapshotJson()==null||quote.getGoodsSnapshotJson().isBlank()||"[]".equals(quote.getGoodsSnapshotJson())
@@ -147,16 +146,12 @@ public class ReservationCreationService {
 
         Instant now = Instant.now();
         boolean quotedReviewRequired = quotedGoodsItems.stream().anyMatch(ReservationCompatibilityService::isOther);
-        if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
-            String message = "Lịch nhận kho đã qua. Vui lòng chọn ngày giờ mới.";
-            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
-        }
         ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
             now, quotedReviewRequired
         );
         if (request.getAppointmentAt() != null
             && !checkInWindow.contains(request.getAppointmentAt())) {
-            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép hoặc giờ sớm nhất đã thay đổi. Vui lòng chọn lại lịch nhận kho.";
+            String message = "Ngày nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
             throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
         }
         java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
@@ -400,9 +395,8 @@ public class ReservationCreationService {
 
     static String generateReservationCode() {
         StringBuilder code = new StringBuilder("RSV-");
-        for (int index = 0; index < 12; index++) {
-            if (index > 0 && index % 4 == 0) code.append('-');
-            code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
+        for (int index = 0; index < 6; index++) {
+            code.append(PUBLIC_CODE_RANDOM.nextInt(10));
         }
         return code.toString();
     }
