@@ -9,7 +9,6 @@ import com.storagehub.service.renewal.operations.RenewalOperationState;
 import com.storagehub.service.renewal.persistence.RenewalWorkflow;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -74,11 +73,6 @@ public class RenewalVnpaySettlementService {
         final List<FinancialContractSpecifications.Specification> specifications;
         try { specifications=FinancialContractSpecifications.accepted(revision,terms); }
         catch (RuntimeException invalid) { return new Result(false,null,"Accepted Renewal terms failed financial validation"); }
-        boolean fullRentPayment = payment.getAmount() != null && terms.totalAfterDiscount() != null
-            && payment.getAmount().compareTo(terms.totalAfterDiscount()) == 0;
-        boolean depositPayment = payment.getAmount() != null
-            && payment.getAmount().compareTo(specifications.getFirst().amount()) == 0;
-
         if(specifications.isEmpty()||payment.getPurpose()!=PaymentType.RENEWAL||payment.getStatus()!=PaymentStatus.PAID
             ||!"VNPAY".equals(payment.getGatewayProvider())||!"VND".equals(payment.getCurrency())
             ||payment.getGatewayTransactionNo()==null||payment.getGatewayTransactionNo().isBlank()
@@ -86,7 +80,7 @@ public class RenewalVnpaySettlementService {
             ||!payment.getPaymentDeadline().equals(workflow.getPaymentDeadline())
             ||payment.getPaidAt().isAfter(payment.getPaymentDeadline())
             ||payment.getAmount()==null
-            ||(!fullRentPayment && !depositPayment))
+            ||payment.getAmount().compareTo(specifications.getFirst().amount())!=0)
             return new Result(false,null,"Payment amount, purpose or deadline does not match initial rental Renewal terms");
 
         if(!Objects.equals(evidenceLogId,payment.getRenewalEvidenceRef())
@@ -101,35 +95,18 @@ public class RenewalVnpaySettlementService {
         if(account==null||!account.customerId().equals(renewal.getRental().getCustomer().getId())
             ||!account.facilityId().equals(renewal.getRental().getFacility().getId()))
             return new Result(false,null,"Renewal ledger account is unavailable or has changed binding");
-
-        Map<UUID, BigDecimal> allocationMap = new java.util.LinkedHashMap<>();
-        if (fullRentPayment) {
-            for (var spec : specifications) {
-                var matches = account.obligations().stream().filter(o -> Objects.equals(o.renewalId(), renewal.getId())
-                    && o.kind() == spec.kind() && Objects.equals(o.sourceRef(), spec.sourceReference())
-                    && o.amount().compareTo(spec.amount()) == 0).toList();
-                if (matches.size() != 1 || matches.getFirst().outstanding().compareTo(spec.amount()) != 0)
-                    return new Result(false, null, "Unique unpaid initial rental obligation is unavailable");
-                if (!ledger.renewalPaymentCommandMatches(matches.getFirst(), spec, renewal.getRental().getCustomer().getId()))
-                    return new Result(false, null, "Full-rent obligation lacks the payment-ready writer evidence");
-                allocationMap.put(matches.getFirst().id(), spec.amount());
-            }
-        } else {
-            var spec = specifications.getFirst();
-            var obligations = account.obligations().stream().filter(o -> Objects.equals(o.renewalId(), renewal.getId())
-                && o.kind() == spec.kind() && Objects.equals(o.sourceRef(), spec.sourceReference())
-                && o.amount().compareTo(spec.amount()) == 0).toList();
-            if (obligations.size() != 1 || obligations.getFirst().outstanding().compareTo(payment.getAmount()) != 0)
-                return new Result(false, null, "Unique unpaid initial rental obligation is unavailable");
-            if (!ledger.renewalPaymentCommandMatches(obligations.getFirst(), spec, renewal.getRental().getCustomer().getId()))
-                return new Result(false, null, "Full-rent obligation lacks the payment-ready writer evidence");
-            allocationMap.put(obligations.getFirst().id(), payment.getAmount());
-        }
-
-        UUID receipt = ledger.receiveSandbox(renewal.getRental().getId(), payment.getAmount(),
-            allocationMap,
-            new LedgerStore.GatewayProof(payment.getId(), evidenceLogId, payment.getGatewayTransactionNo()),
-            renewal.getRental().getCustomer().getId(), "renewal-vnpay:" + payment.getId(), account.revision(), payment.getPaidAt());
+        var spec=specifications.getFirst();
+        var obligations=account.obligations().stream().filter(o->Objects.equals(o.renewalId(),renewal.getId())
+            &&o.kind()==spec.kind()&&Objects.equals(o.sourceRef(),spec.sourceReference())
+            &&o.amount().compareTo(spec.amount())==0).toList();
+        if(obligations.size()!=1||obligations.getFirst().outstanding().compareTo(payment.getAmount())!=0)
+            return new Result(false,null,"Unique unpaid initial rental obligation is unavailable");
+        if(!ledger.renewalPaymentCommandMatches(obligations.getFirst(),spec,renewal.getRental().getCustomer().getId()))
+            return new Result(false,null,"Full-rent obligation lacks the payment-ready writer evidence");
+        UUID receipt=ledger.receiveSandbox(renewal.getRental().getId(),payment.getAmount(),
+            Map.of(obligations.getFirst().id(),payment.getAmount()),
+            new LedgerStore.GatewayProof(payment.getId(),evidenceLogId,payment.getGatewayTransactionNo()),
+            renewal.getRental().getCustomer().getId(),"renewal-vnpay:"+payment.getId(),account.revision(),payment.getPaidAt());
 
         payment.setRenewalLedgerReceiptRef(receipt);
         payment.setRenewalAllocatedAt(now);
@@ -228,16 +205,7 @@ public class RenewalVnpaySettlementService {
         if(deposit)state.deposit(payment.getId(),payment.getPaidAt(),signingDeadline,cutoff,deadlineRef,deadlineVersion);
         else state.fullRent(payment.getId(),payment.getPaidAt(),signingDeadline,cutoff,deadlineRef,deadlineVersion);
         if(newState)em.persist(state);
-        boolean fullOnlinePaid = state.getAppointmentRef() == null && (payment.getAmount().compareTo(terms.totalAfterDiscount()) >= 0 || !deposit);
-        if(fullOnlinePaid) {
-            renewal.getRental().setContractEndDate(terms.newEndDate());
-            renewal.setStatus(RenewalStatus.completed);
-            state.completed(renewal.getRequestedBy()!=null?renewal.getRequestedBy().getId():null,payment.getPaidAt());
-            var slot=em.find(com.storagehub.service.renewal.persistence.RenewalOpenSlot.class,renewal.getRental().getId());
-            if(slot!=null)em.remove(slot);
-        } else {
-            renewal.setStatus(state.getAppointmentRef()!=null?RenewalStatus.appointment_scheduled:deposit?RenewalStatus.deposit_paid:RenewalStatus.full_rent_paid);
-        }
+        renewal.setStatus(state.getAppointmentRef()!=null?RenewalStatus.appointment_scheduled:deposit?RenewalStatus.deposit_paid:RenewalStatus.full_rent_paid);
         em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         var eventData=Map.of("paymentRef",payment.getId(),"renewalId",renewal.getId(),"amount",payment.getAmount(),"currency",payment.getCurrency(),
             "paidAt",payment.getPaidAt(),"paymentDeadline",payment.getPaymentDeadline(),"receiptId",payment.getRenewalLedgerReceiptRef(),"outcome","SUCCESS");
@@ -250,9 +218,9 @@ public class RenewalVnpaySettlementService {
         payment.setRenewalSigningPreparedAt(now);
         payment.setFailureCode(null);payment.setFailureReason(null);payment.setRenewalNextRetryAt(null);
         notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
-            fullOnlinePaid?"Gia hạn hợp đồng thành công":deposit?"Đã nhận thanh toán tiền thuê gia hạn trả trước":"Đã nhận thanh toán gia hạn",
-            fullOnlinePaid?"Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" đã được xác nhận. Hợp đồng của bạn đã được gia hạn thành công đến ngày "+terms.newEndDate()+".":"Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" cho hồ sơ thuê "+renewal.getRental().getId()
-                +" đã được xác nhận. Tiếp tục theo dõi tiến trình trong hồ sơ.",renewal.getId());
+            deposit?"Đã nhận thanh toán tiền thuê gia hạn trả trước":"Đã nhận thanh toán gia hạn",
+            "Khoản thanh toán "+payment.getAmount()+" "+payment.getCurrency()+" cho hồ sơ thuê "+renewal.getRental().getId()
+                +" đã được xác nhận. Tiếp tục theo dõi lịch ký gia hạn trong hồ sơ.",renewal.getId());
         return new Result(true,payment.getRenewalLedgerReceiptRef(),null);
     }
 
