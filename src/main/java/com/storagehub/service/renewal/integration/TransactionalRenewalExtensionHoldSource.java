@@ -89,9 +89,11 @@ public class TransactionalRenewalExtensionHoldSource implements RenewalSources.E
             return h.id();
         }
         // Expired ACTIVE rows still block until accounting reconciliation explicitly releases them.
-        var overlaps=jdbc.query("select id from renewal_extension_holds where unit_id=? and state='ACTIVE' and start_date<? and end_exclusive>? order by id for update",
-            (rs,i)->uuid(rs.getBytes("id")),bytes(r.getStorageUnit().getId()),java.sql.Date.valueOf(end),java.sql.Date.valueOf(start));
+        var overlaps=jdbc.query("select id from renewal_extension_holds where unit_id=? and rental_id!=? and state='ACTIVE' and start_date<? and end_exclusive>? order by id for update",
+            (rs,i)->uuid(rs.getBytes("id")),bytes(r.getStorageUnit().getId()),bytes(r.getId()),java.sql.Date.valueOf(end),java.sql.Date.valueOf(start));
         if(!overlaps.isEmpty())throw ApiExceptions.conflict("Conflicting extension hold");
+        jdbc.update("update renewal_extension_holds set state='CONSUMED', updated_at=? where rental_id=? and state='ACTIVE'",
+            Timestamp.from(at), bytes(r.getId()));
         var id=UUID.randomUUID();
         jdbc.update("insert into renewal_extension_holds(id,renewal_id,rental_id,unit_id,facility_id,start_date,end_exclusive,initial_expires_at,expires_at,state,version,created_at,updated_at) values(?,?,?,?,?,?,?,?,?,'ACTIVE',0,?,?)",
             bytes(id),bytes(renewalId),bytes(r.getId()),bytes(r.getStorageUnit().getId()),bytes(r.getFacility().getId()),
