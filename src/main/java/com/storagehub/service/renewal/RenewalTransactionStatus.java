@@ -10,8 +10,6 @@ public final class RenewalTransactionStatus {
     public static String resolve(Payment p, boolean reconciled, BigDecimal executedRefund, Instant now) {
         boolean expired=p.getPaymentDeadline()!=null&&!now.isBefore(p.getPaymentDeadline());
         if(p.getStatus()==PaymentStatus.PAID) {
-            if(p.getRenewal()!=null&&(p.getRenewal().getStatus()==RenewalStatus.completed||p.getRenewalSigningPreparedAt()!=null))
-                return "SUCCEEDED";
             if(!reconciled||p.getRefundedAmount()!=null&&p.getRefundedAmount().compareTo(executedRefund)>0)
                 return "RECONCILIATION_REQUIRED";
             if(executedRefund.signum()>0)return executedRefund.compareTo(p.getAmount())>=0?"REFUNDED":"PARTIALLY_REFUNDED";

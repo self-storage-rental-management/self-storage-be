@@ -81,13 +81,6 @@ public class VnpayService {
     private RefundRequestRepository refundRequestRepository;
     @Autowired(required = false)
     private SystemSettingRepository systemSettingRepository;
-    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VnpayService.class);
-    @jakarta.persistence.PersistenceContext
-    private jakarta.persistence.EntityManager entityManager;
-    @Autowired(required = false)
-    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
-    @Autowired(required = false)
-    private com.storagehub.service.email.TransactionalEmailService transactionalEmailService;
 
     @Transactional(readOnly=true)
     public RenewalVnpayPaymentResponse installmentPayment(ActorPrincipal actor,UUID renewalId,UUID paymentId,String audience){
@@ -375,84 +368,18 @@ public class VnpayService {
                 }
                 payment.setStatus(PaymentStatus.PAID);
                 payment.setPaidAt(payment.getPaidAt()==null?gatewayPaidAt:payment.getPaidAt());
-                payment.setFailureCode(null);
-                payment.setFailureReason(null);
-                payment.setRenewalSigningPreparedAt(gatewayPaidAt);
-                payment.setRenewalAllocatedAt(gatewayPaidAt);
-                payment.setRenewalNextRetryAt(null);
-
-                Renewal renewal = payment.getRenewal();
-                com.storagehub.domain.model.Rental rental = renewal != null ? renewal.getRental() : null;
-                com.storagehub.api.renewal.RenewalQuoteResponse.Terms terms = null;
-                if(payment.getRenewalRevision() != null && payment.getRenewalRevision().getQuote() != null) {
-                    try {
-                        terms = objectMapper.readValue(payment.getRenewalRevision().getQuote().getTermsJson(), com.storagehub.api.renewal.RenewalQuoteResponse.Terms.class);
-                    } catch(Exception ignored) {}
-                }
-                java.time.LocalDate newEndDate = terms != null && terms.newEndDate() != null ? terms.newEndDate()
-                    : (renewal != null ? renewal.getNewEndDate() : null);
-
-                if(rental != null && newEndDate != null) {
-                    rental.setContractEndDate(newEndDate);
-                }
-                if(renewal != null) {
-                    renewal.setStatus(com.storagehub.domain.model.RenewalStatus.completed);
-                    if(entityManager != null) {
-                        var state = entityManager.find(com.storagehub.service.renewal.operations.RenewalOperationState.class, renewal.getId());
-                        if(state == null) {
-                            state = new com.storagehub.service.renewal.operations.RenewalOperationState(renewal);
-                            entityManager.persist(state);
-                        }
-                        state.completed(renewal.getRequestedBy() != null ? renewal.getRequestedBy().getId() : null, gatewayPaidAt);
-
-                        if(rental != null) {
-                            var slot = entityManager.find(com.storagehub.service.renewal.persistence.RenewalOpenSlot.class, rental.getId());
-                            if(slot != null) {
-                                entityManager.remove(slot);
-                            }
-                        }
-                    }
-                }
-
-                if(rental != null && jdbcTemplate != null) {
-                    try {
-                        byte[] rentalBytes = bytesFromUuid(rental.getId());
-                        byte[] renewalBytes = renewal != null ? bytesFromUuid(renewal.getId()) : null;
-                        jdbcTemplate.update("update renewal_extension_holds set state='CONSUMED', updated_at=? where rental_id=? or renewal_id=?",
-                            java.sql.Timestamp.from(gatewayPaidAt), rentalBytes, renewalBytes);
-                    } catch(Exception ignored) {}
-                }
-
-                recordRenewalGatewayEvidence(payment, query, gatewayPaidAt, true, null);
-                if(auditLogService != null && rental != null && rental.getFacility() != null) {
-                    var evidence = auditLogService.recordMutation((User)null, PaymentProvenance.CALLBACK_ACTION, "Payment", payment.getId(),
-                        rental.getFacility().getId(), null, renewalCallbackProof(payment, query, gatewayPaidAt));
-                    payment.setRenewalEvidenceRef(evidence.getId());
-                }
-
-                if(renewalSettlement != null) {
-                    var settlementService = renewalSettlement.getIfAvailable();
-                    if(settlementService != null && payment.getRenewalEvidenceRef() != null) {
-                        try {
-                            settlementService.settle(payment, payment.getRenewalEvidenceRef());
-                        } catch(Exception ex) {
-                            log.warn("Ledger settlement notice: {}", ex.getMessage());
-                        }
-                    }
-                }
-
+                payment.setFailureCode("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED");
+                payment.setFailureReason("Authenticated funds require Renewal source and obligation reconciliation");
                 paymentRepository.saveAndFlush(payment);
-
-                sendRenewalPaymentBillEmail(payment, renewal, rental, terms, gatewayPaidAt);
-
-                if(notificationService != null && rental != null && rental.getCustomer() != null) {
-                    notificationService.createNotification(rental.getCustomer().getId(), NotificationType.RENEWAL,
-                        "Gia hạn hợp đồng thành công",
-                        "Khoản thanh toán " + formatVnd(payment.getAmount()) + " đã được xác nhận. Hợp đồng của bạn đã được gia hạn thành công đến ngày " + (newEndDate != null ? newEndDate.toString() : "") + ".",
-                        renewal != null ? renewal.getId() : null);
+                if(authenticatedRenewalCallback(payment,query,gatewayPaidAt)) {
+                    recordVerifiedRenewalPayment(payment,query,gatewayPaidAt);
+                } else {
+                    recordRenewalGatewayEvidence(payment,query,gatewayPaidAt,false,"CALLBACK_BINDING_UNVERIFIED");
+                    payment.setFailureReason("VNPAY callback does not match the configured merchant and transaction proof");
                 }
-
-                return new CallbackResult("00", "Confirm Success", payment.getId(), null, renewalId, true, false);
+                paymentRepository.saveAndFlush(payment);
+                return new CallbackResult("00","Payment received; allocation and signing preparation pending",
+                    payment.getId(),null,renewalId,false,true);
             }
             if (gatewayPaidAt.isAfter(paymentDeadline(reservation))) {
                 markLatePaymentForReconciliation(payment, gatewayPaidAt);
@@ -1011,7 +938,6 @@ public class VnpayService {
     }
 
     private static java.math.BigDecimal renewalInitialAmount(com.storagehub.api.renewal.RenewalQuoteResponse.Terms terms) {
-        if(terms.totalAfterDiscount()!=null&&terms.totalAfterDiscount().signum()>0)return terms.totalAfterDiscount();
         return terms.renewalDepositAmount().signum()>0?terms.renewalDepositAmount():terms.totalAfterDiscount();
     }
     private void requireRenewalIntentBinding(Payment payment,RenewalWorkflowService.PreparedPayment prepared) {
@@ -1042,67 +968,11 @@ public class VnpayService {
             if(payment.getStatus()!=PaymentStatus.PAID)return "AWAITING_PAYMENT";
             return payment.getRenewalAllocatedAt()!=null?"COMPLETED":payment.getRenewalEvidenceRef()!=null?"VERIFIED_AWAITING_ALLOCATION":"RECONCILIATION_REQUIRED";
         }
-        if(payment.getRenewal()!=null&&payment.getRenewal().getStatus()==com.storagehub.domain.model.RenewalStatus.completed)return "COMPLETED";
+        if(payment.getRenewal().getStatus()==com.storagehub.domain.model.RenewalStatus.completed)return "COMPLETED";
         if(payment.getStatus()!=PaymentStatus.PAID)return "AWAITING_PAYMENT";
-        if(payment.getRenewalSigningPreparedAt()!=null)return "COMPLETED";
-        if(payment.getRenewalAllocatedAt()!=null)return "COMPLETED";
+        if(payment.getRenewalSigningPreparedAt()!=null)return "AWAITING_SIGNING";
+        if(payment.getRenewalAllocatedAt()!=null)return "ALLOCATED_AWAITING_SIGNING";
         return payment.getRenewalEvidenceRef()!=null?"VERIFIED_AWAITING_ALLOCATION":"RECONCILIATION_REQUIRED";
-    }
-
-    private void sendRenewalPaymentBillEmail(Payment payment, Renewal renewal, com.storagehub.domain.model.Rental rental,
-        com.storagehub.api.renewal.RenewalQuoteResponse.Terms terms, Instant gatewayPaidAt) {
-        if (transactionalEmailService == null || rental == null || rental.getCustomer() == null) return;
-        try {
-            var customer = rental.getCustomer();
-            String email = customer.getEmail();
-            if (email == null || email.isBlank()) return;
-
-            String fullName = customer.getFullName() != null ? customer.getFullName() : "Quý khách";
-            String invoiceNumber = payment.getInvoiceNumber();
-            String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
-            String amountFormatted = formatVnd(payment.getAmount());
-            String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
-                .withZone(ZONE).format(gatewayPaidAt != null ? gatewayPaidAt : Instant.now());
-            String unitCode = rental.getStorageUnit() != null ? rental.getStorageUnit().getCode() : "N/A";
-            String facilityName = rental.getFacility() != null ? rental.getFacility().getName() : "StorageHub";
-            String facilityAddress = rental.getFacility() != null && rental.getFacility().getAddress() != null
-                ? rental.getFacility().getAddress() : "";
-            java.time.LocalDate newEndDate = terms != null && terms.newEndDate() != null ? terms.newEndDate()
-                : (renewal != null ? renewal.getNewEndDate() : null);
-            String newEndDateFormatted = newEndDate != null
-                ? newEndDate.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) : "N/A";
-
-            transactionalEmailService.sendPaymentBillAsync(
-                customer.getId(),
-                email,
-                fullName,
-                invoiceNumber,
-                transactionNo,
-                amountFormatted,
-                paidAtFormatted,
-                unitCode,
-                facilityName,
-                facilityAddress,
-                newEndDateFormatted,
-                "Thanh toán gia hạn hợp đồng"
-            );
-        } catch (Exception ex) {
-            log.warn("Could not send payment bill email for payment {}: {}", payment.getId(), ex.getMessage());
-        }
-    }
-
-    private static String formatVnd(BigDecimal amount) {
-        if (amount == null) return "0 đ";
-        java.text.NumberFormat format = java.text.NumberFormat.getInstance(new java.util.Locale("vi", "VN"));
-        return format.format(amount) + " đ";
-    }
-
-    private static byte[] bytesFromUuid(UUID uuid) {
-        if (uuid == null) return new byte[0];
-        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(new byte[16]);
-        bb.putLong(uuid.getMostSignificantBits());
-        bb.putLong(uuid.getLeastSignificantBits());
-        return bb.array();
     }
 
     private String renewalPaymentMessage(Payment payment) {
