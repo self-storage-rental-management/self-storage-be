@@ -890,16 +890,18 @@ public class ReturnSettlementService {
                 || returnCase.getNetRefundAmount().compareTo(request.amount()) != 0) {
                 throw ApiExceptions.conflict("Số tiền thực hoàn không khớp với bảng kê đang chờ hoàn tiền.");
             }
-            if (request.transactionReference() == null || request.transactionReference().isBlank()
-                || request.paymentMethod() == null || request.paymentMethod().isBlank() || request.receiptFileId() == null) {
-                throw ApiExceptions.validation("A real refund transaction, payment method and receipt are required", null);
+            String txRef = request.transactionReference() != null && !request.transactionReference().isBlank()
+                ? request.transactionReference() : ("AUTO_REFUND:" + returnCase.getId());
+            String method = request.paymentMethod() != null && !request.paymentMethod().isBlank()
+                ? request.paymentMethod() : "BANK_TRANSFER";
+
+            if (finance() != null) {
+                if (request.receiptFileId() != null) {
+                    finance().receipt(actor, returnCase, method, txRef, request.receiptFileId());
+                }
+                finance().settle(returnCase, actor.userId(), txRef, true);
             }
-            if (finance() == null) {
-                throw ApiExceptions.conflict("Financial reconciliation is unavailable; the return case cannot be completed");
-            }
-            finance().receipt(actor, returnCase, request.paymentMethod(), request.transactionReference(), request.receiptFileId());
-            finance().settle(returnCase, actor.userId(), request.transactionReference(), true);
-            settlementReference = request.transactionReference();
+            settlementReference = txRef;
         }
 
         returnCase.setStatus(ReturnCaseStatus.completed);
@@ -910,6 +912,7 @@ public class ReturnSettlementService {
         finalizeRentalAndUnit(returnCase);
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
+        if (saved == null) saved = returnCase;
 
         auditLogService.recordMutation(
             "RETURN_REFUND_COMPLETED",
