@@ -76,7 +76,7 @@ final class ReservationSnapshotView {
         describe(response,r,null);return response;
     }
     static int requireSetupDays(Reservation r,ReservationPricingSnapshot snapshot) {
-        if(!pricingComplete(r,snapshot))throw ApiExceptions.conflict(MISSING+": giá, policy hoặc số ngày setup đã chấp nhận");
+        if(!pricingComplete(r,snapshot))throw ApiExceptions.conflict(MISSING+": giá, chính sách hoặc số ngày chuẩn bị đã chấp nhận");
         return snapshot.getFreeSetupDays();
     }
     static void describe(ReservationResponse response,Reservation r,ReservationPricingSnapshot snapshot) {
@@ -89,7 +89,7 @@ final class ReservationSnapshotView {
         response.setFreeSetupDays(pricing?snapshot.getFreeSetupDays():null);
         response.setSetupEarlyExitPolicyVersion(pricing?snapshot.getSetupEarlyExitPolicyVersion():null);
         response.setSetupEarlyExitFee(pricing?snapshot.getSetupEarlyExitFee():null);
-        if(!pricing)warnings.add(MISSING+": giá, policy hoặc số ngày setup");
+        if(!pricing)warnings.add(MISSING+": giá, chính sách hoặc số ngày chuẩn bị");
         try {
             if(MISSING.equals(unitTypeName(r)))throw ApiExceptions.conflict(MISSING);
             var length=unitTypeDecimal(r,"lengthM");var width=unitTypeDecimal(r,"widthM");var height=unitTypeDecimal(r,"heightM");

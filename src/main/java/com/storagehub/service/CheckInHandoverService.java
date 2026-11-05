@@ -55,7 +55,6 @@ import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.List;
@@ -75,8 +74,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class CheckInHandoverService {
 
     private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
-    private static final int INVENTORY_GRACE_DAYS = 3;
-
     @Autowired
     private AccessCredentialService accessCredentialService;
     @Autowired
@@ -85,9 +82,6 @@ public class CheckInHandoverService {
     private PaymentProvenance paymentProvenance;
     @Autowired
     private com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy sandboxPaymentPolicy;
-    @Autowired(required = false)
-    private com.storagehub.domain.repo.ContractRepository contractRepository;
-
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final UnitAssignmentRepository assignmentRepository;
@@ -302,7 +296,7 @@ public class CheckInHandoverService {
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu snapshot điều khoản đã chấp nhận."));
         if (pricing.getSetupEarlyExitPolicyVersion() != null
             && !pricing.getSetupEarlyExitPolicyVersion().equals(request.confirmedSetupEarlyExitPolicyVersion()))
-            throw ApiExceptions.validation("Nhân viên cần xác nhận hợp đồng đã ký có điều khoản phí trả kho trong setup đúng báo giá.", null);
+            throw ApiExceptions.validation("Nhân viên cần xác nhận hợp đồng đã ký có điều khoản phí trả kho trong thời gian chuẩn bị đúng báo giá.", null);
         User operator = requireActor(actor);
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.contract_signed);
@@ -326,7 +320,7 @@ public class CheckInHandoverService {
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
         BigDecimal due = snapshot.getDueAtCheckIn();
         if (due == null || due.signum() > 0) {
-            throw ApiExceptions.conflict("The remaining check-in payment must be recorded before setup");
+            throw ApiExceptions.conflict("The remaining check-in payment must be recorded before the preparation period starts");
         }
         User operator = requireActor(actor);
         checkIn.setPerformedBy(operator);
@@ -347,70 +341,64 @@ public class CheckInHandoverService {
         CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.payment_collected);
         Reservation reservation = checkIn.getReservation();
         requireRemainingPayment(reservation);
-        var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
-            .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
         String lockReference = request.lockReference().trim();
+        if (request.initialUnitCondition() == null || request.initialUnitCondition().isBlank()) {
+            throw ApiExceptions.validation("Cần ghi nhận tình trạng kho trống trước khi bàn giao.", null);
+        }
+        if (request.evidenceReferences() == null || request.evidenceReferences().isEmpty()) {
+            throw ApiExceptions.validation("Cần ít nhất một ảnh hoặc PDF bằng chứng kho trống trước khi bàn giao.", null);
+        }
+        validateEvidence(checkInId, request.evidenceReferences());
         User operator = requireActor(actor);
         Instant now = Instant.now();
-        int setupDays = ReservationSnapshotView.requireSetupDays(reservation,snapshot);
-        LocalDate handoverDate = now.atZone(VIETNAM_ZONE).toLocalDate();
-        LocalDate paidRentalStart = handoverDate.plusDays(setupDays);
-        Instant setupEndsAt = paidRentalStart.atStartOfDay(VIETNAM_ZONE).toInstant();
-
-        Rental rental = rentalRepository.findByReservation_Id(reservation.getId()).orElseGet(Rental::new);
-        if (rental.getId() == null) {
-            rental.setCustomer(reservation.getCustomer());
-            rental.setFacility(reservation.getFacility());
-            rental.setStorageUnit(reservation.getAssignedUnit());
-            rental.setReservation(reservation);
-            rental.setMonthlyPrice(snapshot.getMonthlyPrice());
-        }
-        rental.setStatus(setupEndsAt.isAfter(now) ? RentalStatus.setup : RentalStatus.active);
-        rental.setSetupStartedAt(now);
-        rental.setSetupEndsAt(setupEndsAt);
-        rental.setTermsEffectiveAt(now);
-        rental.setStartDate(paidRentalStart);
-        rental.setContractEndDate(paidRentalStart.plusMonths(snapshot.getRentalMonths()));
-        rental.setInventoryDueAt(setupEndsAt.plusSeconds(INVENTORY_GRACE_DAYS * 86_400L));
-        rental.setInventoryPending(true);
-        rental = rentalRepository.saveAndFlush(rental);
-        ensureSignedContract(reservation, rental);
+        // This endpoint records only the physical handover. The paid rental and
+        // free preparation period start after the customer confirms receipt.
         if (accessCredentialService != null) {
             accessCredentialService.issue(
                 actor, checkInId,
                 new IssueAccessCredentialRequest(
                     com.storagehub.domain.model.AccessCredentialType.LOCK,
                     lockReference,
-                    "Kích hoạt ổ khóa để khách hàng setup gian kho"
+                    "Bàn giao ổ khóa để khách hàng chuẩn bị hàng"
                 )
             );
         }
-
-        reservation.setStartDate(rental.getStartDate());
-        reservation.setEndDate(rental.getContractEndDate());
+        reservation.getAssignedUnit().setStatus(StorageUnitStatus.assigned);
+        storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
+        ReservationStatus previousReservationStatus = reservation.getStatus();
+        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         reservationRepository.saveAndFlush(reservation);
         checkIn.setPerformedBy(operator);
-        checkIn.setStatus(CheckInStatus.setup_in_progress);
-        checkIn.setSetupStartedAt(now);
-        checkIn.setSetupDueAt(setupEndsAt);
+        checkIn.setStatus(CheckInStatus.handover_pending_receipt);
+        checkIn.setSetupStartedAt(null);
+        checkIn.setSetupDueAt(null);
+        checkIn.setSetupCompletedAt(null);
         checkIn.setCheckedInAt(now);
-        checkIn.setRental(rental);
+        checkIn.setRental(null);
         checkIn.setLockReference(lockReference);
+        checkIn.setReadinessNote("Tình trạng kho trống: " + request.initialUnitCondition().trim()
+            + " | Bằng chứng: " + String.join(",", request.evidenceReferences()));
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
-        if (accessCredentialService != null) {
-            accessCredentialService.attachToRental(reservation, rental);
-        }
-        recordWorkflowAudit(operator, reservation, saved, "CHECKIN_SETUP_STARTED",
-            CheckInStatus.payment_collected, CheckInStatus.setup_in_progress);
+        recordWorkflowAudit(operator, reservation, saved, "CHECKIN_HANDOVER_RECORDED",
+            CheckInStatus.payment_collected, CheckInStatus.handover_pending_receipt);
+        auditLogService.recordMutation(
+            operator, "CHECKIN_HANDOVER_WAITING_CUSTOMER_RECEIPT", "CheckIn", saved.getId(),
+            reservation.getFacility().getId(),
+            Map.of("reservationStatus", previousReservationStatus),
+            Map.of("reservationStatus", ReservationStatus.AWAITING_CUSTOMER_RECEIPT)
+        );
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
-            "Bắt đầu setup gian kho",
-            "Bạn có " + setupDays + " ngày setup miễn phí, đến hết "
-                + paidRentalStart.minusDays(1) + ". Thời hạn thuê tính từ " + paidRentalStart
-                + ". Ổ khóa được kích hoạt từ thời điểm bàn giao; việc ra vào tuân theo giờ mở cửa cơ sở"
-                + (clean(reservation.getFacility().getAccessHours()) == null
-                    ? "."
-                    : " (" + reservation.getFacility().getAccessHours() + ")."),
+            "Đã bàn giao kho, chờ bạn xác nhận",
+            "Gian kho " + reservation.getAssignedUnit().getCode()
+                + " đã được bàn giao. Vui lòng xác nhận đã nhận kho trên tài khoản khách hàng để bắt đầu thời gian chuẩn bị.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Đã bàn giao kho, chờ khách xác nhận",
+            "Đơn " + reservation.getReservationCode()
+                + " đã bàn giao kho trống và đang chờ khách xác nhận nhận kho.",
             reservation.getId()
         );
         return toResponse(reservation, saved, latestAssignment(reservation.getId()));
@@ -457,24 +445,19 @@ public class CheckInHandoverService {
             return toResponse(reservation, checkIn, latestAssignment(reservation.getId()));
         }
         Instant now = Instant.now();
-        boolean setupFinishedForInventory = checkIn.getStatus() == CheckInStatus.setup_completed
-            || (checkIn.getStatus() == CheckInStatus.setup_in_progress
-                && checkIn.getSetupDueAt() != null
-                && !checkIn.getSetupDueAt().isAfter(now));
-        if (!setupFinishedForInventory) {
-            throw ApiExceptions.conflict("Customer setup must be completed before inventory verification");
+        if (checkIn.getStatus() != CheckInStatus.setup_completed) {
+            throw ApiExceptions.conflict("Khách hàng phải báo đã chuẩn bị hàng xong trước khi kiểm kê hàng hóa");
         }
         if (!isCheckInReadyStatus(reservation.getStatus())) {
-            throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
+            throw ApiExceptions.conflict("Reservation is not ready for inventory check");
         }
         requirePaidReservationDeposit(reservation);
         Rental rental = rentalRepository.findByReservation_Id(reservation.getId())
-            .orElseThrow(() -> ApiExceptions.conflict("Setup rental timeline is missing"));
-        Instant inventoryNow = Instant.now();
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu mốc thời gian chuẩn bị của hồ sơ thuê"));
         if (rental.getSetupEndsAt() == null) {
-            throw ApiExceptions.conflict("Setup rental timeline is missing");
+            throw ApiExceptions.conflict("Thiếu mốc thời gian chuẩn bị của hồ sơ thuê");
         }
-        if (rental.getStatus() == RentalStatus.setup && !rental.getSetupEndsAt().isAfter(inventoryNow)) {
+        if (rental.getStatus() == RentalStatus.setup && !rental.getSetupEndsAt().isAfter(now)) {
             rental.setStatus(RentalStatus.active);
         }
         if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
@@ -506,7 +489,7 @@ public class CheckInHandoverService {
         requireRemainingPayment(reservation);
         if (checkIn.getLockReference() == null
             || !checkIn.getLockReference().equals(request.lockReference().trim())) {
-            throw ApiExceptions.conflict("The lock reference does not match the credential activated for setup");
+            throw ApiExceptions.conflict("Mã ổ khóa không khớp với mã đã bàn giao");
         }
 
         User operator = requireActor(actor);
@@ -520,8 +503,9 @@ public class CheckInHandoverService {
         completeInventoryTask(rental, now, request.notes());
         checkIn.setChecklistJson(writeHandover(request));
         assignment.setStatus(UnitAssignmentStatus.COMPLETED);
-        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
-        unit.setStatus(StorageUnitStatus.assigned);
+        ReservationStatus previousReservationStatus = reservation.getStatus();
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        unit.setStatus(StorageUnitStatus.occupied);
 
         storageUnitRepository.saveAndFlush(unit);
         reservationRepository.saveAndFlush(reservation);
@@ -540,29 +524,29 @@ public class CheckInHandoverService {
             reservation.getFacility().getId(),
             Map.of(
                 "checkInStatus", CheckInStatus.setup_completed,
-                "reservationStatus", ReservationStatus.READY_FOR_CHECKIN,
+                "reservationStatus", previousReservationStatus,
                 "assignmentStatus", UnitAssignmentStatus.ACTIVE,
                 "storageUnitStatus", StorageUnitStatus.reserved
             ),
             Map.of(
                 "checkInStatus", CheckInStatus.completed,
-                "reservationStatus", ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+                "reservationStatus", ReservationStatus.COMPLETED,
                 "assignmentStatus", UnitAssignmentStatus.COMPLETED,
-                "storageUnitStatus", StorageUnitStatus.assigned
+                "storageUnitStatus", StorageUnitStatus.occupied
             )
         );
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
-            "Biên bản bàn giao đang chờ xác nhận",
+            "Đã hoàn tất kiểm kê hàng hóa",
             "Gian kho " + unit.getCode() + " của đơn " + reservation.getReservationCode()
-                + " đã được nhân viên bàn giao và đang chờ bạn xác nhận.",
+                + " đã được nhân viên kiểm kê sau khi bạn báo chuẩn bị hàng xong.",
             reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.CHECKIN,
-            "Bàn giao đã hoàn tất",
+            "Đã hoàn tất kiểm kê hàng hóa",
             "Đơn " + reservation.getReservationCode()
-                + " đã bàn giao gian kho và đang chờ khách xác nhận nhận kho.",
+                + " đã hoàn tất kiểm kê hàng hóa đầu vào.",
             reservation.getId()
         );
         return toResponse(reservation, saved, assignment);
@@ -577,9 +561,6 @@ public class CheckInHandoverService {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
         authorizationService.require(actor, SystemPermission.MANAGE_PAYMENTS);
-        if (actor.hasRole(RoleCode.STAFF) && !"CASH".equalsIgnoreCase(request.paymentMethod())) {
-            throw ApiExceptions.forbidden("Staff may collect only cash payments during an active collection session");
-        }
         CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
             .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
         Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
@@ -832,7 +813,8 @@ public class CheckInHandoverService {
      */
     private boolean isCheckInReadyStatus(ReservationStatus status) {
         return status == ReservationStatus.UNIT_RESERVED
-            || status == ReservationStatus.READY_FOR_CHECKIN;
+            || status == ReservationStatus.READY_FOR_CHECKIN
+            || status == ReservationStatus.PREPARING;
     }
 
     private void recordWorkflowAudit(
@@ -978,28 +960,6 @@ public class CheckInHandoverService {
             pricing == null ? null : pricing.getSetupEarlyExitPolicyVersion(),
             pricing == null ? null : pricing.getSetupEarlyExitFee()
         );
-    }
-
-    private void ensureSignedContract(Reservation reservation, Rental rental) {
-        if (contractRepository == null) {
-            return;
-        }
-        Instant now = Instant.now();
-        String unitCode = rental.getStorageUnit() != null ? rental.getStorageUnit().getCode() : "UNIT";
-        var contract = contractRepository.findByRental_Id(rental.getId())
-            .orElseGet(com.storagehub.domain.model.Contract::new);
-        contract.setRental(rental);
-        contract.setStatus(com.storagehub.domain.model.ContractStatus.SIGNED);
-        if (contract.getContractNumber() == null) {
-            contract.setContractNumber("HD-" + unitCode + "-" + rental.getId().toString().substring(0, 8).toUpperCase());
-        }
-        if (contract.getSentAt() == null) {
-            contract.setSentAt(now);
-        }
-        contract.setSignedAt(now);
-        contract.setSignedBy(reservation.getCustomer() != null ? reservation.getCustomer().getFullName() : "Customer");
-        contract.setExpiresAt(rental.getContractEndDate().atStartOfDay(VIETNAM_ZONE).toInstant());
-        contractRepository.save(contract);
     }
 
     private BigDecimal dueAtCheckIn(UUID reservationId) {

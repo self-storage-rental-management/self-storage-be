@@ -5,6 +5,7 @@ public enum CheckInStatus {
     identity_verified,
     contract_signed,
     payment_collected,
+    handover_pending_receipt,
     setup_in_progress,
     setup_completed,
     completed,

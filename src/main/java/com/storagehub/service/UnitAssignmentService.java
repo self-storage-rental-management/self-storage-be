@@ -168,8 +168,8 @@ public class UnitAssignmentService {
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.RESERVATION,
-            "Đã đổi gian kho cho đặt chỗ",
-            "Đơn " + reservation.getReservationCode() + " đã đổi sang gian "
+            "Đã đổi kho cho đặt chỗ",
+            "Đơn " + reservation.getReservationCode() + " đã đổi sang kho "
                 + nextUnit.getCode() + ". Lý do: " + request.reason().trim(),
             reservation.getId()
         );
@@ -255,15 +255,15 @@ public class UnitAssignmentService {
         );
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.RESERVATION,
-            "Đã phân gian kho cho đơn giữ kho",
-            "Đơn " + reservation.getReservationCode() + " đã được phân gian "
+            "Đã phân kho cho đơn giữ kho",
+            "Đơn " + reservation.getReservationCode() + " đã được phân kho "
                 + unit.getCode() + ". Bạn có thể xem lịch nhận kho trên tài khoản.",
             reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.RESERVATION,
-            "Đã phân gian kho cho đơn giữ kho",
-            "Đơn " + reservation.getReservationCode() + " đã được phân gian "
+            "Đã phân kho cho đơn giữ kho",
+            "Đơn " + reservation.getReservationCode() + " đã được phân kho "
                 + unit.getCode() + " và chuyển sang trạng thái chờ nhận kho.",
             reservation.getId()
         );
