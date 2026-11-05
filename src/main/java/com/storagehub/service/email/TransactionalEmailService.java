@@ -180,6 +180,37 @@ public class TransactionalEmailService {
         sendInternal(userId, toEmail, "StorageHub - Thông tin tài khoản của bạn đã thay đổi", "account-changed", vars, "ACCOUNT_CHANGED_EMAIL_SENT");
     }
 
+    @Async
+    public void sendPaymentBillAsync(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String invoiceNumber,
+        String transactionNo,
+        String amountFormatted,
+        String paidAtFormatted,
+        String unitCode,
+        String facilityName,
+        String facilityAddress,
+        String newEndDateFormatted,
+        String paymentPurpose
+    ) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("fullName", fullName);
+        vars.put("email", toEmail);
+        vars.put("invoiceNumber", invoiceNumber != null ? invoiceNumber : "N/A");
+        vars.put("transactionNo", transactionNo != null ? transactionNo : "N/A");
+        vars.put("amount", amountFormatted);
+        vars.put("paidAt", paidAtFormatted);
+        vars.put("unitCode", unitCode);
+        vars.put("facilityName", facilityName);
+        vars.put("facilityAddress", facilityAddress);
+        vars.put("newEndDate", newEndDateFormatted);
+        vars.put("paymentPurpose", paymentPurpose);
+
+        sendInternal(userId, toEmail, "StorageHub - Hóa đơn thanh toán & Gia hạn hợp đồng thành công", "payment-bill", vars, "PAYMENT_BILL_EMAIL_SENT");
+    }
+
     private void sendInternal(
         UUID userId,
         String recipient,

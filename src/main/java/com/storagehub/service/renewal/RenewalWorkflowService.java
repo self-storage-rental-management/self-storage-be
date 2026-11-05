@@ -134,17 +134,20 @@ public class RenewalWorkflowService {
         requireNewPaymentTerms(accepted);
         Instant now=now();var gate=gate(rental,now);requireSnapshot(rental,accepted);requireCurrentTerms(rental,gate,accepted);
         var selection=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,id,LockModeType.PESSIMISTIC_WRITE);
-        if(selection==null||selection.getAppointmentRef()==null||selection.getAppointmentStart()==null||selection.getAppointmentEnd()==null
-            ||!selection.getAppointmentStart().isAfter(now))throw ApiExceptions.conflict("Select a future signing appointment before payment");
-        if(selection.getAppointmentEnd().isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
-        if(selection.getAppointmentEnd().isAfter(RenewalSigningDeadline.calculate(now,gate.eligibility().recoveryCutoff(),accepted)))
-            throw ApiExceptions.conflict("Select a signing appointment within the accepted package signing window");
-        var selectedCalendar=calendars.getIfAvailable();
-        if(selectedCalendar==null||!selectedCalendar.atomic())throw deferred("Signing calendar unavailable");
-        var selectedSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart()).orElseThrow(()->ApiExceptions.conflict("Selected signing slot is no longer available"));
-        if(!selectedSlot.end().equals(selection.getAppointmentEnd()))throw ApiExceptions.conflict("Selected signing duration changed");
-        selectedCalendar.reserve(renewal,selectedSlot,now);
-        workflow.signingBalanceDue(selection.getAppointmentEnd());
+        boolean hasAppointment=selection!=null&&selection.getAppointmentRef()!=null;
+        if(hasAppointment) {
+            if(selection.getAppointmentStart()==null||selection.getAppointmentEnd()==null||!selection.getAppointmentStart().isAfter(now))
+                throw ApiExceptions.conflict("Select a future signing appointment before payment");
+            if(selection.getAppointmentEnd().isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
+            if(selection.getAppointmentEnd().isAfter(RenewalSigningDeadline.calculate(now,gate.eligibility().recoveryCutoff(),accepted)))
+                throw ApiExceptions.conflict("Select a signing appointment within the accepted package signing window");
+            var selectedCalendar=calendars.getIfAvailable();
+            if(selectedCalendar==null||!selectedCalendar.atomic())throw deferred("Signing calendar unavailable");
+            var selectedSlot=selectedCalendar.slot(renewal,selection.getAppointmentStart()).orElseThrow(()->ApiExceptions.conflict("Selected signing slot is no longer available"));
+            if(!selectedSlot.end().equals(selection.getAppointmentEnd()))throw ApiExceptions.conflict("Selected signing duration changed");
+            selectedCalendar.reserve(renewal,selectedSlot,now);
+            workflow.signingBalanceDue(selection.getAppointmentEnd());
+        }
         var specifications=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(revision,accepted);
         if(accepted.totalAfterDiscount().signum()<=0||specifications.isEmpty()||specifications.getFirst().amount().signum()<=0)
             throw ApiExceptions.conflict("Renewal initial payment must be positive");
@@ -153,7 +156,12 @@ public class RenewalWorkflowService {
         if(simple!=null) {
             simple.requireRental(rental);simple.requireKnownFinance(rental,id,now);
             Instant deadline=workflow.getPaymentDeadline();
-            if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),gate.eligibility().recoveryCutoff())).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            if(deadline==null) {
+                Instant target=hasAppointment
+                    ? min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),gate.eligibility().recoveryCutoff()))
+                    : min(now.plus(RENEWAL_PAYMENT_WINDOW),gate.eligibility().recoveryCutoff());
+                deadline=target.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            }
             if(!deadline.isAfter(now)||deadline.isAfter(gate.eligibility().recoveryCutoff()))throw ApiExceptions.conflict("Renewal payment deadline has expired");
             workflow.paymentReady(deadline);
             var ledger=ledgers.getIfAvailable();if(ledger==null)throw deferred("Renewal accounting unavailable");
@@ -188,8 +196,12 @@ public class RenewalWorkflowService {
         if(lifecycle==null||!lifecycle.ready(rental))throw deferred("Payment expiry lifecycle unavailable");
         Instant cutoff=gate.eligibility().recoveryCutoff();
         Instant deadline=workflow.getPaymentDeadline();
-        if(deadline==null)deadline=min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),cutoff))
-            .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        if(deadline==null) {
+            Instant target=hasAppointment
+                ? min(selection.getAppointmentStart().minusSeconds(1),min(now.plus(RENEWAL_PAYMENT_WINDOW),cutoff))
+                : min(now.plus(RENEWAL_PAYMENT_WINDOW),cutoff);
+            deadline=target.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        }
         if(!deadline.isAfter(now)||deadline.isAfter(cutoff))throw ApiExceptions.conflict("Renewal payment deadline has expired or exceeds Recovery cutoff");
 
         var calendar=calendars.getIfAvailable();
@@ -198,9 +210,13 @@ public class RenewalWorkflowService {
         if(calendar==null||!calendar.atomic()
             ||safety==null||!safety.atomic()||holdSource==null||!holdSource.participatesInTransaction())
             throw deferred("Atomic signing calendar and shared extension hold unavailable");
-        Instant signingWindowEnd=selection.getAppointmentEnd();
-        if(signingWindowEnd.isAfter(cutoff))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
-        if(!calendar.feasible(renewal,now,signingWindowEnd))throw ApiExceptions.conflict("No feasible signing slot before Recovery cutoff");
+        if(hasAppointment) {
+            Instant signingWindowEnd=selection.getAppointmentEnd();
+            if(signingWindowEnd.isAfter(cutoff))throw ApiExceptions.conflict("Selected signing appointment exceeds current cutoff");
+            if(!calendar.feasible(renewal,now,signingWindowEnd))throw ApiExceptions.conflict("No feasible signing slot before Recovery cutoff");
+        } else {
+            if(!calendar.feasible(renewal,now,cutoff))throw ApiExceptions.conflict("No feasible signing slot before Recovery cutoff");
+        }
 
         UUID hold=workflow.getExtensionHoldRef();
         if(hold==null) {
