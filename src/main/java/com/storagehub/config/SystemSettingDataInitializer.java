@@ -1,5 +1,7 @@
 package com.storagehub.config;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.domain.model.SystemSetting;
 import com.storagehub.domain.repo.SystemSettingRepository;
 import java.util.List;
@@ -13,14 +15,21 @@ import org.springframework.context.annotation.Configuration;
 public class SystemSettingDataInitializer {
 
     private final SystemSettingRepository repository;
+    private final ObjectMapper objectMapper;
 
     @Bean
     CommandLineRunner seedSystemSettings() {
-        return args -> definitions().forEach(this::seedIfMissing);
+        return args -> definitions().forEach(this::seedOrRepair);
     }
 
-    private void seedIfMissing(Definition definition) {
-        if (repository.findBySettingKey(definition.key()).isPresent()) {
+    private void seedOrRepair(Definition definition) {
+        var existing = repository.findBySettingKey(definition.key());
+        if (existing.isPresent()) {
+            SystemSetting setting = existing.get();
+            if (!isValidStoredValue(setting, definition)) {
+                setting.setValue(definition.value());
+                repository.save(setting);
+            }
             return;
         }
         SystemSetting setting = new SystemSetting();
@@ -32,6 +41,31 @@ public class SystemSettingDataInitializer {
         setting.setValue(definition.value());
         setting.setOptionsJson(definition.optionsJson());
         repository.save(setting);
+    }
+
+    private boolean isValidStoredValue(SystemSetting setting, Definition definition) {
+        try {
+            JsonNode value = objectMapper.readTree(setting.getValue());
+            if (value == null) return false;
+            return switch (definition.type()) {
+                case "text" -> value.isTextual();
+                case "select" -> value.isTextual() && readOptions(definition).contains(value.textValue());
+                case "number" -> value.isNumber();
+                case "toggle" -> value.isBoolean();
+                default -> false;
+            };
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private List<String> readOptions(Definition definition) {
+        if (definition.optionsJson() == null || definition.optionsJson().isBlank()) return List.of();
+        try {
+            return List.of(objectMapper.readValue(definition.optionsJson(), String[].class));
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     private List<Definition> definitions() {

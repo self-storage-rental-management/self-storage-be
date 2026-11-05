@@ -1,19 +1,19 @@
-# D5 — Đặc tả API hỗ trợ
+# D5 - Đặc tả API hỗ trợ
 
-## Luồng giao diện đơn giản — 24/10/2026
+## Luồng giao diện đơn giản - 24/10/2026
 
 - Staff chỉ có hai tab `Chờ nhận` và `Đang hỗ trợ`; không còn tab Tất cả hoặc các danh sách lịch sử phụ. Hội thoại xử lý xong rời danh sách làm việc, dữ liệu vẫn giữ theo thời hạn hiện có.
 - Customer chỉ dùng widget xuyên suốt, không có danh sách session hoặc nút tạo cuộc trò chuyện mới. Khi Staff xử lý xong, ô nhập quay về AI nhưng vẫn giữ ticketId để hiển thị nội dung trước đó trong cùng vùng cuộn. Các tin AI tiếp theo nằm dưới nội dung Staff, được lưu trong snapshot theo tài khoản; lần gặp Staff tiếp theo gửi đoạn AI này vào cùng hội thoại được tái sử dụng.
 - Session API khi khôi phục ticket đã xử lý giữ ticketId và chuyển autoReturn=false thay vì bỏ liên kết. Đăng xuất/đăng nhập không tạo ticket; quyền nhận/xử lý, thời hạn 10 ngày và API cũ giữ nguyên.
 
-## Danh sách Staff gọn theo khách hàng — 24/10/2026
+## Danh sách Staff gọn theo khách hàng - 24/10/2026
 
 - `GET /api/staff/support-workflows/inbox?view=queue|mine|all|history&page=0&size=20` gom theo khách hàng và cơ sở trước khi phân trang. `counts` và `pagination.totalItems` đếm nhóm, không đếm session. Sắp xếp theo hoạt động mới nhất; tab `all` ưu tiên hội thoại đang do chính nhân viên phụ trách trong cùng nhóm.
 - `queue`, `mine`, `all` chỉ hiện các yêu cầu còn hoạt động. `history` hiện các hội thoại đã xử lý/đóng do chính nhân viên đó phụ trách. Nhiều hội thoại cũ cùng khách chỉ có một dòng đại diện. `historyCount` cho biết số hội thoại liên quan khác mà nhân viên hiện tại được phép xem.
 - `GET /api/staff/support-workflows/{id}/related?page=0&size=20` kiểm tra quyền với hội thoại gốc rồi trả các hội thoại còn hạn của cùng khách và cơ sở, chỉ thuộc nhân viên hiện tại. Không mở thêm quyền xem cho nhân viên khác. Hàng chờ vẫn chỉ trả `SupportQueueItem`, không trả nội dung/tệp hay danh tính khách trước khi nhận.
 - Chỉ thay đổi cách trình bày danh sách: không gộp/xóa bản ghi, không tách tin AI khỏi tin Staff, không đổi người phụ trách hay thời hạn lưu. Yêu cầu gặp nhân viên lại ưu tiên dùng hội thoại còn hoạt động trước các hội thoại đã xử lý mới hơn, tránh mở thêm hàng chờ do dữ liệu cũ trùng.
 
-## Thời hạn hội thoại chuyển tiếp — 24/10/2026
+## Thời hạn hội thoại chuyển tiếp - 24/10/2026
 
 - Hội thoại tạo với `handoffMessages` được giữ 10 ngày kể từ tin nhắn cuối cùng. Tin mới qua `append` (Customer/Staff, gồm yêu cầu bổ sung/kết quả hoặc phản hồi nội bộ) đặt lại thời hạn; xem/claim/accept không đặt lại. Ticket tạo trực tiếp không có handoffMessages giữ chính sách hiện có.
 - Migration `V2026102401` thêm `conversation_expires_at`, `conversation_purged_at` vào support_workflow_states và đặt hạn cho hội thoại chuyển tiếp cũ có AI_CONTEXT/USER_CONTEXT theo MAX(sent_at).
@@ -59,7 +59,7 @@ API tạo hỗ trợ nhận thêm `handoffMessages?: {role: "CUSTOMER"|"ASSISTAN
 
 AI dừng sau bàn giao. Header đổi từ Trợ lý AI sang Đang chờ nhân viên rồi tên Staff khi server xác nhận tiếp nhận. Khách có thể gửi thêm khi chờ; đọc phản hồi bằng polling 5 giây khi panel hoạt động. Lịch sử hỗ trợ mở lại cùng giao diện hội thoại, gồm phần AI đã lưu. Không đưa transcript Staff trở lại Gemini và không tạo memory AI giữa các phiên. Trong lúc gửi/upload/kết quả chưa xác định, giữ payload/idempotency hiện có; không có ràng buộc conversation→ticket riêng xuyên phiên ở DB.
 
-## API trợ lý Gemini thử nghiệm — 23/10/2026
+## API trợ lý Gemini thử nghiệm - 23/10/2026
 
 `POST /api/customer/chat/replies` là API trả lời **stateless** riêng, chưa thay thế các API hội thoại/ticket bên dưới. Widget Customer mới gọi endpoint này; các chủ đề FAQ phía FE chỉ là gợi ý câu hỏi, không còn khớp từ khóa để giả phản hồi Gemini. Không tạo SupportTicket, notification, giao dịch hoặc thay đổi hồ sơ. Chưa lưu hội thoại AI vào DB; migration, lịch sử bền vững và bàn giao transcript vẫn là bước sau.
 
@@ -94,7 +94,7 @@ Headers: JWT `Authorization: Bearer …`, `Content-Type: application/json`, `Ide
 
 ### Cấu hình backend
 
-Properties có mặc định an toàn trong `SupportAiProperties`; file mẫu `application-example.properties` minh họa binding. Khai báo `storagehub.ai.enabled=false` mặc định, `provider=gemini`, `api-key`, `model`, `base-url=https://generativelanguage.googleapis.com/v1beta/openai`, `timeout-ms=15000` (1.000–30.000), `max-output-tokens=768` (128–2.048), `temperature=0.2` (0–1). Không có model fallback tự động. Key không có trong FE, log hoặc cấu hình được commit. Endpoint chỉ chấp nhận host/đường dẫn Google cố định, không follow redirect.
+Properties có mặc định an toàn trong `SupportAiProperties`; file mẫu `application-example.properties` minh họa binding. Khai báo `storagehub.ai.enabled=false` mặc định, `provider=gemini`, `api-key`, `model`, `base-url=https://generativelanguage.googleapis.com/v1beta/openai`, `timeout-ms=15000` (1.000-30.000), `max-output-tokens=768` (128-2.048), `temperature=0.2` (0-1). Không có model fallback tự động. Key không có trong FE, log hoặc cấu hình được commit. Endpoint chỉ chấp nhận host/đường dẫn Google cố định, không follow redirect.
 
 `application.properties` import tùy chọn `application-local.properties` và `.local/gemini.local.properties` (đường dẫn tương đối theo working directory BE). File Gemini trên máy phát triển đã được đặt `enabled=true` theo lượt nối widget; file này được Git-ignore, key không nằm trong source. Khi không có file hoặc biến bật, mặc định vẫn tắt. Biến `STORAGEHUB_AI_ENABLED=false` có thể ghi đè để tắt. Cần khởi động lại backend để nạp code/cấu hình mới. Chưa xác nhận key/model hoạt động, chưa gọi Google trong lượt triển khai này.
 
@@ -110,13 +110,13 @@ Properties có mặc định an toàn trong `SupportAiProperties`; file mẫu `a
 
 Backend `SupportQuickFaq` chứa 10 câu hỏi hướng dẫn chung đã duyệt. Chỉ khớp toàn bộ câu sau chuẩn hóa dấu, khoảng trắng, chữ hoa/thường và dấu câu; không dùng từ khóa rộng để suy đoán câu hỏi về hồ sơ. Những câu gợi ý Chọn kho/Gia hạn/Thanh toán/Trả kho gửi đúng câu chuẩn và nhận kết quả FAQ không gọi Google. Lịch sử vẫn được validate/fingerprint; quyền Customer, rate limit và receipt replay áp dụng như trước. FAQ không cần slot gọi Gemini và vẫn hoạt động khi provider chưa bật/cấu hình; đây là hướng dẫn tĩnh, không chứng nhận dữ liệu hồ sơ hoặc gọi công cụ. `source=FAQ`, `model=faq-v1`; câu khác có `source=GEMINI` và giữ kiểm tra provider.
 
-Prompt Gemini yêu cầu 2–4 câu ngắn khoảng 40–90 từ cho hướng dẫn thông thường; tối đa 3 bước khi cần, không chào lại hoặc thêm lời mời hỗ trợ chung. Giới hạn token vẫn là trần an toàn, không ép cắt đáp án giữa câu để rút ngắn. Log kết quả thành công chỉ ghi `source` và `elapsedMs`, không có chat/key/Customer ID. Chưa triển khai streaming; FAQ tránh lượt gọi provider, nhưng câu hỏi Gemini vẫn phụ thuộc độ trễ mạng/model.
+Prompt Gemini yêu cầu 2-4 câu ngắn khoảng 40-90 từ cho hướng dẫn thông thường; tối đa 3 bước khi cần, không chào lại hoặc thêm lời mời hỗ trợ chung. Giới hạn token vẫn là trần an toàn, không ép cắt đáp án giữa câu để rút ngắn. Log kết quả thành công chỉ ghi `source` và `elapsedMs`, không có chat/key/Customer ID. Chưa triển khai streaming; FAQ tránh lượt gọi provider, nhưng câu hỏi Gemini vẫn phụ thuộc độ trễ mạng/model.
 
 Cập nhật kết nối local 23/10/2026: model `gemini-3.5-flash` trả 503 `UNAVAILABLE` do quá tải trong lần chẩn đoán trực tiếp. Đã chuyển file cấu hình local sang `gemini-3.5-flash-lite`, temperature `0.2`, timeout `25000ms`; adapter Java nhận text thực tế trong khoảng 4,5 giây. Không thay model tự động trong runtime và không gửi lại tự động. Lỗi Google 503 được map `AI_UNAVAILABLE`; log chỉ ghi HTTP status/model hoặc loại lỗi transport, không có raw body/key/chat.
 
 Adapter dùng Java HttpClient, deadline toàn bộ body, tối đa 64 KiB response, không giữ transaction DB khi gọi model. Không thêm Spring AI/PGVector. Endpoint/schema tham chiếu [tài liệu tương thích OpenAI chính thức của Gemini](https://ai.google.dev/gemini-api/docs/openai); đây là giao thức gọi Gemini, không phải chuyển provider sang OpenAI.
 
-## Giao diện hội thoại — 23/10/2026
+## Giao diện hội thoại - 23/10/2026
 
 - FE hiển thị danh sách hội thoại và khung chat trực tiếp cho Customer/Staff/Manager, thay bảng yêu cầu và cửa sổ gửi đơn.
 - Customer chọn cơ sở hoặc hồ sơ liên quan rồi gửi tin nhắn đầu tiên; không nhập tiêu đề riêng. FE dùng bản rút gọn tin đầu làm `subject`, toàn bộ tin làm `description` khi tạo workflow bằng API hiện có.
@@ -149,13 +149,13 @@ Ràng buộc: phải có mô tả không chỉ gồm khoảng trắng hoặc ít
 
 `POST S/{id}/resolution` ghi nhận nội dung và minh chứng của Staff, chuyển yêu cầu từ `in_progress` sang `resolved` (đã xử lý, chờ khách xác nhận). Hồ sơ thuê/thanh toán liên kết cung cấp ngữ cảnh; không bắt buộc bộ xác minh kết quả module chỉ vì có liên kết. Thao tác này không xác nhận thu/hoàn tiền hoặc hoàn tất hồ sơ liên kết. Customer xác nhận đóng theo chính sách hoặc yêu cầu mở lại. Phạm vi, phân công, phiên bản, minh chứng và kết quả escalation lịch sử vẫn được kiểm tra. Quy tắc này áp dụng cả khi đóng thủ công hoặc tự đóng yêu cầu hỗ trợ.
 
-## Trao đổi Staff–Manager
+## Trao đổi Staff-Manager
 
 - Staff/Manager: GET `/{id}/public-messages` và `/{id}/internal-messages` dưới tiền tố D5 tương ứng. Chỉ nhận page/size; lọc PUBLIC/INTERNAL trước đếm và phân trang. GET `/messages` cũ vẫn giữ tương thích. Customer chỉ có tin PUBLIC.
 - Manager: POST `/api/manager/support-tickets/{id}/messages`, header `Idempotency-Key`, body `{"body":"Hướng dẫn xử lý","visibility":"INTERNAL","evidenceFileIds":[]}`. PUBLIC bị từ chối; không nhận expectedVersion, actor hoặc người nhận do client chọn.
 - Manager cần role đang hoạt động, `support:read` và phạm vi MANAGE tại cơ sở (kiểm tra token và DB). Hồ sơ phải còn hiệu lực xử lý và có Staff đang nhận. Gửi tin không đổi trạng thái hoặc đồng hồ phản hồi Customer; chỉ thông báo Staff đang phụ trách. Retry cùng key không gửi trùng.
 - Staff gửi INTERNAL qua endpoint messages hiện có; thông báo Manager của cơ sở. Hai bên đính kèm `DUONG_SUPPORT_INTERNAL`; Customer không được đọc hoặc tải các tệp này. Manager chỉ upload/attach chứng từ INTERNAL.
-- FE bỏ tab lịch sử nội bộ, thay điều phối bằng trao đổi Staff–Manager; giữ giao diện và composer tương tự cuộc trao đổi với Customer. API lịch sử và escalation vẫn tồn tại để đọc dữ liệu cũ.
+- FE bỏ tab lịch sử nội bộ, thay điều phối bằng trao đổi Staff-Manager; giữ giao diện và composer tương tự cuộc trao đổi với Customer. API lịch sử và escalation vẫn tồn tại để đọc dữ liệu cũ.
 
 Các mô tả Manager chỉ đọc bên dưới phản ánh quy tắc trước cập nhật này; ngoại lệ hiện hành duy nhất là gửi tin nhắn và đính kèm INTERNAL như trên. Manager vẫn không có quyền phân công, quyết định chuyển bộ phận hoặc đổi trạng thái hồ sơ.
 
@@ -214,13 +214,13 @@ Không có endpoint Manager báo xử lý xong, dòng thời gian nội bộ cho
 
 ## Quy tắc payload và thử lại
 
-Mọi lệnh POST yêu cầu `Idempotency-Key` (1–100 ký tự, không chỉ chứa khoảng trắng). Phạm vi: người thao tác + thao tác lệnh + key; tạo dấu nhận diện từ ID tài nguyên và payload yêu cầu đã chuẩn hóa. Thử lại giống hệt trả kết quả đã lưu, không thay đổi dữ liệu/gửi thông báo lần hai. Cùng key nhưng payload khác trả 409. Kiểm tra lại quyền trước khi trả kết quả đã lưu; trả kết quả đã lưu trước khi kiểm tra trạng thái/phiên bản mới. Key được băm trong bản ghi xác nhận lệnh. Giữ các bản ghi xác nhận chừng nào còn cần bảo đảm thử lại; không âm thầm cho hết hạn.
+Mọi lệnh POST yêu cầu `Idempotency-Key` (1-100 ký tự, không chỉ chứa khoảng trắng). Phạm vi: người thao tác + thao tác lệnh + key; tạo dấu nhận diện từ ID tài nguyên và payload yêu cầu đã chuẩn hóa. Thử lại giống hệt trả kết quả đã lưu, không thay đổi dữ liệu/gửi thông báo lần hai. Cùng key nhưng payload khác trả 409. Kiểm tra lại quyền trước khi trả kết quả đã lưu; trả kết quả đã lưu trước khi kiểm tra trạng thái/phiên bản mới. Key được băm trong bản ghi xác nhận lệnh. Giữ các bản ghi xác nhận chừng nào còn cần bảo đảm thử lại; không âm thầm cho hết hạn.
 
 Chuyển trạng thái/phân công/điều phối cần `expectedVersion` không âm lấy từ chi tiết ticket mới nhất. Phản hồi Customer bắt buộc trường này khi tiếp tục từ `waiting_customer`. Thêm tin nhắn thông thường không cần phiên bản dự kiến. Khóa bi quan trên ticket tuần tự hóa thêm tin/chuyển trạng thái/giao lại/tự đóng; `@Version` trên workflow riêng phát hiện chuyển trạng thái theo phiên bản cũ, không thêm cột version vào entity dùng chung. Phiên bản phân công tăng khi giao lại và việc đã nhận bị đặt lại.
 
 Tham số truy vấn không hỗ trợ/lặp, thuộc tính JSON không hỗ trợ, khóa JSON trùng, JSON thừa phía sau và body trên 64 KiB chỉ bị từ chối trong controller D5. Không thay cấu hình Jackson của module hiện có.
 
-Giới hạn kỹ thuật truyền dữ liệu (không phải policy BO): subject 1–200, description/message/summary 1–4000, reason 1–2000, feedback tùy chọn tối đa 2000 ký tự; tối đa 10 UUID file khác nhau và không null. Không nhận URL nguyên văn. Customer không được gửi priority, visibility, actor/assignee tùy ý hoặc trạng thái kết quả.
+Giới hạn kỹ thuật truyền dữ liệu (không phải policy BO): subject 1-200, description/message/summary 1-4000, reason 1-2000, feedback tùy chọn tối đa 2000 ký tự; tối đa 10 UUID file khác nhau và không null. Không nhận URL nguyên văn. Customer không được gửi priority, visibility, actor/assignee tùy ý hoặc trạng thái kết quả.
 
 Ví dụ tạo không liên kết hồ sơ:
 
