@@ -189,11 +189,31 @@ public class TransactionalEmailService {
         String transactionNo,
         String amountFormatted,
         String paidAtFormatted,
-        String unitCode,
+        String unitInfo,
         String facilityName,
         String facilityAddress,
-        String newEndDateFormatted,
+        String periodOrAppointment,
         String paymentPurpose
+    ) {
+        sendPaymentBillAsync(userId, toEmail, fullName, invoiceNumber, transactionNo, amountFormatted,
+            paidAtFormatted, unitInfo, facilityName, facilityAddress, periodOrAppointment, paymentPurpose, null);
+    }
+
+    @Async
+    public void sendPaymentBillAsync(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String invoiceNumber,
+        String transactionNo,
+        String amountFormatted,
+        String paidAtFormatted,
+        String unitInfo,
+        String facilityName,
+        String facilityAddress,
+        String periodOrAppointment,
+        String paymentPurpose,
+        String note
     ) {
         Map<String, Object> vars = new HashMap<>();
         vars.put("fullName", fullName);
@@ -202,13 +222,16 @@ public class TransactionalEmailService {
         vars.put("transactionNo", transactionNo != null ? transactionNo : "N/A");
         vars.put("amount", amountFormatted);
         vars.put("paidAt", paidAtFormatted);
-        vars.put("unitCode", unitCode);
-        vars.put("facilityName", facilityName);
-        vars.put("facilityAddress", facilityAddress);
-        vars.put("newEndDate", newEndDateFormatted);
-        vars.put("paymentPurpose", paymentPurpose);
+        vars.put("unitInfo", unitInfo != null ? unitInfo : "N/A");
+        vars.put("unitCode", unitInfo != null ? unitInfo : "N/A");
+        vars.put("facilityName", facilityName != null ? facilityName : "StorageHub");
+        vars.put("facilityAddress", facilityAddress != null ? facilityAddress : "");
+        vars.put("periodOrAppointment", periodOrAppointment != null ? periodOrAppointment : "N/A");
+        vars.put("newEndDate", periodOrAppointment != null ? periodOrAppointment : "N/A");
+        vars.put("paymentPurpose", paymentPurpose != null ? paymentPurpose : "Thanh toán dịch vụ");
+        vars.put("note", note);
 
-        sendInternal(userId, toEmail, "StorageHub - Hóa đơn thanh toán & Gia hạn hợp đồng thành công", "payment-bill", vars, "PAYMENT_BILL_EMAIL_SENT");
+        sendInternal(userId, toEmail, "StorageHub - Biên lai xác nhận thanh toán thành công", "payment-bill", vars, "PAYMENT_BILL_EMAIL_SENT");
     }
 
     private void sendInternal(
