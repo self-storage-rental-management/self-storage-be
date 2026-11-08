@@ -108,7 +108,7 @@ public class ReturnSettlementService {
         boolean setupExit = rental.getStatus() == RentalStatus.setup
             || rental.getSetupStartedAt() != null && rental.getSetupEndsAt() != null && Instant.now().isBefore(rental.getSetupEndsAt());
         if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
-            throw ApiExceptions.conflict("Only setup or active rentals can request return");
+            throw ApiExceptions.conflict("Chỉ hồ sơ đang trong thời gian chuẩn bị hoặc đang thuê mới được yêu cầu trả kho");
         }
         var recoveryGuard=recoveryGuard();
         if(recoveryGuard!=null) {
@@ -150,9 +150,9 @@ public class ReturnSettlementService {
             rental.setSetupExitReviewRequired(true);
             notificationService.createBusinessNotifications(
                 NotificationType.RETURN,
-                "Yêu cầu trả kho trong thời gian setup",
+                "Yêu cầu trả kho trong thời gian chuẩn bị",
                 "Đơn " + rental.getReservation().getReservationCode()
-                    + " yêu cầu trả kho khi đang setup. Staff cần xác nhận kho đã trống, kiểm kê và lập bảng kê theo điều khoản đã chấp nhận.",
+                    + " yêu cầu trả kho trong thời gian chuẩn bị. Staff cần xác nhận kho đã trống, kiểm kê và lập bảng kê theo điều khoản đã chấp nhận.",
                 saved.getId()
             );
         }
@@ -227,7 +227,7 @@ public class ReturnSettlementService {
 
         Rental rental = returnCase.getRental();
         if (rental == null || !rental.isSetupExitReviewRequired()) {
-            throw ApiExceptions.conflict("This return case is not awaiting a Business setup-exit decision");
+            throw ApiExceptions.conflict("Hồ sơ trả kho này không chờ Business quyết định xử lý trong thời gian chuẩn bị");
         }
         if (rental.getMoveInCompletedAt() != null && returnCase.getInspectedAt() == null) {
             throw ApiExceptions.conflict("Staff must inspect goods already moved into the unit before Business decides the refund");
@@ -247,7 +247,7 @@ public class ReturnSettlementService {
             ? BigDecimal.ZERO : returnCase.getDepositAmount().setScale(2, RoundingMode.HALF_UP);
         BigDecimal approvedRefund = request.approvedRefundAmount().setScale(2, RoundingMode.HALF_UP);
         if (approvedRefund.compareTo(deposit) > 0) {
-            throw ApiExceptions.conflict("Approved setup-exit refund cannot exceed the verified security deposit");
+            throw ApiExceptions.conflict("Khoản hoàn được duyệt không thể vượt quá tiền cọc đảm bảo thuê đã xác minh");
         }
 
         User business = userRepository.findById(actor.userId())
@@ -259,7 +259,7 @@ public class ReturnSettlementService {
                 .setScale(2, RoundingMode.HALF_UP);
         returnCase.setReviewedBy(business);
         returnCase.setReviewedAt(Instant.now());
-        returnCase.setManagerResolutionNote("Business setup-exit decision: " + request.resolutionNote().trim());
+        returnCase.setManagerResolutionNote("Business quyết định xử lý trả kho trong thời gian chuẩn bị: " + request.resolutionNote().trim());
         returnCase.setEarlyTerminationCharge(rentalCharge);
         returnCase.setRentalRefundAmount(approvedRentalRefund);
         returnCase.setTotalDeductions(retained.add(rentalCharge).setScale(2, RoundingMode.HALF_UP));
@@ -293,7 +293,7 @@ public class ReturnSettlementService {
         notificationService.createNotification(
             saved.getCustomer().getId(),
             NotificationType.RETURN,
-            "Business đã quyết định xử lý yêu cầu trả kho trong setup",
+            "Business đã quyết định xử lý yêu cầu trả kho trong thời gian chuẩn bị",
             refundPending
                 ? "Khoản hoàn tiền thuê và/hoặc cọc đã được duyệt. Staff sẽ đối chiếu chứng từ thực tế trước khi hoàn tiền."
                 : "Yêu cầu đã được chốt không hoàn tiền và hệ thống đã giải phóng hồ sơ trả kho.",
@@ -394,11 +394,11 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Return is not in a state awaiting inspection");
         if (returnCase.isSetupExitRequested()) {
             if (!request.unitVacated() || request.damageClassification() == com.storagehub.domain.model.DamageClassification.abandoned_goods)
-                throw ApiExceptions.conflict("Chỉ nghiệm thu trả kho setup sau khi khách đã đưa hết hàng ra và bàn giao kho trống.");
+                throw ApiExceptions.conflict("Chỉ nghiệm thu trả kho trong thời gian chuẩn bị sau khi khách đã đưa hết hàng ra và bàn giao kho trống.");
             returnCase.setSetupReturnedAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
             if (request.damageFee().signum() > 0 || request.cleaningFee().signum() > 0 || request.lostItemFee().signum() > 0) {
                 if (request.staffNotes() == null || request.staffNotes().isBlank() || request.evidencePhotos() == null || request.evidencePhotos().isEmpty())
-                    throw ApiExceptions.validation("Phí phát sinh trong setup cần ghi chú và bằng chứng kiểm kê.", null);
+                    throw ApiExceptions.validation("Phí phát sinh trong thời gian chuẩn bị cần ghi chú và bằng chứng kiểm kê.", null);
                 for (String photo : request.evidencePhotos()) {
                     com.storagehub.domain.model.FileAsset asset;
                     try { asset = settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, UUID.fromString(photo)); }
@@ -746,7 +746,7 @@ public class ReturnSettlementService {
         var verifiedFinance=captureFinance(returnCase);
         if (returnCase.isSetupEarlyExit() && (safeDamage.compareTo(returnCase.getDamageFee()) > 0
             || safeCleaning.compareTo(returnCase.getCleaningFee()) > 0 || safeLostItem.compareTo(returnCase.getLostItemFee()) > 0))
-            throw ApiExceptions.conflict("Khi xem xét quyết toán setup chỉ được giảm phí kiểm kê đã có chứng cứ; không tự thêm phí mới.");
+            throw ApiExceptions.conflict("Khi xem xét quyết toán trong thời gian chuẩn bị chỉ được giảm phí kiểm kê đã có chứng cứ; không tự thêm phí mới.");
         BigDecimal safeOutstanding = verifiedFinance.debt();
         safeOverdue=settlementOverdueFee(returnCase,safeOverdue,verifiedFinance);
 
@@ -1042,7 +1042,7 @@ public class ReturnSettlementService {
         var rc=new ReturnCase();rc.setRental(rental);rc.setFacility(rental.getFacility());rc.setStorageUnit(rental.getStorageUnit());
         rc.setCustomer(rental.getCustomer());rc.setRequestedBy(userRepository.findById(actor.userId()).orElseThrow(()->ApiExceptions.notFound("Staff not found")));
         rc.setRequestedAt(Instant.now());rc.setScheduledDate(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")));
-        rc.setCustomerNotes("OVERDUE_REPOSSESSION — hồ sơ do nhân viên lập từ nhiệm vụ thu hồi");
+        rc.setCustomerNotes("OVERDUE_REPOSSESSION - hồ sơ do nhân viên lập từ nhiệm vụ thu hồi");
         rc.setDepositAmount(securityDeposit(rental));
         return returnCaseRepository.saveAndFlush(rc);
     }
@@ -1195,11 +1195,11 @@ public class ReturnSettlementService {
         var overdueSettlement=finances==null?null:finances.overdueSettlement(rc,recovery!=null);
         String settlementBlocker=null;
         if (rc.isSetupExitRequested() && rc.getInspectedAt() != null && rc.getSetupReturnedAt() == null)
-            settlementBlocker = "Hồ sơ setup cũ thiếu chứng cứ trả kho và bảng kê theo điều khoản đã chấp nhận; cần đối soát thủ công.";
+            settlementBlocker = "Hồ sơ thời gian chuẩn bị cũ thiếu chứng cứ trả kho và bảng kê theo điều khoản đã chấp nhận; cần đối soát thủ công.";
         if (rc.isSetupExitRequested() && rc.getStatus() != ReturnCaseStatus.completed
             && (rc.getRental().getReservation().getSourceQuote() == null
                 || rc.getRental().getReservation().getSourceQuote().getSetupEarlyExitPolicyVersion() == null))
-            settlementBlocker = "Đơn cũ chưa có điều khoản phí trả kho trong setup đã chấp nhận. Cần cơ sở đối soát thủ công.";
+            settlementBlocker = "Đơn cũ chưa có điều khoản phí trả kho trong thời gian chuẩn bị đã chấp nhận. Cần cơ sở đối soát thủ công.";
         List<String> evidencePhotos = Collections.emptyList();
         if (rc.getEvidencePhotosJson() != null && !rc.getEvidencePhotosJson().isBlank()) {
             try {

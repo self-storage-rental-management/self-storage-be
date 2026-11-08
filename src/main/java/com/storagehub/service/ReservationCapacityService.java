@@ -29,7 +29,8 @@ public class ReservationCapacityService {
         ReservationStatus.PAYMENT_REVIEW,
         ReservationStatus.UNIT_RESERVED,
         ReservationStatus.READY_FOR_CHECKIN,
-        ReservationStatus.AWAITING_CUSTOMER_RECEIPT
+        ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+        ReservationStatus.PREPARING
     );
 
     private final UnitTypeRepository unitTypeRepository;
