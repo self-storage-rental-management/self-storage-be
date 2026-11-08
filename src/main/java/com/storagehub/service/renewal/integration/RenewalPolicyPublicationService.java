@@ -61,7 +61,7 @@ public class RenewalPolicyPublicationService {
         if(input.expectedRevision()!=revision)throw ApiExceptions.conflict("Renewal policy revision changed; reload required");
         var p=new PublishedRenewalPolicy("RENEWAL_POLICY_V1",facility,Math.addExact(revision,1),UUID.randomUUID().toString(),user.getId(),Instant.now(),
             input.effectiveFrom(),input.effectiveTo(),0,input.paymentWindowHours(),0,input.depositRate(),
-            Set.copyOf(input.eligiblePackageIds()),input.signing(),com.storagehub.service.overdue.RenewalOverdueTimeline.policy());
+            Set.copyOf(input.eligiblePackageIds()),input.signing(),input.term()!=null?input.term():com.storagehub.service.overdue.RenewalOverdueTimeline.policy());
         var json=encode(p);if(json.length()>2000)throw ApiExceptions.validation("Policy exceeds existing settings storage limit",null);
         if(setting==null){setting=new SystemSetting();setting.setSettingKey(key(facility));setting.setGroupName("Chính sách gia hạn");setting.setLabel("Chính sách gia hạn theo cơ sở");setting.setSettingType("text");setting.setValue(json);em.persist(setting);}
         setting.setValue(json);em.flush();
@@ -75,7 +75,7 @@ public class RenewalPolicyPublicationService {
             var p=mapper.readValue(setting.getValue(),PublishedRenewalPolicy.class);
             if(p==null||!"RENEWAL_POLICY_V1".equals(p.schema())||!facility.equals(p.facilityId())||p.revision()<1||p.version()==null||p.version().isBlank()||p.publishedBy()==null||p.publishedAt()==null)throw ApiExceptions.conflict("Published renewal policy metadata is incomplete");
             validate(new PublishedRenewalPolicy.Input(p.revision(),p.effectiveFrom(),p.effectiveTo(),p.quoteTtlMinutes(),p.paymentWindowHours(),p.requestWindowDays(),p.depositRate(),p.eligiblePackageIds(),p.signing(),p.term()));
-            return withFixedOverduePolicy(p);
+            return p.term() != null ? p : withFixedOverduePolicy(p);
         }catch(JsonProcessingException e){throw ApiExceptions.conflict("Published renewal policy is invalid");}
     }
     private String encode(Object value){try{return mapper.writeValueAsString(value);}catch(JsonProcessingException e){throw new IllegalStateException("Policy serialization failed",e);}}
