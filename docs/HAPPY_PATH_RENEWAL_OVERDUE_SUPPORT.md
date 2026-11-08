@@ -62,7 +62,7 @@ Ngày 1 là ngày liền sau ngày cuối được phép sử dụng kho. Tính 
 
 | Mốc | Hành vi |
 | --- | --- |
-| Ngày 1–7 | Theo dõi quá hạn, nhắc khách hoàn tất gia hạn hoặc trả kho. Nội bộ vẫn phân mức cảnh báo ngày 1–3, 4–6 và ngày 7. |
+| Ngày 1-7 | Theo dõi quá hạn, nhắc khách hoàn tất gia hạn hoặc trả kho. Nội bộ vẫn phân mức cảnh báo ngày 1-3, 4-6 và ngày 7. |
 | 17:00 ngày 7 | Chốt thời gian hoàn tất gia hạn trong giai đoạn quá hạn. |
 | Từ 08:00 ngày 8 | Đủ điều kiện chuyển hồ sơ sang xử lý thu hồi, sau khi kiểm tra dữ liệu và các điều kiện liên quan. |
 

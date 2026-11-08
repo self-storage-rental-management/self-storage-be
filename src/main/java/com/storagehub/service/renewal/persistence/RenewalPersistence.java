@@ -90,7 +90,7 @@ public class RenewalPersistence {
     }
     private static void validateKey(String operation,String key) {
         if(operation==null||operation.isBlank()||operation.length()>32||key==null||key.isBlank()||key.length()>100)
-            throw ApiExceptions.validation("Operation and Idempotency-Key (1–100) required",null);
+            throw ApiExceptions.validation("Operation and Idempotency-Key (1-100) required",null);
     }
     public String canonical(Object value) {
         if(value==null)throw new IllegalArgumentException("Snapshot/payload must not be null");

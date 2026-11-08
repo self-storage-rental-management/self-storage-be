@@ -155,6 +155,17 @@ public class CustomerReservationController {
         );
     }
 
+    @PostMapping("/{reservationId}/preparation-complete")
+    public ApiResponse<ReservationDetailResponse> markPreparationComplete(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody(required = false) CustomerPreparationCompleteRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.markPreparationComplete(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/check-in-appointment")
     public ApiResponse<ReservationResponse> setCheckInAppointment(
         @PathVariable UUID reservationId,

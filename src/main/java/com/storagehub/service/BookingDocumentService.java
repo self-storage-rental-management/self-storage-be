@@ -160,6 +160,7 @@ public class BookingDocumentService {
             && reservation.getStatus() != ReservationStatus.UNIT_RESERVED
             && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN
             && reservation.getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT
+            && reservation.getStatus() != ReservationStatus.PREPARING
             && reservation.getStatus() != ReservationStatus.COMPLETED) {
             throw ApiExceptions.conflict("Hold confirmation is available only after the reservation deposit is paid");
         }
@@ -208,7 +209,7 @@ public class BookingDocumentService {
         graphics.drawString("PHIẾU XÁC NHẬN GIỮ KHO", 82, 265);
         graphics.setFont(regular);
         graphics.setColor(muted);
-        graphics.drawString("Ghi nhận loại kho đã giữ và khoản phí giữ chỗ đã thanh toán", 82, 310);
+        graphics.drawString("Ghi nhận loại kho đã giữ và khoản đặt cọc giữ chỗ đã thanh toán", 82, 310);
         drawPill(graphics, 892, 224, 266, 58, new Color(224, 247, 239), green, "ĐÃ THANH TOÁN CỌC", medium.deriveFont(19f));
 
         drawCard(graphics, 72, 355, 1096, 500, Color.WHITE, new Color(225, 220, 210));
@@ -243,7 +244,7 @@ public class BookingDocumentService {
             y = drawMoneyRow(graphics, "Ưu đãi (" + rate + "%)", snapshot.getDiscountAmount().negate(), y, regular, medium, green, muted, false);
         }
         y = drawMoneyRow(graphics, "Tiền thuê sau giảm", snapshot.getNetRentalAmount(), y, regular, medium, ink, muted, true);
-        y = drawMoneyRow(graphics, "Phí giữ chỗ đã thanh toán", snapshot.getReservationDepositAmount(), y, regular, medium, orange, muted, true);
+        y = drawMoneyRow(graphics, "Đặt cọc giữ chỗ đã thanh toán", snapshot.getReservationDepositAmount(), y, regular, medium, orange, muted, true);
         y = drawMoneyRow(graphics, "Tiền thuê còn lại", snapshot.getRemainingRentalAmount(), y, regular, medium, ink, muted, false);
         y = drawMoneyRow(graphics, "Tiền đảm bảo kho", snapshot.getSecurityDepositAmount(), y, regular, medium, ink, muted, false);
         drawMoneyRow(graphics, "Tổng thanh toán khi nhận kho", snapshot.getDueAtCheckIn(), y, regular, medium, ink, muted, true);

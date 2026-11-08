@@ -22,6 +22,8 @@ public class ReservationDetailResponse {
     private BigDecimal cancellationChargeAmount;
     private List<ReservationGoodsItemResponse> goodsItems;
     private List<CustomerPaymentReceiptResponse> payments;
+    private String checkInStatus;
+    private String rentalStatus;
 
     public ReservationDetailResponse() {
     }
@@ -54,4 +56,8 @@ public class ReservationDetailResponse {
     public void setGoodsItems(List<ReservationGoodsItemResponse> goodsItems) { this.goodsItems = goodsItems; }
     public List<CustomerPaymentReceiptResponse> getPayments() { return payments; }
     public void setPayments(List<CustomerPaymentReceiptResponse> payments) { this.payments = payments; }
+    public String getCheckInStatus() { return checkInStatus; }
+    public void setCheckInStatus(String checkInStatus) { this.checkInStatus = checkInStatus; }
+    public String getRentalStatus() { return rentalStatus; }
+    public void setRentalStatus(String rentalStatus) { this.rentalStatus = rentalStatus; }
 }

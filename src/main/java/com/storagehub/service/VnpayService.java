@@ -1139,7 +1139,7 @@ public class VnpayService {
                 NotificationType.RESERVATION,
                 "Có đơn đã xác nhận chờ phân kho",
                 "Đơn " + reservation.getReservationCode()
-                    + " đã thanh toán cọc và đang chờ nhân viên phân gian kho.",
+                    + " đã thanh toán cọc và đang chờ nhân viên phân kho.",
                 reservation.getId()
             );
         }

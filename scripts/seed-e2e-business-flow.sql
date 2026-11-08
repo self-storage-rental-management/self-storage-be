@@ -23,7 +23,7 @@ VALUES (
     UUID_TO_BIN('11111111-2222-3333-4444-000000000007'),
     NOW(6), NOW(6),
     'HCM-Q7-F01',
-    'Kho Việt – Cơ sở Quận 7 (Phú Mỹ Hưng)',
+    'Kho Việt - Cơ sở Quận 7 (Phú Mỹ Hưng)',
     '105 Nguyễn Lương Bằng, Phường Tân Phú, Quận 7, TP. Hồ Chí Minh',
     'TP. Hồ Chí Minh',
     'active'
