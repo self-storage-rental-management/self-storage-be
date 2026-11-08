@@ -41,7 +41,15 @@ public class RenewalPersistence {
         if(note!=null&&note.length()>2000)throw ApiExceptions.validation("Note exceeds 2000 characters",null);
         lockRental(rental.getId());
         if(!rental.getId().equals(renewal.getRental().getId()))throw ApiExceptions.conflict("Open slot rental does not match renewal");
-        if(em.find(RenewalOpenSlot.class,rental.getId())!=null)throw ApiExceptions.conflict("Rental already has an open renewal");
+        var openSlot=em.find(RenewalOpenSlot.class,rental.getId());
+        if(openSlot!=null) {
+            if(openSlot.getRenewal()!=null && Set.of(RenewalStatus.rejected,RenewalStatus.cancelled,RenewalStatus.completed,RenewalStatus.payment_expired).contains(openSlot.getRenewal().getStatus())) {
+                em.remove(openSlot);
+                em.flush();
+            } else {
+                throw ApiExceptions.conflict("Rental already has an open renewal");
+            }
+        }
         requireBinding(renewal,quote);
         var revision=new RenewalAcceptedRevision(renewal,quote,1,now,note);em.persist(revision);
         var workflow=new RenewalWorkflow(renewal,revision);em.persist(workflow);
