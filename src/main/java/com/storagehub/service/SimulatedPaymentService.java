@@ -36,6 +36,8 @@ public class SimulatedPaymentService {
     private final PaymentProperties paymentProperties;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.storagehub.service.email.TransactionalEmailService transactionalEmailService;
 
     @Value("${app.reservation.complaint-window-minutes:30}")
     private long complaintWindowMinutes = 30;
@@ -127,6 +129,7 @@ public class SimulatedPaymentService {
                     + " đã thanh toán cọc và đang chờ nhân viên phân kho.",
                 reservation.getId()
             );
+            sendSimulatedReservationPaymentBillEmail(payment, reservation, now);
             message = "Payment was recorded successfully and the reservation is confirmed";
         } else if (outcome == PaymentSimulationOutcome.NOT_RECEIVED) {
             payment.setStatus(PaymentStatus.NOT_RECEIVED);
@@ -199,6 +202,69 @@ public class SimulatedPaymentService {
             return "Payment has not been recorded; keep the receipt if money was deducted";
         }
         return "Payment failed; retry before the payment deadline";
+    }
+
+    private String formatVnd(java.math.BigDecimal amount) {
+        if (amount == null) return "0 đ";
+        java.text.NumberFormat nf = java.text.NumberFormat.getInstance(new java.util.Locale("vi", "VN"));
+        return nf.format(amount) + " đ";
+    }
+
+    private void sendSimulatedReservationPaymentBillEmail(Payment payment, Reservation reservation, Instant paidAt) {
+        if (transactionalEmailService == null || reservation == null) return;
+        try {
+            var customer = reservation.getCustomer();
+            String email = customer != null ? customer.getEmail() : null;
+            if (email == null || email.isBlank()) return;
+
+            String fullName = customer != null && customer.getFullName() != null ? customer.getFullName() : "Quý khách";
+
+            String invoiceNumber = payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : reservation.getReservationCode();
+            String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
+            String amountFormatted = formatVnd(payment.getAmount());
+            String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
+                .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(paidAt != null ? paidAt : Instant.now());
+
+            String unitInfo = reservation.getUnitType() != null ? reservation.getUnitType().getName() : "Gian kho lưu trữ";
+            if (reservation.getAssignedUnit() != null) {
+                unitInfo += " (" + reservation.getAssignedUnit().getCode() + ")";
+            }
+
+            String facilityName = reservation.getFacility() != null ? reservation.getFacility().getName() : "StorageHub";
+            String facilityAddress = reservation.getFacility() != null && reservation.getFacility().getAddress() != null
+                ? reservation.getFacility().getAddress() : "";
+
+            String periodOrAppointment = "";
+            if (reservation.getAppointmentAt() != null) {
+                periodOrAppointment = "Lịch nhận kho: " + java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+                    .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(reservation.getAppointmentAt());
+            } else if (reservation.getStartDate() != null && reservation.getEndDate() != null) {
+                periodOrAppointment = "Kỳ thuê: " + reservation.getStartDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                    + " đến " + reservation.getEndDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            }
+
+            String note = "Biên lai này là bằng chứng xác nhận Quý khách đã thanh toán cọc giữ kho thành công cho đơn "
+                + reservation.getReservationCode() + ". Quý khách vui lòng lưu lại email này để làm căn cứ đối soát hoặc xuất trình khi nhận kho tại cơ sở.";
+
+            UUID userId = customer != null ? customer.getId() : null;
+            transactionalEmailService.sendPaymentBillAsync(
+                userId,
+                email,
+                fullName,
+                invoiceNumber,
+                transactionNo,
+                amountFormatted,
+                paidAtFormatted,
+                unitInfo,
+                facilityName,
+                facilityAddress,
+                periodOrAppointment,
+                "Thanh toán phí giữ chỗ (20%)",
+                note
+            );
+        } catch (Exception ex) {
+            // Ignored in simulation
+        }
     }
 
     private SimulatedPaymentResponse toResponse(

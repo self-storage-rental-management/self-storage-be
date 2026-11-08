@@ -101,26 +101,17 @@ class RentalPackagePolicyProvisionerTests {
     }
 
     @Test
-    @DisplayName("Nếu hệ thống chưa có gói nào, tự động sinh 4 gói mặc định chuẩn (1, 3, 6, 12 tháng)")
-    void provisionRentalPackages_whenSystemHasNoActivePackages_createsStandardDefaultPackages() {
+    @DisplayName("Nếu hệ thống chưa có gói nào, không tự ý sinh gói mặc định để tránh xung đột với cấu hình của BO")
+    void provisionRentalPackages_whenSystemHasNoActivePackages_returnsEmptyList() {
         when(repository.findAllByFacility_IdAndActiveTrueAndEffectiveFromLessThanEqualOrderByRentalMonthsAsc(
             eq(targetFacility.getId()), any(LocalDate.class)
         )).thenReturn(List.of());
 
         when(repository.findAllByOrderByRentalMonthsAsc()).thenReturn(List.of());
-        when(repository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
         List<RentalPackagePolicy> result = RentalPackagePolicyProvisioner.provisionRentalPackages(repository, targetFacility);
 
-        assertThat(result).hasSize(4);
-        assertThat(result.stream().map(RentalPackagePolicy::getRentalMonths).toList())
-            .containsExactly(1, 3, 6, 12);
-
-        for (RentalPackagePolicy p : result) {
-            assertThat(p.getFacility()).isEqualTo(targetFacility);
-            assertThat(p.isActive()).isTrue();
-            assertThat(p.getPublicationStatus()).isEqualTo(PublicationStatus.PUBLISHED);
-        }
+        assertThat(result).isEmpty();
     }
 
     @Test
