@@ -38,6 +38,8 @@ public class ReservationEmailVerificationService {
     private final AuthEmailService emailService;
     private final AuditLogService auditLogService;
     private final SecureRandom secureRandom = new SecureRandom();
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.UnitTypeRepository capacityMutex;
 
     @Value("${app.auth.expose-development-code:false}")
     private boolean exposeDevelopmentCode;
@@ -88,6 +90,8 @@ public class ReservationEmailVerificationService {
         ReservationEmailVerificationRequest request
     ) {
         Reservation reservation = findOwnedReservationForUpdate(actor, reservationId);
+        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         validateWaitingForEmail(reservation);
         Instant now = Instant.now();
         validateHold(reservation, now);

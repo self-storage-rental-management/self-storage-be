@@ -41,6 +41,8 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     @org.springframework.beans.factory.annotation.Autowired private BusinessRecordCodes displayCodes;
     private final UserRepository userRepository;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
 
     @Transactional
     public void notifyBusinessOfUnitTypeReview(com.storagehub.domain.model.UnitType type, UUID requestId) {
@@ -107,7 +109,9 @@ public class NotificationService {
         notification.setContent(content);
         notification.setRelatedEntityId(relatedEntityId);
         notification.setRead(false);
-        return notificationRepository.save(notification);
+        Notification saved = notificationRepository.save(notification);
+        customerEmails.notification(saved);
+        return saved;
     }
 
     @Transactional

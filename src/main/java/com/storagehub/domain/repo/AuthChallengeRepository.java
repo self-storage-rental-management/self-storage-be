@@ -12,11 +12,13 @@ import org.springframework.data.repository.query.Param;
 
 public interface AuthChallengeRepository extends JpaRepository<AuthChallenge, UUID> {
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     Optional<AuthChallenge> findTopByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(
         UUID userId,
         AuthChallengePurpose purpose
     );
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     Optional<AuthChallenge> findByTokenHashAndPurposeAndConsumedAtIsNull(
         String tokenHash,
         AuthChallengePurpose purpose
