@@ -19,12 +19,13 @@ public class ReservationCapacityService {
 
     private static final List<ReservationStatus> TEMPORARY_HOLD_STATUSES = List.of(
         ReservationStatus.AWAITING_EMAIL,
-        ReservationStatus.AWAITING_REVIEW,
-        ReservationStatus.AWAITING_PAYMENT,
-        ReservationStatus.PAYMENT_GRACE
+        ReservationStatus.AWAITING_REVIEW
     );
 
     private static final List<ReservationStatus> PERMANENT_HOLD_STATUSES = List.of(
+        // Release payment capacity only after reconciliation changes the persisted status.
+        ReservationStatus.AWAITING_PAYMENT,
+        ReservationStatus.PAYMENT_GRACE,
         ReservationStatus.CONFIRMED,
         ReservationStatus.PAYMENT_REVIEW,
         ReservationStatus.UNIT_RESERVED,

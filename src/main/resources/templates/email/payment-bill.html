@@ -89,6 +89,7 @@
               </div>
             </td>
           </tr>
+          <tr th:if="${detailsUrl != null}"><td style="padding:0 28px 20px"><a th:href="${detailsUrl}" style="color:#8a5300;font:600 14px Segoe UI,Arial,sans-serif">Xem biên lai và lịch sử thanh toán</a></td></tr>
           <th:block th:replace="~{email/layout :: footer}"></th:block>
         </table>
       </td>
