@@ -30,6 +30,7 @@ public class StaffReservationQueryService {
         ReservationStatus.UNIT_RESERVED,
         ReservationStatus.READY_FOR_CHECKIN,
         ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+        ReservationStatus.PREPARING,
         ReservationStatus.COMPLETED
     );
 

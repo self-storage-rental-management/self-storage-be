@@ -125,7 +125,15 @@ public class RecoveryTaskOperationService {
         try {
             jdbc.update("insert into recovery_settlement_receipts(task_id,return_case_id,direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_by,recorded_at) values(?,?,?,?,?,?,?,?,?)",
                 bytes(id),bytes(rc.getId()),direction,amount,body.paymentMethod().name(),transactionReference,bytes(body.receiptFileId()),bytes(actor.userId()),Timestamp.from(now()));
-        }catch(DuplicateKeyException used){throw ApiExceptions.conflict("Recovery settlement or transaction evidence was already recorded");}
+        }catch(DuplicateKeyException used){
+            String msg = used.getMessage();
+            if (msg != null && msg.contains("transaction_reference")) {
+                throw ApiExceptions.conflict("Mã giao dịch hoặc số biên nhận này đã được sử dụng trên hệ thống. Vui lòng nhập mã giao dịch khác.");
+            } else if (msg != null && msg.contains("receipt_file_id")) {
+                throw ApiExceptions.conflict("Tệp biên lai này đã được sử dụng cho một quyết toán khác. Vui lòng chọn tệp biên lai hợp lệ.");
+            }
+            throw ApiExceptions.conflict("Recovery settlement or transaction evidence was already recorded");
+        }
         returns.completeRecoverySettlement(actor,rc.getId(),transactionReference);
         jdbc.update("update recovery_task_operations set version=version+1 where task_id=?",bytes(id));
         return finish(c,key,"SETTLEMENT",body);
@@ -186,7 +194,7 @@ public class RecoveryTaskOperationService {
             uuid(rs.getBytes("return_case_id")),rs.getString("inspection_json"),instant(rs.getTimestamp("assets_cleared_at")),uuid(rs.getBytes("completion_file_id")),instant(rs.getTimestamp("completed_at"))),bytes(task)).stream().findFirst().orElse(null);
     }
     private Optional<View> replay(Context c,String key,String operation,Object body) {
-        if(key==null||key.isBlank()||key.length()>100)throw ApiExceptions.validation("Idempotency-Key (1–100 characters) required",null);
+        if(key==null||key.isBlank()||key.length()>100)throw ApiExceptions.validation("Idempotency-Key (1-100 characters) required",null);
         var rows=jdbc.queryForList("select task_id,operation,payload_hash,result_json from recovery_task_commands where actor_id=? and key_hash=?",bytes(c.actor().getId()),hash(key));
         if(rows.isEmpty())return Optional.empty();var row=rows.getFirst();
         if(!c.task().id().equals(uuid((byte[])row.get("task_id")))||!operation.equals(row.get("operation"))||!hash(json(body)).equals(row.get("payload_hash")))

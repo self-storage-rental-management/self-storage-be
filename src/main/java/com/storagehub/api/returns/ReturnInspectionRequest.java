@@ -1,5 +1,7 @@
 package com.storagehub.api.returns;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.InventoryMatch;
 import com.storagehub.domain.model.StorageUnitStatus;
@@ -48,6 +50,39 @@ public record ReturnInspectionRequest(
     StorageUnitStatus proposedUnitStatus,
     boolean unitVacated
 ) {
+    @JsonCreator
+    public ReturnInspectionRequest(
+        @JsonProperty("inventoryMatch") InventoryMatch inventoryMatch,
+        @JsonProperty("damageClassification") DamageClassification damageClassification,
+        @JsonProperty("damageFee") BigDecimal damageFee,
+        @JsonProperty("cleaningFee") BigDecimal cleaningFee,
+        @JsonProperty("lostItemFee") BigDecimal lostItemFee,
+        @JsonProperty("overdueFee") BigDecimal overdueFee,
+        @JsonProperty("outstandingFee") BigDecimal outstandingFee,
+        @JsonProperty("staffNotes") String staffNotes,
+        @JsonProperty("evidencePhotos") List<String> evidencePhotos,
+        @JsonProperty("returnedKey") boolean returnedKey,
+        @JsonProperty("returnedCard") boolean returnedCard,
+        @JsonProperty("returnedLock") boolean returnedLock,
+        @JsonProperty("proposedUnitStatus") StorageUnitStatus proposedUnitStatus,
+        @JsonProperty("unitVacated") boolean unitVacated
+    ) {
+        this.inventoryMatch = inventoryMatch;
+        this.damageClassification = damageClassification;
+        this.damageFee = damageFee;
+        this.cleaningFee = cleaningFee;
+        this.lostItemFee = lostItemFee;
+        this.overdueFee = overdueFee;
+        this.outstandingFee = outstandingFee;
+        this.staffNotes = staffNotes;
+        this.evidencePhotos = evidencePhotos;
+        this.returnedKey = returnedKey;
+        this.returnedCard = returnedCard;
+        this.returnedLock = returnedLock;
+        this.proposedUnitStatus = proposedUnitStatus;
+        this.unitVacated = unitVacated;
+    }
+
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
         BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
         BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,

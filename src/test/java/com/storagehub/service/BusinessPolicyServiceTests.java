@@ -281,6 +281,38 @@ class BusinessPolicyServiceTests {
         verify(policyRepository).save(policy);
     }
 
+    @Test
+    void deleteAllPackagePolicies_allFacilities_deletesAll() {
+        RentalPackagePolicy p1 = new RentalPackagePolicy();
+        ReflectionTestUtils.setField(p1, "id", UUID.randomUUID());
+        p1.setFacility(facility);
+
+        RentalPackagePolicy p2 = new RentalPackagePolicy();
+        ReflectionTestUtils.setField(p2, "id", UUID.randomUUID());
+        p2.setFacility(facility);
+
+        when(policyRepository.findAll()).thenReturn(List.of(p1, p2));
+
+        service.deleteAllPackagePolicies(businessActor, null);
+
+        verify(policyRepository).deleteAll(List.of(p1, p2));
+        verify(policyRepository).flush();
+    }
+
+    @Test
+    void deleteAllPackagePolicies_specificFacility_deletesFacilityPolicies() {
+        RentalPackagePolicy p = new RentalPackagePolicy();
+        ReflectionTestUtils.setField(p, "id", UUID.randomUUID());
+        p.setFacility(facility);
+
+        when(policyRepository.findByFacility_IdOrderByRentalMonthsAsc(facilityId)).thenReturn(List.of(p));
+
+        service.deleteAllPackagePolicies(businessActor, facilityId);
+
+        verify(policyRepository).deleteAll(List.of(p));
+        verify(policyRepository).flush();
+    }
+
     private RentalPackagePolicy packagePolicy(
         int months, String discount, LocalDate effectiveFrom, LocalDate effectiveTo
     ) {

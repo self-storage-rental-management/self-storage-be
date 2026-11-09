@@ -68,7 +68,7 @@ public class AccessCredentialService {
     private static final Pattern ACCESS_WINDOW = Pattern.compile("(\\d{1,2}:\\d{2}).*?(\\d{1,2}:\\d{2})");
     private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final Pattern ACCESS_HOURS_PATTERN = Pattern.compile(
-        "(\\d{1,2})(?::|h)?(\\d{2})?\\s*[-–]\\s*(\\d{1,2})(?::|h)?(\\d{2})?",
+        "(\\d{1,2})(?::|h)?(\\d{2})?\\s*[--]\\s*(\\d{1,2})(?::|h)?(\\d{2})?",
         Pattern.CASE_INSENSITIVE
     );
 
@@ -99,7 +99,7 @@ public class AccessCredentialService {
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
         if (checkIn.getStatus() != CheckInStatus.payment_collected
             || !isCheckInReadyStatus(reservation.getStatus())) {
-            throw ApiExceptions.conflict("Credentials can only be activated after payment and before setup");
+            throw ApiExceptions.conflict("Chỉ được kích hoạt thông tin ra vào sau khi thu tiền và trước khi bắt đầu thời gian chuẩn bị");
         }
         if (request.type() != AccessCredentialType.LOCK) {
             throw ApiExceptions.validation("Only a lock credential can be handed over during check-in", null);
@@ -194,7 +194,7 @@ public class AccessCredentialService {
         boolean withinHours = withinAccessHours(credential.getFacility().getAccessHours(), occurredAt);
         boolean allowed = active && rentalOpen && withinHours;
         String reason = !active ? "Credential đã bị thu hồi"
-            : !rentalOpen ? "Rental không còn ở trạng thái setup hoặc active"
+            : !rentalOpen ? "Hồ sơ thuê không còn trong thời gian chuẩn bị hoặc đang thuê"
             : !withinHours ? "Ngoài giờ mở cửa cơ sở"
             : "Truy cập hợp lệ trong giờ mở cửa";
 

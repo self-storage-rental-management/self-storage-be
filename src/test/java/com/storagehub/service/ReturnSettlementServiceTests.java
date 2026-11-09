@@ -394,6 +394,33 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void staffConfirmSettlement_transitionsToRefundPendingWhenDepositRefundExpected() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setNetRefundAmount(new BigDecimal("1900000.00"));
+        returnCase.setAmountDueFromCustomer(BigDecimal.ZERO);
+
+        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ReturnCaseResponse response = service.staffConfirmSettlement(
+            staffActor,
+            returnCase.getId(),
+            new CustomerConfirmSettlementRequest(CustomerDecision.accepted, "Khach xac nhan tai quay")
+        );
+
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        assertThat(response.customerConfirmed()).isTrue();
+        assertThat(response.customerDecisionNote()).contains("Khach xac nhan tai quay");
+    }
+
+    @Test
     void linkedRecoverySettlementDoesNotReleaseUnitWhenCustomerConfirmsZeroBalance() {
         ReturnCase rc=new ReturnCase();ReflectionTestUtils.setField(rc,"id",UUID.randomUUID());
         rc.setRental(rental);rc.setFacility(facility);rc.setStorageUnit(unit);rc.setCustomer(customer);

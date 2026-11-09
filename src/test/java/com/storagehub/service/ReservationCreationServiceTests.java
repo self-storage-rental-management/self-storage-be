@@ -98,10 +98,10 @@ class ReservationCreationServiceTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("495000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("16005000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("3201000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("4301000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("5500000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("12804000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("18304000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("11704000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("17204000.00"));
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
@@ -116,9 +116,14 @@ class ReservationCreationServiceTests {
         policy.setEffectiveFrom(LocalDate.of(2026, 1, 1));
     }
 
-    @Test
-    void createsReservationAndCopiesPricingSnapshot() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 3, 6})
+    void createsReservationAndCopiesPricingSnapshot(int handoverOffsetDays) {
         CreateReservationRequest request = request();
+        quote.getFacility().setAccessHours("06:00 - 22:00 hàng ngày");
+        quote.setFreeSetupDays(6);
+        policy.setFreeSetupDays(6);
+        request.setAppointmentAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.DAYS).plus(handoverOffsetDays, java.time.temporal.ChronoUnit.DAYS).plusSeconds(20 * 3600));
         when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-1"))
             .thenReturn(Optional.empty());
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
@@ -130,6 +135,10 @@ class ReservationCreationServiceTests {
             Reservation reservation = invocation.getArgument(0);
             assertThat(reservation.getRequestFingerprint()).hasSize(64);
             assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("079203009988");
+            assertThat(reservation.getAppointmentAt()).isEqualTo(request.getAppointmentAt());
+            var expectedStart = request.getAppointmentAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(6);
+            assertThat(reservation.getStartDate()).isEqualTo(expectedStart);
+            assertThat(reservation.getEndDate()).isEqualTo(expectedStart.plusMonths(quote.getRentalMonths()));
             ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
             ReflectionTestUtils.setField(reservation, "createdAt", Instant.now());
             return reservation;
@@ -143,10 +152,20 @@ class ReservationCreationServiceTests {
 
         var response = service.create(actor, request, "create-1");
 
+        var handoverDate = request.getAppointmentAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
+        var expectedEnd = handoverDate.plusDays(6).plusMonths(quote.getRentalMonths());
+        org.mockito.Mockito.verify(capacityService).lockAndRequireAvailableCapacity(
+            quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate, expectedEnd);
+        var checkedPeriod = org.mockito.ArgumentCaptor.forClass(com.storagehub.api.reservation.CompatibilityCheckRequest.class);
+        org.mockito.Mockito.verify(compatibilityService).checkQuotedSnapshot(org.mockito.ArgumentMatchers.eq(actor), checkedPeriod.capture());
+        assertThat(checkedPeriod.getValue().getStartDate()).isEqualTo(handoverDate);
+        assertThat(checkedPeriod.getValue().getEndDate()).isEqualTo(expectedEnd);
+        assertThat(response.getTotalInitialObligation()).isEqualByComparingTo(quote.getTotalInitialObligation());
+        assertThat(quote.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 10));
         assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
-        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("3201000.00");
-        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("12804000.00");
-        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("18304000.00");
+        assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("4301000.00");
+        assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("11704000.00");
+        assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
         assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
         assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
         var savedReservation=org.mockito.ArgumentCaptor.forClass(Reservation.class);
@@ -164,6 +183,32 @@ class ReservationCreationServiceTests {
     }
 
     @Test
+    void rejectsStaleAndOutOfWindowAppointmentsWithActionableFieldDetails() {
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
+            .thenReturn(Optional.of(quote));
+        for (long offsetSeconds : new long[] {-60, 6 * 3600, 9 * 24 * 3600}) {
+            var input = request();
+            input.setAppointmentAt(Instant.now().plusSeconds(offsetSeconds));
+            assertThatThrownBy(() -> service.create(actor, input, "stale-appointment"))
+                .isInstanceOfSatisfying(ApiException.class, error -> {
+                    assertThat(error.getDetails()).isEqualTo(Map.of("appointmentAt", error.getMessage()));
+                    assertThat(error.getMessage()).contains("Lịch nhận kho").doesNotContain(";");
+                });
+        }
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+    }
+
+    @Test
+    void missingTermsAcceptanceIdentifiesTheFieldWithoutCreatingAnOrder() {
+        var input = request();
+        input.setAcceptedTerms(false);
+        assertThatThrownBy(() -> service.create(actor, input, "missing-terms"))
+            .isInstanceOfSatisfying(ApiException.class, error ->
+                assertThat(error.getDetails()).isEqualTo(Map.of("acceptedTerms", error.getMessage())));
+        org.mockito.Mockito.verifyNoInteractions(reservationRepository, quoteRepository);
+    }
+
+    @Test
     void createsReservationWhenSecurityDepositDiffersFromMonthlyPrice() {
         // Cỡ kho có tiền cọc đảm bảo 200.000 khác đơn giá tháng 2.000.000
         quote.getUnitType().setMonthlyPrice(new BigDecimal("2000000.00"));
@@ -174,10 +219,10 @@ class ReservationCreationServiceTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("180000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("5820000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("1164000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("1204000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("200000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("4656000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("4856000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("4616000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("4816000.00"));
         quote.setTotalInitialObligation(new BigDecimal("6020000.00"));
 
         CreateReservationRequest request = request();

@@ -411,13 +411,14 @@ class RenewalWorkflowIntegrationTests {
             eligibility.unknown=true;finance.unknown=true;
             var actor=customer(r);var q=commands.quote(actor,r.getId(),new RenewalCommands.Quote("TEST"));
             var submitted=commands.submit(actor,r.getId(),new RenewalCommands.Submit(q.id(),null),"simple-submit");
-            assertThatThrownBy(()->commands.prepareVnpayPayment(actor,submitted.id()))
-                .hasMessageContaining("Select a future signing appointment before payment");
-            verifyNoInteractions(writer,calendar);
             var slot=new com.storagehub.service.renewal.operations.RenewalOperationSources.Slot("TEST",NOW.plusSeconds(3600),NOW.plusSeconds(5400));
             var state=new com.storagehub.service.renewal.operations.RenewalOperationState(em.find(Renewal.class,submitted.id()));
             state.awaitingPayment(NOW.plusSeconds(900),NOW.plusSeconds(86400),"TEST","v1");
-            state.appointment(UUID.randomUUID(),slot.start(),slot.end());em.persist(state);em.flush();
+            state.appointment(UUID.randomUUID(),NOW.minusSeconds(100),NOW.plusSeconds(5400));em.persist(state);em.flush();
+            assertThatThrownBy(()->commands.prepareVnpayPayment(actor,submitted.id()))
+                .hasMessageContaining("Select a future signing appointment before payment");
+            verifyNoInteractions(writer,calendar);
+            state.appointment(UUID.randomUUID(),slot.start(),slot.end());em.flush();
             when(calendar.atomic()).thenReturn(true);
             when(calendar.slot(any(),eq(slot.start()))).thenReturn(Optional.of(slot));
             var result=commands.prepareVnpayPayment(actor,submitted.id());

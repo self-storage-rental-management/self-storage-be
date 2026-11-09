@@ -84,7 +84,7 @@ Tên endpoint dưới đây là đề xuất để thảo luận, chưa phải c
 | Hướng dẫn thao tác | Đặt kho, xem biên lai, trả kho, gia hạn và liên hệ cơ sở; liên kết tới đúng màn hình. |
 | Hồ sơ khách sở hữu | BE kiểm tra ownership và chỉ trả các trường cần để trả lời câu hỏi. |
 | Tin nhắn hội thoại | Giới hạn lịch sử đưa vào model; tách chỉ dẫn hệ thống với nội dung người dùng. |
-| PUBLIC/INTERNAL | Không đưa tin/tệp INTERNAL của Staff–Manager vào ngữ cảnh AI phục vụ Customer. |
+| PUBLIC/INTERNAL | Không đưa tin/tệp INTERNAL của Staff-Manager vào ngữ cảnh AI phục vụ Customer. |
 
 Không đưa mật khẩu, mã truy cập, giấy tờ định danh hoặc thông tin thanh toán nhạy cảm không cần thiết tới nhà cung cấp AI. Không để nội dung chat tự cấp quyền gọi API hoặc thay chỉ dẫn hệ thống.
 
@@ -183,11 +183,11 @@ Cập nhật: 23/10/2026. Mỗi lượt triển khai tập trung một bước �
 
 | Bước | Trạng thái | Điều kiện qua bước |
 | --- | --- | --- |
-| 1 — Thiết kế | Đã đối chiếu source, có thiết kế để review; người dùng đã chọn Gemini | Review các quyết định dưới đây; model, bộ kiến thức và retention phải chốt trước bước 3. |
-| 2 — Widget | Đang triển khai: widget API riêng, không sửa demo | Đã thêm launcher/panel và nối chat Staff; còn nav/deep link và nghiệm thu UI thực tế trước khi hoàn tất toàn bước. |
-| 3 — Hội thoại AI | Đang triển khai: adapter/API stateless, mặc định tắt | Còn nối FE, xác nhận provider, migration và lưu lịch sử/ownership bền vững; chưa hoàn tất bước 3. |
-| 4 — Bàn giao | Chưa triển khai | Một ticket/hội thoại, đúng cơ sở, transcript đúng quyền, đồng bộ claim/resolve/reopen/close, dừng AI. |
-| 5 — Hoàn thiện | Chưa triển khai | Đạt mục 9, ghi bằng chứng E2E và cấu hình triển khai; phân biệt lỗi nền với lỗi phát sinh. |
+| 1 - Thiết kế | Đã đối chiếu source, có thiết kế để review; người dùng đã chọn Gemini | Review các quyết định dưới đây; model, bộ kiến thức và retention phải chốt trước bước 3. |
+| 2 - Widget | Đang triển khai: widget API riêng, không sửa demo | Đã thêm launcher/panel và nối chat Staff; còn nav/deep link và nghiệm thu UI thực tế trước khi hoàn tất toàn bước. |
+| 3 - Hội thoại AI | Đang triển khai: adapter/API stateless, mặc định tắt | Còn nối FE, xác nhận provider, migration và lưu lịch sử/ownership bền vững; chưa hoàn tất bước 3. |
+| 4 - Bàn giao | Chưa triển khai | Một ticket/hội thoại, đúng cơ sở, transcript đúng quyền, đồng bộ claim/resolve/reopen/close, dừng AI. |
+| 5 - Hoàn thiện | Chưa triển khai | Đạt mục 9, ghi bằng chứng E2E và cấu hình triển khai; phân biệt lỗi nền với lỗi phát sinh. |
 
 ### 12.2. Thiết kế bước 1
 
@@ -201,7 +201,7 @@ Các quyết định kỹ thuật dưới đây là thiết kế đề xuất d�
 - Bỏ nav hỗ trợ Customer; các nút mở hỗ trợ, thông báo SUPPORT và đường dẫn cũ phải mở widget. Giữ nguyên màn hình Staff/Manager.
 - `CustomerApp.tsx` hiện có nav `support`, shortcut overview, mapping notification sang `support`, nhánh `page === 'support'` và chatbot demo chỉ chạy khi chưa API-authenticated. Phải rà đủ các điểm này trước khi xóa luồng cũ.
 - Ticket cũ vẫn mở qua `openTicket` của `SupportApiRoute`/`SupportApiWorkspace`; không tự chuyển ticket cũ thành hội thoại AI. Tra ngược ticket sang conversation sau bước 4 chỉ khi có liên kết do server cung cấp.
-- Bước 2 dùng luồng chat Staff hiện tại trong panel và hiển thị đúng chức năng hiện có. Chỉ bật trải nghiệm AI-first sau khi bước 3–4 đạt kiểm tra; không gắn nhãn AI cho phản hồi demo hoặc ticket được tạo trực tiếp.
+- Bước 2 dùng luồng chat Staff hiện tại trong panel và hiển thị đúng chức năng hiện có. Chỉ bật trải nghiệm AI-first sau khi bước 3-4 đạt kiểm tra; không gắn nhãn AI cho phản hồi demo hoặc ticket được tạo trực tiếp.
 
 **Vai trò và ranh giới truy cập**
 
@@ -250,7 +250,7 @@ Giữ `SupportTicketStatus` hiện tại. `HANDOFF_PENDING` biểu diễn hội 
 
 Kiểm tra trong bước 1: đã đọc các điểm tích hợp Customer, controller, enum trạng thái và logic quyền/claim/create của SupportService; chưa sửa runtime, chưa chạy lại test FE/BE. Kết quả test ở mục 11 là baseline lịch sử, không phải kết quả của lượt này. Working tree có thay đổi chat/tài liệu từ trước và được giữ nguyên.
 
-Phạm vi lượt triển khai tiếp theo: **chỉ bước 2 — Widget (UI-01/UI-02 và phần UI-03 cho chat Staff hiện tại)**. Chưa thêm migration hay gọi Gemini. Nghiệm thu bằng test state/draft khi đổi trang, mở đúng ticket từ thông báo/đường dẫn cũ, role Customer, keyboard và mobile; báo riêng các kiểm tra chưa thực hiện được.
+Phạm vi lượt triển khai tiếp theo: **chỉ bước 2 - Widget (UI-01/UI-02 và phần UI-03 cho chat Staff hiện tại)**. Chưa thêm migration hay gọi Gemini. Nghiệm thu bằng test state/draft khi đổi trang, mở đúng ticket từ thông báo/đường dẫn cũ, role Customer, keyboard và mobile; báo riêng các kiểm tra chưa thực hiện được.
 
 ### 12.4. Widget API riêng theo yêu cầu giao diện
 
@@ -264,7 +264,7 @@ Phạm vi lượt triển khai tiếp theo: **chỉ bước 2 — Widget (UI-01/
 - Theo yêu cầu tiếp theo, widget mặc định mở màn hình trợ lý với lời chào, gợi ý câu hỏi và ô nhập; kênh Nhân viên chỉ được mount khi khách chọn. Thu nhỏ hoặc đổi kênh giữ nội dung/draft trong phiên.
 - Thêm `supportAssistantFaq.ts` và `CustomerSupportAssistant.tsx`: tách các chủ đề FAQ từ demo thành bộ riêng, không import demo store/roster hoặc sửa luồng demo. Điều chỉnh nội dung hướng dẫn để không cam kết chính sách cũ, tự xác nhận số tiền, thời gian hoàn tiền hay tình trạng nhân viên.
 - Đây là bước giao diện và FAQ nền theo yêu cầu, **chưa phải tích hợp Gemini**. UI ghi rõ “Hướng dẫn tự động theo FAQ”; câu trả lời hiện dùng khớp từ khóa, không gọi model. Câu không khớp đề nghị gặp nhân viên, không giả đã tra hồ sơ.
-- Hỏi FAQ không gọi API tạo ticket. Nút Gặp nhân viên mở kênh support hiện có; khách vẫn phải chọn cơ sở/hồ sơ và gửi yêu cầu. Chưa tự chuyển transcript FAQ sang ticket; persistence và handoff AI bền vững vẫn thuộc bước 3–4.
+- Hỏi FAQ không gọi API tạo ticket. Nút Gặp nhân viên mở kênh support hiện có; khách vẫn phải chọn cơ sở/hồ sơ và gửi yêu cầu. Chưa tự chuyển transcript FAQ sang ticket; persistence và handoff AI bền vững vẫn thuộc bước 3-4.
 - Theo yêu cầu của người dùng, lượt này không chạy test tự động. Kết quả build/test ở mục 12.4 là của lượt trước, không xác nhận thay đổi FAQ này.
 
 ### 12.6. Cấu hình Gemini tham chiếu từ cultural-museum
@@ -322,7 +322,7 @@ Phạm vi lượt triển khai tiếp theo: **chỉ bước 2 — Widget (UI-01/
 ### Cải thiện định dạng, prompt ngắn và FAQ trả nhanh
 
 - Thêm `SupportReplyText.tsx` cho chữ đậm, đoạn và danh sách dạng React text node; không dùng HTML hoặc tự render URL/image. Tin Customer vẫn giữ text nguyên văn.
-- Prompt yêu cầu đáp án hướng dẫn ngắn 2–4 câu, bỏ chào lặp/lời mời gặp nhân viên không cần thiết. Không bỏ điều kiện nghiệp vụ hoặc ép cắt đáp án để lấy tốc độ.
+- Prompt yêu cầu đáp án hướng dẫn ngắn 2-4 câu, bỏ chào lặp/lời mời gặp nhân viên không cần thiết. Không bỏ điều kiện nghiệp vụ hoặc ép cắt đáp án để lấy tốc độ.
 - Thêm `SupportQuickFaq` ở BE: 10 câu chuẩn hướng dẫn chung, khớp chính xác sau chuẩn hóa; không suy đoán bằng từ khóa. FAQ bỏ qua gọi Google, hiển thị “Hướng dẫn nhanh”; câu khác vẫn dùng Gemini. Response thêm source FAQ/GEMINI; kiểm tra quyền, validation, rate limit và idempotency vẫn giữ.
 - Thêm đo thời gian trả lời theo source, không log dữ liệu khách. Streaming chưa thuộc lượt này. Build FE đạt; không chạy test suite theo yêu cầu.
 

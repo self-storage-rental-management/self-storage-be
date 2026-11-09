@@ -23,6 +23,13 @@ public class AuthController {
 
     private final AuthService authService;
     private final AuthChallengeService authChallengeService;
+    private final com.storagehub.service.RegistrationCaptchaService registrationCaptchaService;
+
+    @GetMapping("/captcha")
+    public org.springframework.http.ResponseEntity<ApiResponse<Map<String, String>>> captcha(HttpServletRequest request) {
+        return org.springframework.http.ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore())
+            .body(new ApiResponse<>(registrationCaptchaService.issue(request.getRemoteAddr()), CorrelationIdContext.current()));
+    }
 
     @PostMapping("/register")
     public ApiResponse<RegisterResponse> register(@Valid @RequestBody RegisterRequest request) {
@@ -40,7 +47,7 @@ public class AuthController {
     @PostMapping("/google")
     public ApiResponse<AuthResponse> googleLogin(@Valid @RequestBody GoogleLoginRequest request, HttpServletRequest httpRequest) {
         return new ApiResponse<>(
-            authService.loginWithGoogle(request.idToken(), httpRequest.getRemoteAddr(), httpRequest.getHeader("User-Agent")),
+            authService.loginWithGoogle(request.idToken(), httpRequest.getRemoteAddr(), httpRequest.getHeader("User-Agent"), request.captchaId(), request.captchaAnswer()),
             CorrelationIdContext.current()
         );
     }

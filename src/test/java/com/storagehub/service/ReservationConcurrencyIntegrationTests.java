@@ -183,10 +183,11 @@ class ReservationConcurrencyIntegrationTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("495000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("16005000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("3201000.00"));
+        // Reservation fee is 20% of rent after discounts plus the security deposit.
+        quote.setReservationDepositAmount(new BigDecimal("4301000.00"));
         quote.setSecurityDepositAmount(new BigDecimal("5500000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("12804000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("18304000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("11704000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("17204000.00"));
         quote.setTotalInitialObligation(new BigDecimal("21505000.00"));
         quote.setQuotedAt(Instant.now());
         quote.setExpiresAt(Instant.now().plusSeconds(600));
