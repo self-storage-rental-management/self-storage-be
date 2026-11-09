@@ -31,6 +31,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class FacilityLifecycleService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     private final FacilityRepository facilities;
     private final UnitTypeRepository unitTypes;
     private final StorageUnitRepository units;
@@ -91,6 +93,9 @@ public class FacilityLifecycleService {
         Facility saved = facilities.save(facility);
         FacilityResponse after = facilityResponse(saved);
         audit.recordMutation("FACILITY_UPDATED", "Facility", saved.getId(), saved.getId(), before, after);
+        if (before.status() != after.status() || !java.util.Objects.equals(before.accessHours(), after.accessHours())
+            || !java.util.Objects.equals(before.address(), after.address()) || !java.util.Objects.equals(before.phone(), after.phone())) customerEmails.facilityChanged(saved.getId(), "details:" + UUID.randomUUID(),
+            "Cập nhật hoạt động cơ sở", "Cơ sở vừa cập nhật thông tin hoạt động, giờ ra vào hoặc trạng thái phục vụ. Vui lòng xem thông tin mới và liên hệ cơ sở nếu ảnh hưởng đến việc sử dụng kho.");
         return after;
     }
 
@@ -360,12 +365,16 @@ public class FacilityLifecycleService {
         UnitType type = unitTypes.findById(unitTypeId)
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         UnitTypeResponse before = unitTypeResponse(type);
+        boolean priceChanged = !java.util.Objects.equals(type.getMonthlyPrice(), request.monthlyPrice())
+            || !java.util.Objects.equals(type.getSecurityDepositAmount(), request.securityDepositAmount());
         type.setMonthlyPrice(request.monthlyPrice());
         type.setSecurityDepositAmount(request.securityDepositAmount());
         if (type.getStatus() == UnitTypeStatus.draft) type.setStatus(UnitTypeStatus.awaiting_pricing);
         UnitType saved = unitTypes.save(type);
         UnitTypeResponse after = unitTypeResponse(saved);
         audit.recordMutation("UNIT_TYPE_PRICED_BY_BUSINESS", "UnitType", saved.getId(), saved.getFacility().getId(), before, after);
+        if (priceChanged && saved.getFacility().getStatus() == FacilityStatus.active) customerEmails.facilityChanged(saved.getFacility().getId(), "pricing:" + UUID.randomUUID(),
+            "Thông báo cập nhật biểu giá", "Biểu giá mới đã được công bố trên web. Giá và nghĩa vụ của kỳ thuê đã chốt vẫn theo báo giá/hợp đồng đã chấp nhận; mức mới chỉ áp dụng cho giao dịch đủ điều kiện sau khi khách xác nhận.");
         return after;
     }
 

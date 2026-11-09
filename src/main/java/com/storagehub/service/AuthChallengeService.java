@@ -45,6 +45,8 @@ public class AuthChallengeService {
     private final AuditLogService auditLogService;
     private final Environment environment;
     private final SecureRandom secureRandom = new SecureRandom();
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.security.RequestRateLimiter emailRateLimiter;
 
     @Value("${app.auth.verification-url:http://localhost:5173/?verifyEmail=}")
     private String verificationUrl;
@@ -52,8 +54,8 @@ public class AuthChallengeService {
     @Value("${app.auth.password-reset-url:http://localhost:5173/?resetPassword=}")
     private String passwordResetUrl;
 
-    @Value("${app.auth.challenge-expiry-minutes:15}")
-    private int expiryMinutes;
+    @Value("${app.auth.challenge-expiry-minutes:5}")
+    private int expiryMinutes = 5;
 
     @Value("${app.auth.expose-development-code:false}")
     private boolean exposeDevelopmentCode;
@@ -66,7 +68,8 @@ public class AuthChallengeService {
             user.getEmail(),
             user.getFullName(),
             verificationUrl + issue.token(),
-            expiryMinutes
+            expiryMinutes,
+            issue.otp()
         );
         return issue;
     }
@@ -74,19 +77,18 @@ public class AuthChallengeService {
     @Transactional
     public AuthChallengeResponse resendEmailVerification(ResendEmailVerificationRequest request) {
         String email = normalizeEmail(request.email());
+        if (!emailRateLimiter.allow("verification-email", email, 5, 900)) return new AuthChallengeResponse(true, true, null);
         User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
         if (user == null || user.getStatus() != UserStatus.PENDING_VERIFICATION) {
             return new AuthChallengeResponse(true, true, null);
         }
 
         Instant now = Instant.now();
-        challengeRepository.findTopByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(
-            user.getId(), AuthChallengePurpose.EMAIL_VERIFICATION
-        ).ifPresent(challenge -> {
-            if (challenge.getCreatedAt().plus(RESEND_COOLDOWN_SECONDS, ChronoUnit.SECONDS).isAfter(now)) {
-                throw ApiExceptions.conflict("Please wait 60 seconds before requesting another code");
-            }
-        });
+        var current = challengeRepository.findTopByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(
+            user.getId(), AuthChallengePurpose.EMAIL_VERIFICATION);
+        if (current.isPresent() && current.get().getCreatedAt().plusSeconds(RESEND_COOLDOWN_SECONDS).isAfter(now)) {
+            return new AuthChallengeResponse(true, true, null);
+        }
 
         ChallengeIssue issue = issueEmailVerification(user);
         auditLogService.recordMutation(user, "EMAIL_VERIFICATION_RESENT", "User", user.getId(), null,
@@ -97,8 +99,13 @@ public class AuthChallengeService {
     @Transactional
     public AuthChallengeResponse requestPasswordReset(ForgotPasswordRequest request) {
         String email = normalizeEmail(request.email());
+        if (!emailRateLimiter.allow("password-reset-email", email, 5, 900)) return new AuthChallengeResponse(true, true, null);
         User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
         if (user == null || user.getStatus() == UserStatus.DISABLED || user.getStatus() == UserStatus.LOCKED) {
+            return new AuthChallengeResponse(true, true, null);
+        }
+        var current = challengeRepository.findTopByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(user.getId(), AuthChallengePurpose.PASSWORD_RESET);
+        if (current.isPresent() && current.get().getCreatedAt().plusSeconds(RESEND_COOLDOWN_SECONDS).isAfter(Instant.now())) {
             return new AuthChallengeResponse(true, true, null);
         }
         ChallengeIssue issue = issue(user, AuthChallengePurpose.PASSWORD_RESET);
@@ -113,7 +120,7 @@ public class AuthChallengeService {
         return new AuthChallengeResponse(true, true, issue.debugCode());
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = com.storagehub.common.api.ApiException.class)
     public com.storagehub.api.auth.ActorResponse verifyEmail(VerifyEmailRequest request) {
         User user;
         AuthChallenge challenge;
@@ -127,6 +134,7 @@ public class AuthChallengeService {
                 .orElseThrow(this::invalidChallenge);
             challenge = latest(user, AuthChallengePurpose.EMAIL_VERIFICATION);
         }
+        if (user.getStatus() != UserStatus.PENDING_VERIFICATION) throw invalidChallenge();
         verifyCredential(challenge, request.codeOrToken());
         Instant now = Instant.now();
         challenge.setConsumedAt(now);
@@ -139,7 +147,7 @@ public class AuthChallengeService {
         return actorResponseMapper.toResponse(saved);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = com.storagehub.common.api.ApiException.class)
     public PasswordResetResponse resetPassword(ResetPasswordRequest request) {
         User user;
         AuthChallenge challenge;
@@ -153,6 +161,7 @@ public class AuthChallengeService {
                 .orElseThrow(this::invalidChallenge);
             challenge = latest(user, AuthChallengePurpose.PASSWORD_RESET);
         }
+        if (user.getStatus() == UserStatus.DISABLED || user.getStatus() == UserStatus.LOCKED) throw invalidChallenge();
         verifyCredential(challenge, request.codeOrToken());
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         user.setMustChangePassword(false);
@@ -185,14 +194,14 @@ public class AuthChallengeService {
     private ChallengeIssue issue(User user, AuthChallengePurpose purpose) {
         Instant now = Instant.now();
         challengeRepository.consumeActiveByUserAndPurpose(user.getId(), purpose, now);
-        String otp = String.format("%06d", secureRandom.nextInt(1_000_000));
+        String otp = String.format(java.util.Locale.ROOT, "%06d", secureRandom.nextInt(1_000_000));
         String token = jwtService.generateRefreshToken();
         AuthChallenge challenge = new AuthChallenge();
         challenge.setUser(user);
         challenge.setPurpose(purpose);
-        challenge.setOtpHash(jwtService.hash(otp));
+        challenge.setOtpHash(passwordEncoder.encode(otp));
         challenge.setTokenHash(jwtService.hash(token));
-        challenge.setExpiresAt(now.plus(15, ChronoUnit.MINUTES));
+        challenge.setExpiresAt(now.plus(expiryMinutes, ChronoUnit.MINUTES));
         challenge.setFailedAttempts(0);
         challengeRepository.saveAndFlush(challenge);
         boolean allowDebugCode = exposeDevelopmentCode && isDevOrLocal();
@@ -214,9 +223,12 @@ public class AuthChallengeService {
         if (!challenge.isUsable(Instant.now())) {
             throw invalidChallenge();
         }
-        String hash = jwtService.hash(credential.trim());
-        boolean matches = constantTimeEquals(hash, challenge.getOtpHash())
-            || constantTimeEquals(hash, challenge.getTokenHash());
+        String code = credential.trim();
+        String hash = jwtService.hash(code);
+        String otpHash = challenge.getOtpHash();
+        boolean matchesOtp = otpHash != null && code.matches("[0-9]{6}") && (otpHash.startsWith("$2")
+            ? passwordEncoder.matches(code, otpHash) : constantTimeEquals(hash, otpHash));
+        boolean matches = matchesOtp || constantTimeEquals(hash, challenge.getTokenHash());
         if (!matches) {
             challenge.setFailedAttempts(challenge.getFailedAttempts() + 1);
             if (challenge.getFailedAttempts() >= MAX_ATTEMPTS) {

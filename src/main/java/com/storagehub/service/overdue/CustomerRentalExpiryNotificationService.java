@@ -24,6 +24,10 @@ public class CustomerRentalExpiryNotificationService {
     private final RentalPeriodResolver periods;
     private final NotificationService notifications;
     private final ObjectProvider<Clock> clocks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ObjectProvider<com.storagehub.service.RentalReadSources.FinancialSource> financialSources;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
 
     @Scheduled(fixedDelayString = "${storagehub.customer-expiry-notification.delay-ms:3600000}",
         initialDelayString = "${storagehub.customer-expiry-notification.initial-delay-ms:60000}")
@@ -35,15 +39,22 @@ public class CustomerRentalExpiryNotificationService {
             var rental = rentals.findByIdForUpdate(id).orElse(null);
             if (rental == null || rental.getCustomer() == null || rental.getStatus() != RentalStatus.active
                 || rental.getActualReturnedAt() != null) continue;
+            var financial = financialSources.orderedStream().map(source -> source.read(rental)).flatMap(java.util.Optional::stream).findFirst();
+            if (financial.isPresent() && financial.get().outstandingAmount() != null && financial.get().outstandingAmount().signum() > 0) {
+                var bill = financial.get();
+                if (bill.nextDueDate() != null) {
+                    long dueIn = ChronoUnit.DAYS.between(today, bill.nextDueDate());
+                    if (java.util.Set.of(7L, 3L, 1L).contains(dueIn)) customerEmails.billingReminder(rental, bill, dueIn);
+                }
+                if (bill.overdueAmount() != null && bill.overdueAmount().signum() > 0) customerEmails.billingReminder(rental, bill, -1);
+            }
             var period = periods.read(rental).orElse(null);
             if (period == null) continue;
             String endDate = period.lastPermittedDate().toString();
             long remainingDays = ChronoUnit.DAYS.between(today, period.lastPermittedDate());
-            long totalDays = ChronoUnit.DAYS.between(period.startDate(), period.lastPermittedDate());
-            long reminderWindow = totalDays > 31 ? 30 : 7;
-            if (remainingDays >= 0 && remainingDays <= reminderWindow) {
+            if (java.util.Set.of(7L, 3L, 1L).contains(remainingDays)) {
                 String content = "Hợp đồng thuê " + rental.getId() + " sẽ hết hạn ngày " + endDate
-                    + ". Vui lòng gửi yêu cầu gia hạn hoặc liên hệ cơ sở nếu cần hỗ trợ.";
+                    + " (còn " + remainingDays + " ngày). Vui lòng gửi yêu cầu gia hạn hoặc trả kho đúng hạn; yêu cầu gia hạn chưa được xác nhận không tự kéo dài hợp đồng.";
                 notifications.notifyCustomerRentalEventOnce(rental.getCustomer().getId(), rental.getId(),
                     "Hợp đồng thuê sắp hết hạn", content);
             } else if (remainingDays < 0) {

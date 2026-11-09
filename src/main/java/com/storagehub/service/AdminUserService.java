@@ -53,6 +53,8 @@ public class AdminUserService {
     private final AdminAuthorizationService authorizationService;
     private final AuditLogService auditLogService;
     private final com.storagehub.service.email.EmailService emailService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private AuthChallengeService accountEmailVerification;
     private final jakarta.persistence.EntityManager entityManager;
 
     public AdminUserService(
@@ -225,7 +227,11 @@ public class AdminUserService {
             securityChanged = true;
         }
 
+        boolean verifyChangedEmail = request.email() != null && !user.getEmail().equalsIgnoreCase(before.email())
+            && user.getStatus() == UserStatus.ACTIVE && user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.CUSTOMER);
+        if (verifyChangedEmail) { user.setStatus(UserStatus.PENDING_VERIFICATION); securityChanged = true; }
         User saved = userRepository.saveAndFlush(user);
+        if (verifyChangedEmail) accountEmailVerification.issueEmailVerification(saved);
         if (request.facilityScopes() != null) {
             replaceScopes(saved, normalizeScopes(request.facilityScopes()));
         }

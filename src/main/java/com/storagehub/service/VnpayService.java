@@ -1218,9 +1218,11 @@ public class VnpayService {
         return proof;
     }
     private void markRenewalLatePayment(Payment payment,Instant gatewayPaidAt) {
+        PaymentStatus previousStatus = payment.getStatus();
         payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
         payment.setFailureCode("PAYMENT_AFTER_DEADLINE");
         payment.setFailureReason("VNPAY recorded Renewal funds after the persisted payment deadline; manual financial reconciliation is required");
+        if (previousStatus != PaymentStatus.PAID) sendRenewalPaymentBillEmail(payment, gatewayPaidAt);
     }
     private boolean replayFieldMatches(String incoming, String recorded) {
         // Missing optional fields were previously no-ops; they must not enrich a PAID row either.
@@ -1266,6 +1268,7 @@ public class VnpayService {
                     + " sau thời hạn. StorageHub đang đối soát giao dịch.",
                 reservation.getId()
             );
+            sendReservationPaymentBillEmail(payment, reservation, gatewayPaidAt);
         }
     }
     private Instant paymentDeadline(Reservation reservation) {
@@ -1384,6 +1387,9 @@ public class VnpayService {
 
             String note = "Biên lai này là bằng chứng xác nhận Quý khách đã thanh toán cọc giữ kho thành công cho đơn "
                 + reservation.getReservationCode() + ". Quý khách vui lòng lưu lại email này để làm căn cứ đối soát hoặc xuất trình khi nhận kho tại cơ sở.";
+            if (payment.getFailureCode() != null) {
+                note = "VNPay đã ghi nhận tiền nhưng giao dịch đang chờ đối soát; email này xác nhận đã nhận tiền, chưa xác nhận giữ kho thành công. Vui lòng lưu biên lai để đối chiếu.";
+            }
 
             UUID userId = customer != null ? customer.getId() : null;
             transactionalEmailService.sendPaymentBillAsync(
@@ -1398,7 +1404,7 @@ public class VnpayService {
                 facilityName,
                 facilityAddress,
                 periodOrAppointment,
-                "Thanh toán phí giữ chỗ (20%)",
+                "Thanh toán cọc giữ chỗ theo báo giá",
                 note
             );
         } catch (Exception ex) {
@@ -1431,6 +1437,9 @@ public class VnpayService {
                 ? "Thời hạn hợp đồng mới: " + newEndDate.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) : "N/A";
 
             String note = "Hợp đồng thuê của bạn đã được gia hạn tự động trên hệ thống mà không cần đến cơ sở ký lại giấy tờ. Quý khách có thể tiếp tục sử dụng kho theo thời hạn mới.";
+            if (payment.getFailureCode() != null) {
+                note = "VNPay đã ghi nhận tiền; kỳ gia hạn chưa được xác nhận và đang chờ đối soát. Vui lòng lưu biên lai để đối chiếu.";
+            }
 
             transactionalEmailService.sendPaymentBillAsync(
                 customer.getId(),

@@ -16,6 +16,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
+    long countByCustomer_IdAndStatusIn(UUID customerId, java.util.Collection<ReservationStatus> statuses);
     boolean existsByReservationCode(String reservationCode);
     boolean existsByFacility_Id(UUID facilityId);
     boolean existsByUnitType_Id(UUID unitTypeId);

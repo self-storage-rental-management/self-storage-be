@@ -59,6 +59,15 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class ReturnSettlementService {
+    @org.springframework.beans.factory.annotation.Value("${app.refund.processing-days:7}")
+    private int refundProcessingDays = 7;
+
+    private void markRefundPending(ReturnCase returnCase) {
+        returnCase.setStatus(ReturnCaseStatus.refund_pending);
+        if (returnCase.getRefundExpectedAt() == null) {
+            returnCase.setRefundExpectedAt(Instant.now().plus(java.time.Duration.ofDays(refundProcessingDays)));
+        }
+    }
 
     @Autowired
     private AccessCredentialService accessCredentialService;
@@ -266,7 +275,7 @@ public class ReturnSettlementService {
         returnCase.setNetRefundAmount(approvedRefund.add(approvedRentalRefund).setScale(2, RoundingMode.HALF_UP));
         returnCase.setAmountDueFromCustomer(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
         boolean refundPending = approvedRefund.signum() > 0 || approvedRentalRefund.signum() > 0;
-        returnCase.setStatus(refundPending ? ReturnCaseStatus.refund_pending : ReturnCaseStatus.completed);
+        if (refundPending) markRefundPending(returnCase); else returnCase.setStatus(ReturnCaseStatus.completed);
 
         rental.setSetupExitReviewRequired(false);
         if (!refundPending) {
@@ -573,7 +582,7 @@ public class ReturnSettlementService {
             if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
                 returnCase.setStatus(ReturnCaseStatus.payment_due);
             } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
-                returnCase.setStatus(ReturnCaseStatus.refund_pending);
+                markRefundPending(returnCase);
             } else {
                 reconciliation.settle(returnCase, actor.userId(), "OFFSET:" + returnCase.getId(), false);
                 returnCase.setStatus(ReturnCaseStatus.completed);
@@ -628,7 +637,7 @@ public class ReturnSettlementService {
         if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
         } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
-            returnCase.setStatus(ReturnCaseStatus.refund_pending);
+            markRefundPending(returnCase);
         } else {
             reconciliation.settle(returnCase, actor.userId(), "STAFF_OFFSET:" + returnCase.getId(), false);
             returnCase.setStatus(ReturnCaseStatus.completed);
@@ -692,7 +701,7 @@ public class ReturnSettlementService {
         if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
         } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
-            returnCase.setStatus(ReturnCaseStatus.refund_pending);
+            markRefundPending(returnCase);
         } else {
             reconciliation.settle(returnCase, returnCase.getCustomer().getId(), "AUTO_OFFSET:" + returnCase.getId(), false);
             returnCase.setStatus(ReturnCaseStatus.completed);
@@ -803,7 +812,7 @@ public class ReturnSettlementService {
         if (amountDue.compareTo(BigDecimal.ZERO) > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
         } else if (netRefund.compareTo(BigDecimal.ZERO) > 0) {
-            returnCase.setStatus(ReturnCaseStatus.refund_pending);
+            markRefundPending(returnCase);
         } else {
             requireFinance().settle(returnCase, actor.userId(), "OFFSET:" + returnCase.getId(), false);
             returnCase.setStatus(ReturnCaseStatus.completed);

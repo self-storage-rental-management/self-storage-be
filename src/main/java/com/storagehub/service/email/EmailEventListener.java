@@ -19,7 +19,7 @@ public class EmailEventListener {
 
     private final TransactionalEmailService transactionalEmailService;
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT, fallbackExecution = true)
     public void onVerifyEmail(SendVerifyEmailEvent event) {
         log.debug("Dispatching verify-email event for recipient={}", event.toEmail());
         transactionalEmailService.sendVerifyEmailAsync(
@@ -27,11 +27,12 @@ public class EmailEventListener {
             event.toEmail(),
             event.fullName(),
             event.verifyUrl(),
-            event.expiryMinutes()
+            event.expiryMinutes(),
+            event.otp()
         );
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT, fallbackExecution = true)
     public void onPasswordReset(SendPasswordResetEvent event) {
         log.debug("Dispatching reset-password event for recipient={}", event.toEmail());
         transactionalEmailService.sendPasswordResetAsync(
@@ -44,7 +45,7 @@ public class EmailEventListener {
         );
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT, fallbackExecution = true)
     public void onNewLogin(SendNewLoginEvent event) {
         log.debug("Dispatching new-login event for recipient={}", event.toEmail());
         transactionalEmailService.sendNewLoginNoticeAsync(
@@ -60,7 +61,7 @@ public class EmailEventListener {
         );
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT, fallbackExecution = true)
     public void onAccountCreated(SendAccountCreatedEvent event) {
         log.debug("Dispatching account-created event for recipient={}, isReset={}", event.toEmail(), event.isReset());
         transactionalEmailService.sendAccountCreatedAsync(
@@ -74,7 +75,8 @@ public class EmailEventListener {
         );
     }
 
-    @org.springframework.context.event.EventListener
+    @org.springframework.scheduling.annotation.Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMPLETION, fallbackExecution = true)
     public void onSecurityAlert(SendSecurityAlertEvent event) {
         log.debug("Dispatching security-alert event for recipient={}", event.toEmail());
         transactionalEmailService.sendSecurityAlertAsync(
@@ -92,7 +94,7 @@ public class EmailEventListener {
         );
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT, fallbackExecution = true)
     public void onAccountChanged(SendAccountChangedEvent event) {
         log.debug("Dispatching account-changed event for recipient={}", event.toEmail());
         transactionalEmailService.sendAccountChangedAsync(
