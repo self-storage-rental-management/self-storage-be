@@ -1,202 +1,46 @@
 package com.storagehub.service;
 
-import com.storagehub.config.EmailProperties;
-import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.User;
-import com.storagehub.service.email.EmailTemplateRenderer;
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
-import jakarta.annotation.PostConstruct;
-import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
+import com.storagehub.service.email.TransactionalEmailService;
+import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.io.Resource;
-import org.springframework.mail.MailException;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class AuthEmailService {
-
-    private static final String LOGO_PATH = "static/email/storagehub-logo.png";
-    private static final String LOGO_CID = "storagehubLogo";
-
-    private final ObjectProvider<JavaMailSender> mailSenderProvider;
-    private final EmailTemplateRenderer templateRenderer;
-    private final EmailProperties emailProperties;
-
-    @Value("${app.mail.enabled:false}")
-    private boolean enabled;
-
-    @Value("${app.mail.from:no-reply@storagehub.local}")
-    private String from;
-
-    @Value("${spring.mail.host:}")
-    private String mailHost;
-
-    @Value("${spring.mail.port:587}")
-    private int mailPort;
-
-    @Value("${spring.mail.username:}")
-    private String mailUsername;
+    private final TransactionalEmailService mail;
 
     @Value("${app.auth.verification-url:http://localhost:5173/?verifyEmail=}")
     private String verificationUrl;
-
     @Value("${app.auth.password-reset-url:http://localhost:5173/?resetPassword=}")
     private String passwordResetUrl;
-
-    @Value("${app.auth.expose-development-code:false}")
-    private boolean exposeDevelopmentCode;
-
-    @PostConstruct
-    void logMailConfiguration() {
-        log.info(
-            "Authentication email configuration: enabled={}, smtpHost='{}', smtpPort={}, usernameConfigured={}, from='{}'",
-            enabled,
-            mailHost,
-            mailPort,
-            mailUsername != null && !mailUsername.isBlank(),
-            from
-        );
-    }
+    @Value("${app.auth.challenge-expiry-minutes:5}")
+    private int expiryMinutes = 5;
 
     public void sendVerification(User user, String otp, String token) {
-        Map<String, Object> variables = new HashMap<>();
-        variables.put("fullName", user.getFullName());
-        variables.put("email", user.getEmail());
-        variables.put("verifyUrl", verificationUrl + token);
-        variables.put("expiryMinutes", 15);
-        variables.put("otp", otp);
-
-        sendTemplate(
-            user.getEmail(),
-            "StorageHub - Xác minh email đăng ký",
-            "verify-email",
-            variables,
-            "Xin chào " + user.getFullName() + ",\n\n"
-                + "Cảm ơn bạn đã đăng ký tài khoản StorageHub.\n\n"
-                + "Xác minh nhanh: " + verificationUrl + token + "\n\n"
-                + "Mã xác minh thủ công: " + otp + "\n\n"
-                + "Liên kết và mã hết hạn sau 15 phút. Nếu bạn không yêu cầu đăng ký, hãy bỏ qua email này."
-        );
+        mail.sendVerifyEmailAsync(user.getId(), user.getEmail(), user.getFullName(), verificationUrl + token, expiryMinutes, otp);
     }
 
     public void sendPasswordReset(User user, String otp, String token) {
-        Map<String, Object> variables = new HashMap<>();
-        variables.put("fullName", user.getFullName());
-        variables.put("email", user.getEmail());
-        variables.put("resetUrl", passwordResetUrl + token);
-        variables.put("expiryMinutes", 15);
-        variables.put("otp", otp);
-
-        sendTemplate(
-            user.getEmail(),
-            "StorageHub - Đặt lại mật khẩu",
-            "reset-password",
-            variables,
-            "Xin chào " + user.getFullName() + ",\n\n"
-                + "Bạn vừa yêu cầu đặt lại mật khẩu StorageHub.\n\n"
-                + "Đặt lại nhanh: " + passwordResetUrl + token + "\n\n"
-                + "Mã đặt lại thủ công: " + otp + "\n\n"
-                + "Liên kết và mã hết hạn sau 15 phút. Nếu bạn không yêu cầu, hãy bỏ qua email này."
-        );
+        mail.sendPasswordResetAsync(user.getId(), user.getEmail(), user.getFullName(), passwordResetUrl + token, expiryMinutes, otp);
     }
 
+    /** Compatibility for the legacy reservation state; new bookings use account verification. */
     public void sendReservationVerification(Reservation reservation, String otp) {
-        String reservationCode = reservation.getReservationCode();
-        Map<String, Object> variables = new HashMap<>();
-        variables.put("fullName", reservation.getCustomer().getFullName());
-        variables.put("reservationCode", reservationCode);
-        variables.put("otp", otp);
-        variables.put("expiryMinutes", 10);
-
-        sendTemplate(
-            reservation.getCustomer().getEmail(),
-            "StorageHub - Xác minh đơn đặt kho " + reservationCode,
-            "reservation-verification",
-            variables,
-            "Mã xác minh đơn đặt kho của bạn là: " + otp + "\n\n"
-                + "Mã đơn: " + reservationCode + "\n"
-                + "Mã hết hạn sau 10 phút. Nếu bạn không tạo đơn này, hãy liên hệ StorageHub."
-        );
-    }
-
-    private void sendTemplate(
-        String recipient,
-        String subject,
-        String templateName,
-        Map<String, Object> variables,
-        String text
-    ) {
-        if (!enabled) {
-            if (!exposeDevelopmentCode) {
-                throw ApiExceptions.conflict("The email delivery service is not configured");
-            }
-            log.info(
-                "[DEV EMAIL] Mail sending disabled. Template: {}, recipient: {}, variables: {}",
-                templateName,
-                recipient,
-                variables
-            );
-            return;
+        User customer = reservation.getCustomer();
+        Instant expiry = Instant.now().plusSeconds(600);
+        if (reservation.getHoldExpiresAt() != null && reservation.getHoldExpiresAt().isBefore(expiry)) {
+            expiry = reservation.getHoldExpiresAt();
         }
-
-        JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
-        if (mailSender == null) {
-            throw ApiExceptions.conflict("The email delivery service is not configured");
-        }
-
-        Resource logoResource = new ClassPathResource(LOGO_PATH);
-        boolean hasPublicLogo = emailProperties.getLogoUrl() != null
-            && !emailProperties.getLogoUrl().isBlank();
-        boolean hasInlineLogo = !hasPublicLogo && logoResource.exists();
-        if (hasInlineLogo) {
-            variables.put("logoCid", LOGO_CID);
-        }
-
-        try {
-            String html = templateRenderer.render(templateName, variables);
-            MimeMessage mimeMessage = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(
-                mimeMessage,
-                MimeMessageHelper.MULTIPART_MODE_RELATED,
-                StandardCharsets.UTF_8.name()
-            );
-            helper.setFrom(from);
-            helper.setTo(recipient);
-            helper.setSubject(subject);
-            helper.setText(text, html);
-
-            if (hasInlineLogo) {
-                helper.addInline(LOGO_CID, logoResource, "image/png");
-            }
-
-            mailSender.send(mimeMessage);
-            log.info(
-                "Authentication email accepted by SMTP: template={}, recipient={}, smtpHost='{}'",
-                templateName,
-                recipient,
-                mailHost
-            );
-        } catch (MessagingException | MailException exception) {
-            log.error(
-                "Failed to send authentication email to {} using SMTP host '{}': {}",
-                recipient,
-                mailHost,
-                exception.getMessage(),
-                exception
-            );
-            throw ApiExceptions.conflict("The email delivery service is unavailable");
-        }
+        Map<String, Object> variables = Map.of(
+            "fullName", customer.getFullName(), "reservationCode", reservation.getReservationCode(),
+            "otp", otp, "expiryMinutes", 10, "_expiresAt", expiry.toString());
+        mail.queueTemplate(customer.getId(), customer.getEmail(), "StorageHub - Xác minh đơn đặt kho " + reservation.getReservationCode(),
+            "reservation-verification", variables, "AUTH_EMAIL_SENT", UUID.randomUUID().toString());
     }
 }

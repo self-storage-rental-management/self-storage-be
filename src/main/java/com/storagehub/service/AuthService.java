@@ -58,6 +58,8 @@ public class AuthService {
     private final AuditLogService auditLogService;
     private final AuthChallengeService authChallengeService;
     private final GoogleIdentityService googleIdentityService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private RegistrationCaptchaService registrationCaptchaService;
     private final com.storagehub.service.email.EmailService transactionalEmailService;
     private final com.storagehub.domain.repo.LoginHistoryRepository loginHistoryRepository;
     private final com.storagehub.domain.repo.ActivityLogRepository activityLogRepository;
@@ -67,6 +69,7 @@ public class AuthService {
 
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
+        registrationCaptchaService.verify(request.captchaId(), request.captchaAnswer());
         String email = normalizeEmail(request.email());
         if (userRepository.existsByEmailIgnoreCase(email)) {
             throw ApiExceptions.conflict("An account with this email already exists");
@@ -116,9 +119,15 @@ public class AuthService {
 
     @Transactional
     public AuthResponse loginWithGoogle(String idToken, String ipAddress, String userAgent) {
+        return loginWithGoogle(idToken, ipAddress, userAgent, null, null);
+    }
+
+    @Transactional
+    public AuthResponse loginWithGoogle(String idToken, String ipAddress, String userAgent, String captchaId, String captchaAnswer) {
         GoogleIdentity identity = googleIdentityService.verify(idToken);
         User user = userRepository.findByEmailIgnoreCase(identity.email()).orElse(null);
         if (user == null) {
+            registrationCaptchaService.verify(captchaId, captchaAnswer);
             Role customerRole = roleRepository.findByCode(RoleCode.CUSTOMER)
                 .orElseThrow(() -> ApiExceptions.conflict("System roles have not been initialized"));
             user = new User();

@@ -45,6 +45,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class MaintenanceService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
 
     private final MaintenanceTaskRepository maintenanceTaskRepository;
     private final StorageUnitRepository storageUnitRepository;
@@ -96,6 +98,8 @@ public class MaintenanceService {
         task.setDueAt(request.dueAt());
 
         MaintenanceTask saved = maintenanceTaskRepository.save(task);
+        if (task.getTaskType() == MaintenanceTaskType.maintenance) customerEmails.facilityChanged(task.getFacility().getId(), "maintenance:" + saved.getId(),
+            "Thông báo kế hoạch bảo trì cơ sở", "Cơ sở đã lập nhiệm vụ bảo trì. Vui lòng xem thông tin lịch làm việc, khu vực ảnh hưởng trên web hoặc liên hệ cơ sở trước khi đến.");
 
         // Put storage unit in maintenance status
         if (unit.getStatus() != StorageUnitStatus.maintenance) {

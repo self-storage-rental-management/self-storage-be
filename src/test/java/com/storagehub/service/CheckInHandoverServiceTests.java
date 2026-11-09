@@ -239,19 +239,21 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void preventsInventoryVerificationBeforeFreeSetupWindowEnds() {
+    void allowsInventoryVerificationAfterEarlySetupCompletion() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
-        checkIn.setStatus(CheckInStatus.setup_completed);
-        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
-        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
-        Rental rental = entityWithId(new Rental());
+        mockCompletionChecks(true);
+        Rental rental = checkIn.getRental();
+        LocalDate paidRentalStart = LocalDate.now().plusDays(3);
         rental.setStatus(RentalStatus.setup);
         rental.setSetupEndsAt(Instant.now().plusSeconds(3600));
-        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+        rental.setStartDate(paidRentalStart);
+        rental.setContractEndDate(paidRentalStart.plusMonths(1));
 
-        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("setup miễn phí kết thúc");
+        var response = service.complete(actor, checkIn.getId(), validCompletionRequest());
+
+        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.completed);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.setup);
+        assertThat(rental.getStartDate()).isEqualTo(paidRentalStart);
     }
 
     @Test
@@ -460,6 +462,7 @@ class CheckInHandoverServiceTests {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
+        "2026-10-30T03:00:00Z,6,2026-11-05,2026-12-05",
         "2026-10-26T03:00:00Z,3,2026-10-29,2026-11-29",
         "2026-10-31T16:59:59Z,3,2026-11-03,2026-12-03",
         "2026-10-31T17:00:00Z,3,2026-11-04,2026-12-04",

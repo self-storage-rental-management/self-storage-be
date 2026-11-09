@@ -50,9 +50,10 @@ public class AdminSettingsService {
         authorizationService.require(actor, SystemPermission.MANAGE_SETTINGS);
         SystemSetting setting = repository.findBySettingKey(key)
             .orElseThrow(() -> ApiExceptions.notFound("Setting was not found"));
-        validateValue(setting, request.value());
+        JsonNode value = objectMapper.valueToTree(request.value());
+        validateValue(setting, value);
         AdminSettingResponse before = toResponse(setting);
-        setting.setValue(request.value().toString());
+        setting.setValue(value.toString());
         SystemSetting saved = repository.saveAndFlush(setting);
         AdminSettingResponse after = toResponse(saved);
         auditLogService.recordMutation(

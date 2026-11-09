@@ -20,7 +20,11 @@ public class EmailService {
     private final ApplicationEventPublisher eventPublisher;
 
     public void sendVerifyEmail(UUID userId, String toEmail, String fullName, String verifyUrl, int expiryMinutes) {
-        eventPublisher.publishEvent(new SendVerifyEmailEvent(userId, toEmail, fullName, verifyUrl, expiryMinutes));
+        sendVerifyEmail(userId, toEmail, fullName, verifyUrl, expiryMinutes, null);
+    }
+
+    public void sendVerifyEmail(UUID userId, String toEmail, String fullName, String verifyUrl, int expiryMinutes, String otp) {
+        eventPublisher.publishEvent(new SendVerifyEmailEvent(userId, toEmail, fullName, verifyUrl, expiryMinutes, otp));
     }
 
     public void sendVerifyEmail(String toEmail, String fullName, String verifyUrl, int expiryMinutes) {
@@ -98,7 +102,7 @@ public class EmailService {
         boolean isReset
     ) {
         eventPublisher.publishEvent(new SendAccountCreatedEvent(
-            userId, toEmail, fullName, createdAt, tempPassword, loginUrl, isReset
+            userId, toEmail, fullName, createdAt, null, loginUrl, isReset
         ));
     }
 

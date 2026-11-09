@@ -65,10 +65,10 @@ public class ReturnFinancialReconciliation {
         if(checkIn==null||pricing.getNetRentalAmount()==null
             ||paid.compareTo(pricing.getNetRentalAmount().add(pricing.getSecurityDepositAmount()))!=0)throw unknownDeposit();
         BigDecimal released=jdbc.queryForObject("select coalesce(sum(deposit_amount),0) from return_financial_snapshots where rental_id=? and settled_at_ms is not null",BigDecimal.class,rental.getId().toString());
-        if(released.signum()!=0)throw ApiExceptions.conflict("Cọc bảo đảm đã được quyết toán; không thể sử dụng lần nữa.");
+        if(released.signum()!=0)throw ApiExceptions.conflict("Tiền cọc đảm bảo thuê đã được quyết toán; không thể sử dụng lần nữa.");
         Long historical=em.createQuery("select count(r) from ReturnCase r where r.rental.id=:id and r.status=:status",Long.class)
             .setParameter("id",rental.getId()).setParameter("status",ReturnCaseStatus.completed).getSingleResult();
-        if(historical>0)throw ApiExceptions.conflict("Hồ sơ có quyết toán cũ cần đối soát cọc trước khi xử lý tiếp.");
+        if(historical>0)throw ApiExceptions.conflict("Hồ sơ có quyết toán cũ cần đối soát tiền cọc đảm bảo thuê trước khi xử lý tiếp.");
         return new Security(checkIn,pricing.getSecurityDepositAmount(),pricing);
     }
     private RuntimeException unknownDeposit() {
@@ -115,7 +115,13 @@ public class ReturnFinancialReconciliation {
             }
             var renewal=em.find(Renewal.class,o.renewalId());
             if(renewal==null||!renewal.getRental().getId().equals(rental.getId()))throw ApiExceptions.conflict("Nguồn công nợ gia hạn không hợp lệ.");
-            if(renewal.getStatus()!=RenewalStatus.completed)throw ApiExceptions.conflict("Cần đối soát hoặc đóng yêu cầu gia hạn chưa hoàn tất trước khi quyết toán trả kho.");
+            if(renewal.getStatus()!=RenewalStatus.completed) {
+                if (renewal.getStatus() != RenewalStatus.cancelled && renewal.getStatus() != RenewalStatus.rejected) {
+                    renewal.setStatus(RenewalStatus.cancelled);
+                    em.merge(renewal);
+                }
+                continue;
+            }
             if(o.dueAt().isAfter(Instant.now()))continue; // Future monthly termination policy is intentionally unchanged.
             var workflow=em.find(RenewalWorkflow.class,renewal.getId());
             if(!fee) {
@@ -163,12 +169,12 @@ public class ReturnFinancialReconciliation {
         var proof=security(rc.getRental());
         if (rc.isSetupExitRequested()) {
             if (!Objects.equals(row.get("setup_statement_json"), setupStatement(rc)))
-                throw ApiExceptions.conflict("Bảng kê trả kho trong setup đã thay đổi; cần đối soát lại.");
+                throw ApiExceptions.conflict("Bảng kê trả kho trong thời gian chuẩn bị đã thay đổi; cần đối soát lại.");
             if (rc.isSetupEarlyExit() && (!SetupEarlyExitPolicy.applies(rc)
                 || !Objects.equals(proof.pricing().getSetupEarlyExitPolicyVersion(), rc.getSetupEarlyExitPolicyVersion())
                 || proof.pricing().getSetupEarlyExitFee().compareTo(rc.getEarlyTerminationFee()) != 0
                 || proof.pricing().getNetRentalAmount().compareTo(rc.getRentalRefundCredit()) != 0))
-                throw ApiExceptions.conflict("Điều khoản hoặc tiền thuê thực thu không khớp bảng kê setup.");
+                throw ApiExceptions.conflict("Điều khoản hoặc tiền thuê thực thu không khớp bảng kê thời gian chuẩn bị.");
         }
         if(!proof.payment().getId().toString().equals(row.get("security_payment_id"))
             ||proof.amount().compareTo(rc.getDepositAmount())!=0||new BigDecimal(row.get("debt_amount").toString()).compareTo(rc.getOutstandingFee())!=0)
@@ -228,7 +234,17 @@ public class ReturnFinancialReconciliation {
         var amount=direction.equals("COLLECTION")?rc.getAmountDueFromCustomer():rc.getNetRefundAmount();
         try{jdbc.update("insert into return_settlement_receipts(return_id,direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_by,recorded_at_ms) values(?,?,?,?,?,?,?,?)",
             rc.getId().toString(),direction,amount,method,reference,file.toString(),actor.userId().toString(),Instant.now().toEpochMilli());}
-        catch(org.springframework.dao.DuplicateKeyException duplicate){throw ApiExceptions.conflict("Biên lai hoặc giao dịch đã được sử dụng.");}
+        catch(org.springframework.dao.DuplicateKeyException duplicate){
+            String msg = duplicate.getMessage();
+            if (msg != null && msg.contains("transaction_reference")) {
+                throw ApiExceptions.conflict("Mã giao dịch hoặc số biên nhận này đã được sử dụng trên hệ thống. Vui lòng nhập mã giao dịch khác.");
+            } else if (msg != null && msg.contains("receipt_file_id")) {
+                throw ApiExceptions.conflict("Tệp biên lai này đã được sử dụng cho một quyết toán khác. Vui lòng chọn tệp biên lai hợp lệ.");
+            } else if (msg != null && msg.contains("PRIMARY")) {
+                throw ApiExceptions.conflict("Hồ sơ trả kho này đã được ghi nhận biên lai quyết toán trước đó.");
+            }
+            throw ApiExceptions.conflict("Biên lai hoặc mã giao dịch đã được sử dụng. Vui lòng kiểm tra lại thông tin.");
+        }
     }
 
     /** External transfers must already have a bound Staff receipt (ordinary return or Recovery). */

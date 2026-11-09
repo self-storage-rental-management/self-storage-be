@@ -69,6 +69,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 
 public class VnpayService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VnpayService.class);
     @Autowired
     private com.storagehub.domain.repo.RentalRepository refundRentals;
     @Autowired
@@ -81,6 +82,8 @@ public class VnpayService {
     private RefundRequestRepository refundRequestRepository;
     @Autowired(required = false)
     private SystemSettingRepository systemSettingRepository;
+    @Autowired(required = false)
+    private com.storagehub.service.email.TransactionalEmailService transactionalEmailService;
 
     @Transactional(readOnly=true)
     public RenewalVnpayPaymentResponse installmentPayment(ActorPrincipal actor,UUID renewalId,UUID paymentId,String audience){
@@ -1131,6 +1134,7 @@ public class VnpayService {
                     + reservation.getReservationCode() + ".",
                 reservation.getId()
             );
+            sendReservationPaymentBillEmail(payment, reservation, paidAt);
         }
         if (previousReservationStatus != ReservationStatus.CONFIRMED
             && reservation.getStatus() == ReservationStatus.CONFIRMED) {
@@ -1139,7 +1143,7 @@ public class VnpayService {
                 NotificationType.RESERVATION,
                 "Có đơn đã xác nhận chờ phân kho",
                 "Đơn " + reservation.getReservationCode()
-                    + " đã thanh toán cọc và đang chờ nhân viên phân gian kho.",
+                    + " đã thanh toán cọc và đang chờ nhân viên phân kho.",
                 reservation.getId()
             );
         }
@@ -1181,6 +1185,7 @@ public class VnpayService {
         }
         payment.setRenewalNextRetryAt(Instant.now());
         if(paymentEvents!=null)paymentEvents.publishEvent(new com.storagehub.service.ledger.RenewalPaymentReconciler.Verified(payment.getId()));
+        sendRenewalPaymentBillEmail(payment, paidAt);
     }
     private com.storagehub.domain.model.ActivityLog recordRenewalGatewayEvidence(
         Payment payment,Map<String,String> query,Instant gatewayPaidAt,boolean accepted,String reason
@@ -1213,9 +1218,11 @@ public class VnpayService {
         return proof;
     }
     private void markRenewalLatePayment(Payment payment,Instant gatewayPaidAt) {
+        PaymentStatus previousStatus = payment.getStatus();
         payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
         payment.setFailureCode("PAYMENT_AFTER_DEADLINE");
         payment.setFailureReason("VNPAY recorded Renewal funds after the persisted payment deadline; manual financial reconciliation is required");
+        if (previousStatus != PaymentStatus.PAID) sendRenewalPaymentBillEmail(payment, gatewayPaidAt);
     }
     private boolean replayFieldMatches(String incoming, String recorded) {
         // Missing optional fields were previously no-ops; they must not enrich a PAID row either.
@@ -1261,6 +1268,7 @@ public class VnpayService {
                     + " sau thời hạn. StorageHub đang đối soát giao dịch.",
                 reservation.getId()
             );
+            sendReservationPaymentBillEmail(payment, reservation, gatewayPaidAt);
         }
     }
     private Instant paymentDeadline(Reservation reservation) {
@@ -1336,6 +1344,121 @@ public class VnpayService {
     private String message(Payment payment) {
         return payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully"
             : payment.getStatus() == PaymentStatus.FAILED ? "Payment was not successful" : "Payment is awaiting VNPAY confirmation";
+    }
+
+    private String formatVnd(BigDecimal amount) {
+        if (amount == null) return "0 đ";
+        java.text.NumberFormat nf = java.text.NumberFormat.getInstance(new java.util.Locale("vi", "VN"));
+        return nf.format(amount) + " đ";
+    }
+
+    private void sendReservationPaymentBillEmail(Payment payment, Reservation reservation, Instant gatewayPaidAt) {
+        if (transactionalEmailService == null || reservation == null) return;
+        try {
+            var customer = reservation.getCustomer();
+            String email = customer != null ? customer.getEmail() : null;
+            if (email == null || email.isBlank()) return;
+
+            String fullName = customer != null && customer.getFullName() != null ? customer.getFullName() : "Quý khách";
+
+            String invoiceNumber = payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : reservation.getReservationCode();
+            String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
+            String amountFormatted = formatVnd(payment.getAmount());
+            String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
+                .withZone(ZONE).format(gatewayPaidAt != null ? gatewayPaidAt : Instant.now());
+
+            String unitInfo = reservation.getUnitType() != null ? reservation.getUnitType().getName() : "Gian kho lưu trữ";
+            if (reservation.getAssignedUnit() != null) {
+                unitInfo += " (" + reservation.getAssignedUnit().getCode() + ")";
+            }
+
+            String facilityName = reservation.getFacility() != null ? reservation.getFacility().getName() : "StorageHub";
+            String facilityAddress = reservation.getFacility() != null && reservation.getFacility().getAddress() != null
+                ? reservation.getFacility().getAddress() : "";
+
+            String periodOrAppointment = "";
+            if (reservation.getAppointmentAt() != null) {
+                periodOrAppointment = "Lịch nhận kho: " + java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+                    .withZone(ZONE).format(reservation.getAppointmentAt());
+            } else if (reservation.getStartDate() != null && reservation.getEndDate() != null) {
+                periodOrAppointment = "Kỳ thuê: " + reservation.getStartDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                    + " đến " + reservation.getEndDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            }
+
+            String note = "Biên lai này là bằng chứng xác nhận Quý khách đã thanh toán cọc giữ kho thành công cho đơn "
+                + reservation.getReservationCode() + ". Quý khách vui lòng lưu lại email này để làm căn cứ đối soát hoặc xuất trình khi nhận kho tại cơ sở.";
+            if (payment.getFailureCode() != null) {
+                note = "VNPay đã ghi nhận tiền nhưng giao dịch đang chờ đối soát; email này xác nhận đã nhận tiền, chưa xác nhận giữ kho thành công. Vui lòng lưu biên lai để đối chiếu.";
+            }
+
+            UUID userId = customer != null ? customer.getId() : null;
+            transactionalEmailService.sendPaymentBillAsync(
+                userId,
+                email,
+                fullName,
+                invoiceNumber,
+                transactionNo,
+                amountFormatted,
+                paidAtFormatted,
+                unitInfo,
+                facilityName,
+                facilityAddress,
+                periodOrAppointment,
+                "Thanh toán cọc giữ chỗ theo báo giá",
+                note
+            );
+        } catch (Exception ex) {
+            log.warn("Could not send reservation payment bill email: {}", ex.getMessage());
+        }
+    }
+
+    private void sendRenewalPaymentBillEmail(Payment payment, Instant gatewayPaidAt) {
+        if (transactionalEmailService == null || payment == null || payment.getRenewal() == null) return;
+        try {
+            var renewal = payment.getRenewal();
+            var rental = renewal.getRental();
+            if (rental == null || rental.getCustomer() == null) return;
+            var customer = rental.getCustomer();
+            String email = customer.getEmail();
+            if (email == null || email.isBlank()) return;
+
+            String fullName = customer.getFullName() != null ? customer.getFullName() : "Quý khách";
+            String invoiceNumber = payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : ("INV-" + payment.getId().toString().substring(0, 8).toUpperCase());
+            String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
+            String amountFormatted = formatVnd(payment.getAmount());
+            String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
+                .withZone(ZONE).format(gatewayPaidAt != null ? gatewayPaidAt : Instant.now());
+            String unitCode = rental.getStorageUnit() != null ? rental.getStorageUnit().getCode() : "N/A";
+            String facilityName = rental.getFacility() != null ? rental.getFacility().getName() : "StorageHub";
+            String facilityAddress = rental.getFacility() != null && rental.getFacility().getAddress() != null
+                ? rental.getFacility().getAddress() : "";
+            java.time.LocalDate newEndDate = renewal.getNewEndDate();
+            String newEndDateFormatted = newEndDate != null
+                ? "Thời hạn hợp đồng mới: " + newEndDate.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) : "N/A";
+
+            String note = "Hợp đồng thuê của bạn đã được gia hạn tự động trên hệ thống mà không cần đến cơ sở ký lại giấy tờ. Quý khách có thể tiếp tục sử dụng kho theo thời hạn mới.";
+            if (payment.getFailureCode() != null) {
+                note = "VNPay đã ghi nhận tiền; kỳ gia hạn chưa được xác nhận và đang chờ đối soát. Vui lòng lưu biên lai để đối chiếu.";
+            }
+
+            transactionalEmailService.sendPaymentBillAsync(
+                customer.getId(),
+                email,
+                fullName,
+                invoiceNumber,
+                transactionNo,
+                amountFormatted,
+                paidAtFormatted,
+                unitCode,
+                facilityName,
+                facilityAddress,
+                newEndDateFormatted,
+                "Thanh toán gia hạn hợp đồng",
+                note
+            );
+        } catch (Exception ex) {
+            log.warn("Could not send renewal payment bill email: {}", ex.getMessage());
+        }
     }
 
     public record CallbackResult(String rspCode,String message,UUID paymentId,UUID reservationId,UUID renewalId,

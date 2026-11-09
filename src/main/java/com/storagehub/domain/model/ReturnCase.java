@@ -205,4 +205,7 @@ public class ReturnCase extends BaseEntity {
 
     @Column
     private Instant completedAt;
+
+    @Column
+    private Instant refundExpectedAt;
 }

@@ -21,7 +21,7 @@ public final class SetupEarlyExitPolicy {
     public static void capture(ReturnCase rc, ReservationPricingSnapshot pricing) {
         if (rc.isSetupExitRequested() && (rc.getSetupReturnedAt() == null
             || rc.getRental().getSetupStartedAt() == null || rc.getRental().getSetupEndsAt() == null))
-            throw ApiExceptions.conflict("Thiếu chứng cứ thời điểm bàn giao hoặc trả kho trong setup. Cần đối soát trước khi quyết toán.");
+            throw ApiExceptions.conflict("Thiếu chứng cứ thời điểm bàn giao hoặc trả kho trong thời gian chuẩn bị. Cần đối soát trước khi quyết toán.");
         boolean applies = applies(rc);
         rc.setSetupEarlyExit(applies);
         rc.setRentalRefundCredit(BigDecimal.ZERO);
@@ -36,7 +36,7 @@ public final class SetupEarlyExitPolicy {
             || pricing.getSetupEarlyExitFee().signum() < 0
             || pricing.getSetupEarlyExitFee().compareTo(pricing.getMonthlyPrice()) != 0
             || pricing.getSetupEarlyExitFee().compareTo(quote.getSetupEarlyExitFee()) != 0) {
-            throw ApiExceptions.conflict("Đơn chưa có điều khoản trả kho trong setup đã chấp nhận. Cần đối soát thủ công, không tự áp phí mới.");
+            throw ApiExceptions.conflict("Đơn chưa có điều khoản trả kho trong thời gian chuẩn bị đã chấp nhận. Cần đối soát thủ công, không tự áp phí mới.");
         }
         rc.setSetupEarlyExitPolicyVersion(pricing.getSetupEarlyExitPolicyVersion());
         rc.setRentalRefundCredit(pricing.getNetRentalAmount());

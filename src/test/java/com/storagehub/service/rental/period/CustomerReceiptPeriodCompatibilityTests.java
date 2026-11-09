@@ -35,6 +35,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     CustomerReservationService service;
     Reservation reservation;
     CheckIn checkIn;
+    ReservationPricingSnapshot snapshot;
     ActorPrincipal actor;
 
     @BeforeEach
@@ -71,7 +72,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         checkIn = id(new CheckIn());
         checkIn.setReservation(reservation);
         checkIn.setStatus(CheckInStatus.completed);
-        var snapshot = id(new ReservationPricingSnapshot());
+        snapshot = id(new ReservationPricingSnapshot());
         snapshot.setReservation(reservation);
         snapshot.setPricingPackageCode("TEST-1M");
         snapshot.setPricingPolicyVersion("test-v1");
@@ -123,6 +124,90 @@ class CustomerReceiptPeriodCompatibilityTests {
         assertThat(payload).containsEntry("status", ReservationStatus.COMPLETED)
             .containsEntry("rentalId", rental.getId());
         return (Map<String, Object>) payload.get("rentalPeriodEvidence");
+    }
+
+    @Test
+    void earlyInventoryReceiptActivatesRentalAndPreservesPaidRentalDates() {
+        var rental = earlyInventoryRental();
+        var setupEnd = rental.getSetupEndsAt();
+        var paidStart = rental.getStartDate();
+        var contractEnd = rental.getContractEndDate();
+
+        var response = service.confirmReceipt(actor, reservation.getId());
+
+        assertThat(response.getReservation().getStatus()).isEqualTo(ReservationStatus.COMPLETED);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
+        assertThat(rental.getSetupEndsAt()).isEqualTo(setupEnd);
+        assertThat(rental.getStartDate()).isEqualTo(paidStart);
+        assertThat(rental.getContractEndDate()).isEqualTo(contractEnd);
+        assertThat(reservation.getAssignedUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
+        assertThat(evidence(rental)).containsEntry("rentalCreated", false);
+        verify(rentals).saveAndFlush(rental);
+        verifyNoInteractions(ledger);
+    }
+
+    @Test
+    void alreadyConfirmedEarlyHandoverCanActivateWithoutRepeatingReceiptSideEffects() {
+        var rental = earlyInventoryRental();
+        var paidStart = rental.getStartDate();
+        reservation.setStatus(ReservationStatus.COMPLETED);
+
+        service.confirmReceipt(actor, reservation.getId());
+
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
+        assertThat(rental.getStartDate()).isEqualTo(paidStart);
+        verify(rentals).saveAndFlush(rental);
+        verifyNoInteractions(units, audit, notifications, ledger);
+    }
+
+    @Test
+    void missingInventoryStillBlocksEarlyReceipt() {
+        var rental = earlyInventoryRental();
+        rental.setInventoryVerifiedAt(null);
+        assertThatThrownBy(() -> service.confirmReceipt(actor, reservation.getId()))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+        verifyNoInteractions(units, audit, notifications, ledger);
+    }
+
+    @Test
+    void mismatchedInventoryStillBlocksEarlyReceipt() {
+        earlyInventoryRental();
+        checkIn.setInventoryVerifiedAt(checkIn.getInventoryVerifiedAt().minusSeconds(1));
+        assertThatThrownBy(() -> service.confirmReceipt(actor, reservation.getId()))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+        verifyNoInteractions(units, audit, notifications, ledger);
+    }
+
+    @Test
+    void returnedRentalStillBlocksEarlyReceipt() {
+        var rental = earlyInventoryRental();
+        rental.setStatus(RentalStatus.completed);
+        assertThatThrownBy(() -> service.confirmReceipt(actor, reservation.getId()))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+        verifyNoInteractions(units, audit, notifications, ledger);
+    }
+
+    private Rental earlyInventoryRental() {
+        var zone = com.storagehub.time.BusinessTime.ZONE;
+        var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var handoverAt = now.minusSeconds(3600);
+        snapshot.setFreeSetupDays(7);
+        com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation, snapshot);
+        var paidStart = handoverAt.atZone(zone).toLocalDate().plusDays(7);
+        var rental = checkIn.getRental();
+        rental.setStatus(RentalStatus.setup);
+        rental.setSetupStartedAt(handoverAt);
+        rental.setTermsEffectiveAt(handoverAt);
+        rental.setSetupEndsAt(paidStart.atStartOfDay(zone).toInstant());
+        rental.setStartDate(paidStart);
+        rental.setContractEndDate(paidStart.plusMonths(snapshot.getRentalMonths()));
+        rental.setInventoryVerifiedAt(now.minusSeconds(60));
+        checkIn.setSetupStartedAt(handoverAt);
+        checkIn.setSetupDueAt(rental.getSetupEndsAt());
+        checkIn.setContractSignedAt(handoverAt.minusSeconds(120));
+        checkIn.setPaymentCollectedAt(handoverAt.minusSeconds(60));
+        checkIn.setInventoryVerifiedAt(rental.getInventoryVerifiedAt());
+        return rental;
     }
 
     @Test

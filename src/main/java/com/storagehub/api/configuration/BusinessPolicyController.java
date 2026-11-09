@@ -103,6 +103,14 @@ public class BusinessPolicyController {
         );
     }
 
+    @DeleteMapping("/policies/packages/all")
+    public ApiResponse<Void> deleteAllPackagePolicies(
+        @RequestParam(required = false) UUID facilityId
+    ) {
+        businessPolicyService.deleteAllPackagePolicies(actorContext.required(), facilityId);
+        return new ApiResponse<>(null, CorrelationIdContext.current());
+    }
+
     @DeleteMapping("/policies/packages/{id}")
     public ApiResponse<Void> deletePackagePolicy(@PathVariable UUID id) {
         businessPolicyService.deletePackagePolicy(actorContext.required(), id);
