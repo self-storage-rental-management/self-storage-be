@@ -35,8 +35,8 @@ public class ReservationExpirationService {
     private final AuditLogService auditLogService;
     private final VnpayService vnpayService;
 
-    @Value("${app.reservation.complaint-window-minutes:30}")
-    private long complaintWindowMinutes = 30;
+    @Value("${app.reservation.complaint-window-minutes:1440}")
+    private long complaintWindowMinutes = 1440;
 
     @Transactional
     public int expireDueReservations() {
@@ -123,7 +123,8 @@ public class ReservationExpirationService {
             "Chưa nhận được kết quả thanh toán",
             "Đơn " + reservation.getReservationCode()
                 + " đang chờ đối soát VNPay. Nếu tài khoản đã bị trừ tiền, bạn có "
-                + complaintWindowMinutes + " phút để gửi khiếu nại kèm bằng chứng.",
+                + (complaintWindowMinutes % 60 == 0 ? complaintWindowMinutes / 60 + " giờ" : complaintWindowMinutes + " phút")
+                + " để gửi khiếu nại kèm bằng chứng. Suất kho tiếp tục được giữ trong thời hạn này.",
             reservation.getId()
         );
         return true;

@@ -39,8 +39,8 @@ public class SimulatedPaymentService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.storagehub.service.email.TransactionalEmailService transactionalEmailService;
 
-    @Value("${app.reservation.complaint-window-minutes:30}")
-    private long complaintWindowMinutes = 30;
+    @Value("${app.reservation.complaint-window-minutes:1440}")
+    private long complaintWindowMinutes = 1440;
 
     @Transactional(readOnly = true)
     public SimulatedPaymentResponse getPayment(ActorPrincipal actor, UUID reservationId) {
@@ -259,7 +259,7 @@ public class SimulatedPaymentService {
                 facilityName,
                 facilityAddress,
                 periodOrAppointment,
-                "Thanh toán phí giữ chỗ (20%)",
+                "Thanh toán cọc giữ chỗ theo báo giá",
                 note
             );
         } catch (Exception ex) {

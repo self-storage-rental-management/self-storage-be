@@ -22,8 +22,15 @@ public record RegisterRequest(
     @NotBlank @Size(max = 160) String emergencyContactName,
     @NotBlank @Size(max = 10)
     @Pattern(regexp = "^(?:03[2-9]|05[25689]|07[06789]|08[1-9]|09[0-46-9])\\d{7}$", message = "emergencyContactPhone must be a valid Vietnamese mobile number")
-    String emergencyContactPhone
+    String emergencyContactPhone,
+    @NotBlank @Size(max = 36) String captchaId,
+    @NotBlank @Size(max = 6) String captchaAnswer
 ) {
+    public RegisterRequest(String email, String password, String fullName, String phone,
+                           String permanentAddress, String emergencyContactName, String emergencyContactPhone) {
+        this(email, password, fullName, phone, permanentAddress, emergencyContactName, emergencyContactPhone, null, null);
+    }
+
     @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
     public boolean isPhoneNumbersValid() {
         return PhoneNumberPolicy.isOptionalValid(phone)
