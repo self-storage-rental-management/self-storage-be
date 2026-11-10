@@ -31,7 +31,7 @@ import org.springframework.transaction.support.TransactionTemplate;
     "server.address=127.0.0.1",
     "spring.datasource.url=jdbc:h2:mem:duong-communication-integration;MODE=MySQL;DB_CLOSE_DELAY=-1",
     "spring.sql.init.mode=always",
-    "spring.sql.init.schema-locations=classpath:rental-ledger-test-schema.sql,classpath:notification-outbox-test-schema.sql",
+    "spring.sql.init.schema-locations=classpath:rental-ledger-test-schema.sql,classpath:notification-outbox-test-schema.sql,classpath:transactional-email-test-schema.sql",
     "storagehub.integration.ledger.enabled=true",
     "storagehub.integration.communication.enabled=true",
     "storagehub.integration.communication.worker-initial-delay-ms=86400000",

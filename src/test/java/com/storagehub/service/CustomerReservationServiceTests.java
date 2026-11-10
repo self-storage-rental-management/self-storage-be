@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import com.storagehub.api.reservation.CancelReservationRequest;
 import com.storagehub.api.reservation.CheckInAppointmentRequest;
+import com.storagehub.api.reservation.CheckInDocumentResponse;
 import com.storagehub.api.reservation.GoodsItemRequest;
 import com.storagehub.api.reservation.UpdateSetupGoodsRequest;
 import com.storagehub.common.api.ApiException;
@@ -16,6 +17,8 @@ import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.CompatibilityResult;
 import com.storagehub.domain.model.Facility;
+import com.storagehub.domain.model.FileAsset;
+import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.ReservationGoodsItem;
@@ -75,6 +78,7 @@ class CustomerReservationServiceTests {
     @Mock private com.storagehub.domain.repo.FileAssetRepository fileAssetRepository;
     @Mock private AuditLogService auditLogService;
     @Mock private NotificationService notificationService;
+    @Mock private PaymentProvenance paymentProvenance;
 
     private CustomerReservationService service;
     private ActorPrincipal actor;
@@ -130,6 +134,43 @@ class CustomerReservationServiceTests {
         snapshot.setRemainingRentalAmount(new BigDecimal("9603000.00"));
         snapshot.setDueAtCheckIn(new BigDecimal("15103000.00"));
         snapshot.setTotalInitialObligation(new BigDecimal("21505000.00"));
+    }
+
+    @Test
+    void classifiesIdenticallyNamedCheckInDocumentsByTheirWorkflowReferences() {
+        ReflectionTestUtils.setField(service, "paymentProvenance", paymentProvenance);
+        ReflectionTestUtils.setField(service, "objectMapper", new com.fasterxml.jackson.databind.ObjectMapper());
+        CheckIn checkIn = entityWithId(new CheckIn());
+        checkIn.setStatus(CheckInStatus.completed);
+        var files = java.util.stream.IntStream.range(0, 4).mapToObj(i -> {
+            FileAsset file = entityWithId(new FileAsset());
+            file.setOriginalName("image_0.jpg");
+            file.setEntityType("CHECK_IN");
+            file.setEntityId(checkIn.getId());
+            file.setStatus(FileAssetStatus.ACTIVE);
+            return file;
+        }).toList();
+        UUID handoverId = files.get(2).getId();
+        checkIn.setContractEvidenceReference(files.get(0).getId().toString());
+        checkIn.setReadinessNote("Tình trạng kho trống: Kho sạch | Bằng chứng: " + handoverId + " | Ghi chú khách: Đã xếp hàng");
+        checkIn.setChecklistJson("{\"evidenceReferences\":[\"" + handoverId + "\",\"" + files.get(3).getId() + "\"]}");
+        Payment payment = entityWithId(new Payment());
+        payment.setPurpose(PaymentType.RENTAL_BALANCE);
+        payment.setStatus(PaymentStatus.PAID);
+        payment.setGatewayProvider("MANUAL");
+        when(paymentProvenance.manualReceiptFileId(payment)).thenReturn(files.get(1).getId());
+        when(reservationRepository.findByIdAndCustomer_Id(reservation.getId(), actor.userId())).thenReturn(Optional.of(reservation));
+        when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
+        when(paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())).thenReturn(List.of(payment));
+        when(fileAssetRepository.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("CHECK_IN", checkIn.getId()))
+            .thenReturn(files.reversed());
+
+        var documents = service.listCheckInDocuments(actor, reservation.getId());
+        assertThat(documents).extracting(CheckInDocumentResponse::id)
+            .containsExactlyElementsOf(files.stream().map(FileAsset::getId).toList());
+        assertThat(documents).extracting(CheckInDocumentResponse::kind).containsExactly(
+            CheckInDocumentResponse.Kind.SIGNED_CONTRACT, CheckInDocumentResponse.Kind.PAYMENT_RECEIPT,
+            CheckInDocumentResponse.Kind.HANDOVER_EVIDENCE, CheckInDocumentResponse.Kind.INVENTORY_EVIDENCE);
     }
 
     @Test
@@ -190,7 +231,7 @@ class CustomerReservationServiceTests {
         assertThatThrownBy(() -> service.updateSetupGoods(actor, reservation.getId(),
             new UpdateSetupGoodsRequest(List.of(new GoodsItemRequest()), null)))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("locked");
+            .hasMessageContaining("đã bị khóa");
     }
 
     @Test
@@ -291,10 +332,10 @@ class CustomerReservationServiceTests {
     }
 
     @Test
-    void rejectsCheckInAppointmentBeforeRentalStartDate() {
+    void rejectsCheckInAppointmentOutsideTheSevenDayWindow() {
         reservation.setStatus(ReservationStatus.CONFIRMED);
         reservation.setStartDate(LocalDate.now().plusDays(2));
-        Instant invalidAppointment = Instant.now().plusSeconds(3_600);
+        Instant invalidAppointment = Instant.now().plusSeconds(8 * 86_400L);
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
 

@@ -452,7 +452,7 @@ public class CheckInHandoverService {
             throw ApiExceptions.conflict("Reservation is not ready for inventory check");
         }
         requirePaidReservationDeposit(reservation);
-        Rental rental = rentalRepository.findByReservation_Id(reservation.getId())
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu mốc thời gian chuẩn bị của hồ sơ thuê"));
         if (rental.getSetupEndsAt() == null) {
             throw ApiExceptions.conflict("Thiếu mốc thời gian chuẩn bị của hồ sơ thuê");
@@ -539,7 +539,11 @@ public class CheckInHandoverService {
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Đã hoàn tất kiểm kê hàng hóa",
             "Gian kho " + unit.getCode() + " của đơn " + reservation.getReservationCode()
-                + " đã được nhân viên kiểm kê sau khi bạn báo chuẩn bị hàng xong.",
+                + " đã được nhân viên kiểm kê sau khi bạn báo chuẩn bị hàng xong."
+                + (rental.getStatus() == RentalStatus.setup
+                    ? " Mở Hồ sơ thuê để xác nhận bắt đầu kỳ thuê ngay. Nếu chưa xác nhận sớm, kỳ thuê tính tiền từ "
+                        + rental.getStartDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) + " theo lịch."
+                    : ""),
             reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(

@@ -197,13 +197,25 @@ class ReturnSettlementServiceTests {
         ReflectionTestUtils.setField(record, "id", UUID.randomUUID());
         record.setRental(rental); record.setFacility(facility); record.setStorageUnit(unit); record.setCustomer(customer);
         record.setStatus(ReturnCaseStatus.requested);
-        record.setScheduledDate(LocalDate.now().plusDays(1));
+        LocalDate lastRentalDay = rental.getContractEndDate().minusDays(1);
+        record.setScheduledDate(lastRentalDay);
+        var periods = org.mockito.Mockito.mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        when(periods.read(rental)).thenReturn(com.storagehub.service.rental.period.RentalPeriod.verified(
+            rental.getId(), rental.getStartDate(), rental.getContractEndDate(),
+            com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE, "test-confirmed-period"));
+        ReflectionTestUtils.setField(service, "rentalPeriods", periods);
         when(returnCaseRepository.findOwnedForUpdate(record.getId(), customer.getId())).thenReturn(Optional.of(record));
         when(returnCaseRepository.saveAndFlush(record)).thenReturn(record);
         var result = service.updateCustomerReturnRequest(customerActor, record.getId(),
             new CustomerCreateReturnRequest(LocalDate.now().plusDays(3), "Chuyển địa điểm"));
         assertThat(result.scheduledDate()).isEqualTo(LocalDate.now().plusDays(3));
         assertThat(record.getCustomerNotes()).isEqualTo("Chuyển địa điểm");
+        assertThat(record.getReturnType()).isEqualTo(com.storagehub.domain.model.ReturnType.EARLY_RETURN);
+        assertThat(record.isActiveReturnRepricingRequired()).isTrue();
+        service.updateCustomerReturnRequest(customerActor, record.getId(),
+            new CustomerCreateReturnRequest(lastRentalDay, "Trả đúng hạn"));
+        assertThat(record.getReturnType()).isEqualTo(com.storagehub.domain.model.ReturnType.NORMAL);
+        assertThat(record.isActiveReturnRepricingRequired()).isFalse();
         record.setStatus(ReturnCaseStatus.scheduled);
         assertThatThrownBy(() -> service.updateCustomerReturnRequest(customerActor, record.getId(),
             new CustomerCreateReturnRequest(LocalDate.now().plusDays(4), "Đổi ngày"))).hasMessageContaining("được nhân viên xử lý");
@@ -228,7 +240,7 @@ class ReturnSettlementServiceTests {
         returnCase.setRequestedBy(customer);
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setDepositAmount(new BigDecimal("2000000.00"));
-        returnCase.setScheduledDate(LocalDate.now());
+        returnCase.setScheduledDate(rental.getContractEndDate());
 
         ReturnInspectionRequest request = new ReturnInspectionRequest(
             InventoryMatch.match,
@@ -356,8 +368,9 @@ class ReturnSettlementServiceTests {
         assertThat(response.customerDecisionNote()).contains("Phi ve sinh 500k qua cao");
     }
 
-    @Test
-    void managerReviewDispute_recalculatesAndResolves() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"0,0,1900000", "8000000,4000000,5900000"})
+    void managerReviewDispute_recalculatesAndResolves(String rentalCharge, String rentalRefund, String expectedRefund) {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
         returnCase.setRental(rental);
@@ -369,6 +382,8 @@ class ReturnSettlementServiceTests {
         returnCase.setTotalDeductions(new BigDecimal("500000.00"));
         returnCase.setNetRefundAmount(new BigDecimal("1500000.00"));
         returnCase.setAmountDueFromCustomer(BigDecimal.ZERO);
+        returnCase.setEarlyTerminationCharge(new BigDecimal(rentalCharge));
+        returnCase.setRentalRefundAmount(new BigDecimal(rentalRefund));
 
         // Manager reduces cleaning fee to 100k
         ManagerReviewDisputeRequest request = new ManagerReviewDisputeRequest(
@@ -388,7 +403,8 @@ class ReturnSettlementServiceTests {
         ReturnCaseResponse response = service.managerReviewDispute(managerActor, returnCase.getId(), request);
 
         assertThat(response.totalDeductions()).isEqualByComparingTo(new BigDecimal("100000.00"));
-        assertThat(response.netRefundAmount()).isEqualByComparingTo(new BigDecimal("1900000.00"));
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(expectedRefund);
+        assertThat(response.amountDueFromCustomer()).isZero();
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
         assertThat(response.reviewedByName()).isEqualTo("Le Van Manager");
     }
