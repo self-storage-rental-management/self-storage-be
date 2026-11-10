@@ -37,6 +37,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class ReservationGoodsReviewService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.UnitTypeRepository capacityMutex;
 
     private final ReservationRepository reservationRepository;
     private final ReservationGoodsItemRepository goodsItemRepository;
@@ -81,8 +83,10 @@ public class ReservationGoodsReviewService {
     ) {
         requireStaffActor(actor);
         authorizationService.require(actor, SystemPermission.APPROVE_RESERVATIONS);
-        Reservation reservation = reservationRepository.findById(reservationId)
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
         if (reservation.getStatus() != ReservationStatus.AWAITING_REVIEW
             || reservation.getGoodsReviewStatus() != GoodsReviewStatus.PENDING) {

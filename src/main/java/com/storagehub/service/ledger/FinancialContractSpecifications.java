@@ -21,8 +21,9 @@ public final class FinancialContractSpecifications {
         }
         public Instant requireDue(Instant prepaymentDue,Instant signingBalanceDue) {
             if(dueDate==null&&sourceReference.endsWith(":REMAINDER")) {
-                if(signingBalanceDue==null)throw ApiExceptions.conflict("Hạn thu tiền khi ký chưa được xác định.");
-                return signingBalanceDue;
+                if(signingBalanceDue!=null)return signingBalanceDue;
+                if(prepaymentDue!=null)return prepaymentDue;
+                throw ApiExceptions.conflict("Hạn thu tiền khi ký chưa được xác định.");
             }
             return requireDue(prepaymentDue);
         }

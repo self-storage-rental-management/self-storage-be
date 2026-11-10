@@ -20,6 +20,8 @@ public class FacilityContentPolicyService {
     private final AdminAuthorizationService authorization;
     private final AuditLogService audit;
     private final ObjectMapper mapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     public record Catalog(long version, List<FacilityContentPolicy> policies) {}
     private void requireBusiness(ActorPrincipal actor, boolean write) {
         if (!actor.hasRole(RoleCode.BUSINESS)) throw ApiExceptions.forbidden("Chỉ BO được quản lý chính sách cơ sở.");
@@ -51,12 +53,25 @@ public class FacilityContentPolicyService {
         catalogs.saveAndFlush(entity);
         Catalog after = new Catalog(entity.getVersion(), policies);
         audit.recordMutation("FACILITY_CONTENT_POLICIES_UPDATED", "FacilityPolicyCatalog", UUID.nameUUIDFromBytes(KEY.getBytes(java.nio.charset.StandardCharsets.UTF_8)), null, before, after);
+        if (!Objects.equals(before.policies(), policies)) {
+            for (Facility facility : facilities.findAll()) {
+                UUID id = facility.getId();
+                var oldRules = before.policies().stream().filter(policy -> appliesTo(policy, id)).toList();
+                var newRules = policies.stream().filter(policy -> appliesTo(policy, id)).toList();
+                if (!oldRules.equals(newRules)) customerEmails.facilityChanged(id, "rules:" + after.version(),
+                    "Thông báo cập nhật quy định cơ sở", "Quy định cơ sở đã được cập nhật. Vui lòng xem nội dung và thời điểm áp dụng trên web. Các thay đổi không tự động sửa giá, phí hoặc điều khoản của kỳ thuê đã được hai bên chấp nhận.");
+            }
+        }
         return after;
     }
     @Transactional(readOnly=true)
     public List<FacilityContentPolicy> customerPolicies(UUID facilityId) {
         var facility = facilities.findById(facilityId).orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy cơ sở."));
         if (facility.getStatus() != FacilityStatus.active) return List.of();
-        return read().policies().stream().filter(policy -> "all".equals(policy.scopeType()) || policy.facilityIds().contains(facilityId)).toList();
+        return read().policies().stream().filter(policy -> appliesTo(policy, facilityId)).toList();
+    }
+
+    private static boolean appliesTo(FacilityContentPolicy policy, UUID facilityId) {
+        return "all".equals(policy.scopeType()) || policy.facilityIds().contains(facilityId);
     }
 }

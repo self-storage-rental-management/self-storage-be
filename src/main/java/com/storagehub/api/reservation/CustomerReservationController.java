@@ -13,7 +13,6 @@ import com.storagehub.api.payment.VnpayPaymentUrlResponse;
 import com.storagehub.api.payment.VnpayTransactionResponse;
 import com.storagehub.api.payment.CreatePaymentComplaintRequest;
 import com.storagehub.api.payment.PaymentComplaintResponse;
-import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.service.PaymentComplaintService;
 import jakarta.validation.Valid;
@@ -144,6 +143,25 @@ public class CustomerReservationController {
         );
     }
 
+    @GetMapping("/{reservationId}/rental-start-confirmation")
+    public ApiResponse<RentalStartConfirmation> previewRentalStart(@PathVariable UUID reservationId) {
+        return new ApiResponse<>(
+            customerReservationService.previewRentalStart(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{reservationId}/rental-start-confirmation")
+    public ApiResponse<ReservationDetailResponse> confirmRentalStart(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody RentalStartConfirmation.Request request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.confirmRentalStart(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/setup-goods")
     public ApiResponse<ReservationDetailResponse> updateSetupGoods(
         @PathVariable UUID reservationId,
@@ -151,6 +169,17 @@ public class CustomerReservationController {
     ) {
         return new ApiResponse<>(
             customerReservationService.updateSetupGoods(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{reservationId}/preparation-complete")
+    public ApiResponse<ReservationDetailResponse> markPreparationComplete(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody(required = false) CustomerPreparationCompleteRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.markPreparationComplete(actorContext.required(), reservationId, request),
             CorrelationIdContext.current()
         );
     }
@@ -167,7 +196,7 @@ public class CustomerReservationController {
     }
 
     @GetMapping("/{reservationId}/check-in-documents")
-    public ApiResponse<List<FileAssetResponse>> listCheckInDocuments(
+    public ApiResponse<List<CheckInDocumentResponse>> listCheckInDocuments(
         @PathVariable UUID reservationId
     ) {
         return new ApiResponse<>(

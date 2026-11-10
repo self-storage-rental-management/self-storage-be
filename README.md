@@ -163,7 +163,7 @@ Mặc định:
 
 ## API chính theo main
 
-### Auth — /api/auth
+### Auth - /api/auth
 
 - POST /register
 - POST /login

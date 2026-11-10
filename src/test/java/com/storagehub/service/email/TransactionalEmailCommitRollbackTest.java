@@ -82,7 +82,7 @@ class TransactionalEmailCommitRollbackTest {
 
         // Must NOT send any email when transaction rolls back
         verify(transactionalEmailService, never()).sendVerifyEmailAsync(
-            any(), anyString(), anyString(), anyString(), anyInt()
+            any(), anyString(), anyString(), anyString(), anyInt(), any()
         );
     }
 
@@ -93,7 +93,7 @@ class TransactionalEmailCommitRollbackTest {
 
         // Must send EXACTLY ONCE upon successful commit
         verify(transactionalEmailService, times(1)).sendVerifyEmailAsync(
-            any(), eq("commit@storagehub.test"), eq("User Commit"), anyString(), eq(15)
+            any(), eq("commit@storagehub.test"), eq("User Commit"), anyString(), eq(15), org.mockito.ArgumentMatchers.isNull()
         );
     }
 }

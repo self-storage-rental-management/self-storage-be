@@ -48,13 +48,7 @@
                 </tr>
               </table>
 
-              <!-- Chỉ hiển thị cho tài khoản do Admin cấp (Staff / Manager / Business / Admin) hoặc Admin reset mật khẩu -->
-              <div th:if="${tempPassword != null and !tempPassword.isEmpty()}"
-                   style="margin:0 0 20px;padding:14px 16px;background:#FFF6E5;border-left:4px solid #F59A1B;border-radius:4px;font:400 14px/1.6 Segoe UI,Helvetica,Arial,sans-serif;color:#1F1F1F">
-                <span th:if="${isReset}">Mật khẩu tài khoản của bạn đã được đặt lại bởi quản trị viên. Lần đăng nhập tiếp theo bạn sẽ được yêu cầu <b>đổi mật khẩu tạm thời</b>.<br></span>
-                <span th:unless="${isReset}">Tài khoản này do quản trị viên cấp. Lần đăng nhập đầu tiên bạn sẽ được yêu cầu <b>đổi mật khẩu tạm thời</b>.<br></span>
-                Mật khẩu tạm thời: <b style="font-family:Consolas,monospace;letter-spacing:1px" th:text="${tempPassword}">Abc@123456</b>
-              </div>
+              <p style="font:400 14px/1.6 Segoe UI,Helvetica,Arial,sans-serif;color:#444">Để bảo vệ tài khoản, StorageHub không gửi mật khẩu qua email. Nếu tài khoản do quản trị viên cấp hoặc đặt lại mật khẩu, hãy chọn “Quên mật khẩu” trên trang đăng nhập để tự đặt mật khẩu bằng liên kết dùng một lần.</p>
 
               <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0">
                 <tr>

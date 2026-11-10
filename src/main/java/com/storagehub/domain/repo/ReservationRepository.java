@@ -16,6 +16,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
+    long countByCustomer_IdAndStatusIn(UUID customerId, java.util.Collection<ReservationStatus> statuses);
     boolean existsByReservationCode(String reservationCode);
     boolean existsByFacility_Id(UUID facilityId);
     boolean existsByUnitType_Id(UUID unitTypeId);
@@ -155,12 +156,14 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
                 com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN,
                 com.storagehub.domain.model.ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+                com.storagehub.domain.model.ReservationStatus.PREPARING,
                 com.storagehub.domain.model.ReservationStatus.COMPLETED
             ))
             or (:statusFilter = true and reservation.status in (
                 com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
                 com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN,
                 com.storagehub.domain.model.ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
+                com.storagehub.domain.model.ReservationStatus.PREPARING,
                 com.storagehub.domain.model.ReservationStatus.COMPLETED
             ))
         )

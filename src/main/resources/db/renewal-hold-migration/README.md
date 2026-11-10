@@ -1,4 +1,4 @@
-# Extension hold rollout — opt-in, chưa áp dụng DB thật
+# Extension hold rollout - opt-in, chưa áp dụng DB thật
 
 Migration V2026101104 tạo duy nhất renewal_extension_holds; 4 FK tới Renewal/Rental/Unit/Facility, unique renewal_id, index unit/state/interval và CHECK dates/state/expiry.
 
