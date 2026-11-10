@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="vi" xmlns:th="http://www.thymeleaf.org">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>StorageHub</title></head>
+<body style="margin:0;background:#f5f5f4">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border-radius:12px;overflow:hidden">
+  <th:block th:replace="~{email/layout :: header}"></th:block>
+  <tr><td style="padding:28px;font:400 15px/1.7 Segoe UI,Helvetica,Arial,sans-serif;color:#292524">
+    <h1 style="font-size:22px;line-height:1.4;margin:0 0 20px" th:text="${title}">Thông tin hồ sơ StorageHub</h1>
+    <p>Xin chào <b th:text="${fullName}">Quý khách</b>,</p>
+    <p style="white-space:pre-line" th:text="${summary}">Vui lòng xem cập nhật hồ sơ trên web.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;margin:20px 0">
+      <tr th:each="row : ${details}"><td style="padding:10px 8px 10px 0;border-bottom:1px solid #e7e5e4;color:#78716c;vertical-align:top;width:40%" th:text="${row.key}">Thuộc tính</td><td style="padding:10px 0;border-bottom:1px solid #e7e5e4;vertical-align:top" th:text="${row.value}">Nội dung</td></tr>
+    </table>
+    <p><a th:href="${detailsUrl}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:#f59e0b;color:#292524;text-decoration:none;font-weight:600">Xem hồ sơ và thao tác trên web</a></p>
+    <p style="font-size:12px;color:#78716c">Đăng nhập đúng tài khoản để xem hợp đồng, biên lai, quyền ra vào và bảng kê quyết toán. Đây là email giao dịch liên quan đến hồ sơ của bạn.</p>
+  </td></tr>
+  <th:block th:replace="~{email/layout :: footer}"></th:block>
+</table></td></tr></table>
+</body></html>

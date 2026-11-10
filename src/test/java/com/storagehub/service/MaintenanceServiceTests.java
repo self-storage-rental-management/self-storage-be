@@ -87,6 +87,8 @@ class MaintenanceServiceTests {
             auditLogService,
             objectMapper
         );
+        org.springframework.test.util.ReflectionTestUtils.setField(maintenanceService, "customerEmails",
+            org.mockito.Mockito.mock(com.storagehub.service.email.CustomerLifecycleEmailService.class));
 
         UUID facilityId = UUID.randomUUID();
         UUID managerId = UUID.randomUUID();

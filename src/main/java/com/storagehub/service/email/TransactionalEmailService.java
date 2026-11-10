@@ -15,7 +15,6 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -31,24 +30,29 @@ public class TransactionalEmailService {
     private final EmailProperties emailProperties;
     private final AuditLogService auditLogService;
     private final Environment environment;
+    @org.springframework.beans.factory.annotation.Autowired
+    private PaymentReceiptEmailQueue paymentReceiptEmailQueue;
 
-    @Async
     public void sendVerifyEmailAsync(UUID userId, String toEmail, String fullName, String verifyUrl, int expiryMinutes) {
+        sendVerifyEmailAsync(userId, toEmail, fullName, verifyUrl, expiryMinutes, null);
+    }
+
+    public void sendVerifyEmailAsync(UUID userId, String toEmail, String fullName, String verifyUrl, int expiryMinutes, String otp) {
         Map<String, Object> vars = new HashMap<>();
         vars.put("fullName", fullName);
         vars.put("email", toEmail);
         vars.put("verifyUrl", verifyUrl);
+        vars.put("otp", otp);
         vars.put("expiryMinutes", expiryMinutes);
+        vars.put("_expiresAt", java.time.Instant.now().plusSeconds(expiryMinutes * 60L).toString());
 
         sendInternal(userId, toEmail, "StorageHub - Xác minh địa chỉ email của bạn", "verify-email", vars, "EMAIL_VERIFICATION_SENT");
     }
 
-    @Async
     public void sendPasswordResetAsync(UUID userId, String toEmail, String fullName, String resetUrl, int expiryMinutes) {
         sendPasswordResetAsync(userId, toEmail, fullName, resetUrl, expiryMinutes, null);
     }
 
-    @Async
     public void sendPasswordResetAsync(
         UUID userId,
         String toEmail,
@@ -67,7 +71,6 @@ public class TransactionalEmailService {
         sendInternal(userId, toEmail, "StorageHub - Đặt lại mật khẩu", "reset-password", vars, "PASSWORD_RESET_EMAIL_SENT");
     }
 
-    @Async
     public void sendNewLoginNoticeAsync(
         UUID userId,
         String toEmail,
@@ -91,12 +94,10 @@ public class TransactionalEmailService {
         sendInternal(userId, toEmail, "StorageHub - Đăng nhập mới vào tài khoản StorageHub", "new-login", vars, "NEW_LOGIN_EMAIL_SENT");
     }
 
-    @Async
     public void sendAccountCreatedAsync(UUID userId, String toEmail, String fullName, String createdAt, String tempPassword, String loginUrl) {
         sendAccountCreatedAsync(userId, toEmail, fullName, createdAt, tempPassword, loginUrl, false);
     }
 
-    @Async
     public void sendAccountCreatedAsync(
         UUID userId,
         String toEmail,
@@ -111,7 +112,8 @@ public class TransactionalEmailService {
         vars.put("email", toEmail);
         vars.put("createdAt", createdAt);
         vars.put("resetTime", createdAt);
-        vars.put("tempPassword", tempPassword);
+        // Passwords are never delivered by email. Use the one-time reset flow.
+        vars.put("tempPassword", null);
         vars.put("loginUrl", loginUrl != null ? loginUrl : emailProperties.getLoginUrl());
         vars.put("isReset", isReset);
         vars.put("resetMode", isReset);
@@ -124,7 +126,6 @@ public class TransactionalEmailService {
         sendInternal(userId, toEmail, subject, "account-created", vars, auditAction);
     }
 
-    @Async
     public void sendSecurityAlertAsync(
         UUID userId,
         String toEmail,
@@ -152,7 +153,6 @@ public class TransactionalEmailService {
         sendInternal(userId, toEmail, "StorageHub - Cảnh báo bảo mật: hoạt động bất thường", "security-alert", vars, "SECURITY_ALERT_EMAIL_SENT");
     }
 
-    @Async
     public void sendAccountChangedAsync(
         UUID userId,
         String toEmail,
@@ -170,8 +170,9 @@ public class TransactionalEmailService {
         vars.put("fullName", fullName);
         vars.put("changeTime", changeTime);
         vars.put("fieldName", fieldName);
-        vars.put("oldValue", oldValue);
-        vars.put("newValue", newValue);
+        boolean phoneChange = fieldName != null && fieldName.toLowerCase(java.util.Locale.ROOT).contains("điện thoại");
+        vars.put("oldValue", phoneChange ? maskContact(oldValue) : oldValue);
+        vars.put("newValue", phoneChange ? maskContact(newValue) : newValue);
         vars.put("performedByAdmin", performedByAdmin);
         vars.put("device", device);
         vars.put("ipAddress", ipAddress);
@@ -180,7 +181,74 @@ public class TransactionalEmailService {
         sendInternal(userId, toEmail, "StorageHub - Thông tin tài khoản của bạn đã thay đổi", "account-changed", vars, "ACCOUNT_CHANGED_EMAIL_SENT");
     }
 
-    private void sendInternal(
+    public void sendPaymentBillAsync(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String invoiceNumber,
+        String transactionNo,
+        String amountFormatted,
+        String paidAtFormatted,
+        String unitInfo,
+        String facilityName,
+        String facilityAddress,
+        String periodOrAppointment,
+        String paymentPurpose
+    ) {
+        sendPaymentBillAsync(userId, toEmail, fullName, invoiceNumber, transactionNo, amountFormatted,
+            paidAtFormatted, unitInfo, facilityName, facilityAddress, periodOrAppointment, paymentPurpose, null);
+    }
+
+    public void sendPaymentBillAsync(
+        UUID userId,
+        String toEmail,
+        String fullName,
+        String invoiceNumber,
+        String transactionNo,
+        String amountFormatted,
+        String paidAtFormatted,
+        String unitInfo,
+        String facilityName,
+        String facilityAddress,
+        String periodOrAppointment,
+        String paymentPurpose,
+        String note
+    ) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("fullName", fullName);
+        vars.put("email", toEmail);
+        vars.put("invoiceNumber", invoiceNumber != null ? invoiceNumber : "N/A");
+        vars.put("transactionNo", transactionNo != null ? transactionNo : "N/A");
+        vars.put("amount", amountFormatted);
+        vars.put("paidAt", paidAtFormatted);
+        vars.put("unitInfo", unitInfo != null ? unitInfo : "N/A");
+        vars.put("unitCode", unitInfo != null ? unitInfo : "N/A");
+        vars.put("facilityName", facilityName != null ? facilityName : "StorageHub");
+        vars.put("facilityAddress", facilityAddress != null ? facilityAddress : "");
+        vars.put("periodOrAppointment", periodOrAppointment != null ? periodOrAppointment : "N/A");
+        vars.put("newEndDate", periodOrAppointment != null ? periodOrAppointment : "N/A");
+        vars.put("paymentPurpose", paymentPurpose != null ? paymentPurpose : "Thanh toán dịch vụ");
+        vars.put("note", note);
+
+        paymentReceiptEmailQueue.enqueue(userId, toEmail, vars);
+    }
+
+    public void queueTemplate(UUID userId, String recipient, String subject, String template,
+                              Map<String, Object> variables, String auditAction, String eventKey) {
+        paymentReceiptEmailQueue.enqueue(userId, recipient, template, subject, auditAction, eventKey, variables);
+    }
+
+    private void sendInternal(UUID userId, String recipient, String subject, String template,
+                                 Map<String, Object> variables, String auditAction) {
+        queueTemplate(userId, recipient, subject, template, variables, auditAction, UUID.randomUUID().toString());
+    }
+
+    public String deliveryUnavailableReason() {
+        if (!emailProperties.isEnabled()) return "MAIL_DISABLED";
+        return mailSenderProvider.getIfAvailable() == null ? "SMTP_NOT_CONFIGURED" : null;
+    }
+
+    public boolean deliverEmail(
         UUID userId,
         String recipient,
         String subject,
@@ -196,7 +264,7 @@ public class TransactionalEmailService {
                 logDevPreview(recipient, templateName, variables);
             }
             recordAuditSafely(userId, auditAction, recipient, subject, "SKIPPED_DISABLED");
-            return;
+            return false;
         }
 
         JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
@@ -206,7 +274,7 @@ public class TransactionalEmailService {
                 logDevPreview(recipient, templateName, variables);
             }
             recordAuditSafely(userId, auditAction, recipient, subject, "SKIPPED_NO_SENDER");
-            return;
+            return false;
         }
 
         try {
@@ -216,6 +284,9 @@ public class TransactionalEmailService {
             boolean hasInlineLogo = !hasPublicLogo && logoResource.exists();
             if (hasInlineLogo) {
                 variables.put("logoCid", LOGO_CID);
+            }
+            if ("payment-bill".equals(templateName)) {
+                variables.putIfAbsent("detailsUrl", emailProperties.getFrontendBaseUrl().replaceAll("/+$", "") + "/login?emailSection=payments");
             }
 
             String html = templateRenderer.render(templateName, variables);
@@ -239,24 +310,21 @@ public class TransactionalEmailService {
             mailSender.send(mimeMessage);
             log.info("Email sent successfully: template={} to={}", templateName, recipient);
             recordAuditSafely(userId, auditAction, recipient, subject, "SENT");
+            return true;
         } catch (Exception exception) {
             log.error("Failed to send email template={} to recipient={}: {}", templateName, recipient, exception.getMessage());
             recordAuditSafely(userId, auditAction, recipient, subject, "FAILED: " + exception.getClass().getSimpleName());
+            return false;
         }
     }
 
-    private void logDevPreview(String recipient, String templateName, Map<String, Object> variables) {
-        Object link = variables.get("verifyUrl");
-        if (link == null) link = variables.get("resetUrl");
-        if (link == null) link = variables.get("loginUrl");
-        if (link == null) link = variables.get("securityUrl");
-        if (link == null) link = variables.get("accountUrl");
+    private String maskContact(String value) {
+        if (value == null || value.length() < 4) return "Đã cập nhật";
+        return "••••" + value.substring(value.length() - 3);
+    }
 
-        if (link != null) {
-            log.info("[DEV EMAIL PREVIEW] To: {}, Template: {}, Action Link: {}", recipient, templateName, link);
-        } else {
-            log.info("[DEV EMAIL PREVIEW] To: {}, Template: {}", recipient, templateName);
-        }
+    private void logDevPreview(String recipient, String templateName, Map<String, Object> variables) {
+        log.info("[DEV EMAIL PREVIEW] Template: {}. Open the local development screen for verification codes.", templateName);
     }
 
     private void recordAuditSafely(UUID userId, String action, String recipient, String subject, String deliveryStatus) {

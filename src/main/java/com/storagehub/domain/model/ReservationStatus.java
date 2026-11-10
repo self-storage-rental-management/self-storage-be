@@ -10,6 +10,7 @@ public enum ReservationStatus {
     UNIT_RESERVED,
     READY_FOR_CHECKIN,
     AWAITING_CUSTOMER_RECEIPT,
+    PREPARING,
     COMPLETED,
     CANCELLED,
     EXPIRED,

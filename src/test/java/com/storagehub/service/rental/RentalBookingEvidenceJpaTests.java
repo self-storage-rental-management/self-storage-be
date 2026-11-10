@@ -17,6 +17,8 @@ import org.springframework.test.context.ActiveProfiles;
 @DataJpaTest(properties={"storagehub.project.payment-environment=VNPAY_SANDBOX","storagehub.project.sandbox-recognition-enabled=true","storagehub.integration.ledger.enabled=true","storagehub.integration.sandbox-reconciliation.enabled=true"}) @ActiveProfiles("test") @Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RentalBookingEvidenceReader.class,com.storagehub.service.ledger.SandboxPaymentReconciliationService.class,com.storagehub.service.integration.DuongResourceAccess.class,com.storagehub.service.ledger.LedgerQueryService.class,com.storagehub.service.ledger.LedgerCoverageInventory.class,com.storagehub.service.RentalQueryService.class,com.storagehub.service.PaymentProvenance.class,com.storagehub.service.VnpayService.class,com.storagehub.service.AuditLogService.class,com.storagehub.service.ledger.PaymentReconciliationPreflight.class,com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy.class,RentalBookingEvidenceJpaTests.JsonConfig.class})
 class RentalBookingEvidenceJpaTests {
     @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.storagehub.service.renewal.RenewalWorkflowService renewalWorkflow;
     @org.springframework.boot.test.context.TestConfiguration static class JsonConfig {
         @org.springframework.context.annotation.Bean com.storagehub.service.FacilityScopeService facilityScopes(){return new com.storagehub.service.FacilityScopeService();}

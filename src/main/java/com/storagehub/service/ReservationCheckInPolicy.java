@@ -2,8 +2,12 @@ package com.storagehub.service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 
 final class ReservationCheckInPolicy {
+
+    private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
 
     static final long PAYMENT_WINDOW_MINUTES = 15;
     static final long STAFF_REVIEW_HOURS = 6;
@@ -33,8 +37,11 @@ final class ReservationCheckInPolicy {
 
     record Window(Instant availableAt, Instant deadlineAt) {
         boolean contains(Instant appointmentAt) {
-            return appointmentAt != null && !appointmentAt.isBefore(availableAt)
-                && !appointmentAt.isAfter(deadlineAt);
+            if (appointmentAt == null) return false;
+            LocalDate appointmentDate = appointmentAt.atZone(VIETNAM_ZONE).toLocalDate();
+            LocalDate firstDate = availableAt.atZone(VIETNAM_ZONE).toLocalDate();
+            LocalDate lastDate = deadlineAt.atZone(VIETNAM_ZONE).toLocalDate();
+            return !appointmentDate.isBefore(firstDate) && !appointmentDate.isAfter(lastDate);
         }
     }
 }

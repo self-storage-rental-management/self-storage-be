@@ -39,6 +39,8 @@ public class PaymentComplaintService {
     private final FacilityScopeService facilityScopeService;
     private final NotificationService notificationService;
     private final AuditLogService auditLogService;
+    @org.springframework.beans.factory.annotation.Value("${app.reservation.complaint-review-hours:24}")
+    private long complaintReviewHours = 24;
 
     @Transactional
     public PaymentComplaintResponse submit(
@@ -71,7 +73,7 @@ public class PaymentComplaintService {
         complaint.setCustomer(reservation.getCustomer());
         complaint.setReason(request.reason().trim());
         complaint.setSubmittedAt(now);
-        complaint.setReviewDueAt(now.plus(24, ChronoUnit.HOURS));
+        complaint.setReviewDueAt(now.plus(complaintReviewHours, ChronoUnit.HOURS));
         PaymentComplaint saved = complaintRepository.saveAndFlush(complaint);
         for (FileAsset image : images) {
             image.setEntityType(FILE_ENTITY_TYPE);

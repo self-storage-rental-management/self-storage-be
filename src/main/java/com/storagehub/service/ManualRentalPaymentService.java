@@ -18,6 +18,8 @@ public class ManualRentalPaymentService {
     public static final String AUDIT_ACTION="MANUAL_RENTAL_BALANCE_RECORDED_V1";
     private final PaymentRepository payments;
     private final AuditLogService audit;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.TransactionalEmailService receiptEmails;
 
     public record Recorded(Payment payment,boolean created) {}
     public Recorded booking(Reservation reservation,UUID checkIn,User actor,BigDecimal expected,BigDecimal amount,String method,String reference,Instant now) {
@@ -78,6 +80,24 @@ public class ManualRentalPaymentService {
         proof.put("amount",amount);proof.put("currency","VND");proof.put("paymentMethod",method);proof.put("transactionReference",reference);
         proof.put("initiatedBy",actor.getId());proof.put("paidAt",now.toString());proof.put("receiptFileId",file);
         audit.recordMutation(actor,AUDIT_ACTION,"Payment",p.getId(),reservation!=null?reservation.getFacility().getId():renewal.getRental().getFacility().getId(),null,proof);
+        queueReceipt(p, reservation, renewal, now);
         return new Recorded(p,true);
+    }
+
+    private void queueReceipt(Payment payment, Reservation reservation, Renewal renewal, Instant paidAt) {
+        User customer = reservation != null ? reservation.getCustomer() : renewal.getRental().getCustomer();
+        Facility facility = reservation != null ? reservation.getFacility() : renewal.getRental().getFacility();
+        StorageUnit unit = reservation != null ? reservation.getAssignedUnit() : renewal.getRental().getStorageUnit();
+        String reference = payment.getGatewayTransactionNo();
+        String paidAtText = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
+            .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(paidAt);
+        String amount = java.text.NumberFormat.getNumberInstance(java.util.Locale.forLanguageTag("vi-VN")).format(payment.getAmount()) + " đ";
+        receiptEmails.sendPaymentBillAsync(customer.getId(), customer.getEmail(), customer.getFullName(),
+            payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : payment.getId().toString(),
+            reference, amount, paidAtText, unit == null ? "Chưa phân gian kho" : unit.getCode(),
+            facility.getName(), facility.getAddress(),
+            reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode() : "Kỳ gia hạn: " + renewal.getId(),
+            reservation != null ? "Thanh toán phần còn lại khi nhận kho" : "Thanh toán phần còn lại kỳ gia hạn",
+            "Biên lai ghi nhận khoản thanh toán tại cơ sở. Vui lòng lưu email này để đối chiếu khi cần.");
     }
 }

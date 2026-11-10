@@ -41,7 +41,15 @@ public class RenewalPersistence {
         if(note!=null&&note.length()>2000)throw ApiExceptions.validation("Note exceeds 2000 characters",null);
         lockRental(rental.getId());
         if(!rental.getId().equals(renewal.getRental().getId()))throw ApiExceptions.conflict("Open slot rental does not match renewal");
-        if(em.find(RenewalOpenSlot.class,rental.getId())!=null)throw ApiExceptions.conflict("Rental already has an open renewal");
+        var openSlot=em.find(RenewalOpenSlot.class,rental.getId());
+        if(openSlot!=null) {
+            if(openSlot.getRenewal()!=null && Set.of(RenewalStatus.rejected,RenewalStatus.cancelled,RenewalStatus.completed,RenewalStatus.payment_expired).contains(openSlot.getRenewal().getStatus())) {
+                em.remove(openSlot);
+                em.flush();
+            } else {
+                throw ApiExceptions.conflict("Rental already has an open renewal");
+            }
+        }
         requireBinding(renewal,quote);
         var revision=new RenewalAcceptedRevision(renewal,quote,1,now,note);em.persist(revision);
         var workflow=new RenewalWorkflow(renewal,revision);em.persist(workflow);
@@ -90,7 +98,7 @@ public class RenewalPersistence {
     }
     private static void validateKey(String operation,String key) {
         if(operation==null||operation.isBlank()||operation.length()>32||key==null||key.isBlank()||key.length()>100)
-            throw ApiExceptions.validation("Operation and Idempotency-Key (1–100) required",null);
+            throw ApiExceptions.validation("Operation and Idempotency-Key (1-100) required",null);
     }
     public String canonical(Object value) {
         if(value==null)throw new IllegalArgumentException("Snapshot/payload must not be null");

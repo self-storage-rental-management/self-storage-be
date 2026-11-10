@@ -45,6 +45,8 @@ public class UnitAssignmentService {
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.UnitTypeRepository capacityMutex;
 
     @Transactional(readOnly = true)
     public PageResponse<UnitAssignmentCandidateResponse> listCandidates(
@@ -122,6 +124,8 @@ public class UnitAssignmentService {
 
         StorageUnit previousUnit = storageUnitRepository.findByIdForUpdate(current.getStorageUnit().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Current storage unit was not found"));
+        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         StorageUnit nextUnit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
         validateAssignableUnit(reservation, nextUnit);
@@ -168,8 +172,8 @@ public class UnitAssignmentService {
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.RESERVATION,
-            "Đã đổi gian kho cho đặt chỗ",
-            "Đơn " + reservation.getReservationCode() + " đã đổi sang gian "
+            "Đã đổi kho cho đặt chỗ",
+            "Đơn " + reservation.getReservationCode() + " đã đổi sang kho "
                 + nextUnit.getCode() + ". Lý do: " + request.reason().trim(),
             reservation.getId()
         );
@@ -205,6 +209,8 @@ public class UnitAssignmentService {
             throw ApiExceptions.conflict("The goods approver cannot assign a storage unit to the same reservation");
         }
 
+        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
         if (!unit.getFacility().getId().equals(reservation.getFacility().getId())) {
@@ -255,15 +261,15 @@ public class UnitAssignmentService {
         );
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.RESERVATION,
-            "Đã phân gian kho cho đơn giữ kho",
-            "Đơn " + reservation.getReservationCode() + " đã được phân gian "
+            "Đã phân kho cho đơn giữ kho",
+            "Đơn " + reservation.getReservationCode() + " đã được phân kho "
                 + unit.getCode() + ". Bạn có thể xem lịch nhận kho trên tài khoản.",
             reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.RESERVATION,
-            "Đã phân gian kho cho đơn giữ kho",
-            "Đơn " + reservation.getReservationCode() + " đã được phân gian "
+            "Đã phân kho cho đơn giữ kho",
+            "Đơn " + reservation.getReservationCode() + " đã được phân kho "
                 + unit.getCode() + " và chuyển sang trạng thái chờ nhận kho.",
             reservation.getId()
         );

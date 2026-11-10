@@ -42,9 +42,21 @@ import com.storagehub.domain.repo.DiscountCodeRepository;
 @Service
 public class ReservationCreationService {
 
-    private static final long HOLD_MINUTES = 10;
+    @org.springframework.beans.factory.annotation.Value("${app.reservation.payment-window-minutes:15}")
+    private long paymentWindowMinutes = 15;
+    @org.springframework.beans.factory.annotation.Value("${app.reservation.max-unpaid-per-customer:2}")
+    private int maxUnpaidHolds = 2;
+    @org.springframework.beans.factory.annotation.Value("${app.reservation.complaint-window-minutes:1440}")
+    private long complaintWindowMinutes = 1440;
+    @org.springframework.beans.factory.annotation.Value("${app.reservation.complaint-review-hours:24}")
+    private long complaintReviewHours = 24;
+    @org.springframework.beans.factory.annotation.Value("${app.refund.processing-days:7}")
+    private int refundProcessingDays = 7;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.UserRepository bookingUsers;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     private static final java.security.SecureRandom PUBLIC_CODE_RANDOM = new java.security.SecureRandom();
-    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -99,7 +111,7 @@ public class ReservationCreationService {
         );
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public ReservationResponse create(ActorPrincipal actor, CreateReservationRequest request,
                                       String idempotencyKey) {
         if (request == null || !Boolean.TRUE.equals(request.getAcceptedTerms())) {
@@ -127,6 +139,18 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
+        var account = bookingUsers.findByIdForUpdate(actor.userId())
+            .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
+        if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
+            throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+        }
+        long unpaid = reservationRepository.countByCustomer_IdAndStatusIn(actor.userId(), java.util.List.of(
+            ReservationStatus.AWAITING_EMAIL, ReservationStatus.AWAITING_REVIEW, ReservationStatus.AWAITING_PAYMENT,
+            ReservationStatus.PAYMENT_GRACE, ReservationStatus.PAYMENT_REVIEW));
+        if (unpaid >= maxUnpaidHolds) {
+            throw ApiExceptions.conflict("Bạn đang có " + unpaid + " đơn chưa hoàn tất cọc. Vui lòng thanh toán hoặc hủy bớt trước khi giữ thêm kho.");
+        }
+
         ReservationQuote quote = quoteRepository.findByIdAndCustomer_Id(request.getQuoteId(), actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Quote was not found"));
         if (!quote.getExpiresAt().isAfter(Instant.now())) {
@@ -134,7 +158,7 @@ public class ReservationCreationService {
         }
         if (!SetupEarlyExitPolicy.VERSION.equals(quote.getSetupEarlyExitPolicyVersion())
             || !quote.getSetupEarlyExitPolicyVersion().equals(request.getAcceptedSetupEarlyExitPolicyVersion())) {
-            throw ApiExceptions.conflict("Vui lòng lấy báo giá mới và xác nhận điều khoản trả kho trong setup trước khi đặt kho.");
+            throw ApiExceptions.conflict("Vui lòng lấy báo giá mới và xác nhận điều khoản trả kho trong thời gian chuẩn bị trước khi đặt kho.");
         }
 
         if(quote.getGoodsSnapshotJson()==null||quote.getGoodsSnapshotJson().isBlank()||"[]".equals(quote.getGoodsSnapshotJson())
@@ -147,16 +171,12 @@ public class ReservationCreationService {
 
         Instant now = Instant.now();
         boolean quotedReviewRequired = quotedGoodsItems.stream().anyMatch(ReservationCompatibilityService::isOther);
-        if (request.getAppointmentAt() != null && request.getAppointmentAt().isBefore(now)) {
-            String message = "Lịch nhận kho đã qua. Vui lòng chọn ngày giờ mới.";
-            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
-        }
         ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
             now, quotedReviewRequired
         );
         if (request.getAppointmentAt() != null
             && !checkInWindow.contains(request.getAppointmentAt())) {
-            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép hoặc giờ sớm nhất đã thay đổi. Vui lòng chọn lại lịch nhận kho.";
+            String message = "Ngày nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
             throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
         }
         java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
@@ -193,7 +213,7 @@ public class ReservationCreationService {
         reservation.setRequestFingerprint(requestFingerprint);
         reservation.setFacility(quote.getFacility());
         reservation.setUnitType(quote.getUnitType());
-        reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
+        reservation.setStatus(reviewRequired ? ReservationStatus.AWAITING_REVIEW : ReservationStatus.AWAITING_PAYMENT);
         reservation.setGoodsReviewStatus(reviewRequired ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
         reservation.setCompatibilityResult(compatibility.getResult());
         reservation.setStartDate(rentalStartDate);
@@ -204,9 +224,17 @@ public class ReservationCreationService {
         reservation.setGoodsCondition(clean(request.getGoodsCondition()));
         reservation.setTotalGoodsVolumeM3(compatibility.getTotalGoodsVolumeM3());
         reservation.setTotalGoodsWeightKg(compatibility.getTotalGoodsWeightKg());
-        reservation.setHoldExpiresAt(now.plus(HOLD_MINUTES, ChronoUnit.MINUTES));
-        // The payment window starts only after email verification (and goods review, when required).
-        reservation.setPaymentExpiresAt(null);
+        if (reviewRequired) {
+            Instant reviewDueAt = ReservationCheckInPolicy.staffReviewDueAt(now);
+            reservation.setGoodsReviewSubmittedAt(now);
+            reservation.setGoodsReviewDueAt(reviewDueAt);
+            reservation.setHoldExpiresAt(reviewDueAt);
+            reservation.setPaymentExpiresAt(null);
+        } else {
+            Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
+            reservation.setPaymentExpiresAt(paymentDueAt);
+            reservation.setHoldExpiresAt(paymentDueAt);
+        }
         reservation.setNotes(clean(request.getNotes()));
         Reservation saved = reservationRepository.saveAndFlush(reservation);
 
@@ -232,6 +260,7 @@ public class ReservationCreationService {
             quote.getCustomer(), "RESERVATION_CREATED", "Reservation", saved.getId(),
             null, null, response
         );
+        customerEmails.reservationCreated(saved);
         return response;
     }
 
@@ -400,9 +429,8 @@ public class ReservationCreationService {
 
     static String generateReservationCode() {
         StringBuilder code = new StringBuilder("RSV-");
-        for (int index = 0; index < 12; index++) {
-            if (index > 0 && index % 4 == 0) code.append('-');
-            code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
+        for (int index = 0; index < 6; index++) {
+            code.append(PUBLIC_CODE_RANDOM.nextInt(10));
         }
         return code.toString();
     }
@@ -500,7 +528,18 @@ public class ReservationCreationService {
 
     private String termsSnapshot(ReservationQuote quote) {
         Map<String, Object> terms = new LinkedHashMap<>();
-        terms.put("termsVersion", "RESERVATION_TERMS_V1");
+        terms.put("termsVersion", "RESERVATION_TERMS_V3_20261109");
+        terms.put("emailVerification", "Xác minh một lần khi kích hoạt tài khoản; không yêu cầu OTP ở mỗi đơn giữ kho.");
+        terms.put("paymentWindowMinutes", paymentWindowMinutes);
+        terms.put("complaintHoldWindowMinutes", complaintWindowMinutes);
+        terms.put("complaintReviewHours", complaintReviewHours);
+        terms.put("refundProcessingDays", refundProcessingDays);
+        terms.put("depositNotice", "Cọc giữ chỗ là khoản trả trước theo báo giá, khấu trừ tổng nghĩa vụ. Cọc đảm bảo thuê được ghi riêng và quyết toán khi trả kho.");
+        terms.put("cancellationNotice", "Không hoàn cọc do khách tự hủy/không nhận kho theo điều khoản đã chấp nhận. Lỗi dịch vụ, thu trùng hoặc kết quả chưa rõ phải đối soát riêng; không tự động coi là mất cọc.");
+        terms.put("setupNotice", "Thời gian chuẩn bị bắt đầu sau xác nhận nhận kho của khách. Phí trả sớm chỉ áp dụng theo báo giá đã chấp nhận, không cộng chồng khoản phí cùng bản chất.");
+        terms.put("paidStartNotice", "Sau khi nhân viên kiểm kê xong, khách có thể xem mốc mới và xác nhận bắt đầu kỳ thuê ngay. Khi xác nhận, thời gian miễn phí kết thúc và kỳ thuê tính từ ngày xác nhận theo thời lượng và chi phí đã chốt. Nếu khách chưa xác nhận sớm, kỳ thuê tự động bắt đầu theo lịch hết miễn phí.");
+        terms.put("complaintRights", "Hết hạn giữ suất không làm mất quyền yêu cầu đối soát qua Hỗ trợ hoặc khiếu nại theo quy định áp dụng.");
+        terms.put("versionNotice", "Giá và điều khoản mới không tự thay đổi nghĩa vụ của kỳ thuê đã chốt.");
         terms.put("pricingPackageCode", quote.getPricingPackageCode());
         terms.put("policyVersion", quote.getPolicyVersion());
         terms.put("startDate", quote.getStartDate() == null ? null : quote.getStartDate().toString());
@@ -509,6 +548,11 @@ public class ReservationCreationService {
         terms.put("monthlyPrice", quote.getMonthlyPrice());
         terms.put("totalAfterDiscount", quote.getTotalAfterDiscount());
         terms.put("reservationDepositAmount", quote.getReservationDepositAmount());
+        terms.put("securityDepositAmount", quote.getSecurityDepositAmount());
+        terms.put("totalInitialObligation", quote.getTotalInitialObligation());
+        terms.put("dueAtCheckIn", quote.getDueAtCheckIn());
+        terms.put("setupEarlyExitPolicyVersion", quote.getSetupEarlyExitPolicyVersion());
+        terms.put("setupEarlyExitFee", quote.getSetupEarlyExitFee());
         terms.put("freeSetupDays", quote.getFreeSetupDays());
         terms.put("earlyTerminationFee", quote.getEarlyTerminationFee());
         terms.put("earlyTerminationNoticeDays", quote.getEarlyTerminationNoticeDays());
