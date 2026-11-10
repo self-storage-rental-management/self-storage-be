@@ -23,6 +23,7 @@ import com.storagehub.domain.model.GoodsReviewStatus;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.Reservation;
+import com.storagehub.domain.model.ReservationCancellationType;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
@@ -435,6 +436,9 @@ class CustomerReservationServiceTests {
         assertThat(assignedUnit.getStatus()).isEqualTo(StorageUnitStatus.available);
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
         assertThat(assignment.getReleaseDisposition()).isEqualTo(UnitReleaseDisposition.AVAILABLE);
+        assertThat(reservation.getCancellationChargeAmount()).isEqualByComparingTo(snapshot.getReservationDepositAmount());
+        assertThat(reservation.getCancellationRefundAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(reservation.getCancellationType()).isEqualTo(ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
         verify(notificationService).notifyStaffOfReservationCancellation(reservation, true);
     }
 
