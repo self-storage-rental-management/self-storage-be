@@ -1026,34 +1026,10 @@ public class CustomerReservationService {
             .findFirst()
             .orElse(null);
         if (paidDeposit != null) {
-            ReservationPricingSnapshot pricing = snapshotRepository.findByReservation_Id(reservationId).orElse(null);
             BigDecimal deposit = paidDeposit.getAmount().setScale(2, RoundingMode.HALF_UP);
-            BigDecimal fee = pricing == null ? BigDecimal.ZERO : EarlyTerminationPolicy.fee(
-                pricing.getReservationDepositAmount(), pricing.getNetRentalAmount(), pricing.getRentalMonths(),
-                pricing.getEarlyTerminationFeeCoefficient(), pricing.getEarlyTerminationFeeCapMonths()
-            );
-            Instant checkInAt = reservation.getAppointmentAt() != null
-                ? reservation.getAppointmentAt()
-                : reservation.getStartDate().atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
-            boolean fullRefund = !Instant.now().isAfter(checkInAt.minus(24, java.time.temporal.ChronoUnit.HOURS));
-            BigDecimal charge = fullRefund ? BigDecimal.ZERO : fee.min(deposit);
-            BigDecimal refund = deposit.subtract(charge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-            reservation.setCancellationType(fullRefund
-                ? ReservationCancellationType.BEFORE_CHECKIN_FULL_REFUND
-                : ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
-            reservation.setCancellationChargeAmount(charge);
-            reservation.setCancellationRefundAmount(refund);
-            if (refund.signum() > 0 && refundRequestRepository != null) {
-                RefundRequest refundRequest = new RefundRequest();
-                refundRequest.setPayment(paidDeposit);
-                refundRequest.setRequestedBy(reservation.getCustomer());
-                refundRequest.setAmount(refund);
-                refundRequest.setReason(fullRefund
-                    ? "Customer cancellation at least 24 hours before check-in"
-                    : "Customer cancellation within 24 hours before check-in; retain early termination fee");
-                refundRequest.setStatus(RefundRequestStatus.REQUESTED);
-                refundRequestRepository.save(refundRequest);
-            }
+            reservation.setCancellationType(ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
+            reservation.setCancellationChargeAmount(deposit);
+            reservation.setCancellationRefundAmount(BigDecimal.ZERO);
         }
 
         // Assignment/unit release still belongs to the operations flow; this service
