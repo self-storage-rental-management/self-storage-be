@@ -121,8 +121,8 @@ class EmailTemplateRendererTest {
         assertTrue(htmlCreate.contains("Tài khoản StorageHub của bạn đã sẵn sàng"));
         assertTrue(htmlCreate.contains("Ngày tạo"));
         assertFalse(htmlCreate.contains("Thời gian đặt lại"));
-        assertTrue(htmlCreate.contains("TempPass@999"), "Must display temporary password");
-        assertTrue(htmlCreate.contains("Tài khoản này do quản trị viên cấp"));
+        assertFalse(htmlCreate.contains("TempPass@999"), "Must not include a temporary password");
+        assertTrue(htmlCreate.contains("liên kết dùng một lần"));
 
         // Case B: Admin reset password (isReset = true)
         Map<String, Object> varsReset = new HashMap<>();
@@ -140,7 +140,7 @@ class EmailTemplateRendererTest {
         assertTrue(htmlReset.contains("Mật khẩu tài khoản StorageHub của bạn đã được quản trị viên đặt lại"));
         assertTrue(htmlReset.contains("Thời gian đặt lại"));
         assertFalse(htmlReset.contains("Ngày tạo"));
-        assertTrue(htmlReset.contains("TempPass@999"), "Must display temporary password");
+        assertFalse(htmlReset.contains("TempPass@999"), "Must not include a temporary password");
 
         // Case C: Without temp password (self-registered or no temp password)
         Map<String, Object> varsWithoutPassword = new HashMap<>();

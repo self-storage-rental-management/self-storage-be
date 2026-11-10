@@ -40,6 +40,8 @@ class NotificationServiceTests {
     @BeforeEach
     void setUp() {
         service = new NotificationService(notificationRepository, userRepository);
+        ReflectionTestUtils.setField(service, "customerEmails",
+            org.mockito.Mockito.mock(com.storagehub.service.email.CustomerLifecycleEmailService.class));
         facilityId = UUID.randomUUID();
         reservationId = UUID.randomUUID();
         staff = user(RoleCode.STAFF);

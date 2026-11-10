@@ -194,18 +194,18 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void completesPhysicalHandoverAtTramBoundary() {
+    void completesInventoryAndOccupiesAssignedUnit() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(true);
 
         var response = service.complete(actor, checkIn.getId(), validCompletionRequest());
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.completed);
-        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.COMPLETED);
         assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.COMPLETED);
-        assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.assigned);
+        assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.occupied);
         assertThat(response.handover()).isNotNull();
-        verify(rentalRepository, never()).save(any());
+        verify(rentalRepository).saveAndFlush(checkIn.getRental());
     }
 
     @Test
@@ -235,7 +235,7 @@ class CheckInHandoverServiceTests {
 
         assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), validCompletionRequest()))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("setup must be completed");
+            .hasMessageContaining("phải báo đã chuẩn bị hàng xong");
     }
 
     @Test
@@ -460,25 +460,14 @@ class CheckInHandoverServiceTests {
         verify(rentalRepository,never()).save(any());
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({
-        "2026-10-30T03:00:00Z,6,2026-11-05,2026-12-05",
-        "2026-10-26T03:00:00Z,3,2026-10-29,2026-11-29",
-        "2026-10-31T16:59:59Z,3,2026-11-03,2026-12-03",
-        "2026-10-31T17:00:00Z,3,2026-11-04,2026-12-04",
-        "2026-12-31T16:59:59Z,0,2026-12-31,2027-01-31",
-        "2026-12-31T17:00:00Z,0,2027-01-01,2027-02-01",
-        "2026-01-28T03:00:00Z,3,2026-01-31,2026-02-28"
-    })
-    void actualHandoverDeterminesPaidPeriodFromAcceptedSetupSnapshot(String instant,int days,String expectedStart,String expectedEnd) {
-        var at=Instant.parse(instant);var start=LocalDate.parse(expectedStart);var end=LocalDate.parse(expectedEnd);
+    @Test
+    void recordsHandoverWithoutStartingPreparation() {
+        var at=Instant.parse("2026-10-30T03:00:00Z");
         var snapshot=pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElseThrow();
-        snapshot.setFreeSetupDays(days);reservation.getSourceQuote().setFreeSetupDays(days);reservation.setSetupDaysSnapshot(days);
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);checkIn.setStatus(CheckInStatus.payment_collected);
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
-        // Deliberately different planned dates and live catalog price must not set the paid period or price.
+        // Keep the planned dates until the customer confirms receipt.
         reservation.setStartDate(LocalDate.of(2025,1,1));reservation.setEndDate(LocalDate.of(2025,2,1));
-        unit.getUnitType().setMonthlyPrice(new BigDecimal("999999"));
         var balance=entityWithId(new com.storagehub.domain.model.Payment());balance.setReservation(reservation);
         balance.setPurpose(com.storagehub.domain.model.PaymentType.RENTAL_BALANCE);
         balance.setStatus(com.storagehub.domain.model.PaymentStatus.PAID);balance.setAmount(snapshot.getDueAtCheckIn());
@@ -486,18 +475,25 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
-        when(rentalRepository.saveAndFlush(any(Rental.class))).thenAnswer(call->{Rental r=call.getArgument(0);ReflectionTestUtils.setField(r,"id",UUID.randomUUID());return r;});
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        UUID evidenceId = UUID.randomUUID();
+        FileAsset evidence = new FileAsset();
+        ReflectionTestUtils.setField(evidence, "id", evidenceId);
+        evidence.setEntityType("CHECK_IN");
+        evidence.setEntityId(checkIn.getId());
+        when(fileAssetRepository.findAllById(List.of(evidenceId))).thenReturn(List.of(evidence));
         try(var time=org.mockito.Mockito.mockStatic(Instant.class,org.mockito.Mockito.CALLS_REAL_METHODS)) {
             time.when(Instant::now).thenReturn(at);
-            service.startSetup(actor,checkIn.getId(),new com.storagehub.api.checkin.StartCheckInSetupRequest("TEST-LOCK","TEST handover"));
+            service.startSetup(actor, checkIn.getId(), new com.storagehub.api.checkin.StartCheckInSetupRequest(
+                "TEST-LOCK", "TEST handover", "Kho trống và sạch", List.of(evidenceId.toString())));
         }
-        var rental=checkIn.getRental();
-        assertThat(rental.getSetupStartedAt()).isEqualTo(at);
-        assertThat(rental.getStartDate()).isEqualTo(start);assertThat(rental.getContractEndDate()).isEqualTo(end);
-        assertThat(rental.getSetupEndsAt()).isEqualTo(start.atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant());
-        assertThat(rental.getMonthlyPrice()).isEqualByComparingTo(snapshot.getMonthlyPrice());
-        assertThat(reservation.getStartDate()).isEqualTo(start);
+        assertThat(checkIn.getCheckedInAt()).isEqualTo(at);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.handover_pending_receipt);
+        assertThat(checkIn.getSetupStartedAt()).isNull();
+        assertThat(checkIn.getRental()).isNull();
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2025, 1, 1));
+        verify(rentalRepository, never()).saveAndFlush(any());
     }
 
     private void paidReservationFixture() {
@@ -539,8 +535,9 @@ class CheckInHandoverServiceTests {
         rental.setStorageUnit(unit);
         rental.setStatus(RentalStatus.active);
         rental.setSetupEndsAt(Instant.now().minusSeconds(1));
+        rental.setStartDate(reservation.getStartDate());
         checkIn.setRental(rental);
-        org.mockito.Mockito.lenient().when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+        org.mockito.Mockito.lenient().when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
         when(assignmentRepository.findByReservation_IdAndStatus(
             reservation.getId(), UnitAssignmentStatus.ACTIVE
         )).thenReturn(Optional.of(assignment));
