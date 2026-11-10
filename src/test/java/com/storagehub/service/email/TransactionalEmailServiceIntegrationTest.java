@@ -79,6 +79,14 @@ class TransactionalEmailServiceIntegrationTest {
         TransactionalEmailService emailService = new TransactionalEmailService(
             provider, renderer, properties, auditLogService, environment
         );
+        PaymentReceiptEmailQueue queue = Mockito.mock(PaymentReceiptEmailQueue.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(emailService, "paymentReceiptEmailQueue", queue);
+        Mockito.doAnswer(call -> {
+            assertTrue(emailService.deliverEmail(call.getArgument(0), call.getArgument(1),
+                call.getArgument(3), call.getArgument(2), call.getArgument(6), call.getArgument(4)));
+            return null;
+        }).when(queue).enqueue(Mockito.any(), Mockito.anyString(), Mockito.anyString(), Mockito.anyString(),
+            Mockito.anyString(), Mockito.anyString(), Mockito.anyMap());
 
         UUID userId = UUID.randomUUID();
         String recipient = "test-user@storagehub.local";
@@ -114,7 +122,8 @@ class TransactionalEmailServiceIntegrationTest {
         assertTrue(received.stream().anyMatch(e -> e.contains("verifyEmail") || e.contains("X=C3=A1c minh")));
         assertTrue(received.stream().anyMatch(e -> e.contains("resetPassword") || e.contains("m=E1=BA=ADt kh=E1=BA=A9u")));
         assertTrue(received.stream().anyMatch(e -> e.contains("new-login") || e.contains("Windows PC")));
-        assertTrue(received.stream().anyMatch(e -> e.contains("account-created") || e.contains("Temp#123456")));
+        assertTrue(received.stream().anyMatch(e -> e.contains("http://localhost:5173/login")));
+        assertTrue(received.stream().noneMatch(e -> e.contains("Temp#123456")));
         assertTrue(received.stream().anyMatch(e -> e.contains("security-alert") || e.contains("gi=E1=BB=9Bi h=E1=BA=A1n")));
         assertTrue(received.stream().anyMatch(e -> e.contains("account-changed") || e.contains("M=E1=BA=ADt kh=E1=BA=A9u")));
     }

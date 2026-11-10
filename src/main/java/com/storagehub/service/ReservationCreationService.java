@@ -528,7 +528,7 @@ public class ReservationCreationService {
 
     private String termsSnapshot(ReservationQuote quote) {
         Map<String, Object> terms = new LinkedHashMap<>();
-        terms.put("termsVersion", "RESERVATION_TERMS_V2_20261109");
+        terms.put("termsVersion", "RESERVATION_TERMS_V3_20261109");
         terms.put("emailVerification", "Xác minh một lần khi kích hoạt tài khoản; không yêu cầu OTP ở mỗi đơn giữ kho.");
         terms.put("paymentWindowMinutes", paymentWindowMinutes);
         terms.put("complaintHoldWindowMinutes", complaintWindowMinutes);
@@ -537,6 +537,7 @@ public class ReservationCreationService {
         terms.put("depositNotice", "Cọc giữ chỗ là khoản trả trước theo báo giá, khấu trừ tổng nghĩa vụ. Cọc đảm bảo thuê được ghi riêng và quyết toán khi trả kho.");
         terms.put("cancellationNotice", "Không hoàn cọc do khách tự hủy/không nhận kho theo điều khoản đã chấp nhận. Lỗi dịch vụ, thu trùng hoặc kết quả chưa rõ phải đối soát riêng; không tự động coi là mất cọc.");
         terms.put("setupNotice", "Thời gian chuẩn bị bắt đầu sau xác nhận nhận kho của khách. Phí trả sớm chỉ áp dụng theo báo giá đã chấp nhận, không cộng chồng khoản phí cùng bản chất.");
+        terms.put("paidStartNotice", "Sau khi nhân viên kiểm kê xong, khách có thể xem mốc mới và xác nhận bắt đầu kỳ thuê ngay. Khi xác nhận, thời gian miễn phí kết thúc và kỳ thuê tính từ ngày xác nhận theo thời lượng và chi phí đã chốt. Nếu khách chưa xác nhận sớm, kỳ thuê tự động bắt đầu theo lịch hết miễn phí.");
         terms.put("complaintRights", "Hết hạn giữ suất không làm mất quyền yêu cầu đối soát qua Hỗ trợ hoặc khiếu nại theo quy định áp dụng.");
         terms.put("versionNotice", "Giá và điều khoản mới không tự thay đổi nghĩa vụ của kỳ thuê đã chốt.");
         terms.put("pricingPackageCode", quote.getPricingPackageCode());
