@@ -54,6 +54,7 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     java.util.List<Rental> findByStatus(RentalStatus status);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     java.util.List<Rental> findByStatusAndSetupEndsAtIsNotNull(RentalStatus status);
 
     java.util.List<Rental> findByStatusAndInventoryPendingTrue(RentalStatus status);

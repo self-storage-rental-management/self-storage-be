@@ -47,7 +47,7 @@ public class RentalQueryService {
             r.getActualReturnedAt(), r.getCompletedAt(),
             financial(r), access(r), s.dateSemantics(), bookingEvidence(actor,r,manager),
             r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
-            r.getMoveInCompletedAt(), r.isSetupExitReviewRequired());
+            r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart());
     }
 
     private RentalBookingEvidence bookingEvidence(ActorPrincipal actor,Rental rental,boolean manager) {
@@ -163,7 +163,8 @@ public class RentalQueryService {
             period.map(p -> new RentalSummaryResponse.DateSemantics("COMPLETE",p.convention().name(),p.lastPermittedDate(),p.endExclusive()))
                 .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
             r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
-            r.getMoveInCompletedAt(), r.isSetupExitReviewRequired());
+            r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(),
+            RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()));
     }
     private void integrity(Rental r) {
         boolean valid = r.getCustomer() != null && r.getFacility() != null && r.getStorageUnit() != null
