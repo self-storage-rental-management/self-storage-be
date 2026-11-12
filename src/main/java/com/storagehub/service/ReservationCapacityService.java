@@ -57,6 +57,39 @@ public class ReservationCapacityService {
         }
     }
 
+    public void lockAndRequireAvailableCapacityForReschedule(
+        UUID facilityId,
+        UUID unitTypeId,
+        LocalDate startDate,
+        LocalDate endDate,
+        LocalDate previousStartDate,
+        LocalDate previousEndDate,
+        boolean currentlyHoldingCapacity
+    ) {
+        var lockedUnitType = unitTypeRepository.findByIdForUpdate(unitTypeId)
+            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (!lockedUnitType.getFacility().getId().equals(facilityId)) {
+            throw ApiExceptions.validation("Unit type does not belong to the selected facility", null);
+        }
+        long operationalAvailableUnits = storageUnitRepository
+            .countByFacility_IdAndUnitType_IdAndStatus(
+                facilityId, unitTypeId, StorageUnitStatus.available
+            );
+        long unassignedActiveHolds = reservationRepository.countCapacityHoldingReservations(
+            facilityId, unitTypeId, startDate, endDate, Instant.now(),
+            TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES
+        );
+        boolean overlapsPrevious = currentlyHoldingCapacity
+            && previousStartDate != null && previousEndDate != null
+            && previousStartDate.isBefore(endDate) && previousEndDate.isAfter(startDate);
+        long competingHolds = overlapsPrevious ? Math.max(0, unassignedActiveHolds - 1) : unassignedActiveHolds;
+        if (operationalAvailableUnits - competingHolds < 1) {
+            throw ApiExceptions.conflict(
+                "No storage unit is available for the selected rental period"
+            );
+        }
+    }
+
     public long availableCount(
         UUID facilityId,
         UUID unitTypeId,

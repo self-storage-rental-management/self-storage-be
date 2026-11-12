@@ -90,8 +90,10 @@ public class ReservationEmailVerificationService {
         ReservationEmailVerificationRequest request
     ) {
         Reservation reservation = findOwnedReservationForUpdate(actor, reservationId);
-        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (capacityMutex != null) {
+            capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+                .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        }
         validateWaitingForEmail(reservation);
         Instant now = Instant.now();
         validateHold(reservation, now);

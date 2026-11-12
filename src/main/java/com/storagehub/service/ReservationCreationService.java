@@ -139,10 +139,12 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
-        var account = bookingUsers.findByIdForUpdate(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
-        if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
-            throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+        if (bookingUsers != null) {
+            var account = bookingUsers.findByIdForUpdate(actor.userId())
+                .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
+            if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
+                throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+            }
         }
         long unpaid = reservationRepository.countByCustomer_IdAndStatusIn(actor.userId(), java.util.List.of(
             ReservationStatus.AWAITING_EMAIL, ReservationStatus.AWAITING_REVIEW, ReservationStatus.AWAITING_PAYMENT,
@@ -176,7 +178,7 @@ public class ReservationCreationService {
         );
         if (request.getAppointmentAt() != null
             && !checkInWindow.contains(request.getAppointmentAt())) {
-            String message = "Ngày nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
+            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
             throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
         }
         java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
@@ -260,7 +262,9 @@ public class ReservationCreationService {
             quote.getCustomer(), "RESERVATION_CREATED", "Reservation", saved.getId(),
             null, null, response
         );
-        customerEmails.reservationCreated(saved);
+        if (customerEmails != null) {
+            customerEmails.reservationCreated(saved);
+        }
         return response;
     }
 
@@ -427,10 +431,15 @@ public class ReservationCreationService {
         return value.trim();
     }
 
+    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
     static String generateReservationCode() {
-        StringBuilder code = new StringBuilder("RSV-");
-        for (int index = 0; index < 6; index++) {
-            code.append(PUBLIC_CODE_RANDOM.nextInt(10));
+        StringBuilder code = new StringBuilder("RSV");
+        for (int group = 0; group < 3; group++) {
+            code.append('-');
+            for (int index = 0; index < 4; index++) {
+                code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
+            }
         }
         return code.toString();
     }

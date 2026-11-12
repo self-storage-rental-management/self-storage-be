@@ -216,14 +216,41 @@ public class ReportingService {
 
     @Transactional(readOnly = true)
     public BusinessRevenueReportResponse getBusinessRevenueReport(ActorPrincipal actor, Integer months) {
+        return getBusinessRevenueReport(actor, months, null);
+    }
+
+    @Transactional(readOnly = true)
+    public BusinessRevenueReportResponse getBusinessRevenueReport(
+        ActorPrincipal actor,
+        Integer months,
+        UUID facilityId
+    ) {
         authorizationService.require(actor, SystemPermission.VIEW_REPORTS);
+        if (facilityId != null) {
+            facilityScopeService.assertCanRead(actor, facilityId);
+        }
 
         int monthsToLookBack = months != null && months > 0 && months <= 24 ? months : 6;
-        List<Payment> allPaid = paymentRepository.findByStatus(PaymentStatus.PAID);
+        List<Facility> facilities;
+        if (facilityId != null) {
+            Facility facility = facilityRepository.findById(facilityId)
+                .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
+            facilities = List.of(facility);
+        } else {
+            facilities = facilityRepository.findAll();
+        }
+
+        List<Payment> allPaid = facilityId != null
+            ? paymentRepository.findPaidPaymentsByFacility(facilityId)
+            : paymentRepository.findByStatus(PaymentStatus.PAID);
 
         BigDecimal totalCollected = allPaid.stream()
             .map(Payment::getAmount)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalRefunds = allPaid.stream()
+            .map(p -> p.getRefundedAmount() != null ? p.getRefundedAmount() : BigDecimal.ZERO)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal netRevenue = totalCollected.subtract(totalRefunds).max(BigDecimal.ZERO);
 
         DateTimeFormatter monthFormatter = DateTimeFormatter.ofPattern("yyyy-MM");
         YearMonth current = YearMonth.now();
@@ -253,11 +280,10 @@ public class ReportingService {
             })
             .toList();
 
-        List<Facility> facilities = facilityRepository.findAll();
         List<BusinessRevenueReportResponse.FacilityRevenue> facilityBreakdown = facilities.stream()
             .map(fac -> {
                 List<Payment> facPayments = allPaid.stream()
-                    .filter(p -> p.getReservation() != null && p.getReservation().getFacility().getId().equals(fac.getId()))
+                    .filter(p -> fac.getId().equals(resolvePaymentFacilityId(p)))
                     .toList();
                 BigDecimal facRevenue = facPayments.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
                 long totalUnits = storageUnitRepository.countByFacility_IdAndStatusIn(fac.getId(), StorageUnitStatus.operationalStatuses());
@@ -283,12 +309,24 @@ public class ReportingService {
 
         return new BusinessRevenueReportResponse(
             totalCollected,
-            BigDecimal.ZERO,
-            totalCollected,
+            totalRefunds,
+            netRevenue,
             monthlyBreakdown,
             facilityBreakdown,
             purposeBreakdown
         );
+    }
+
+    private UUID resolvePaymentFacilityId(Payment payment) {
+        if (payment.getReservation() != null && payment.getReservation().getFacility() != null) {
+            return payment.getReservation().getFacility().getId();
+        }
+        if (payment.getRenewal() != null
+            && payment.getRenewal().getRental() != null
+            && payment.getRenewal().getRental().getFacility() != null) {
+            return payment.getRenewal().getRental().getFacility().getId();
+        }
+        return null;
     }
 
     @Transactional(readOnly = true)

@@ -4,6 +4,7 @@ import com.storagehub.common.api.ApiResponse;
 import com.storagehub.common.api.CorrelationIdContext;
 import com.storagehub.security.ActorContext;
 import com.storagehub.service.ReportingService;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,10 +21,11 @@ public class BusinessReportingController {
 
     @GetMapping("/revenue")
     public ApiResponse<BusinessRevenueReportResponse> getRevenueReport(
-        @RequestParam(required = false, defaultValue = "6") Integer months
+        @RequestParam(required = false, defaultValue = "6") Integer months,
+        @RequestParam(required = false) UUID facilityId
     ) {
         return new ApiResponse<>(
-            reportingService.getBusinessRevenueReport(actorContext.required(), months),
+            reportingService.getBusinessRevenueReport(actorContext.required(), months, facilityId),
             CorrelationIdContext.current()
         );
     }

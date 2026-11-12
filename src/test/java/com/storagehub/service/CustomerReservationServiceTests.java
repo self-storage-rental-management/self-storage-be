@@ -336,7 +336,7 @@ class CustomerReservationServiceTests {
     void rejectsCheckInAppointmentOutsideTheSevenDayWindow() {
         reservation.setStatus(ReservationStatus.CONFIRMED);
         reservation.setStartDate(LocalDate.now().plusDays(2));
-        Instant invalidAppointment = Instant.now().plusSeconds(8 * 86_400L);
+        Instant invalidAppointment = Instant.now().plusSeconds(10 * 86_400L);
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
 

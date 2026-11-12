@@ -152,7 +152,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
 
     @Test
     void rejectionRequiresReason() {
-        when(reservationRepository.findById(reservation.getId()))
+        when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
 
         assertThatThrownBy(() -> service.review(
@@ -195,7 +195,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     void staffCannotReviewReservationFromAnotherFacility() {
         Facility otherFacility = entityWithId(new Facility());
         reservation.setFacility(otherFacility);
-        when(reservationRepository.findById(reservation.getId()))
+        when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
 
         assertThatThrownBy(() -> service.review(
@@ -209,7 +209,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     @Test
     void expiredReviewCannotBeApproved() {
         reservation.setGoodsReviewDueAt(Instant.now().minusSeconds(1));
-        when(reservationRepository.findById(reservation.getId()))
+        when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
 
         assertThatThrownBy(() -> service.review(
@@ -221,7 +221,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     }
 
     private void mockReviewData() {
-        when(reservationRepository.findById(reservation.getId()))
+        when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
         when(userRepository.findById(staff.userId())).thenReturn(Optional.of(reviewer));
         when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))

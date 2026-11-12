@@ -67,6 +67,16 @@ public class MaintenanceService {
 
         facilityScopeService.assertCanManage(actor, unit.getFacility().getId());
 
+        if (unit.getStatus() == StorageUnitStatus.occupied) {
+            throw ApiExceptions.conflict("Cannot place an actively occupied storage unit into maintenance without completing check-out/return first");
+        }
+        if (unit.getStatus() == StorageUnitStatus.reserved
+            || unit.getStatus() == StorageUnitStatus.held
+            || unit.getStatus() == StorageUnitStatus.assigned
+            || unit.getStatus() == StorageUnitStatus.archived) {
+            throw ApiExceptions.conflict("Cannot place a reserved, assigned, or archived storage unit into maintenance: " + unit.getStatus());
+        }
+
         User reportedBy = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reporter user not found"));
 
@@ -136,7 +146,7 @@ public class MaintenanceService {
         UpdateStorageUnitStatusRequest request
     ) {
         authorizationService.require(actor, SystemPermission.MANAGE_INVENTORY);
-        StorageUnit unit = storageUnitRepository.findById(unitId)
+        StorageUnit unit = storageUnitRepository.findByIdForUpdate(unitId)
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
 
         facilityScopeService.assertCanManage(actor, unit.getFacility().getId());
@@ -150,6 +160,13 @@ public class MaintenanceService {
 
         if (previousStatus == StorageUnitStatus.occupied && newStatus == StorageUnitStatus.maintenance) {
             throw ApiExceptions.conflict("Cannot place an actively occupied storage unit into maintenance without completing check-out/return first");
+        }
+        if (previousStatus == StorageUnitStatus.reserved
+            || previousStatus == StorageUnitStatus.held
+            || previousStatus == StorageUnitStatus.assigned
+            || previousStatus == StorageUnitStatus.occupied
+            || previousStatus == StorageUnitStatus.archived) {
+            throw ApiExceptions.conflict("Cannot change storage unit status directly while unit is " + previousStatus);
         }
 
         unit.setStatus(newStatus);
@@ -320,6 +337,9 @@ public class MaintenanceService {
         if (task.getStatus() == MaintenanceTaskStatus.completed) {
             throw ApiExceptions.conflict("Task is already completed");
         }
+        if (task.getStatus() == MaintenanceTaskStatus.cancelled) {
+            throw ApiExceptions.conflict("Cannot complete a cancelled maintenance task");
+        }
         if (task.getTaskType() == MaintenanceTaskType.inventory_check) {
             throw ApiExceptions.conflict("Inventory check tasks must be completed from the check-in workflow");
         }
@@ -339,7 +359,8 @@ public class MaintenanceService {
 
         boolean makeAvailable = request.makeUnitAvailable() == null || request.makeUnitAvailable();
         StorageUnit unit = saved.getStorageUnit();
-        unit.setStatus(makeAvailable ? StorageUnitStatus.available : StorageUnitStatus.maintenance);
+        boolean hasOtherOpenTasks = hasOtherActiveMaintenanceTasks(unit.getId(), saved.getId());
+        unit.setStatus(makeAvailable && !hasOtherOpenTasks ? StorageUnitStatus.available : StorageUnitStatus.maintenance);
         storageUnitRepository.save(unit);
 
         auditLogService.recordMutation(
@@ -365,6 +386,9 @@ public class MaintenanceService {
         if (task.getStatus() == MaintenanceTaskStatus.completed) {
             throw ApiExceptions.conflict("Cannot cancel an already completed task");
         }
+        if (task.getStatus() == MaintenanceTaskStatus.cancelled) {
+            throw ApiExceptions.conflict("Task is already cancelled");
+        }
 
         task.setStatus(MaintenanceTaskStatus.cancelled);
         if (reason != null && !reason.isBlank()) {
@@ -372,6 +396,13 @@ public class MaintenanceService {
         }
 
         MaintenanceTask saved = maintenanceTaskRepository.save(task);
+        StorageUnit unit = saved.getStorageUnit();
+        if (unit != null && unit.getStatus() == StorageUnitStatus.maintenance
+            && saved.getTaskType() != MaintenanceTaskType.inventory_check
+            && !hasOtherActiveMaintenanceTasks(unit.getId(), saved.getId())) {
+            unit.setStatus(StorageUnitStatus.available);
+            storageUnitRepository.save(unit);
+        }
 
         auditLogService.recordMutation(
             "MAINTENANCE_TASK_CANCELLED",
@@ -383,6 +414,13 @@ public class MaintenanceService {
         );
 
         return toResponse(saved);
+    }
+
+    private boolean hasOtherActiveMaintenanceTasks(UUID storageUnitId, UUID excludeTaskId) {
+        return maintenanceTaskRepository.findByStorageUnit_IdAndStatusIn(
+            storageUnitId, List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)
+        ).stream().anyMatch(other -> !other.getId().equals(excludeTaskId)
+            && other.getTaskType() != MaintenanceTaskType.inventory_check);
     }
 
     @Transactional(readOnly = true)

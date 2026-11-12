@@ -43,16 +43,6 @@ public class StaffMaintenanceController {
         );
     }
 
-    @PostMapping
-    public ApiResponse<MaintenanceTaskResponse> createTask(
-        @Valid @RequestBody CreateMaintenanceTaskRequest request
-    ) {
-        return new ApiResponse<>(
-            maintenanceService.createTask(actorContext.required(), request),
-            CorrelationIdContext.current()
-        );
-    }
-
     @GetMapping("/staff-options")
     public ApiResponse<List<MaintenanceStaffOption>> listStaffOptions(@RequestParam UUID facilityId) {
         return new ApiResponse<>(

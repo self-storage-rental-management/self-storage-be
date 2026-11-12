@@ -57,14 +57,11 @@ public class OverdueService {
     }
     @Transactional(readOnly=true)
     public OverdueResponse detail(ActorPrincipal actor,String id){
-        if(id!=null&&id.toUpperCase(Locale.ROOT).matches("(?:SH-\\d{6}|QH-\\d{4}-\\d{6})")&&displayCodes!=null){
-            String resource=displayCodes.resource("QH",id);
-            if(resource==null)throw ApiExceptions.notFound("Không tìm thấy hồ sơ quá hạn.");
-            id=resource;
-        }
+        id=resolveCaseRef(id);
         var ref=parse(id);var rental=visible(actor,ref,false);return current(rental,ref);
     }
     public OverdueResponse.FollowUp followUp(ActorPrincipal actor,String id,OverdueCommands.FollowUp body,String key) {
+        id=resolveCaseRef(id);
         var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
         Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_follow_up",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
         var current=current(r,ref);
@@ -79,6 +76,7 @@ public class OverdueService {
         var event=new OverdueFollowUp(id,r,body.type().name(),body.content(),actor.userId(),now(),notification,policyRef,version);return finish(user,r,state,event,"overdue_follow_up",key,payload);
     }
     public OverdueResponse.FollowUp recovery(ActorPrincipal actor,String id,OverdueCommands.Recovery body,String key) {
+        id=resolveCaseRef(id);
         var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
         Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_recovery",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
         if(!em.createQuery("select f.id from OverdueFollowUp f where f.caseRef=:id and f.type='RECOVERY_HANDOFF'",UUID.class)
@@ -93,6 +91,7 @@ public class OverdueService {
     }
     @Transactional(readOnly=true)
     public PageResponse<OverdueResponse.FollowUp> history(ActorPrincipal actor,String id,int page,int size,String correlation) {
+        id=resolveCaseRef(id);
         var ref=parse(id);visible(actor,ref,false);if(page<0||size<1||size>100||(long)page*size>Integer.MAX_VALUE)throw ApiExceptions.validation("Invalid pagination",null);
         long revision=revision(id);var rows=em.createQuery("select f from OverdueFollowUp f where f.caseRef=:id order by f.recordedAt desc,f.id",OverdueFollowUp.class).setParameter("id",id).setFirstResult(page*size).setMaxResults(size).getResultList().stream().map(f->response(f,revision)).toList();
         long count=em.createQuery("select count(f) from OverdueFollowUp f where f.caseRef=:id",Long.class).setParameter("id",id).getSingleResult();return PageResponse.from(new PageImpl<>(rows,PageRequest.of(page,size,Sort.by(Sort.Direction.DESC,"recordedAt").and(Sort.by("id"))),count),correlation);
@@ -149,6 +148,14 @@ public class OverdueService {
     private OverdueResponse.FollowUp response(OverdueFollowUp f,long revision){return new OverdueResponse.FollowUp(f.getId(),f.getCaseRef(),f.getType(),f.getContent(),f.getActorId(),f.getRecordedAt(),f.getExternalRef(),f.getPolicyRef(),f.getPolicyVersion(),revision);}
     private User lockActor(ActorPrincipal a){var u=em.find(User.class,a.userId(),LockModeType.PESSIMISTIC_WRITE);if(u==null)throw ApiExceptions.unauthorized("Actor not found");return u;}
     private OverdueResponse.FollowUp decode(String json){try{return mapper.readValue(json,OverdueResponse.FollowUp.class);}catch(Exception e){throw ApiExceptions.conflict("Stored follow-up result invalid");}}
+    private String resolveCaseRef(String id) {
+        if(id!=null&&id.toUpperCase(Locale.ROOT).matches("(?:SH-\\d{6}|QH-\\d{4}-\\d{6})")&&displayCodes!=null){
+            String resource=displayCodes.resource("QH",id);
+            if(resource==null)throw ApiExceptions.notFound("Không tìm thấy hồ sơ quá hạn.");
+            return resource;
+        }
+        return id;
+    }
     private Ref parse(String value){try{var parts=value.split(":",-1);if(parts.length<2)throw new IllegalArgumentException();String kind=parts[0];if(!(kind.equals("RENTAL_TERM")&&parts.length==2||kind.equals("PAYMENT_DUE")&&parts.length==3))throw new IllegalArgumentException();UUID rental=UUID.fromString(parts[1]),obligation=parts.length==3?UUID.fromString(parts[2]):null;if(!value.equals(kind+":"+rental+(obligation==null?"":":"+obligation)))throw new IllegalArgumentException();return new Ref(value,rental,kind,obligation);}catch(IllegalArgumentException e){throw ApiExceptions.validation("Invalid stable overdue reference",null);}}
     private int priority(String value){return switch(value){case "RECOVERY"->5;case "URGENT"->4;case "SERIOUS"->3;case "PAYMENT_DUE"->2;default->1;};}
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}

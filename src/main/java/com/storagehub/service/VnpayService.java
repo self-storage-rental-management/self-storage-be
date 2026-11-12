@@ -324,6 +324,7 @@ public class VnpayService {
         }
         String responseCode = query.getOrDefault("vnp_ResponseCode", "99");
         String transactionStatus = query.getOrDefault("vnp_TransactionStatus", responseCode);
+        boolean success = "00".equals(responseCode) && "00".equals(transactionStatus);
         // PAID is terminal for callback metadata, including late funds awaiting reconciliation.
         // Keep the owner's duplicate response contract without letting a signed replay rewrite
         // the accepted transaction or invalidate its financial provenance.
@@ -347,6 +348,12 @@ public class VnpayService {
                 !renewalPayment||payment.getFailureCode()==null,
                 renewalPayment&&payment.getFailureCode()!=null);
         }
+        Reservation reservation = reservationId == null ? payment.getReservation()
+            : reservationRepository.findByIdForUpdate(reservationId).orElse(payment.getReservation());
+        if (!success && payment.getStatus() == PaymentStatus.CANCELLED) {
+            paymentRepository.saveAndFlush(payment);
+            return new CallbackResult("00", "Confirm Success", payment.getId(), reservationId, renewalId, false, false);
+        }
         payment.setGatewayResponseCode(responseCode);
         payment.setGatewayTransactionStatus(transactionStatus);
         setIfPresent(query.get("vnp_TransactionNo"), payment::setGatewayTransactionNo);
@@ -354,8 +361,6 @@ public class VnpayService {
         setIfPresent(query.get("vnp_CardType"), payment::setGatewayCardType);
         setIfPresent(query.get("vnp_PayDate"), payment::setGatewayPayDate);
         payment.setProcessedAt(Instant.now());
-        boolean success = "00".equals(responseCode) && "00".equals(transactionStatus);
-        Reservation reservation = payment.getReservation();
         if (success) {
             Instant gatewayPaidAt = parseGatewayPayDate(payment.getGatewayPayDate());
             if (gatewayPaidAt == null || gatewayPaidAt.isAfter(Instant.now())) {
@@ -383,6 +388,23 @@ public class VnpayService {
                 paymentRepository.saveAndFlush(payment);
                 return new CallbackResult("00","Payment received; allocation and signing preparation pending",
                     payment.getId(),null,renewalId,false,true);
+            }
+            if (payment.getStatus() == PaymentStatus.CANCELLED
+                || reservation.getStatus() == ReservationStatus.CANCELLED
+                || reservation.getStatus() == ReservationStatus.EXPIRED) {
+                payment.setStatus(PaymentStatus.PAID);
+                payment.setPaidAt(gatewayPaidAt);
+                payment.setFailureCode("PAYMENT_AFTER_RESERVATION_CLOSED");
+                payment.setFailureReason("VNPAY recorded funds for an already cancelled or expired reservation; manual reconciliation/refund required");
+                notificationService.createNotification(
+                    reservation.getCustomer().getId(), NotificationType.PAYMENT,
+                    "Thanh toán cần đối soát hoàn tiền",
+                    "VNPay ghi nhận giao dịch cho đơn đã hủy/hết hạn " + reservation.getReservationCode()
+                        + ". Bộ phận tài chính sẽ đối soát và hỗ trợ hoàn tiền.",
+                    reservation.getId()
+                );
+                paymentRepository.saveAndFlush(payment);
+                return new CallbackResult("00", "Payment received on closed reservation", payment.getId(), reservationId, null, false, false);
             }
             if (gatewayPaidAt.isAfter(paymentDeadline(reservation))) {
                 markLatePaymentForReconciliation(payment, gatewayPaidAt);
@@ -686,9 +708,8 @@ public class VnpayService {
         }
         Payment payment = paymentRepository.findByIdForUpdate(request.getPayment().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
-        if (payment.getReservation() == null || payment.getGatewayTransactionNo() == null
-            || payment.getStatus() != PaymentStatus.PAID) {
-            throw ApiExceptions.conflict("Only a successful original VNPay payment can be refunded");
+        if (payment.getReservation() == null || payment.getStatus() != PaymentStatus.PAID) {
+            throw ApiExceptions.conflict("Only a successful original reservation payment can be refunded");
         }
         facilityScopeService.assertCanManage(actor, payment.getReservation().getFacility().getId());
         if (request.getRequestedBy() != null && request.getRequestedBy().getId().equals(actor.userId())) {
@@ -723,11 +744,18 @@ public class VnpayService {
             execution = refundRepository.saveAndFlush(execution);
         }
 
-        Map<String, String> gateway = post(refundRequest(
-            payment,
-            new VnpayRefundRequest(request.getAmount(), request.getReason()),
-            approver.getEmail(), clientIp
-        ));
+        boolean manualSettlement = payment.getGatewayTransactionNo() == null || payment.getGatewayTransactionNo().isBlank();
+        Map<String, String> gateway = manualSettlement
+            ? Map.of(
+                "vnp_ResponseCode", "00",
+                "vnp_TransactionNo", "MANUAL-" + request.getId().toString().substring(0, 8).toUpperCase(),
+                "vnp_Message", "Manual refund approved and recorded"
+            )
+            : post(refundRequest(
+                payment,
+                new VnpayRefundRequest(request.getAmount(), request.getReason()),
+                approver.getEmail(), clientIp
+            ));
         boolean successful = "00".equals(gateway.get("vnp_ResponseCode"));
         String gatewayReference = gateway.get("vnp_TransactionNo") != null
             ? gateway.get("vnp_TransactionNo") : gateway.get("vnp_TxnRef");
