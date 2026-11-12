@@ -31,11 +31,10 @@ import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.TaskPriority;
 import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.Payment;
+import com.storagehub.domain.model.PaymentComplaintStatus;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.ReservationCancellationType;
-import com.storagehub.domain.model.RefundRequest;
-import com.storagehub.domain.model.RefundRequestStatus;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
@@ -44,6 +43,7 @@ import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.repo.CheckInRepository;
+import com.storagehub.domain.repo.PaymentComplaintRepository;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
@@ -59,6 +59,7 @@ import com.storagehub.service.ledger.LedgerStore;
 import com.storagehub.service.rental.period.RentalPeriod;
 import com.storagehub.time.BusinessTime;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.math.BigDecimal;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -108,6 +109,10 @@ public class CustomerReservationService {
     private RefundRequestRepository refundRequestRepository;
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
+    @Autowired(required = false)
+    private PaymentComplaintRepository paymentComplaintRepository;
+    @Autowired(required = false)
+    private ReservationCapacityService reservationCapacityService;
 
     private static String clean(String value) {
         if (value == null) return null;
@@ -881,14 +886,30 @@ public class CustomerReservationService {
             );
         }
         Instant previousAppointmentAt = reservation.getAppointmentAt();
+        LocalDate previousStartDate = reservation.getStartDate();
+        LocalDate previousEndDate = reservation.getEndDate();
         reservation.setAppointmentAt(request.appointmentAt());
         var pricing = snapshotRepository.findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
         if (pricing.getRentalMonths() > 0) {
             var estimatedStart = request.appointmentAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
                 .toLocalDate().plusDays(pricing.getFreeSetupDays());
+            LocalDate estimatedEnd = estimatedStart.plusMonths(pricing.getRentalMonths());
+            boolean datesChanged = !estimatedStart.equals(previousStartDate) || !estimatedEnd.equals(previousEndDate);
+            if (datesChanged && reservation.getAssignedUnit() == null && reservationCapacityService != null) {
+                boolean holdsCapacity = reservation.getStatus() == ReservationStatus.CONFIRMED
+                    || reservation.getStatus() == ReservationStatus.AWAITING_PAYMENT
+                    || reservation.getStatus() == ReservationStatus.PAYMENT_GRACE
+                    || reservation.getStatus() == ReservationStatus.PAYMENT_REVIEW
+                    || reservation.getStatus() == ReservationStatus.AWAITING_EMAIL
+                    || reservation.getStatus() == ReservationStatus.AWAITING_REVIEW;
+                reservationCapacityService.lockAndRequireAvailableCapacityForReschedule(
+                    reservation.getFacility().getId(), reservation.getUnitType().getId(),
+                    estimatedStart, estimatedEnd, previousStartDate, previousEndDate, holdsCapacity
+                );
+            }
             reservation.setStartDate(estimatedStart);
-            reservation.setEndDate(estimatedStart.plusMonths(pricing.getRentalMonths()));
+            reservation.setEndDate(estimatedEnd);
         }
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
         if (checkIn != null && checkIn.getStatus() != CheckInStatus.scheduled) {
@@ -1018,8 +1039,21 @@ public class CustomerReservationService {
         }
 
         payments.stream()
-            .filter(payment -> payment.getStatus() == PaymentStatus.PENDING)
+            .filter(payment -> payment.getStatus() == PaymentStatus.PENDING
+                || payment.getStatus() == PaymentStatus.NOT_RECEIVED)
             .forEach(payment -> payment.setStatus(PaymentStatus.CANCELLED));
+
+        if (previousStatus == ReservationStatus.PAYMENT_REVIEW && paymentComplaintRepository != null) {
+            paymentComplaintRepository.findByReservation_Id(reservationId).ifPresent(complaint -> {
+                if (complaint.getStatus() == PaymentComplaintStatus.PENDING
+                    || complaint.getStatus() == PaymentComplaintStatus.REVIEW_OVERDUE) {
+                    complaint.setStatus(PaymentComplaintStatus.WITHDRAWN);
+                    complaint.setReviewedAt(Instant.now());
+                    complaint.setDecisionReason("Customer cancelled reservation before complaint decision");
+                    paymentComplaintRepository.saveAndFlush(complaint);
+                }
+            });
+        }
 
         Payment paidDeposit = payments.stream()
             .filter(payment -> payment.getStatus() == PaymentStatus.PAID)
@@ -1029,7 +1063,7 @@ public class CustomerReservationService {
             BigDecimal deposit = paidDeposit.getAmount().setScale(2, RoundingMode.HALF_UP);
             reservation.setCancellationType(ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
             reservation.setCancellationChargeAmount(deposit);
-            reservation.setCancellationRefundAmount(BigDecimal.ZERO);
+            reservation.setCancellationRefundAmount(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
         }
 
         // Assignment/unit release still belongs to the operations flow; this service
@@ -1057,6 +1091,27 @@ public class CustomerReservationService {
         );
         notificationService.notifyStaffOfReservationCancellation(saved, assignedUnitReleased);
         return response;
+    }
+
+    @Transactional
+    public void deleteHistory(ActorPrincipal actor, UUID reservationId) {
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        ReservationStatus status = reservation.getStatus();
+        if (status != ReservationStatus.EXPIRED
+            && status != ReservationStatus.COMPLETED
+            && status != ReservationStatus.CANCELLED
+            && status != ReservationStatus.REJECTED) {
+            throw ApiExceptions.conflict("Only ended reservations can be removed from active history");
+        }
+        if (reservation.getArchivedAt() == null) {
+            reservation.setArchivedAt(Instant.now());
+            reservationRepository.saveAndFlush(reservation);
+            auditLogService.recordMutation(
+                reservation.getCustomer(), "RESERVATION_HISTORY_DELETED", "Reservation", reservation.getId(),
+                reservation.getFacility().getId(), null, Map.of("status", status)
+            );
+        }
     }
 
     private boolean releaseAssignedUnitAfterCancellation(Reservation reservation, Instant cancelledAt) {

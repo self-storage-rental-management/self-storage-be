@@ -675,6 +675,20 @@ public class ReturnSettlementService {
         return toResponse(saved);
     }
 
+    public int autoSettleExpiredReturns(ActorPrincipal actor) {
+        if (actor == null || actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only operators can trigger return auto-settlement");
+        }
+        if (actor.hasRole(RoleCode.STAFF)) {
+            authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
+        } else if (actor.hasRole(RoleCode.MANAGER)) {
+            authorizationService.require(actor, SystemPermission.MANAGE_RENTALS);
+        } else if (!actor.hasRole(RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Only operators can trigger return auto-settlement");
+        }
+        return autoSettleExpiredReturns();
+    }
+
     public int autoSettleExpiredReturns() {
         Instant cutoff = Instant.now().minus(java.time.Duration.ofHours(autoSettlementSlaHours));
         List<ReturnCase> expired = returnCaseRepository.findExpiredAwaitingConfirmation(cutoff);
@@ -1053,7 +1067,7 @@ public class ReturnSettlementService {
         facilityScopeService.assertCanOperate(actor,rental.getFacility().getId());
         var guard=recoveryGuard();
         if(guard!=null) {
-            try { guard.requireActiveTask(rental); } catch (Exception ignored) {}
+            guard.requireActiveTask(rental);
         }
         var rc=new ReturnCase();rc.setRental(rental);rc.setFacility(rental.getFacility());rc.setStorageUnit(rental.getStorageUnit());
         rc.setCustomer(rental.getCustomer());rc.setRequestedBy(userRepository.findById(actor.userId()).orElseThrow(()->ApiExceptions.notFound("Staff not found")));
@@ -1071,7 +1085,7 @@ public class ReturnSettlementService {
         facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
         var guard=recoveryGuard();
         if(guard!=null) {
-            try { guard.requireReceipt(rc,reference); } catch (Exception ignored) {}
+            guard.requireReceipt(rc,reference);
         }
                 requireFinance().settle(rc,actor.userId(),reference,true);
         rc.setStatus(ReturnCaseStatus.completed);rc.setCompletedAt(Instant.now());
@@ -1088,7 +1102,7 @@ public class ReturnSettlementService {
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
         facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
         var guard=recoveryGuard();if(guard!=null) {
-            try { guard.requireReadyToRelease(rc); } catch (Exception ignored) {}
+            guard.requireReadyToRelease(rc);
         }
         releaseRentalAndUnit(rc);
         auditLogService.recordMutation("RECOVERY_RENTAL_RELEASED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));

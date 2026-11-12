@@ -124,8 +124,10 @@ public class UnitAssignmentService {
 
         StorageUnit previousUnit = storageUnitRepository.findByIdForUpdate(current.getStorageUnit().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Current storage unit was not found"));
-        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (capacityMutex != null) {
+            capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+                .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        }
         StorageUnit nextUnit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
         validateAssignableUnit(reservation, nextUnit);
@@ -209,8 +211,10 @@ public class UnitAssignmentService {
             throw ApiExceptions.conflict("The goods approver cannot assign a storage unit to the same reservation");
         }
 
-        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (capacityMutex != null) {
+            capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+                .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        }
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
         if (!unit.getFacility().getId().equals(reservation.getFacility().getId())) {
