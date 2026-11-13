@@ -108,7 +108,10 @@ public final class EarlyTerminationPolicy {
             : (int) Math.max(0, ChronoUnit.DAYS.between(setupStart, paidRentalStart));
         int rentalDaysUsed = (int) Math.max(0,
             ChronoUnit.DAYS.between(paidRentalStart, returnDate.plusDays(1)));
-        int noticeShortfallDays = (int) Math.max(0, noticeDays - Math.max(0, noticeGivenDays));
+        int requestedNoticeShortfallDays = (int) Math.max(0, noticeDays - Math.max(0, noticeGivenDays));
+        int remainingTermDays = (int) Math.max(0, ChronoUnit.DAYS.between(returnDate, fullTermEnd));
+        // Notice compensation cannot extend beyond the remaining contract term.
+        int noticeShortfallDays = Math.min(requestedNoticeShortfallDays, remainingTermDays);
 
         PricingTier tier = pricingTiers == null ? null : pricingTiers.stream()
             .filter(value -> value != null && value.rentalMonths() >= 3
