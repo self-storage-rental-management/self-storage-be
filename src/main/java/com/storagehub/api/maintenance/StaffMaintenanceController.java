@@ -78,15 +78,4 @@ public class StaffMaintenanceController {
             CorrelationIdContext.current()
         );
     }
-
-    @PostMapping("/{taskId}/assign")
-    public ApiResponse<MaintenanceTaskResponse> assignTask(
-        @PathVariable UUID taskId,
-        @Valid @RequestBody AssignStaffTaskRequest request
-    ) {
-        return new ApiResponse<>(
-            maintenanceService.assignStaff(actorContext.required(), taskId, request),
-            CorrelationIdContext.current()
-        );
-    }
 }

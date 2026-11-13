@@ -602,12 +602,16 @@ public class VnpayService {
         if (payment.getStatus() != PaymentStatus.PAID || payment.getGatewayTransactionNo() == null) {
             throw ApiExceptions.conflict("Only a successful VNPAY payment can be refunded");
         }
+        if (payment.getRenewal() != null) {
+            throw ApiExceptions.conflict("Renewal refunds require the Renewal refund entitlement and payout workflow");
+        }
+        if (payment.getReservation() == null) {
+            throw ApiExceptions.conflict("Only an original reservation payment can be refunded through this endpoint");
+        }
         UUID facilityId = payment.getReservation().getFacility().getId();
         if (facilityScopeService != null && actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS)) {
             facilityScopeService.assertCanManage(actor, facilityId);
         }
-        if(payment.getRenewal()!=null)
-            throw ApiExceptions.conflict("Renewal refunds require the Renewal refund entitlement and payout workflow");
         if (refundRentals.findByReservation_Id(payment.getReservation().getId())
             .filter(rental -> rental.getSetupStartedAt() != null).isPresent())
             throw ApiExceptions.conflict("Tiền của hồ sơ đã bàn giao phải được hoàn qua quyết toán trả kho để tránh hoàn trùng.");
@@ -777,9 +781,14 @@ public class VnpayService {
             payment.setLastReconciledAt(Instant.now());
             paymentRepository.saveAndFlush(payment);
         }
+        UUID auditFacilityId = payment.getReservation() != null && payment.getReservation().getFacility() != null
+            ? payment.getReservation().getFacility().getId()
+            : (payment.getRenewal() != null && payment.getRenewal().getRental() != null && payment.getRenewal().getRental().getFacility() != null
+                ? payment.getRenewal().getRental().getFacility().getId()
+                : null);
         auditLogService.recordMutation(
             approver, "VNPAY_ESCALATED_REFUND_PROCESSED", "RefundRequest", request.getId(),
-            payment.getReservation().getFacility().getId(), null,
+            auditFacilityId, null,
             Map.of("requestStatus", request.getStatus().name(),
                 "amount", request.getAmount(),
                 "gatewayReference", gatewayReference == null ? "" : gatewayReference)
