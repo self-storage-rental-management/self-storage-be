@@ -101,6 +101,18 @@ class EarlyTerminationPolicyTests {
     }
 
     @Test
+    void activeReturnCapsNoticeShortfallAtTheRemainingContractDays() {
+        var result = EarlyTerminationPolicy.activeReturn(
+            LocalDate.of(2026, 1, 16), LocalDate.of(2027, 1, 12), LocalDate.of(2026, 1, 16),
+            12, 15, new BigDecimal("1000000"), new BigDecimal("12000000"),
+            new BigDecimal("2400000"), BigDecimal.ONE, 1, 14, 0, List.of()
+        );
+
+        assertThat(result.noticeShortfallDays()).isEqualTo(3);
+        assertThat(result.noticeCharge()).isEqualByComparingTo("100000");
+    }
+
+    @Test
     void fullTermReturnDoesNotRepriceOrChargeEarlyTerminationFee() {
         var result = EarlyTerminationPolicy.activeReturn(
             LocalDate.of(2026, 1, 16), LocalDate.of(2050, 1, 15), LocalDate.of(2026, 1, 1),
