@@ -302,7 +302,10 @@ class RenewalPaymentTransactionTests {
         UUID payment=paidDeposit(true);Instant first=NOW.plus(Duration.ofDays(1)).plusSeconds(3600),second=NOW.plus(Duration.ofDays(2));
         var provider=new org.springframework.beans.factory.support.StaticListableBeanFactory();provider.addBean("finance",finance);
         var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
-        org.springframework.test.util.ReflectionTestUtils.setField(accounting,"manualPayments",new ManualRentalPaymentService(payments,audit));
+        var manualPayments = new ManualRentalPaymentService(payments, audit);
+        org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptEmails",
+            mock(com.storagehub.service.email.TransactionalEmailService.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(accounting, "manualPayments", manualPayments);
         var periods=mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
         when(periods.require(any())).thenAnswer(call->{var r=(Rental)call.getArgument(0);return com.storagehub.service.rental.period.RentalPeriod.verified(r.getId(),r.getStartDate(),r.getContractEndDate(),com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE,"period").orElseThrow();});
         var policyService=mock(com.storagehub.service.renewal.integration.RenewalPolicyPublicationService.class);var published=mock(com.storagehub.api.renewal.PublishedRenewalPolicy.class);

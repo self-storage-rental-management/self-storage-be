@@ -1,8 +1,13 @@
 package com.storagehub.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.reservation.CancelReservationRequest;
 import com.storagehub.api.reservation.CheckInAppointmentRequest;
+import com.storagehub.api.reservation.CheckInDocumentResponse;
+import com.storagehub.api.reservation.CheckInDocumentResponse.Kind;
 import com.storagehub.api.reservation.CustomerPreparationCompleteRequest;
+import com.storagehub.api.reservation.RentalStartConfirmation;
 import com.storagehub.api.reservation.ReservationDetailResponse;
 import com.storagehub.api.reservation.ReservationGoodsItemResponse;
 import com.storagehub.api.reservation.ReservationResponse;
@@ -26,11 +31,10 @@ import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.TaskPriority;
 import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.Payment;
+import com.storagehub.domain.model.PaymentComplaintStatus;
 import com.storagehub.domain.model.PaymentStatus;
 import com.storagehub.domain.model.PaymentType;
 import com.storagehub.domain.model.ReservationCancellationType;
-import com.storagehub.domain.model.RefundRequest;
-import com.storagehub.domain.model.RefundRequestStatus;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
@@ -39,6 +43,7 @@ import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.UnitReleaseDisposition;
 import com.storagehub.domain.repo.CheckInRepository;
+import com.storagehub.domain.repo.PaymentComplaintRepository;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
@@ -51,10 +56,15 @@ import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.RefundRequestRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.ledger.LedgerStore;
+import com.storagehub.service.rental.period.RentalPeriod;
+import com.storagehub.time.BusinessTime;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.math.RoundingMode;
@@ -76,6 +86,10 @@ public class CustomerReservationService {
     private com.storagehub.service.rental.period.ConfirmedRentalPeriods confirmedRentalPeriods;
     @Autowired
     private ObjectProvider<ReturnSettlementService> returnSettlementServices;
+    @Autowired
+    private PaymentProvenance paymentProvenance;
+    @Autowired
+    private ObjectMapper objectMapper;
 
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
@@ -95,6 +109,10 @@ public class CustomerReservationService {
     private RefundRequestRepository refundRequestRepository;
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
+    @Autowired(required = false)
+    private PaymentComplaintRepository paymentComplaintRepository;
+    @Autowired(required = false)
+    private ReservationCapacityService reservationCapacityService;
 
     private static String clean(String value) {
         if (value == null) return null;
@@ -567,6 +585,7 @@ public class CustomerReservationService {
             java.time.LocalDate paidRentalStart = startedAt.atZone(zone).toLocalDate().plusDays(setupDays);
             Instant setupEndsAt = paidRentalStart.atStartOfDay(zone).toInstant();
             Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId).orElseGet(Rental::new);
+            if (rental.getId() != null) requireReceiptRentalStatus(rental);
             if (rental.getId() == null) {
                 rental.setCustomer(reservation.getCustomer());
                 rental.setFacility(reservation.getFacility());
@@ -679,6 +698,96 @@ public class CustomerReservationService {
         return toDetailResponse(saved);
     }
 
+    @Transactional(readOnly = true)
+    public RentalStartConfirmation previewRentalStart(ActorPrincipal actor, UUID reservationId) {
+        requireRentalStartCustomer(actor);
+        Reservation reservation = reservationRepository.findByIdAndCustomer_Id(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy đơn giữ kho."));
+        Rental rental = rentalRepository.findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Đơn chưa có hồ sơ thuê."));
+        return rentalStartOffer(reservation, rental, Instant.now());
+    }
+
+    @Transactional
+    public ReservationDetailResponse confirmRentalStart(
+        ActorPrincipal actor, UUID reservationId, RentalStartConfirmation.Request request
+    ) {
+        requireRentalStartCustomer(actor);
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy đơn giữ kho."));
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Đơn chưa có hồ sơ thuê."));
+        if (reservation.getStatus() == ReservationStatus.COMPLETED && rental.getStatus() == RentalStatus.active
+            && rental.getInventoryVerifiedAt() != null && request.startDate().equals(rental.getStartDate())
+            && rental.getContractEndDate() != null
+            && request.lastPermittedDate().equals(rental.getContractEndDate().minusDays(1))) {
+            return toDetailResponse(reservation);
+        }
+
+        Instant now = Instant.now();
+        RentalStartConfirmation offer = rentalStartOffer(reservation, rental, now);
+        if (!offer.startDate().equals(request.startDate()) || !offer.lastPermittedDate().equals(request.lastPermittedDate())) {
+            throw ApiExceptions.conflict("Ngày bắt đầu hoặc ngày cuối kỳ thuê đã thay đổi. Vui lòng xem lại trước khi xác nhận.");
+        }
+        var contract = contractRepository.findByRental_Id(rental.getId())
+            .filter(item -> item.getStatus() == com.storagehub.domain.model.ContractStatus.SIGNED)
+            .orElseThrow(() -> ApiExceptions.conflict("Hồ sơ chưa có hợp đồng đã ký để xác nhận mốc kỳ thuê."));
+
+        var oldDates = Map.of("startDate", rental.getStartDate(), "endDateExclusive", rental.getContractEndDate(),
+            "setupEndsAt", rental.getSetupEndsAt());
+        var endExclusive = offer.lastPermittedDate().plusDays(1);
+        rental.setStartDate(offer.startDate());
+        rental.setContractEndDate(endExclusive);
+        rental.setSetupEndsAt(now);
+        rental.setStatus(RentalStatus.active);
+        reservation.setStartDate(offer.startDate());
+        reservation.setEndDate(endExclusive);
+        contract.setExpiresAt(endExclusive.atStartOfDay(BusinessTime.ZONE).toInstant());
+        rentalRepository.saveAndFlush(rental);
+        reservationRepository.save(reservation);
+        contractRepository.save(contract);
+
+        var period = RentalPeriod.verified(rental.getId(), offer.startDate(), endExclusive,
+            RentalPeriod.Convention.EXCLUSIVE, "customer-rental-start:" + reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Mốc kỳ thuê xác nhận không hợp lệ."));
+        confirmedRentalPeriods.confirm(rental, period);
+        auditLogService.recordMutation(reservation.getCustomer(), "CUSTOMER_RENTAL_START_CONFIRMED", "Rental",
+            rental.getId(), reservation.getFacility().getId(), oldDates,
+            Map.of("startDate", offer.startDate(), "endDateExclusive", endExclusive, "setupEndsAt", now,
+                "rentalMonths", offer.rentalMonths(), "confirmedByCustomer", true));
+        notificationService.createNotification(reservation.getCustomer().getId(), NotificationType.CHECKIN,
+            "Kỳ thuê đã bắt đầu",
+            "Bạn đã xác nhận bắt đầu kỳ thuê gian " + rental.getStorageUnit().getCode()
+                + " từ " + offer.startDate() + " đến hết " + offer.lastPermittedDate() + ".",
+            reservationId);
+        return toDetailResponse(reservation);
+    }
+
+    private void requireRentalStartCustomer(ActorPrincipal actor) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Chỉ khách hàng thuê kho được xác nhận bắt đầu kỳ thuê.");
+        }
+    }
+
+    private RentalStartConfirmation rentalStartOffer(Reservation reservation, Rental rental, Instant now) {
+        requireReceiptRentalStatus(rental);
+        if (rental.getStatus() == RentalStatus.active) {
+            throw ApiExceptions.conflict("Kỳ thuê của hồ sơ này đã bắt đầu.");
+        }
+        if (!RentalSetupLifecycleService.customerCanStartAfterInventory(rental, now)) {
+            throw ApiExceptions.conflict("Chỉ xác nhận bắt đầu sớm sau khi khách báo chuẩn bị xong và nhân viên hoàn tất kiểm kê, trong thời gian miễn phí.");
+        }
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId())
+            .filter(item -> item.getStatus() == CheckInStatus.completed)
+            .orElseThrow(() -> ApiExceptions.conflict("Chưa có biên bản kiểm kê hoàn tất."));
+        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu báo giá đã chấp nhận của hồ sơ thuê."));
+        requireReceiptTimeline(reservation, checkIn, rental, snapshot);
+        var start = now.atZone(BusinessTime.ZONE).toLocalDate();
+        return new RentalStartConfirmation(rental.getStartDate(), start,
+            start.plusMonths(snapshot.getRentalMonths()).minusDays(1), snapshot.getRentalMonths());
+    }
+
     private void ensureSignedContract(Reservation reservation, Rental rental) {
         if (contractRepository == null) return;
         Instant now = Instant.now();
@@ -705,8 +814,18 @@ public class CustomerReservationService {
         }
     }
 
+    private void requireReceiptRentalStatus(Rental rental) {
+        if (rental.getStatus() == RentalStatus.completed) {
+            throw ApiExceptions.conflict("Hồ sơ thuê đã kết thúc. Mở Hồ sơ thuê để xem biên bản và quyết toán.");
+        }
+        if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
+            throw ApiExceptions.conflict("Hồ sơ thuê đang trong quy trình trả kho. Mở Hồ sơ thuê để theo dõi tiến độ trả kho.");
+        }
+    }
+
     /** Receipt activates a verified handover, including early inventory, without changing paid dates. */
     private void requireReceiptTimeline(Reservation reservation,CheckIn checkIn,Rental rental,ReservationPricingSnapshot snapshot) {
+        requireReceiptRentalStatus(rental);
         String missing="Thiếu hoặc lệch chứng cứ bàn giao/thời gian chuẩn bị, cần đối soát trước khi xác nhận nhận kho.";
         if(rental.getId()==null||rental.getReservation()==null||rental.getCustomer()==null||rental.getFacility()==null||rental.getStorageUnit()==null
             ||checkIn.getRental()==null||!java.util.Objects.equals(checkIn.getRental().getId(),rental.getId())
@@ -714,7 +833,6 @@ public class CustomerReservationService {
             ||!java.util.Objects.equals(rental.getCustomer().getId(),reservation.getCustomer().getId())
             ||!java.util.Objects.equals(rental.getFacility().getId(),reservation.getFacility().getId())
             ||!java.util.Objects.equals(rental.getStorageUnit().getId(),reservation.getAssignedUnit().getId())
-            ||(rental.getStatus()!=RentalStatus.setup&&rental.getStatus()!=RentalStatus.active)
             ||rental.getActualReturnedAt()!=null||rental.getCompletedAt()!=null
             ||rental.getSetupStartedAt()==null||rental.getSetupEndsAt()==null||rental.getTermsEffectiveAt()==null
             ||rental.getStartDate()==null||rental.getContractEndDate()==null||rental.getInventoryVerifiedAt()==null
@@ -768,14 +886,30 @@ public class CustomerReservationService {
             );
         }
         Instant previousAppointmentAt = reservation.getAppointmentAt();
+        LocalDate previousStartDate = reservation.getStartDate();
+        LocalDate previousEndDate = reservation.getEndDate();
         reservation.setAppointmentAt(request.appointmentAt());
         var pricing = snapshotRepository.findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
         if (pricing.getRentalMonths() > 0) {
             var estimatedStart = request.appointmentAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
                 .toLocalDate().plusDays(pricing.getFreeSetupDays());
+            LocalDate estimatedEnd = estimatedStart.plusMonths(pricing.getRentalMonths());
+            boolean datesChanged = !estimatedStart.equals(previousStartDate) || !estimatedEnd.equals(previousEndDate);
+            if (datesChanged && reservation.getAssignedUnit() == null && reservationCapacityService != null) {
+                boolean holdsCapacity = reservation.getStatus() == ReservationStatus.CONFIRMED
+                    || reservation.getStatus() == ReservationStatus.AWAITING_PAYMENT
+                    || reservation.getStatus() == ReservationStatus.PAYMENT_GRACE
+                    || reservation.getStatus() == ReservationStatus.PAYMENT_REVIEW
+                    || reservation.getStatus() == ReservationStatus.AWAITING_EMAIL
+                    || reservation.getStatus() == ReservationStatus.AWAITING_REVIEW;
+                reservationCapacityService.lockAndRequireAvailableCapacityForReschedule(
+                    reservation.getFacility().getId(), reservation.getUnitType().getId(),
+                    estimatedStart, estimatedEnd, previousStartDate, previousEndDate, holdsCapacity
+                );
+            }
             reservation.setStartDate(estimatedStart);
-            reservation.setEndDate(estimatedStart.plusMonths(pricing.getRentalMonths()));
+            reservation.setEndDate(estimatedEnd);
         }
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
         if (checkIn != null && checkIn.getStatus() != CheckInStatus.scheduled) {
@@ -797,30 +931,80 @@ public class CustomerReservationService {
     }
 
     @Transactional(readOnly = true)
-    public List<FileAssetResponse> listCheckInDocuments(ActorPrincipal actor, UUID reservationId) {
+    public List<CheckInDocumentResponse> listCheckInDocuments(ActorPrincipal actor, UUID reservationId) {
         Reservation reservation = findOwnedReservation(actor, reservationId);
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId()).orElse(null);
         if (checkIn == null) {
             return List.of();
         }
+        Map<String, Kind> documentKinds = checkInDocumentKinds(checkIn, reservation.getId());
+        boolean hasContractReference = clean(checkIn.getContractEvidenceReference()) != null;
         return fileAssetRepository.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("CHECK_IN", checkIn.getId())
             .stream()
             .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
-            .sorted((left, right) -> {
-                boolean leftContract = left.getOriginalName() != null
-                    && left.getOriginalName().toLowerCase().startsWith("hop-dong-da-ky-");
-                boolean rightContract = right.getOriginalName() != null
-                    && right.getOriginalName().toLowerCase().startsWith("hop-dong-da-ky-");
-                if (leftContract == rightContract) {
-                    return 0;
+            .map(asset -> {
+                Kind kind = documentKinds.get(asset.getId().toString());
+                if (kind == null) {
+                    boolean legacyContract = !hasContractReference && asset.getOriginalName() != null
+                        && asset.getOriginalName().toLowerCase(Locale.ROOT).startsWith("hop-dong-da-ky-");
+                    kind = legacyContract ? Kind.SIGNED_CONTRACT : Kind.OTHER;
                 }
-                return leftContract ? -1 : 1;
+                return new CheckInDocumentResponse(
+                    asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
+                    asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(), asset.getStatus(),
+                    asset.getCreatedAt(), kind
+                );
             })
-            .map(asset -> new FileAssetResponse(
-                asset.getId(), asset.getOriginalName(), asset.getContentType(), asset.getSizeBytes(),
-                asset.getChecksumSha256(), asset.getEntityType(), asset.getEntityId(), asset.getStatus(), asset.getCreatedAt()
-            ))
+            .sorted(Comparator.comparing(CheckInDocumentResponse::kind))
             .toList();
+    }
+
+    private Map<String, Kind> checkInDocumentKinds(CheckIn checkIn, UUID reservationId) {
+        Map<String, Kind> kinds = new HashMap<>();
+        tagCheckInDocument(kinds, checkIn.getContractEvidenceReference(), Kind.SIGNED_CONTRACT);
+        for (Payment payment : paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId)) {
+            if (payment.getPurpose() == PaymentType.RENTAL_BALANCE && payment.getStatus() == PaymentStatus.PAID
+                && "MANUAL".equals(payment.getGatewayProvider())) {
+                UUID receiptId = paymentProvenance.manualReceiptFileId(payment);
+                if (receiptId != null) {
+                    kinds.putIfAbsent(receiptId.toString(), Kind.PAYMENT_RECEIPT);
+                }
+            }
+        }
+
+        String readinessNote = checkIn.getReadinessNote();
+        String evidenceMarker = " | Bằng chứng: ";
+        if (readinessNote != null && readinessNote.startsWith("Tình trạng kho trống: ")) {
+            int customerNoteIndex = readinessNote.indexOf(" | Ghi chú khách: ");
+            String handoverNote = customerNoteIndex < 0 ? readinessNote : readinessNote.substring(0, customerNoteIndex);
+            int markerIndex = handoverNote.lastIndexOf(evidenceMarker);
+            if (markerIndex >= 0) {
+                for (String reference : handoverNote.substring(markerIndex + evidenceMarker.length()).split(",")) {
+                    tagCheckInDocument(kinds, reference, Kind.HANDOVER_EVIDENCE);
+                }
+            }
+        }
+
+        if (checkIn.getStatus() == CheckInStatus.completed && clean(checkIn.getChecklistJson()) != null) {
+            try {
+                var references = objectMapper.readTree(checkIn.getChecklistJson()).path("evidenceReferences");
+                if (references.isArray()) {
+                    for (var reference : references) {
+                        tagCheckInDocument(kinds, reference.asText(), Kind.INVENTORY_EVIDENCE);
+                    }
+                }
+            } catch (JsonProcessingException ignored) {
+                // Legacy checklist data may be unreadable. Its files can still be shown without a category.
+            }
+        }
+        return kinds;
+    }
+
+    private static void tagCheckInDocument(Map<String, Kind> kinds, String reference, Kind kind) {
+        String id = clean(reference);
+        if (id != null) {
+            kinds.putIfAbsent(id.toLowerCase(Locale.ROOT), kind);
+        }
     }
 
     @Transactional
@@ -855,42 +1039,31 @@ public class CustomerReservationService {
         }
 
         payments.stream()
-            .filter(payment -> payment.getStatus() == PaymentStatus.PENDING)
+            .filter(payment -> payment.getStatus() == PaymentStatus.PENDING
+                || payment.getStatus() == PaymentStatus.NOT_RECEIVED)
             .forEach(payment -> payment.setStatus(PaymentStatus.CANCELLED));
+
+        if (previousStatus == ReservationStatus.PAYMENT_REVIEW && paymentComplaintRepository != null) {
+            paymentComplaintRepository.findByReservation_Id(reservationId).ifPresent(complaint -> {
+                if (complaint.getStatus() == PaymentComplaintStatus.PENDING
+                    || complaint.getStatus() == PaymentComplaintStatus.REVIEW_OVERDUE) {
+                    complaint.setStatus(PaymentComplaintStatus.WITHDRAWN);
+                    complaint.setReviewedAt(Instant.now());
+                    complaint.setDecisionReason("Customer cancelled reservation before complaint decision");
+                    paymentComplaintRepository.saveAndFlush(complaint);
+                }
+            });
+        }
 
         Payment paidDeposit = payments.stream()
             .filter(payment -> payment.getStatus() == PaymentStatus.PAID)
             .findFirst()
             .orElse(null);
         if (paidDeposit != null) {
-            ReservationPricingSnapshot pricing = snapshotRepository.findByReservation_Id(reservationId).orElse(null);
             BigDecimal deposit = paidDeposit.getAmount().setScale(2, RoundingMode.HALF_UP);
-            BigDecimal fee = pricing == null ? BigDecimal.ZERO : EarlyTerminationPolicy.fee(
-                pricing.getReservationDepositAmount(), pricing.getNetRentalAmount(), pricing.getRentalMonths(),
-                pricing.getEarlyTerminationFeeCoefficient(), pricing.getEarlyTerminationFeeCapMonths()
-            );
-            Instant checkInAt = reservation.getAppointmentAt() != null
-                ? reservation.getAppointmentAt()
-                : reservation.getStartDate().atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
-            boolean fullRefund = !Instant.now().isAfter(checkInAt.minus(24, java.time.temporal.ChronoUnit.HOURS));
-            BigDecimal charge = fullRefund ? BigDecimal.ZERO : fee.min(deposit);
-            BigDecimal refund = deposit.subtract(charge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-            reservation.setCancellationType(fullRefund
-                ? ReservationCancellationType.BEFORE_CHECKIN_FULL_REFUND
-                : ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
-            reservation.setCancellationChargeAmount(charge);
-            reservation.setCancellationRefundAmount(refund);
-            if (refund.signum() > 0 && refundRequestRepository != null) {
-                RefundRequest refundRequest = new RefundRequest();
-                refundRequest.setPayment(paidDeposit);
-                refundRequest.setRequestedBy(reservation.getCustomer());
-                refundRequest.setAmount(refund);
-                refundRequest.setReason(fullRefund
-                    ? "Customer cancellation at least 24 hours before check-in"
-                    : "Customer cancellation within 24 hours before check-in; retain early termination fee");
-                refundRequest.setStatus(RefundRequestStatus.REQUESTED);
-                refundRequestRepository.save(refundRequest);
-            }
+            reservation.setCancellationType(ReservationCancellationType.BEFORE_CHECKIN_EARLY_FEE);
+            reservation.setCancellationChargeAmount(deposit);
+            reservation.setCancellationRefundAmount(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
         }
 
         // Assignment/unit release still belongs to the operations flow; this service
@@ -918,6 +1091,27 @@ public class CustomerReservationService {
         );
         notificationService.notifyStaffOfReservationCancellation(saved, assignedUnitReleased);
         return response;
+    }
+
+    @Transactional
+    public void deleteHistory(ActorPrincipal actor, UUID reservationId) {
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        ReservationStatus status = reservation.getStatus();
+        if (status != ReservationStatus.EXPIRED
+            && status != ReservationStatus.COMPLETED
+            && status != ReservationStatus.CANCELLED
+            && status != ReservationStatus.REJECTED) {
+            throw ApiExceptions.conflict("Only ended reservations can be removed from active history");
+        }
+        if (reservation.getArchivedAt() == null) {
+            reservation.setArchivedAt(Instant.now());
+            reservationRepository.saveAndFlush(reservation);
+            auditLogService.recordMutation(
+                reservation.getCustomer(), "RESERVATION_HISTORY_DELETED", "Reservation", reservation.getId(),
+                reservation.getFacility().getId(), null, Map.of("status", status)
+            );
+        }
     }
 
     private boolean releaseAssignedUnitAfterCancellation(Reservation reservation, Instant cancelledAt) {

@@ -42,6 +42,8 @@ class SupportNotificationVietnameseTests {
     @Test void newSupportNotificationsAreStoredInVietnamese(){
         var repository=mock(NotificationRepository.class);var users=mock(UserRepository.class);
         var service=new NotificationService(repository,users);var user=new User();var id=UUID.randomUUID();
+        ReflectionTestUtils.setField(service, "customerEmails",
+            mock(com.storagehub.service.email.CustomerLifecycleEmailService.class));
         ReflectionTestUtils.setField(user,"id",id);when(users.findById(id)).thenReturn(Optional.of(user));
         when(repository.save(any(Notification.class))).thenAnswer(call->call.getArgument(0));
         var notice=service.createNotification(id,NotificationType.SUPPORT,"Customer replied to Support","Yêu cầu hỗ trợ",UUID.randomUUID());

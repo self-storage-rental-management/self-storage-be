@@ -1,5 +1,6 @@
 package com.storagehub.api.checkin;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.storagehub.validation.IdentityDocumentPolicy;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
@@ -26,6 +27,7 @@ public record CompleteCheckInRequest(
     @Size(max = 2000) String notes,
     @NotBlank @Size(max = 160) String lockReference
 ) {
+    @JsonIgnore
     @AssertTrue(message = IdentityDocumentPolicy.MESSAGE)
     public boolean isIdentityDocumentNumberValid() {
         return IdentityDocumentPolicy.isValid(identityDocumentNumber);
