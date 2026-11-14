@@ -139,10 +139,12 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
-        var account = bookingUsers.findByIdForUpdate(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
-        if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
-            throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+        if (bookingUsers != null) {
+            var account = bookingUsers.findByIdForUpdate(actor.userId())
+                .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
+            if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
+                throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+            }
         }
         long unpaid = reservationRepository.countByCustomer_IdAndStatusIn(actor.userId(), java.util.List.of(
             ReservationStatus.AWAITING_EMAIL, ReservationStatus.AWAITING_REVIEW, ReservationStatus.AWAITING_PAYMENT,
@@ -176,7 +178,7 @@ public class ReservationCreationService {
         );
         if (request.getAppointmentAt() != null
             && !checkInWindow.contains(request.getAppointmentAt())) {
-            String message = "Ngày nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
+            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
             throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
         }
         java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
@@ -260,7 +262,9 @@ public class ReservationCreationService {
             quote.getCustomer(), "RESERVATION_CREATED", "Reservation", saved.getId(),
             null, null, response
         );
-        customerEmails.reservationCreated(saved);
+        if (customerEmails != null) {
+            customerEmails.reservationCreated(saved);
+        }
         return response;
     }
 
@@ -293,7 +297,7 @@ public class ReservationCreationService {
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
         BigDecimal securityDeposit = money(
             (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
-                ? currentMonthlyPrice
+                ? BigDecimal.ZERO
                 : quote.getUnitType().getSecurityDepositAmount()
         );
         BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
@@ -427,10 +431,15 @@ public class ReservationCreationService {
         return value.trim();
     }
 
+    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
     static String generateReservationCode() {
-        StringBuilder code = new StringBuilder("RSV-");
-        for (int index = 0; index < 6; index++) {
-            code.append(PUBLIC_CODE_RANDOM.nextInt(10));
+        StringBuilder code = new StringBuilder("RSV");
+        for (int group = 0; group < 3; group++) {
+            code.append('-');
+            for (int index = 0; index < 4; index++) {
+                code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
+            }
         }
         return code.toString();
     }
@@ -528,7 +537,7 @@ public class ReservationCreationService {
 
     private String termsSnapshot(ReservationQuote quote) {
         Map<String, Object> terms = new LinkedHashMap<>();
-        terms.put("termsVersion", "RESERVATION_TERMS_V2_20261109");
+        terms.put("termsVersion", "RESERVATION_TERMS_V3_20261109");
         terms.put("emailVerification", "Xác minh một lần khi kích hoạt tài khoản; không yêu cầu OTP ở mỗi đơn giữ kho.");
         terms.put("paymentWindowMinutes", paymentWindowMinutes);
         terms.put("complaintHoldWindowMinutes", complaintWindowMinutes);
@@ -537,6 +546,7 @@ public class ReservationCreationService {
         terms.put("depositNotice", "Cọc giữ chỗ là khoản trả trước theo báo giá, khấu trừ tổng nghĩa vụ. Cọc đảm bảo thuê được ghi riêng và quyết toán khi trả kho.");
         terms.put("cancellationNotice", "Không hoàn cọc do khách tự hủy/không nhận kho theo điều khoản đã chấp nhận. Lỗi dịch vụ, thu trùng hoặc kết quả chưa rõ phải đối soát riêng; không tự động coi là mất cọc.");
         terms.put("setupNotice", "Thời gian chuẩn bị bắt đầu sau xác nhận nhận kho của khách. Phí trả sớm chỉ áp dụng theo báo giá đã chấp nhận, không cộng chồng khoản phí cùng bản chất.");
+        terms.put("paidStartNotice", "Sau khi nhân viên kiểm kê xong, khách có thể xem mốc mới và xác nhận bắt đầu kỳ thuê ngay. Khi xác nhận, thời gian miễn phí kết thúc và kỳ thuê tính từ ngày xác nhận theo thời lượng và chi phí đã chốt. Nếu khách chưa xác nhận sớm, kỳ thuê tự động bắt đầu theo lịch hết miễn phí.");
         terms.put("complaintRights", "Hết hạn giữ suất không làm mất quyền yêu cầu đối soát qua Hỗ trợ hoặc khiếu nại theo quy định áp dụng.");
         terms.put("versionNotice", "Giá và điều khoản mới không tự thay đổi nghĩa vụ của kỳ thuê đã chốt.");
         terms.put("pricingPackageCode", quote.getPricingPackageCode());

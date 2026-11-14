@@ -154,6 +154,15 @@ public class AdminRoleService {
             throw ApiExceptions.conflict("Admin permissions are limited to account, role, system and audit administration");
         }
 
+        if (roleCode != RoleCode.ADMIN && intersects(permissions, Set.of(
+            SystemPermission.MANAGE_USERS.code(),
+            SystemPermission.MANAGE_ROLES.code(),
+            SystemPermission.VIEW_AUDIT_LOGS.code(),
+            SystemPermission.MANAGE_SESSIONS.code()
+        ))) {
+            throw ApiExceptions.conflict("Only Admin may hold user, role, session or audit-log management permissions");
+        }
+
         if (roleCode == RoleCode.MANAGER) {
             Set<String> required = Set.of(
                 SystemPermission.APPROVE_RESERVATIONS.code(),

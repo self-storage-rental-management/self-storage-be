@@ -94,6 +94,9 @@ public class FacilityQueryService {
         Pageable pageable,
         String correlationId
     ) {
+        if (actor.hasRole(RoleCode.CUSTOMER)) {
+            throw com.storagehub.common.api.ApiExceptions.forbidden("Customers cannot list facility storage units directly");
+        }
         if (facilityScopeService.isFacilityScoped(actor) && facilityId == null) {
             throw com.storagehub.common.api.ApiExceptions.validation("facilityId is required for facility-scoped actors", null);
         }

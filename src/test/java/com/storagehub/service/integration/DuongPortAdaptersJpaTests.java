@@ -38,6 +38,8 @@ import org.springframework.test.context.*;
     com.storagehub.service.NotificationService.class,com.storagehub.service.support.SupportService.class,
     com.storagehub.service.support.SupportPersistence.class,DuongPortAdaptersJpaTests.Config.class})
 class DuongPortAdaptersJpaTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     static final Instant NOW=Instant.parse("2026-10-08T02:00:00Z");
     @TestConfiguration static class Config {
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}

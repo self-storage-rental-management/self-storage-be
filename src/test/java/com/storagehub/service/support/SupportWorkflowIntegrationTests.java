@@ -29,6 +29,8 @@ import org.springframework.util.LinkedMultiValueMap;
 @DataJpaTest(showSql=false) @ActiveProfiles("test")
 @Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,SupportService.class,SupportPersistence.class,SupportConversationRetention.class,CustomerChatSessionService.class,SupportWorkflowIntegrationTests.Sources.class})
 class SupportWorkflowIntegrationTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     static final Instant NOW=Instant.parse("2026-10-08T03:00:00Z");
     @TestConfiguration static class Sources {
         @Bean ObjectMapper mapper(){return new ObjectMapper().findAndRegisterModules();}

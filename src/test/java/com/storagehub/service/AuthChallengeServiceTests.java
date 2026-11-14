@@ -1,7 +1,6 @@
 package com.storagehub.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -10,7 +9,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.api.auth.ResendEmailVerificationRequest;
-import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.AuthChallenge;
 import com.storagehub.domain.model.AuthChallengePurpose;
 import com.storagehub.domain.model.User;
@@ -19,6 +17,7 @@ import com.storagehub.domain.repo.AuthChallengeRepository;
 import com.storagehub.domain.repo.SessionRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.JwtService;
+import com.storagehub.security.RequestRateLimiter;
 import com.storagehub.service.email.EmailService;
 import java.time.Instant;
 import java.util.Optional;
@@ -44,6 +43,7 @@ class AuthChallengeServiceTests {
     @Mock private ActorResponseMapper actorResponseMapper;
     @Mock private AuditLogService auditLogService;
     @Mock private Environment environment;
+    @Mock private RequestRateLimiter emailRateLimiter;
 
     private AuthChallengeService service;
     private User pendingUser;
@@ -54,6 +54,8 @@ class AuthChallengeServiceTests {
             challengeRepository, userRepository, sessionRepository, passwordEncoder, jwtService,
             emailService, actorResponseMapper, auditLogService, environment
         );
+        ReflectionTestUtils.setField(service, "emailRateLimiter", emailRateLimiter);
+        when(emailRateLimiter.allow(eq("verification-email"), any(), eq(5), eq(900L))).thenReturn(true);
         ReflectionTestUtils.setField(service, "exposeDevelopmentCode", true);
         ReflectionTestUtils.setField(service, "verificationUrl", "http://localhost:5173/?verifyEmail=");
         ReflectionTestUtils.setField(service, "expiryMinutes", 15);
@@ -91,12 +93,13 @@ class AuthChallengeServiceTests {
             eq(pendingUser.getEmail()),
             eq(pendingUser.getFullName()),
             eq("http://localhost:5173/?verifyEmail=new-token"),
-            eq(15)
+            eq(15),
+            eq(response.debugCode())
         );
     }
 
     @Test
-    void rejectsResendDuringCooldown() {
+    void returnsGenericResponseAndDoesNotResendDuringCooldown() {
         AuthChallenge challenge = new AuthChallenge();
         ReflectionTestUtils.setField(challenge, "createdAt", Instant.now().minusSeconds(10));
         when(userRepository.findByEmailIgnoreCase("pending@storagehub.test"))
@@ -105,13 +108,13 @@ class AuthChallengeServiceTests {
             pendingUser.getId(), AuthChallengePurpose.EMAIL_VERIFICATION
         )).thenReturn(Optional.of(challenge));
 
-        assertThatThrownBy(() -> service.resendEmailVerification(
+        var response = service.resendEmailVerification(
             new ResendEmailVerificationRequest("pending@storagehub.test")
-        ))
-            .isInstanceOf(ApiException.class)
-            .satisfies(error -> assertThat(((ApiException) error).getStatus().value()).isEqualTo(409))
-            .hasMessage("Please wait 60 seconds before requesting another code");
-        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
+        );
+        assertThat(response.accepted()).isTrue();
+        assertThat(response.verificationRequired()).isTrue();
+        assertThat(response.debugCode()).isNull();
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt(), any());
     }
 
     @Test
@@ -125,7 +128,7 @@ class AuthChallengeServiceTests {
 
         assertThat(response.accepted()).isTrue();
         assertThat(response.debugCode()).isNull();
-        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt(), any());
     }
 
     @Test
@@ -140,6 +143,6 @@ class AuthChallengeServiceTests {
 
         assertThat(response.accepted()).isTrue();
         assertThat(response.debugCode()).isNull();
-        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt());
+        verify(emailService, never()).sendVerifyEmail(any(), any(), any(), any(), anyInt(), any());
     }
 }
