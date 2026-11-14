@@ -74,6 +74,7 @@ class ReservationCreationServiceTests {
         ReflectionTestUtils.setField(unitType, "id", UUID.randomUUID());
         unitType.setFacility(facility);
         unitType.setMonthlyPrice(new BigDecimal("5500000.00"));
+        unitType.setSecurityDepositAmount(new BigDecimal("5500000.00"));
 
         User customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
@@ -162,7 +163,7 @@ class ReservationCreationServiceTests {
         assertThat(checkedPeriod.getValue().getEndDate()).isEqualTo(expectedEnd);
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo(quote.getTotalInitialObligation());
         assertThat(quote.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 10));
-        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
+        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("4301000.00");
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("11704000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
@@ -244,7 +245,7 @@ class ReservationCreationServiceTests {
 
         var response = service.create(actor, request, "create-diff-deposit");
 
-        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
+        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
         assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("200000.00");
     }
 

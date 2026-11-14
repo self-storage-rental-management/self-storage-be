@@ -36,6 +36,8 @@ import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.service.rental.period.RentalPeriod;
+import com.storagehub.service.rental.period.RentalPeriodResolver;
 import com.storagehub.time.BusinessTime;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -77,6 +79,8 @@ public class ReturnSettlementService {
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.ledger.ReturnFinancialReconciliation> returnFinances;
     @Autowired
     private ReservationPricingSnapshotRepository reservationPricingSnapshotRepository;
+    @Autowired
+    private RentalPeriodResolver rentalPeriods;
     @Autowired
     private PaymentRepository paymentRepository;
     @Autowired
@@ -141,17 +145,13 @@ public class ReturnSettlementService {
         returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : LocalDate.now(BusinessTime.ZONE));
         returnCase.setCustomerNotes(request.notes());
         returnCase.setDepositAmount(depositAmount);
-        LocalDate scheduledDate = returnCase.getScheduledDate();
-        boolean normalReturn = !setupExit
-            && rental.getContractEndDate() != null
-            && !scheduledDate.isBefore(rental.getContractEndDate());
-        returnCase.setReturnType(setupExit
-            ? ReturnType.RETURN_IN_SETUP
-            : normalReturn ? ReturnType.NORMAL : ReturnType.EARLY_RETURN);
-        returnCase.setActiveReturnRepricingRequired(!setupExit && !normalReturn);
-        returnCase.setSettlementMode(setupExit || !normalReturn && !hasPricingTiers(rental)
-            ? SettlementMode.MANUAL_REVIEW : SettlementMode.AUTO);
         returnCase.setSetupExitRequested(setupExit);
+        if (setupExit) {
+            returnCase.setReturnType(ReturnType.RETURN_IN_SETUP);
+            returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+        } else {
+            classifyScheduledReturn(returnCase);
+        }
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
 
@@ -198,10 +198,23 @@ public class ReturnSettlementService {
         if (request.notes() == null || request.notes().isBlank()) throw ApiExceptions.validation("Vui lòng nhập lý do trả kho.", null);
         var before = toResponse(record);
         record.setScheduledDate(request.scheduledDate());
+        if (!record.isSetupExitRequested()) {
+            classifyScheduledReturn(record);
+        }
         record.setCustomerNotes(request.notes().trim());
         ReturnCase saved = returnCaseRepository.saveAndFlush(record);
         auditLogService.recordMutation("CUSTOMER_RETURN_REQUEST_UPDATED", "return", saved.getId(), saved.getFacility().getId(), before, toResponse(saved));
         return toResponse(saved);
+    }
+
+    private void classifyScheduledReturn(ReturnCase record) {
+        Rental rental = record.getRental();
+        LocalDate lastRentalDay = rentalPeriods == null ? rental.getContractEndDate()
+            : rentalPeriods.read(rental).map(RentalPeriod::lastPermittedDate).orElse(rental.getContractEndDate());
+        boolean normalReturn = lastRentalDay != null && !record.getScheduledDate().isBefore(lastRentalDay);
+        record.setReturnType(normalReturn ? ReturnType.NORMAL : ReturnType.EARLY_RETURN);
+        record.setActiveReturnRepricingRequired(!normalReturn);
+        record.setSettlementMode(!normalReturn && !hasPricingTiers(rental) ? SettlementMode.MANUAL_REVIEW : SettlementMode.AUTO);
     }
 
     @Transactional(readOnly = true)
@@ -358,9 +371,7 @@ public class ReturnSettlementService {
             .add(zeroIfNull(returnCase.getOverdueFee()))
             .add(zeroIfNull(returnCase.getOutstandingFee()))
             .setScale(2, RoundingMode.HALF_UP);
-        BigDecimal deposit = zeroIfNull(returnCase.getDepositAmount());
-        BigDecimal securityRefund = deposit.subtract(securityDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal amountDue = securityDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        var settlement = calculateSettlement(returnCase, securityDeductions, charge, refund);
 
         User business = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Business user not found"));
@@ -372,9 +383,9 @@ public class ReturnSettlementService {
         returnCase.setLegacyPricingDecisionReason(request.resolutionNote().trim());
         returnCase.setEarlyTerminationCharge(charge);
         returnCase.setRentalRefundAmount(refund);
-        returnCase.setTotalDeductions(securityDeductions.add(charge).setScale(2, RoundingMode.HALF_UP));
-        returnCase.setNetRefundAmount(securityRefund.add(refund).setScale(2, RoundingMode.HALF_UP));
-        returnCase.setAmountDueFromCustomer(amountDue);
+        returnCase.setTotalDeductions(settlement.deductions());
+        returnCase.setNetRefundAmount(settlement.refund());
+        returnCase.setAmountDueFromCustomer(settlement.due());
         returnCase.setLegacyPricingReviewRequired(false);
         returnCase.setSettlementMode(SettlementMode.AUTO);
         returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
@@ -401,6 +412,11 @@ public class ReturnSettlementService {
 
         if (returnCase.getStatus() != ReturnCaseStatus.requested && returnCase.getStatus() != ReturnCaseStatus.scheduled)
             throw ApiExceptions.conflict("Return is not in a state awaiting inspection");
+        if (!returnCase.isSetupExitRequested() && returnCase.getRequestedBy() != null
+            && returnCase.getCustomer() != null
+            && returnCase.getCustomer().getId().equals(returnCase.getRequestedBy().getId())) {
+            classifyScheduledReturn(returnCase);
+        }
         if (returnCase.isSetupExitRequested()) {
             if (!request.unitVacated() || request.damageClassification() == com.storagehub.domain.model.DamageClassification.abandoned_goods)
                 throw ApiExceptions.conflict("Chỉ nghiệm thu trả kho trong thời gian chuẩn bị sau khi khách đã đưa hết hàng ra và bàn giao kho trống.");
@@ -433,14 +449,13 @@ public class ReturnSettlementService {
         safeOverdue=settlementOverdueFee(returnCase,safeOverdue,verifiedFinance);
         if (returnCase.isSetupEarlyExit()) safeOverdue = BigDecimal.ZERO;
 
-        BigDecimal totalDeductions = safeDamage
+        BigDecimal deductions = safeDamage
             .add(safeCleaning)
             .add(safeLostItem)
             .add(safeOverdue)
             .add(safeOutstanding)
             .setScale(2, RoundingMode.HALF_UP);
 
-        BigDecimal deposit = returnCase.getDepositAmount() != null ? returnCase.getDepositAmount() : BigDecimal.ZERO;
         var activePricing = activeReturnCalculation(returnCase);
         boolean legacyPricingReview = returnCase.isActiveReturnRepricingRequired() && activePricing == null;
         boolean activeRepricing = activePricing != null && activePricing.recalculationRequired();
@@ -458,16 +473,8 @@ public class ReturnSettlementService {
         BigDecimal rentalRefund = returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getRentalRefundCredit())
             : (!legacyPricingReview && activeRepricing ? activePricing.rentalRefundAmount() : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-        BigDecimal securityRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        totalDeductions = totalDeductions.add(earlyTerminationCharge).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal netRefund = securityRefund.add(rentalRefund).setScale(2, RoundingMode.HALF_UP);
-        if (returnCase.isSetupEarlyExit()) {
-            BigDecimal setupBalance = deposit.add(rentalRefund).subtract(totalDeductions);
-            netRefund = setupBalance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-            amountDue = setupBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        }
-        requireSettlementLimit(totalDeductions);
+        var settlement = calculateSettlement(returnCase, deductions, earlyTerminationCharge, rentalRefund);
+        requireSettlementLimit(settlement.deductions());
 
         returnCase.setInspectedBy(staff);
         returnCase.setInspectedAt(inspectionAt);
@@ -486,9 +493,9 @@ public class ReturnSettlementService {
         returnCase.setOutstandingFee(safeOutstanding);
         returnCase.setEarlyTerminationCharge(earlyTerminationCharge);
         returnCase.setRentalRefundAmount(rentalRefund);
-        returnCase.setTotalDeductions(totalDeductions);
-        returnCase.setNetRefundAmount(netRefund);
-        returnCase.setAmountDueFromCustomer(amountDue);
+        returnCase.setTotalDeductions(settlement.deductions());
+        returnCase.setNetRefundAmount(settlement.refund());
+        returnCase.setAmountDueFromCustomer(settlement.due());
         returnCase.setLegacyPricingReviewRequired(legacyPricingReview);
         if (legacyPricingReview) {
             returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
@@ -564,6 +571,9 @@ public class ReturnSettlementService {
         }
         if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation)
             throw ApiExceptions.conflict("Return is not awaiting customer confirmation");
+        if (request.decision() == CustomerDecision.accepted) {
+            requireCurrentEarlyReturnAmounts(returnCase);
+        }
         requireFinance().requireCurrent(returnCase);
 
         returnCase.setCustomerConfirmed(true);
@@ -622,6 +632,7 @@ public class ReturnSettlementService {
         if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation) {
             throw ApiExceptions.conflict("Return is not awaiting customer confirmation");
         }
+        requireCurrentEarlyReturnAmounts(returnCase);
         requireFinance().requireCurrent(returnCase);
 
         String decisionNote = request != null && request.note() != null && !request.note().isBlank()
@@ -664,6 +675,20 @@ public class ReturnSettlementService {
         return toResponse(saved);
     }
 
+    public int autoSettleExpiredReturns(ActorPrincipal actor) {
+        if (actor == null || actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only operators can trigger return auto-settlement");
+        }
+        if (actor.hasRole(RoleCode.STAFF)) {
+            authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
+        } else if (actor.hasRole(RoleCode.MANAGER)) {
+            authorizationService.require(actor, SystemPermission.MANAGE_RENTALS);
+        } else if (!actor.hasRole(RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Only operators can trigger return auto-settlement");
+        }
+        return autoSettleExpiredReturns();
+    }
+
     public int autoSettleExpiredReturns() {
         Instant cutoff = Instant.now().minus(java.time.Duration.ofHours(autoSettlementSlaHours));
         List<ReturnCase> expired = returnCaseRepository.findExpiredAwaitingConfirmation(cutoff);
@@ -690,6 +715,7 @@ public class ReturnSettlementService {
             return;
         }
 
+        requireCurrentEarlyReturnAmounts(returnCase);
         requireFinance().requireCurrent(returnCase);
         returnCase.setCustomerConfirmed(true);
         returnCase.setCustomerConfirmedAt(Instant.now());
@@ -758,38 +784,28 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Khi xem xét quyết toán trong thời gian chuẩn bị chỉ được giảm phí kiểm kê đã có chứng cứ; không tự thêm phí mới.");
         BigDecimal safeOutstanding = verifiedFinance.debt();
         safeOverdue=settlementOverdueFee(returnCase,safeOverdue,verifiedFinance);
+        if (returnCase.isSetupEarlyExit()) safeOverdue = BigDecimal.ZERO;
 
-        BigDecimal totalDeductions = safeDamage
+        BigDecimal deductions = safeDamage
             .add(safeCleaning)
             .add(safeLostItem)
             .add(safeOverdue)
             .add(safeOutstanding)
             .setScale(2, RoundingMode.HALF_UP);
 
-        BigDecimal deposit = returnCase.getDepositAmount() != null ? returnCase.getDepositAmount() : BigDecimal.ZERO;
         var activePricing = activeReturnCalculation(returnCase);
         BigDecimal calculatedEarlyTerminationCharge = activePricing == null
             ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP) : activePricing.totalRentalCharge();
         BigDecimal calculatedRentalRefund = activePricing == null
             ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP) : activePricing.rentalRefundAmount();
-        if (returnCase.isSetupEarlyExit()) safeOverdue = BigDecimal.ZERO;
         BigDecimal earlyTerminationCharge = returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getEarlyTerminationFee())
             : (returnCase.getEarlyTerminationCharge() != null ? returnCase.getEarlyTerminationCharge() : calculatedEarlyTerminationCharge);
         BigDecimal rentalRefund = returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getRentalRefundCredit())
             : (returnCase.getRentalRefundAmount() != null ? returnCase.getRentalRefundAmount() : calculatedRentalRefund);
-        BigDecimal securityRefund = deposit.subtract(totalDeductions).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        totalDeductions = totalDeductions.add(earlyTerminationCharge).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal netRefund = securityRefund.add(rentalRefund).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal amountDue = totalDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        if (returnCase.isSetupEarlyExit()) {
-            BigDecimal setupBalance = deposit.add(rentalRefund).subtract(totalDeductions);
-            netRefund = setupBalance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-            amountDue = setupBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        }
-
-        requireSettlementLimit(totalDeductions);
+        var settlement = calculateSettlement(returnCase, deductions, earlyTerminationCharge, rentalRefund);
+        requireSettlementLimit(settlement.deductions());
         returnCase.setReviewedBy(manager);
         returnCase.setReviewedAt(Instant.now());
         returnCase.setManagerResolutionNote(request.resolutionNote());
@@ -801,17 +817,17 @@ public class ReturnSettlementService {
         returnCase.setOutstandingFee(safeOutstanding);
         returnCase.setEarlyTerminationCharge(earlyTerminationCharge);
         returnCase.setRentalRefundAmount(rentalRefund);
-        returnCase.setTotalDeductions(totalDeductions);
-        returnCase.setNetRefundAmount(netRefund);
-        returnCase.setAmountDueFromCustomer(amountDue);
+        returnCase.setTotalDeductions(settlement.deductions());
+        returnCase.setNetRefundAmount(settlement.refund());
+        returnCase.setAmountDueFromCustomer(settlement.due());
 
         if (request.proposedUnitStatus() != null) {
             returnCase.setProposedUnitStatus(request.proposedUnitStatus());
         }
 
-        if (amountDue.compareTo(BigDecimal.ZERO) > 0) {
+        if (settlement.due().signum() > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
-        } else if (netRefund.compareTo(BigDecimal.ZERO) > 0) {
+        } else if (settlement.refund().signum() > 0) {
             markRefundPending(returnCase);
         } else {
             requireFinance().settle(returnCase, actor.userId(), "OFFSET:" + returnCase.getId(), false);
@@ -864,6 +880,7 @@ public class ReturnSettlementService {
         }
 
         lockRecoveryReturn(returnCase);
+        requireCurrentEarlyReturnAmounts(returnCase);
         var recoveryGuard = recoveryGuard();
         if (recoveryGuard != null) {
             recoveryGuard.requireManualSettlement(returnCase);
@@ -958,6 +975,7 @@ public class ReturnSettlementService {
         }
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
         facilityScopeService.assertCanOperate(actor, rc.getFacility().getId());
+        lockRecoveryReturn(rc);
         if (rc.getStatus() == ReturnCaseStatus.completed) {
             BigDecimal settledAmount = zeroIfNull(rc.getAmountDueFromCustomer()).signum() > 0
                 ? rc.getAmountDueFromCustomer() : rc.getNetRefundAmount();
@@ -974,7 +992,7 @@ public class ReturnSettlementService {
         if (expectedAmount == null || request.amount() == null || expectedAmount.compareTo(request.amount()) != 0) {
             throw ApiExceptions.conflict("Số tiền quyết toán không khớp với bảng kê đã xác nhận.");
         }
-        lockRecoveryReturn(rc);
+        requireCurrentEarlyReturnAmounts(rc);
         var guard=recoveryGuard();
         if(guard!=null) {
             guard.requireManualSettlement(rc);
@@ -1049,7 +1067,7 @@ public class ReturnSettlementService {
         facilityScopeService.assertCanOperate(actor,rental.getFacility().getId());
         var guard=recoveryGuard();
         if(guard!=null) {
-            try { guard.requireActiveTask(rental); } catch (Exception ignored) {}
+            guard.requireActiveTask(rental);
         }
         var rc=new ReturnCase();rc.setRental(rental);rc.setFacility(rental.getFacility());rc.setStorageUnit(rental.getStorageUnit());
         rc.setCustomer(rental.getCustomer());rc.setRequestedBy(userRepository.findById(actor.userId()).orElseThrow(()->ApiExceptions.notFound("Staff not found")));
@@ -1067,7 +1085,7 @@ public class ReturnSettlementService {
         facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
         var guard=recoveryGuard();
         if(guard!=null) {
-            try { guard.requireReceipt(rc,reference); } catch (Exception ignored) {}
+            guard.requireReceipt(rc,reference);
         }
                 requireFinance().settle(rc,actor.userId(),reference,true);
         rc.setStatus(ReturnCaseStatus.completed);rc.setCompletedAt(Instant.now());
@@ -1084,7 +1102,7 @@ public class ReturnSettlementService {
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
         facilityScopeService.assertCanOperate(actor,rc.getFacility().getId());lockRecoveryReturn(rc);
         var guard=recoveryGuard();if(guard!=null) {
-            try { guard.requireReadyToRelease(rc); } catch (Exception ignored) {}
+            guard.requireReadyToRelease(rc);
         }
         releaseRentalAndUnit(rc);
         auditLogService.recordMutation("RECOVERY_RENTAL_RELEASED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));
@@ -1101,11 +1119,37 @@ public class ReturnSettlementService {
         return source;
     }
     private record Calculation(BigDecimal deductions, BigDecimal refund, BigDecimal due) {}
-    private Calculation calculateSettlement(ReturnCase rc, BigDecimal damage, BigDecimal cleaning, BigDecimal lost, BigDecimal overdue, BigDecimal debt) {
-        BigDecimal total = damage.add(cleaning).add(lost).add(overdue).add(debt)
-            .add(rc.isSetupEarlyExit() ? rc.getEarlyTerminationFee() : BigDecimal.ZERO).setScale(0, RoundingMode.UNNECESSARY);
-        BigDecimal available = rc.getDepositAmount().add(rc.isSetupEarlyExit() ? rc.getRentalRefundCredit() : BigDecimal.ZERO);
-        return new Calculation(total, available.subtract(total).max(BigDecimal.ZERO), total.subtract(available).max(BigDecimal.ZERO));
+    private Calculation calculateSettlement(ReturnCase rc, BigDecimal deductions, BigDecimal rentalCharge, BigDecimal rentalRefund) {
+        // For an active rental, the rental refund already accounts for the repriced rent.
+        BigDecimal total = deductions.add(rc.isSetupEarlyExit() ? rentalCharge : BigDecimal.ZERO);
+        BigDecimal balance = zeroIfNull(rc.getDepositAmount()).add(rentalRefund).subtract(total);
+        return new Calculation(total.setScale(2, RoundingMode.HALF_UP),
+            balance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
+            balance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
+    }
+
+    private static final String EARLY_RETURN_AMOUNTS_OUTDATED =
+        "Bảng kê trả kho trước hạn cần được cơ sở đối soát lại trước khi xác nhận hoặc thu, hoàn tiền.";
+
+    private boolean hasOutdatedEarlyReturnAmounts(ReturnCase rc) {
+        if (rc.getStatus() == ReturnCaseStatus.completed || rc.getInspectedAt() == null
+            || rc.isSetupExitRequested() || !rc.isActiveReturnRepricingRequired()) {
+            return false;
+        }
+        BigDecimal deductions = zeroIfNull(rc.getDamageFee()).add(zeroIfNull(rc.getCleaningFee()))
+            .add(zeroIfNull(rc.getLostItemFee())).add(zeroIfNull(rc.getOverdueFee()))
+            .add(zeroIfNull(rc.getOutstandingFee()));
+        var expected = calculateSettlement(rc, deductions, zeroIfNull(rc.getEarlyTerminationCharge()),
+            zeroIfNull(rc.getRentalRefundAmount()));
+        return expected.deductions().compareTo(zeroIfNull(rc.getTotalDeductions())) != 0
+            || expected.refund().compareTo(zeroIfNull(rc.getNetRefundAmount())) != 0
+            || expected.due().compareTo(zeroIfNull(rc.getAmountDueFromCustomer())) != 0;
+    }
+
+    private void requireCurrentEarlyReturnAmounts(ReturnCase rc) {
+        if (hasOutdatedEarlyReturnAmounts(rc)) {
+            throw ApiExceptions.conflict(EARLY_RETURN_AMOUNTS_OUTDATED);
+        }
     }
     private BigDecimal settlementOverdueFee(ReturnCase rc,BigDecimal requested,com.storagehub.service.ledger.ReturnFinancialReconciliation.View view) {
         try {
@@ -1206,6 +1250,8 @@ public class ReturnSettlementService {
         var settlementReceipt=finances==null?null:finances.settledReceipt(rc,recovery!=null);
         var overdueSettlement=finances==null?null:finances.overdueSettlement(rc,recovery!=null);
         String settlementBlocker=null;
+        if (hasOutdatedEarlyReturnAmounts(rc))
+            settlementBlocker = EARLY_RETURN_AMOUNTS_OUTDATED;
         if (rc.isSetupExitRequested() && rc.getInspectedAt() != null && rc.getSetupReturnedAt() == null)
             settlementBlocker = "Hồ sơ thời gian chuẩn bị cũ thiếu chứng cứ trả kho và bảng kê theo điều khoản đã chấp nhận; cần đối soát thủ công.";
         if (rc.isSetupExitRequested() && rc.getStatus() != ReturnCaseStatus.completed

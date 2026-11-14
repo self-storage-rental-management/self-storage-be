@@ -13,7 +13,6 @@ import com.storagehub.api.payment.VnpayPaymentUrlResponse;
 import com.storagehub.api.payment.VnpayTransactionResponse;
 import com.storagehub.api.payment.CreatePaymentComplaintRequest;
 import com.storagehub.api.payment.PaymentComplaintResponse;
-import com.storagehub.api.file.FileAssetResponse;
 import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.service.PaymentComplaintService;
 import jakarta.validation.Valid;
@@ -22,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -144,6 +144,25 @@ public class CustomerReservationController {
         );
     }
 
+    @GetMapping("/{reservationId}/rental-start-confirmation")
+    public ApiResponse<RentalStartConfirmation> previewRentalStart(@PathVariable UUID reservationId) {
+        return new ApiResponse<>(
+            customerReservationService.previewRentalStart(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{reservationId}/rental-start-confirmation")
+    public ApiResponse<ReservationDetailResponse> confirmRentalStart(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody RentalStartConfirmation.Request request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.confirmRentalStart(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/setup-goods")
     public ApiResponse<ReservationDetailResponse> updateSetupGoods(
         @PathVariable UUID reservationId,
@@ -178,7 +197,7 @@ public class CustomerReservationController {
     }
 
     @GetMapping("/{reservationId}/check-in-documents")
-    public ApiResponse<List<FileAssetResponse>> listCheckInDocuments(
+    public ApiResponse<List<CheckInDocumentResponse>> listCheckInDocuments(
         @PathVariable UUID reservationId
     ) {
         return new ApiResponse<>(
@@ -274,6 +293,12 @@ public class CustomerReservationController {
             paymentComplaintService.getForCustomer(actorContext.required(), reservationId),
             CorrelationIdContext.current()
         );
+    }
+
+    @DeleteMapping("/{reservationId}/history")
+    public ApiResponse<Void> deleteHistory(@PathVariable UUID reservationId) {
+        customerReservationService.deleteHistory(actorContext.required(), reservationId);
+        return new ApiResponse<>(null, CorrelationIdContext.current());
     }
 
 }

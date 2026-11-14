@@ -53,6 +53,8 @@ public class RenewalOperationService {
     private ObjectProvider<com.storagehub.service.renewal.integration.RenewalAssignmentSource> assignmentSources;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.NotificationService notifications;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.integration.renewal-simple-payment.enabled:false}")
+    private boolean simplePayment;
 
     @Transactional(readOnly=true)
     public RenewalOperationResponse detail(ActorPrincipal actor,UUID id,Audience audience) {
@@ -371,10 +373,13 @@ public class RenewalOperationService {
         var n=em.find(Renewal.class,id);if(n==null)return false;
         var rental=store.lockRental(n.getRental().getId());em.refresh(rental);em.refresh(n);var wf=workflow(n);em.lock(wf,LockModeType.PESSIMISTIC_WRITE);em.refresh(wf);
         var s=state(n);boolean paid=s!=null&&s.hasVerifiedPayment();
-        if(Set.of(RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed).contains(n.getStatus())||s!=null&&s.getPhase()!=RenewalOperationState.Phase.SIGNING)return false;
+        if(Set.of(RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))return false;
+        if(s!=null&&!Set.of(RenewalOperationState.Phase.SIGNING,RenewalOperationState.Phase.AWAITING_PAYMENT_INTENT).contains(s.getPhase()))return false;
         Instant deadline=paid?s.getEffectiveSigningDeadline():wf.getPaymentDeadline();if(deadline==null||!now().isAfter(deadline))return false;
         if(!accounting().safeToExpire(n))throw deferred("Payment attempts require reconciliation before expiry");
-        var safety=safety();if(wf.getExtensionHoldRef()==null)throw deferred("Extension hold missing");safety.release(n,wf.getExtensionHoldRef());
+        var safety=safety();
+        if(wf.getExtensionHoldRef()!=null){safety.release(n,wf.getExtensionHoldRef());}
+        else if(!simplePayment)throw deferred("Extension hold missing");
         if(s==null){s=new RenewalOperationState(n);em.persist(s);}s.expire(paid);
         if(!paid)n.setStatus(RenewalStatus.payment_expired); // Paid signing expiry stays supplemental, not payment failure.
         calendar().release(n,now());

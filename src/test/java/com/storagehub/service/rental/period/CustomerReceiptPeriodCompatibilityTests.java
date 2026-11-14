@@ -127,7 +127,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     }
 
     @Test
-    void earlyInventoryReceiptActivatesRentalAndPreservesPaidRentalDates() {
+    void earlyInventoryReceiptPreservesPreparationAndPaidRentalDates() {
         var rental = earlyInventoryRental();
         var setupEnd = rental.getSetupEndsAt();
         var paidStart = rental.getStartDate();
@@ -136,28 +136,58 @@ class CustomerReceiptPeriodCompatibilityTests {
         var response = service.confirmReceipt(actor, reservation.getId());
 
         assertThat(response.getReservation().getStatus()).isEqualTo(ReservationStatus.COMPLETED);
-        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.setup);
         assertThat(rental.getSetupEndsAt()).isEqualTo(setupEnd);
         assertThat(rental.getStartDate()).isEqualTo(paidStart);
         assertThat(rental.getContractEndDate()).isEqualTo(contractEnd);
         assertThat(reservation.getAssignedUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
         assertThat(evidence(rental)).containsEntry("rentalCreated", false);
-        verify(rentals).saveAndFlush(rental);
+        verify(rentals, never()).saveAndFlush(any());
         verifyNoInteractions(ledger);
     }
 
     @Test
-    void alreadyConfirmedEarlyHandoverCanActivateWithoutRepeatingReceiptSideEffects() {
+    void alreadyConfirmedEarlyHandoverDoesNotStartTheRentalOrRepeatReceiptSideEffects() {
         var rental = earlyInventoryRental();
         var paidStart = rental.getStartDate();
         reservation.setStatus(ReservationStatus.COMPLETED);
 
         service.confirmReceipt(actor, reservation.getId());
 
-        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.setup);
         assertThat(rental.getStartDate()).isEqualTo(paidStart);
-        verify(rentals).saveAndFlush(rental);
+        verify(rentals, never()).saveAndFlush(any());
         verifyNoInteractions(units, audit, notifications, ledger);
+    }
+
+    @Test
+    void customerStartsPaidRentalAfterInventoryUsingTheConfirmedDates() {
+        var rental = earlyInventoryRental();
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        rental.setMoveInCompletedAt(rental.getInventoryVerifiedAt().minusSeconds(60));
+        rental.setInventoryPending(false);
+        var contracts = mock(ContractRepository.class);
+        var contract = id(new Contract());
+        contract.setStatus(ContractStatus.SIGNED);
+        when(contracts.findByRental_Id(rental.getId())).thenReturn(Optional.of(contract));
+        ReflectionTestUtils.setField(service, "contractRepository", contracts);
+        var confirmedPeriods = mock(ConfirmedRentalPeriods.class);
+        ReflectionTestUtils.setField(service, "confirmedRentalPeriods", confirmedPeriods);
+
+        var start = LocalDate.now(com.storagehub.time.BusinessTime.ZONE);
+        var endExclusive = start.plusMonths(snapshot.getRentalMonths());
+        var request = new com.storagehub.api.reservation.RentalStartConfirmation.Request(start, endExclusive.minusDays(1));
+        service.confirmRentalStart(actor, reservation.getId(), request);
+        service.confirmRentalStart(actor, reservation.getId(), request);
+
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
+        assertThat(rental.getStartDate()).isEqualTo(start);
+        assertThat(rental.getContractEndDate()).isEqualTo(endExclusive);
+        assertThat(reservation.getStartDate()).isEqualTo(start);
+        assertThat(contract.getExpiresAt()).isEqualTo(endExclusive.atStartOfDay(com.storagehub.time.BusinessTime.ZONE).toInstant());
+        verify(confirmedPeriods).confirm(eq(rental), any(RentalPeriod.class));
+        verify(rentals).saveAndFlush(rental);
+        verifyNoInteractions(ledger);
     }
 
     @Test
@@ -240,7 +270,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         existing.setFacility(reservation.getFacility());
         when(rentals.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(existing));
 
-        assertThatThrownBy(()->service.confirmReceipt(actor, reservation.getId())).hasMessageContaining("Thiếu hoặc lệch chứng cứ bàn giao/setup");
+        assertThatThrownBy(()->service.confirmReceipt(actor, reservation.getId())).hasMessageContaining("Thiếu hoặc lệch chứng cứ bàn giao/thời gian chuẩn bị");
 
         assertThat(checkIn.getRental()).isNotSameAs(existing);
         assertThat(existing.getContractEndDate()).isEqualTo(LocalDate.of(2026, 10, 31));
@@ -265,7 +295,7 @@ class CustomerReceiptPeriodCompatibilityTests {
 
         service.confirmReceipt(actor, reservation.getId());
 
-        verify(rentals).findByReservation_Id(reservation.getId());
+        verify(rentals, atLeastOnce()).findByReservation_Id(reservation.getId());
         verifyNoInteractions(audit, notifications, units, ledger, ledgerStores);
         verify(checkIns, never()).saveAndFlush(any());
     }
