@@ -76,6 +76,7 @@ class ReservationQuoteServiceTests {
         ReflectionTestUtils.setField(unitType, "id", UUID.randomUUID());
         unitType.setFacility(facility);
         unitType.setMonthlyPrice(new BigDecimal("5500000"));
+        unitType.setSecurityDepositAmount(new BigDecimal("5500000"));
 
         policy = new RentalPackagePolicy();
         policy.setFacility(facility);

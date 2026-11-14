@@ -104,7 +104,7 @@ public class LocalDemoDataInitializer {
                 unitType.setWidthM(decimal(definition.widthM()));
                 unitType.setHeightM(decimal(definition.heightM()));
                 if (unitType.getMonthlyPrice() == null || unitType.getMonthlyPrice().signum() <= 0) unitType.setMonthlyPrice(decimal(definition.monthlyPrice()));
-                if (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().signum() <= 0) unitType.setSecurityDepositAmount(decimal(definition.monthlyPrice()));
+                unitType.setSecurityDepositAmount(BigDecimal.ZERO);
                 unitType.setMaxLoadKg(decimal(definition.maxLoadKg()));
                 unitType.setRackCount(definition.rackCount());
                 unitType.setRackLengthM(decimal(4.0));
