@@ -139,7 +139,7 @@ public final class EarlyTerminationPolicy {
         return new ActiveReturnCalculation(
             true,
             completedMonths,
-            underThreeMonths ? 0 : tier == null ? null : tier.rentalMonths(),
+            underThreeMonths ? Integer.valueOf(0) : (tier == null ? null : tier.rentalMonths()),
             setupDaysUsed,
             chargeableSetupDays,
             rentalDaysUsed,
