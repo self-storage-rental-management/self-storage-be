@@ -144,7 +144,7 @@ public class LocalDemoDataInitializer {
                     unit.setCode(code);
                     unit.setFloor(String.valueOf(definition.floor()));
                     unit.setZone(definition.zone());
-                    unit.setStatus(StorageUnitStatus.available);
+                    unit.setStatus(number == 1 ? StorageUnitStatus.available : StorageUnitStatus.inactive);
                     StorageUnit saved = storageUnitRepository.saveAndFlush(unit);
                     existing.put(saved.getCode(), saved);
                     createdCount++;
