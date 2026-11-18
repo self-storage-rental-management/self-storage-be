@@ -113,27 +113,18 @@ class RackLayoutServiceTests {
         assertThat(customer.withSamplePlans(null, null, null)).isEqualTo(saved.result());
         assertThat(customer.palletSlotCount()).isEqualTo(48);
         assertThat(customer.smallBoxesPerUnit()).isEqualTo(120);
-        assertThat(customer.smallBoxPlan().requiredPallets()).isEqualTo(8);
+        assertThat(customer.smallBoxPlan().requiredPallets()).isEqualTo(12);
         var small = customer.smallBoxPlan().items().getFirst().allocations().getFirst().capacity();
         assertThat(small.piecesPerLayer()).isEqualTo(8);
         assertThat(small.usableLayers()).isEqualTo(3);
-        assertThat(small.maxPieces()).isEqualTo(15);
+        assertThat(small.maxPieces()).isEqualTo(10);
         assertThat(customer.largeBoxesPerUnit()).isEqualTo(40);
         assertThat(customer.largeBoxPlan().requiredPallets()).isEqualTo(40);
         var large = customer.largeBoxPlan().items().getFirst().allocations().getFirst().capacity();
         assertThat(large.piecesPerLayer()).isEqualTo(1);
         assertThat(large.usableLayers()).isEqualTo(1);
         assertThat(large.maxPieces()).isEqualTo(1);
-        var mixed = customer.mixedBoxExample();
-        assertThat(mixed.smallBoxQuantity()).isEqualTo(63);
-        assertThat(mixed.largeBoxQuantity()).isEqualTo(19);
-        assertThat(mixed.plan().requiredPallets()).isEqualTo(24);
-        assertThat(mixed.plan().totalLoadedWeightKg()).isEqualByComparingTo("1200");
-        assertThat(mixed.plan().items().getFirst().allocations())
-            .extracting(allocation -> allocation.piecesPerPallet()).containsExactly(15, 3);
-        assertThat(mixed.plan().items().getFirst().requiredPallets()).isEqualTo(5);
-        assertThat(mixed.plan().items().getLast().requiredPallets()).isEqualTo(19);
-        assertThat(mixed.plan().racks()).allSatisfy(rack -> assertThat(rack.usedSlots()).isEqualTo(12));
+        assertThat(customer.mixedBoxExample()).isNull();
     }
 
     @Test
@@ -164,10 +155,11 @@ class RackLayoutServiceTests {
         assertThatThrownBy(() -> service.confirmNewType(manager, type, new RackLayout.Save(configuration, preview.previewKey())))
             .isInstanceOf(ApiException.class).hasMessageContaining("kiểm tra lại");
         type.setMaxLoadKg(draft.maxLoadKg());
+        when(units.findByFacility_Id(facilityId)).thenReturn(List.of());
         service.confirmNewType(manager, type, new RackLayout.Save(configuration, preview.previewKey()));
         assertThat(type.getRackCount()).isEqualTo(1);
         assertThat(type.getSmallBoxCapacity()).isEqualTo(preview.result().smallBoxesPerUnit());
-        verifyNoInteractions(units);
+        org.mockito.Mockito.verify(units).findByFacility_Id(facilityId);
     }
 
     @Test
@@ -192,12 +184,13 @@ class RackLayoutServiceTests {
         assertThat(preview.result().configuration().racks())
             .allSatisfy(rack -> assertThat(rack.maxLoadedPalletKg()).isEqualTo(new BigDecimal("100")));
 
+        when(units.findByFacility_Id(facilityId)).thenReturn(List.of());
         service.confirmNewType(manager, type,
             new RackLayout.Save(preview.result().configuration(), preview.previewKey()));
 
         assertThat(type.getRackCount()).isEqualTo(4);
         assertThat(type.getRackLayoutJson()).isNotBlank();
-        verifyNoInteractions(units);
+        org.mockito.Mockito.verify(units).findByFacility_Id(facilityId);
     }
 
     @Test

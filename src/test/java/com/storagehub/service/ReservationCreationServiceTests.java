@@ -199,7 +199,8 @@ class ReservationCreationServiceTests {
         assertThat(captured.getFreeSetupDays()).isEqualTo(originalSetup);
         assertThat(captured.getMonthlyPrice()).isEqualByComparingTo(originalPrice);
         assertThat(captured.getPricingPolicyVersion()).isEqualTo(originalVersion);
-        assertThat(response.getReservationCode()).matches("RSV-[0-9]{6}");
+        assertThat(response.getReservationCode())
+            .matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
     }
 
     @Test
