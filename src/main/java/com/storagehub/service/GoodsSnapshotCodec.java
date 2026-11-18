@@ -27,6 +27,12 @@ final class GoodsSnapshotCodec {
                 if (supplied.stream().allMatch(value -> value.getCatalogCategoryId() == null)) {
                     object.remove(List.of("catalogCategoryId", "catalogMaterialId"));
                 }
+                // This field was added after older quotes were created. A
+                // missing value means false, so it must compare equal to an
+                // explicitly submitted false value.
+                if (!object.has("allowHorizontalPlacement") || object.get("allowHorizontalPlacement").isNull()) {
+                    object.put("allowHorizontalPlacement", false);
+                }
             }
         }
         return left.equals(right);

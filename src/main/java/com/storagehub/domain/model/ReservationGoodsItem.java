@@ -71,6 +71,15 @@ public class ReservationGoodsItem extends BaseEntity {
     @Column(nullable = false)
     private boolean fragile;
 
+    @Column(nullable = false)
+    private boolean stackable;
+
+    @Column(nullable = false)
+    private int maxStackLayers = 1;
+
+    @Column(nullable = false)
+    private boolean allowHorizontalPlacement;
+
     @Column(length = 1000)
     private String customerNote;
 

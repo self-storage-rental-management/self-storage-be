@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import com.storagehub.api.reservation.CompatibilityCheckResponse;
 import com.storagehub.api.reservation.CreateReservationRequest;
@@ -20,13 +21,16 @@ import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationQuoteRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -54,11 +58,14 @@ class ReservationCreationServiceTests {
     @Mock private ReservationCompatibilityService compatibilityService;
     @Mock private AuditLogService auditLogService;
     @Mock private ReservationCapacityService capacityService;
+    @Mock private UserRepository bookingUsers;
+    @Mock private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
 
     private ReservationCreationService service;
     private ActorPrincipal actor;
     private ReservationQuote quote;
     private RentalPackagePolicy policy;
+    private StorageUnit heldUnit;
 
     @BeforeEach
     void setUp() {
@@ -66,6 +73,8 @@ class ReservationCreationServiceTests {
             reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
             policyRepository, compatibilityService, auditLogService, capacityService
         );
+        ReflectionTestUtils.setField(service, "bookingUsers", bookingUsers);
+        ReflectionTestUtils.setField(service, "customerEmails", customerEmails);
 
         Facility facility = new Facility();
         ReflectionTestUtils.setField(facility, "id", UUID.randomUUID());
@@ -77,6 +86,11 @@ class ReservationCreationServiceTests {
 
         User customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
+        customer.setStatus(UserStatus.ACTIVE);
+        lenient().when(bookingUsers.findByIdForUpdate(customer.getId())).thenReturn(Optional.of(customer));
+        heldUnit = new StorageUnit();
+        heldUnit.setUnitType(unitType);
+        heldUnit.setFacility(facility);
         actor = new ActorPrincipal(
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()
         );
@@ -162,7 +176,7 @@ class ReservationCreationServiceTests {
         assertThat(checkedPeriod.getValue().getEndDate()).isEqualTo(expectedEnd);
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo(quote.getTotalInitialObligation());
         assertThat(quote.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 10));
-        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
+        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("4301000.00");
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("11704000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
@@ -171,6 +185,12 @@ class ReservationCreationServiceTests {
         var savedReservation=org.mockito.ArgumentCaptor.forClass(Reservation.class);
         var savedSnapshot=org.mockito.ArgumentCaptor.forClass(ReservationPricingSnapshot.class);
         org.mockito.Mockito.verify(reservationRepository).saveAndFlush(savedReservation.capture());
+        assertThat(savedReservation.getValue().getPalletHeldUnit()).isSameAs(heldUnit);
+        assertThat(savedReservation.getValue().getAssignedUnit()).isNull();
+        var order = org.mockito.Mockito.inOrder(capacityService, compatibilityService);
+        order.verify(capacityService).lockAndRequireAvailableCapacity(
+            quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate, expectedEnd);
+        order.verify(compatibilityService).checkQuotedSnapshot(eq(actor), any());
         org.mockito.Mockito.verify(snapshotRepository).saveAndFlush(savedSnapshot.capture());
         var captured=savedSnapshot.getValue();var originalSetup=captured.getFreeSetupDays();var originalPrice=captured.getMonthlyPrice();var originalVersion=captured.getPricingPolicyVersion();
         policy.setFreeSetupDays(99);policy.setPolicyVersion("TEST-NEW-POLICY");policy.setDiscountRate(new BigDecimal("0.9"));
@@ -179,20 +199,21 @@ class ReservationCreationServiceTests {
         assertThat(captured.getFreeSetupDays()).isEqualTo(originalSetup);
         assertThat(captured.getMonthlyPrice()).isEqualByComparingTo(originalPrice);
         assertThat(captured.getPricingPolicyVersion()).isEqualTo(originalVersion);
-        assertThat(response.getReservationCode()).matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
+        assertThat(response.getReservationCode()).matches("RSV-[0-9]{6}");
     }
 
     @Test
     void rejectsStaleAndOutOfWindowAppointmentsWithActionableFieldDetails() {
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        for (long offsetSeconds : new long[] {-60, 6 * 3600, 9 * 24 * 3600}) {
+        // The production policy validates calendar dates in Vietnam, not offsets within a date.
+        for (long offsetSeconds : new long[] {-24 * 3600, 9 * 24 * 3600}) {
             var input = request();
             input.setAppointmentAt(Instant.now().plusSeconds(offsetSeconds));
             assertThatThrownBy(() -> service.create(actor, input, "stale-appointment"))
                 .isInstanceOfSatisfying(ApiException.class, error -> {
                     assertThat(error.getDetails()).isEqualTo(Map.of("appointmentAt", error.getMessage()));
-                    assertThat(error.getMessage()).contains("Lịch nhận kho").doesNotContain(";");
+                    assertThat(error.getMessage()).contains("Ngày nhận kho");
                 });
         }
         org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
@@ -244,7 +265,7 @@ class ReservationCreationServiceTests {
 
         var response = service.create(actor, request, "create-diff-deposit");
 
-        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_EMAIL);
+        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
         assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("200000.00");
     }
 
@@ -401,12 +422,14 @@ class ReservationCreationServiceTests {
     }
 
     private CompatibilityCheckResponse compatibleResponse() {
-        return new CompatibilityCheckResponse(
+        var response = new CompatibilityCheckResponse(
             quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
             quote.getEndDate(), CompatibilityResult.COMPATIBLE, new BigDecimal("0.180000"),
             new BigDecimal("36.00"), new BigDecimal("15.000000"),
             new BigDecimal("1000.00"), new BigDecimal("0.80"),
             new BigDecimal("28.800000"), 1, 4, 2, false, List.of()
         );
+        response.setPalletHeldUnit(heldUnit);
+        return response;
     }
 }

@@ -2,6 +2,7 @@ package com.storagehub.service.email;
 
 import com.storagehub.config.EmailProperties;
 import com.storagehub.domain.model.*;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -20,6 +21,7 @@ public class CustomerLifecycleEmailService {
     private final TransactionalEmailService mail;
     private final EmailProperties properties;
     private final com.storagehub.service.rental.period.RentalPeriodResolver periods;
+    private final ReservationPricingSnapshotRepository snapshotRepository;
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy").withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
 
     public void notification(Notification notice) {
@@ -132,14 +134,15 @@ public class CustomerLifecycleEmailService {
     }
 
     private Map<String, String> reservationDetails(Reservation reservation) {
+        var snapshot = snapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
         var rows = new LinkedHashMap<String, String>();
         rows.put("Mã đơn giữ kho", reservation.getReservationCode());
-        rows.put("Cơ sở", reservation.getFacility().getName());
-        rows.put("Địa điểm", reservation.getFacility().getAddress());
-        rows.put("Loại kho", reservation.getUnitType().getName());
-        var unit = reservation.getUnitType();
-        rows.put("Kích thước kho (D × R × C)", unit.getLengthM() + " × " + unit.getWidthM() + " × " + unit.getHeightM() + " m");
-        if (reservation.getAssignedUnit() != null) rows.put("Mã gian kho", reservation.getAssignedUnit().getCode());
+        rows.put("Cơ sở", com.storagehub.service.ReservationSnapshotView.facilityName(reservation, snapshot));
+        rows.put("Địa điểm", com.storagehub.service.ReservationSnapshotView.facilityAddress(reservation, snapshot));
+        rows.put("Loại kho", com.storagehub.service.ReservationSnapshotView.unitTypeName(reservation, snapshot));
+        rows.put("Kích thước kho (D × R × C)", historicalUnitDimensions(reservation, snapshot));
+        String assignedUnitCode = com.storagehub.service.ReservationSnapshotView.assignedUnitCode(reservation, snapshot);
+        if (assignedUnitCode != null) rows.put("Mã gian kho", assignedUnitCode);
         if (reservation.getPaymentExpiresAt() != null) rows.put("Hạn thanh toán cọc", TIME.format(reservation.getPaymentExpiresAt()));
         else if (reservation.getHoldExpiresAt() != null) rows.put("Hạn giữ hồ sơ", TIME.format(reservation.getHoldExpiresAt()));
         if (reservation.getAppointmentAt() != null) rows.put("Lịch nhận kho", TIME.format(reservation.getAppointmentAt()));
@@ -147,6 +150,19 @@ public class CustomerLifecycleEmailService {
         if (!checkIns.isEmpty() && checkIns.getFirst().getAssignedStaff() != null) rows.put("Nhân viên phụ trách", checkIns.getFirst().getAssignedStaff().getFullName());
         rows.put("Giấy tờ khi nhận kho", "Mang giấy tờ định danh gốc trùng với hồ sơ và biên lai thanh toán; không gửi ảnh giấy tờ qua email.");
         return rows;
+    }
+
+    private String historicalUnitDimensions(Reservation reservation, ReservationPricingSnapshot snapshot) {
+        try {
+            return com.storagehub.service.ReservationSnapshotView.unitTypeDecimal(reservation, snapshot, "lengthM")
+                + " × "
+                + com.storagehub.service.ReservationSnapshotView.unitTypeDecimal(reservation, snapshot, "widthM")
+                + " × "
+                + com.storagehub.service.ReservationSnapshotView.unitTypeDecimal(reservation, snapshot, "heightM")
+                + " m";
+        } catch (RuntimeException ignored) {
+            return com.storagehub.service.ReservationSnapshotView.MISSING;
+        }
     }
 
     private void send(User user, String key, String title, String summary, Map<String, String> details, String section, UUID reservation, Instant expiry) {

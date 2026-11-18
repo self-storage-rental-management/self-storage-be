@@ -8,6 +8,7 @@ import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.repo.RentalRepository;
+import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class CustomerRentalService {
 
     private final RentalRepository rentalRepository;
+    private final ReservationPricingSnapshotRepository snapshotRepository;
     private final AdminAuthorizationService authorizationService;
 
     @Transactional(readOnly = true)
@@ -47,14 +49,16 @@ public class CustomerRentalService {
     }
 
     private CustomerRentalResponse toResponse(Rental rental) {
+        var reservation = rental.getReservation();
+        var snapshot = snapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
         return new CustomerRentalResponse(
             rental.getId(),
-            rental.getReservation().getId(),
-            rental.getFacility().getId(),
-            rental.getFacility().getName(),
-            rental.getFacility().getAddress(),
+            reservation.getId(),
+            reservation.getFacility().getId(),
+            ReservationSnapshotView.facilityName(reservation, snapshot),
+            ReservationSnapshotView.facilityAddress(reservation, snapshot),
             rental.getStorageUnit().getId(),
-            rental.getStorageUnit().getCode(),
+            ReservationSnapshotView.assignedUnitCode(reservation, snapshot),
             rental.getStatus(),
             rental.getStartDate(),
             rental.getContractEndDate(),

@@ -149,4 +149,17 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     List<Payment> findPaidPaymentsByFacility(@Param("facilityId") UUID facilityId);
 
     List<Payment> findByStatus(com.storagehub.domain.model.PaymentStatus status);
+
+    @Query("""
+        select count(p) from Payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and p.status in :statuses
+        """)
+    long countOutstandingByFacilityId(
+        @Param("facilityId") UUID facilityId,
+        @Param("statuses") Collection<com.storagehub.domain.model.PaymentStatus> statuses
+    );
 }

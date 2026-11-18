@@ -37,6 +37,9 @@ public class ReservationGoodsItemResponse {
     private BigDecimal heightCm;
     private BigDecimal weightPerItemKg;
     private boolean fragile;
+    private boolean stackable;
+    private int maxStackLayers = 1;
+    private boolean allowHorizontalPlacement;
     private String customerNote;
     private boolean requiresStaffReview;
     private GoodsReviewStatus reviewStatus;
@@ -72,6 +75,14 @@ public class ReservationGoodsItemResponse {
     public void setWeightPerItemKg(BigDecimal weightPerItemKg) { this.weightPerItemKg = weightPerItemKg; }
     public boolean isFragile() { return fragile; }
     public void setFragile(boolean fragile) { this.fragile = fragile; }
+    public boolean isStackable() { return stackable; }
+    public void setStackable(boolean stackable) { this.stackable = stackable; }
+    public int getMaxStackLayers() { return maxStackLayers; }
+    public void setMaxStackLayers(int maxStackLayers) { this.maxStackLayers = maxStackLayers; }
+    public boolean isAllowHorizontalPlacement() { return allowHorizontalPlacement; }
+    public void setAllowHorizontalPlacement(boolean allowHorizontalPlacement) {
+        this.allowHorizontalPlacement = allowHorizontalPlacement;
+    }
     public String getCustomerNote() { return customerNote; }
     public void setCustomerNote(String customerNote) { this.customerNote = customerNote; }
     public boolean isRequiresStaffReview() { return requiresStaffReview; }
