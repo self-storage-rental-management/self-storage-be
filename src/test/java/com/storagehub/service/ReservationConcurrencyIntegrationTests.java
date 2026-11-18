@@ -1,16 +1,21 @@
 package com.storagehub.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.storagehub.api.facility.ManagerUnitTypeRequest;
+import com.storagehub.api.facility.RackLayout;
 import com.storagehub.api.reservation.CreateReservationRequest;
 import com.storagehub.api.reservation.GoodsItemRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.Facility;
+import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.GoodsCategory;
 import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnit;
+import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.FacilityRepository;
@@ -21,6 +26,7 @@ import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.service.support.ai.GeminiSupportAiProvider;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -35,11 +41,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 
 @SpringBootTest(properties = "app.bootstrap-admin.enabled=false")
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@MockitoBean(types = GeminiSupportAiProvider.class)
 class ReservationConcurrencyIntegrationTests {
 
     @Autowired private ReservationCreationService creationService;
@@ -51,6 +59,8 @@ class ReservationConcurrencyIntegrationTests {
     @Autowired private RentalPackagePolicyRepository policyRepository;
     @Autowired private ReservationQuoteRepository quoteRepository;
     @Autowired private ReservationRepository reservationRepository;
+    @Autowired private RackLayoutService rackLayouts;
+    @Autowired private FacilityLifecycleService facilityLifecycle;
 
     @Test
     void onlyOneOfTwoConcurrentRequestsCanReserveTheLastCapacity() throws Exception {
@@ -58,7 +68,10 @@ class ReservationConcurrencyIntegrationTests {
             .availableAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate();
         LocalDate endDate = startDate.plusMonths(3);
         Facility facility = facilityRepository.saveAndFlush(facility());
-        UnitType unitType = unitTypeRepository.saveAndFlush(unitType(facility));
+        UnitType draft = unitType(facility);
+        ActorPrincipal manager = manager(facility);
+        rackLayouts.confirmNewType(manager, draft, previewLayout(manager, draft));
+        UnitType unitType = unitTypeRepository.saveAndFlush(draft);
         storageUnitRepository.saveAndFlush(storageUnit(facility, unitType));
         policyRepository.saveAndFlush(policy(facility));
 
@@ -96,6 +109,76 @@ class ReservationConcurrencyIntegrationTests {
         assertThat(capacityService.availableCount(
             facility.getId(), unitType.getId(), startDate, endDate
         )).isZero();
+    }
+
+    @Test
+    void confirmedTypeCreatesTheRequestedUnitsWithOneSharedLayout() {
+        Facility draft = facility();
+        draft.setCode("LAYOUT-F01");
+        Facility facility = facilityRepository.saveAndFlush(draft);
+        UnitType type = unitType(facility);
+        ActorPrincipal manager = manager(facility);
+        RackLayout.Save layout = previewLayout(manager, type);
+
+        assertThatThrownBy(() -> facilityLifecycle.createUnitType(manager, facility.getId(), typeRequest(type, null)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("xác nhận");
+        assertThat(unitTypeRepository.findByFacility_IdOrderByCodeAsc(facility.getId())).isEmpty();
+        assertThat(storageUnitRepository.findByFacility_Id(facility.getId())).isEmpty();
+
+        var created = facilityLifecycle.createUnitType(manager, facility.getId(), typeRequest(type, layout));
+        var shared = rackLayouts.readForManager(manager, created.id());
+        assertThat(created.totalCount()).isEqualTo(3);
+        assertThat(shared.result().palletSlotCount()).isEqualTo(12);
+        assertThat(storageUnitRepository.findByFacility_Id(facility.getId()))
+            .hasSize(3)
+            .allSatisfy(unit -> {
+                assertThat(unit.getUnitType().getId()).isEqualTo(created.id());
+                assertThat(unit.getRackLayoutJson()).isNull();
+            });
+    }
+
+    @Test
+    void confirmedV8TypePersistsTheDimensionSpecificPalletRatingCatalog() {
+        Facility draft = facility();
+        draft.setCode("RATING-F01");
+        Facility facility = facilityRepository.saveAndFlush(draft);
+        UnitType type = unitType(facility);
+        ActorPrincipal manager = manager(facility);
+        RackLayout.Rack rack = RackLayoutCalculatorTests.v6Rack("R01", 30, 30);
+        RackLayout.PalletRating one = new RackLayout.PalletRating(210, 170, new BigDecimal("18"),
+            new BigDecimal("40"), new BigDecimal("500"));
+        RackLayout.PalletRating two = new RackLayout.PalletRating(210, 80, new BigDecimal("18"),
+            new BigDecimal("40"), new BigDecimal("500"));
+        RackLayout.Configuration configuration = new RackLayout.Configuration(
+            new RackLayout.Clearances(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
+            List.of(rack), one.toPallet(), true, List.of(one, two));
+        RackLayout.Draft draftLayout = new RackLayout.Draft(type.getLengthM(), type.getWidthM(), type.getHeightM(),
+            type.getMaxLoadKg(), configuration);
+        RackLayout.Preview preview = rackLayouts.previewDraft(manager, facility.getId(), draftLayout);
+
+        rackLayouts.confirmNewType(manager, type, new RackLayout.Save(configuration, preview.previewKey()));
+        UnitType saved = unitTypeRepository.saveAndFlush(type);
+
+        assertThat(saved.getPalletRatingCatalogJson()).contains("210", "170", "210", "80");
+        assertThat(rackLayouts.readForManager(manager, saved.getId()).result().maxFeasiblePalletCount())
+            .isEqualTo(2);
+    }
+
+    private RackLayout.Save previewLayout(ActorPrincipal manager, UnitType type) {
+        var config = RackLayoutCalculatorTests.config(RackLayoutCalculatorTests.rack("R01", 0, 3, 2, 100, 1200));
+        var draft = new RackLayout.Draft(type.getLengthM(), type.getWidthM(), type.getHeightM(), type.getMaxLoadKg(), config);
+        return new RackLayout.Save(config, rackLayouts.previewDraft(manager, type.getFacility().getId(), draft).previewKey());
+    }
+
+    private ManagerUnitTypeRequest typeRequest(UnitType type, RackLayout.Save layout) {
+        return new ManagerUnitTypeRequest(null, type.getName(), null, type.getLengthM(), type.getWidthM(),
+            type.getHeightM(), type.getMaxLoadKg(), 0, type.getRackLengthM(), type.getRackWidthM(), type.getRackHeightM(),
+            BigDecimal.ONE, "Xe đẩy", 0, 0, null, 3, "2", "Khu Z", null, List.of(), List.of(), layout);
+    }
+
+    private ActorPrincipal manager(Facility facility) {
+        return new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.MANAGER),
+            Set.of(SystemPermission.MANAGE_INVENTORY.code()), Map.of(facility.getId(), FacilityScopeLevel.MANAGE));
     }
 
     private Result createAfterBarrier(ActorPrincipal actor, CreateReservationRequest request,

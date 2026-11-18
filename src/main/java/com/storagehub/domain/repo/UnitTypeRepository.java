@@ -5,6 +5,7 @@ import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.UnitTypeStatus;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Collection;
 import java.util.UUID;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
@@ -15,6 +16,23 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UnitTypeRepository extends JpaRepository<UnitType, UUID> {
+
+    interface RackLayoutType {
+        UUID getId();
+        String getCode();
+        String getName();
+        String getFacilityName();
+    }
+
+    @Query("""
+        select t.id as id, t.code as code, t.name as name, f.name as facilityName
+        from UnitType t join t.facility f
+        where t.rackLayoutJson is not null
+          and (:globalScope = true or f.id in :facilityIds)
+        order by f.name, t.code, t.id
+        """)
+    Page<RackLayoutType> findRackLayoutTypes(@Param("globalScope") boolean globalScope,
+        @Param("facilityIds") Collection<UUID> facilityIds, Pageable pageable);
 
     List<UnitType> findByFacility_IdOrderByCodeAsc(UUID facilityId);
 

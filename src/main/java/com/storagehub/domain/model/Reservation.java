@@ -70,6 +70,10 @@ public class Reservation extends BaseEntity {
     @JoinColumn(name = "assigned_unit_id")
     private StorageUnit assignedUnit;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "pallet_held_unit_id")
+    private StorageUnit palletHeldUnit;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private ReservationStatus status = ReservationStatus.AWAITING_EMAIL;
@@ -139,6 +143,9 @@ public class Reservation extends BaseEntity {
 
     @Column
     private Instant archivedAt;
+
+    @Column
+    private Instant customerArchivedAt;
 
     @Column
     private Instant confirmedAt;

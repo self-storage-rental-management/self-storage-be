@@ -26,11 +26,19 @@ public class ReservationQuote extends BaseEntity {
     @Column(precision = 14, scale = 2)
     private BigDecimal setupEarlyExitFee;
 
-    @Column(name = "goods_snapshot_json", nullable = false, columnDefinition = "LONGTEXT")
+    @Column(name = "goods_snapshot_json", nullable = false, updatable = false, columnDefinition = "LONGTEXT")
     private String goodsSnapshotJson;
 
-    @Column(name = "unit_type_snapshot_json", nullable = false, columnDefinition = "LONGTEXT")
+    /** Facility identity and address captured when this quote was issued. */
+    @Column(name = "facility_snapshot_json", updatable = false, columnDefinition = "LONGTEXT")
+    private String facilitySnapshotJson;
+
+    @Column(name = "unit_type_snapshot_json", nullable = false, updatable = false, columnDefinition = "LONGTEXT")
     private String unitTypeSnapshotJson;
+
+    /** Hash of the quote-time goods, facility and storage snapshots. */
+    @Column(name = "snapshot_hash", updatable = false, length = 64)
+    private String snapshotHash;
 
     @Column(name = "unit_type_revision", nullable = false)
     private long unitTypeRevision;

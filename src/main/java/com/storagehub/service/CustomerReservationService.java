@@ -77,6 +77,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class CustomerReservationService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private PalletInventoryService palletInventory;
     @Autowired
     private ObjectProvider<ReturnSettlementService> returnSettlements;
     @Autowired
@@ -267,8 +269,10 @@ public class CustomerReservationService {
         PageRequest pageable = createPageRequest(page, size);
         Page<Reservation> reservations;
         if (status == null) {
-            reservations = reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
-                actor.userId(), ReservationStatus.REJECTED, pageable
+            reservations = reservationRepository.findCustomerVisibleReservations(actor.userId(), pageable);
+        } else if (status == ReservationStatus.EXPIRED) {
+            reservations = reservationRepository.findAllByCustomer_IdAndStatusAndCustomerArchivedAtIsNull(
+                actor.userId(), status, pageable
             );
         } else {
             reservations = reservationRepository.findAllByCustomer_IdAndStatusAndArchivedAtIsNull(
@@ -276,6 +280,20 @@ public class CustomerReservationService {
             );
         }
         return PageResponse.from(reservations.map(this::toSummaryResponse), correlationId);
+    }
+
+    @Transactional
+    public void archiveExpiredHistory(ActorPrincipal actor, UUID reservationId) {
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        if (reservation.getStatus() != ReservationStatus.EXPIRED
+            && reservation.getStatus() != ReservationStatus.COMPLETED) {
+            throw ApiExceptions.conflict("Only expired or completed reservations can be removed from history");
+        }
+        if (reservation.getCustomerArchivedAt() == null) {
+            reservation.setCustomerArchivedAt(Instant.now());
+            reservationRepository.saveAndFlush(reservation);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -311,9 +329,16 @@ public class CustomerReservationService {
         }
         BigDecimal totalVolume = BigDecimal.ZERO;
         BigDecimal totalWeight = BigDecimal.ZERO;
-        BigDecimal rackLengthCm = ReservationSnapshotView.unitTypeDecimal(reservation, "rackLengthM").movePointRight(2);
-        BigDecimal rackWidthCm = ReservationSnapshotView.unitTypeDecimal(reservation, "rackWidthM").movePointRight(2);
-        BigDecimal rackHeightCm = ReservationSnapshotView.unitTypeDecimal(reservation, "rackHeightM").movePointRight(2);
+        boolean palletBooking = reservation.getPalletHeldUnit() != null;
+        boolean palletLayoutAvailable = palletBooking
+            || reservation.getAssignedUnit() != null && reservation.getAssignedUnit().getRackLayoutJson() != null
+            || reservation.getUnitType().getRackLayoutJson() != null;
+        if (palletBooking) palletInventory.requireFit(reservation.getAssignedUnit(), request.goodsItems());
+        else if (reservation.getAssignedUnit() != null && reservation.getAssignedUnit().getUnitType().getRackLayoutJson() != null) {
+            palletInventory.requireFit(reservation.getAssignedUnit(), request.goodsItems());
+        } else if (reservation.getUnitType().getRackLayoutJson() != null) {
+            palletInventory.requireFit(reservation.getUnitType(), request.goodsItems());
+        }
         var beforeGoods = existing.stream().map(this::goodsAuditSnapshot).toList();
         for (int index = 0; index < request.goodsItems().size(); index++) {
             var input = request.goodsItems().get(index);
@@ -325,8 +350,14 @@ public class CustomerReservationService {
                 .multiply(input.getHeightCm()).divide(BigDecimal.valueOf(1_000_000), 12, RoundingMode.HALF_UP);
             totalVolume = totalVolume.add(itemVolume.multiply(BigDecimal.valueOf(input.getQuantity())));
             totalWeight = totalWeight.add(input.getWeightPerItemKg().multiply(BigDecimal.valueOf(input.getQuantity())));
-            if (!dimensionsFit(input.getLengthCm(), input.getWidthCm(), input.getHeightCm(),
-                rackLengthCm, rackWidthCm, rackHeightCm)) {
+            // Once a pallet layout exists, PalletPacking is the single source
+            // of truth. It already checks the permitted 2/6 orientations,
+            // layers and shared beam/pallet load. The old fallback check used
+            // the rack envelope and could reject a valid laid-flat package.
+            if (!palletLayoutAvailable && !dimensionsFit(input.getLengthCm(), input.getWidthCm(), input.getHeightCm(),
+                ReservationSnapshotView.unitTypeDecimal(reservation, "rackLengthM").movePointRight(2),
+                ReservationSnapshotView.unitTypeDecimal(reservation, "rackWidthM").movePointRight(2),
+                ReservationSnapshotView.unitTypeDecimal(reservation, "rackHeightM").movePointRight(2))) {
                 throw ApiExceptions.conflict("Kích thước hàng thứ " + (index + 1) + " không vừa khung kệ của loại kho đã đặt.");
             }
             item.setCustomGoodsName(clean(input.getCustomGoodsName()));
@@ -338,24 +369,24 @@ public class CustomerReservationService {
             item.setHeightCm(input.getHeightCm());
             item.setWeightKg(input.getWeightPerItemKg());
             item.setFragile(input.isFragile());
+            item.setStackable(input.allowsStacking());
+            item.setMaxStackLayers(input.hasStackabilityDeclaration()
+                ? 1
+                : input.isFragile() ? 1 : input.getMaxStackLayers());
+            item.setAllowHorizontalPlacement(input.allowsHorizontalPlacement());
             item.setCustomerNote(clean(input.getCustomerNote()));
         }
-        BigDecimal snapshotVolume = ReservationSnapshotView.unitTypeDecimal(reservation, "lengthM")
-            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "widthM"))
-            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "heightM"));
-        BigDecimal usableRackVolume = ReservationSnapshotView.unitTypeDecimal(reservation, "rackLengthM")
-            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "rackWidthM"))
-            .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "rackHeightM"))
-            .multiply(new BigDecimal("0.80"));
-        int requiredRacks = usableRackVolume.signum() > 0
-            ? totalVolume.divide(usableRackVolume, 0, RoundingMode.CEILING).intValueExact()
-            : Integer.MAX_VALUE;
-        if (totalVolume.compareTo(snapshotVolume) > 0
-            || requiredRacks > ReservationSnapshotView.unitTypeRackCount(reservation)) {
-            throw ApiExceptions.conflict("Goods volume exceeds the storage unit capacity");
-        }
-        if (totalWeight.compareTo(ReservationSnapshotView.unitTypeDecimal(reservation, "maxLoadKg")) > 0) {
-            throw ApiExceptions.conflict("Goods weight exceeds the storage unit capacity");
+        if (!palletBooking && reservation.getUnitType().getRackLayoutJson() == null
+            && (reservation.getAssignedUnit() == null || reservation.getAssignedUnit().getRackLayoutJson() == null)) {
+            BigDecimal snapshotVolume = ReservationSnapshotView.unitTypeDecimal(reservation, "lengthM")
+                .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "widthM"))
+                .multiply(ReservationSnapshotView.unitTypeDecimal(reservation, "heightM"));
+            if (totalVolume.compareTo(snapshotVolume) > 0) {
+                throw ApiExceptions.conflict("Goods volume exceeds the storage unit capacity");
+            }
+            if (totalWeight.compareTo(ReservationSnapshotView.unitTypeDecimal(reservation, "maxLoadKg")) > 0) {
+                throw ApiExceptions.conflict("Goods weight exceeds the storage unit capacity");
+            }
         }
         goodsItemRepository.saveAll(existing);
         reservation.setTotalGoodsVolumeM3(totalVolume.setScale(6, RoundingMode.HALF_UP));
@@ -504,6 +535,8 @@ public class CustomerReservationService {
         value.put("heightCm", item.getHeightCm());
         value.put("weightKg", item.getWeightKg());
         value.put("fragile", item.isFragile());
+        value.put("stackable", item.isStackable());
+        value.put("allowHorizontalPlacement", item.isAllowHorizontalPlacement());
         return value;
     }
 
@@ -518,7 +551,12 @@ public class CustomerReservationService {
             Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id"))
         );
         return PageResponse.from(paymentRepository.findAllByReservation_Customer_Id(actor.userId(), pageable)
-            .map(payment -> toPaymentResponse(payment, payment.getReservation().getStatus())), correlationId);
+            .map(payment -> {
+                Reservation reservation = payment.getReservation();
+                return toPaymentResponse(
+                    payment, reservation.getStatus(), snapshotRepository.findByReservation_Id(reservation.getId()).orElse(null)
+                );
+            }), correlationId);
     }
 
     @Transactional(readOnly = true)
@@ -526,7 +564,9 @@ public class CustomerReservationService {
         Reservation reservation = findOwnedReservation(actor, reservationId);
         return paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
             .stream()
-            .map(payment -> toPaymentResponse(payment, reservation.getStatus()))
+            .map(payment -> toPaymentResponse(
+                payment, reservation.getStatus(), snapshotRepository.findByReservation_Id(reservation.getId()).orElse(null)
+            ))
             .toList();
     }
 
@@ -1175,7 +1215,6 @@ public class CustomerReservationService {
             snapshot.getDiscountRate(), snapshot.getDiscountAmount(), reservation.getAppointmentAt()
         );
         response.setMonthlyPrice(snapshot.getMonthlyPrice());
-        response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
         ReservationSnapshotView.describe(response,reservation,snapshot);
         response.setRentalPeriodConfirmed(reservation.getStatus() == ReservationStatus.COMPLETED
             || checkInRepository != null && checkInRepository.findByReservation_Id(reservation.getId())
@@ -1201,11 +1240,6 @@ public class CustomerReservationService {
         response.setCustomerAddress(reservation.getCustomerAddress() != null
             ? reservation.getCustomerAddress() : reservation.getCustomer().getPermanentAddress());
         response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
-        if (reservation.getAssignedUnit() != null) {
-            response.setAssignedUnitId(reservation.getAssignedUnit().getId());
-            response.setAssignedUnitCode(reservation.getAssignedUnit().getCode());
-            response.setAssignedUnitStatus(reservation.getAssignedUnit().getStatus().name());
-        }
         return response;
     }
 
@@ -1230,9 +1264,10 @@ public class CustomerReservationService {
         response.setCancellationRefundAmount(reservation.getCancellationRefundAmount());
         response.setCancellationChargeAmount(reservation.getCancellationChargeAmount());
         response.setGoodsItems(goodsItems);
+        ReservationPricingSnapshot pricingSnapshot = snapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
         response.setPayments(paymentRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())
             .stream()
-            .map(payment -> toPaymentResponse(payment, reservation.getStatus()))
+            .map(payment -> toPaymentResponse(payment, reservation.getStatus(), pricingSnapshot))
             .toList());
         checkInRepository.findByReservation_Id(reservation.getId()).ifPresent(checkIn ->
             response.setCheckInStatus(checkIn.getStatus().name()));
@@ -1241,7 +1276,9 @@ public class CustomerReservationService {
         return response;
     }
 
-    private CustomerPaymentReceiptResponse toPaymentResponse(Payment payment, ReservationStatus reservationStatus) {
+    private CustomerPaymentReceiptResponse toPaymentResponse(
+        Payment payment, ReservationStatus reservationStatus, ReservationPricingSnapshot snapshot
+    ) {
         return new CustomerPaymentReceiptResponse(
             payment.getId(), payment.getReservation().getId(), payment.getGatewayIntentId(),
             payment.getGatewayTransactionNo(), payment.getAmount(), payment.getCurrency(),
@@ -1251,7 +1288,12 @@ public class CustomerReservationService {
             payment.getStatus() == PaymentStatus.PAID ? "Payment was recorded successfully" : "Payment is awaiting confirmation",
             payment.getProcessedAt(), payment.getPaidAt(), payment.getLastReconciledAt(),
             payment.getInitiatedBy().getFullName(), payment.getCreatedAt(), payment.getReservation().getReservationCode(),
-            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt()
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
+            ReservationSnapshotView.facilityCode(payment.getReservation(), snapshot),
+            ReservationSnapshotView.facilityName(payment.getReservation(), snapshot),
+            ReservationSnapshotView.facilityAddress(payment.getReservation(), snapshot),
+            ReservationSnapshotView.unitTypeName(payment.getReservation(), snapshot),
+            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot)
         );
     }
 
@@ -1275,6 +1317,9 @@ public class CustomerReservationService {
         response.setHeightCm(item.getHeightCm());
         response.setWeightPerItemKg(item.getWeightKg());
         response.setFragile(item.isFragile());
+        response.setStackable(item.isStackable());
+        response.setMaxStackLayers(item.getMaxStackLayers());
+        response.setAllowHorizontalPlacement(item.isAllowHorizontalPlacement());
         response.setCustomerNote(item.getCustomerNote());
         response.setRequiresStaffReview(item.isRequiresStaffReview());
         response.setReviewStatus(item.getReviewStatus());
