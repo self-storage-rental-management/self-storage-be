@@ -143,9 +143,10 @@ public class ReservationExpirationService {
         ReservationStatus previousStatus = reservation.getStatus();
         reservation.setStatus(ReservationStatus.EXPIRED);
         reservation.setExpiredAt(now);
-        // Expiration moves the reservation into customer history; only an explicit
-        // customer action should hide it from the reservation list.
-        reservation.setArchivedAt(null);
+        // Keep the system archive timestamp separate from the customer's own
+        // history archive flag. Customer history still includes expired orders
+        // until the customer explicitly hides them.
+        reservation.setArchivedAt(now);
         reservationRepository.saveAndFlush(reservation);
 
         for (Payment payment : payments) {
