@@ -2,15 +2,22 @@ package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
+import jakarta.persistence.LockModeType;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface FacilityRepository extends JpaRepository<Facility, UUID> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select f from Facility f where f.id = :id")
+    Optional<Facility> findByIdForUpdate(@Param("id") UUID id);
 
     java.util.Optional<Facility> findByCodeIgnoreCase(String code);
 

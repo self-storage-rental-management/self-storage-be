@@ -23,6 +23,10 @@ class FacilityDeletionSafetyTests {
     @Mock AuditLogService audit;
     @Mock UserFacilityScopeRepository userFacilityScopes;
     @Mock ReservationRepository reservations;
+    @Mock ContractRepository contracts;
+    @Mock PaymentRepository payments;
+    @Mock RefundRepository refunds;
+    @Mock RefundRequestRepository refundRequests;
     @Mock NotificationService notifications;
     @Mock UnitTypeChangeRequestRepository changes;
     @Mock UserRepository users;
@@ -38,31 +42,30 @@ class FacilityDeletionSafetyTests {
 
     @Test void preservesFacilityWithReservationHistory() {
         Facility facility = new Facility();
-        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
         service.deleteFacility(actor, id);
         assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
-        verifyNoInteractions(reservations);
     }
 
-    @Test void archivesFacilityAndTypesWithoutDeletingPhysicalUnits() {
+    @Test void archivesFacilityWithoutChangingUnitTypesOrDeletingPhysicalUnits() {
         Facility facility = new Facility();
-        when(facilities.findById(id)).thenReturn(Optional.of(facility));
-        UnitType type = new UnitType();
-        type.setStatus(UnitTypeStatus.active);
-        when(unitTypes.findByFacility_IdOrderByCodeAsc(id)).thenReturn(List.of(type));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
         service.deleteFacility(actor, id);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
         assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
-        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.archived);
+        verifyNoInteractions(unitTypes);
         verify(units, never()).deleteAll(anyList());
     }
 
     @Test void archivesEmptyFacilityWithoutPhysicalDeletion() {
         Facility facility = new Facility();
-        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
         service.deleteFacility(actor, id);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
