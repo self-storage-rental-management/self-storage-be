@@ -93,6 +93,14 @@ public class PaymentComplaintService {
             "Khiếu nại của đơn " + reservation.getReservationCode() + " đang chờ đối soát.",
             reservation.getId()
         );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.PAYMENT,
+            "Có khiếu nại thanh toán cần đối soát",
+            "Đơn " + reservation.getReservationCode() + " vừa gửi khiếu nại thanh toán: \""
+                + (request.reason().length() > 60 ? request.reason().substring(0, 57) + "..." : request.reason())
+                + "\". Vui lòng kiểm tra và xử lý.",
+            reservation.getId()
+        );
         return toResponse(saved);
     }
 
