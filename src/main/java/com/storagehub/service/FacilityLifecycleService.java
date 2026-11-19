@@ -252,25 +252,34 @@ public class FacilityLifecycleService {
     @Transactional
     public FacilityResponse restoreFacility(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
         if (facility.getStatus() != FacilityStatus.inactive && facility.getStatus() != FacilityStatus.maintenance) {
             throw ApiExceptions.conflict("Cơ sở hiện không ở trạng thái có thể khôi phục.");
         }
 
         FacilityResponse before = facilityResponse(facility);
-        List<UnitType> archivedTypes = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).stream()
-            .filter(type -> type.getStatus() == UnitTypeStatus.archived).toList();
-        if (!archivedTypes.isEmpty()) {
-            // Legacy facility archive records need a fresh BO pricing review.
-            archivedTypes.forEach(type -> {
-                type.setMonthlyPrice(BigDecimal.ZERO);
-                type.setSecurityDepositAmount(BigDecimal.ZERO);
-                type.setStatus(UnitTypeStatus.awaiting_pricing);
-            });
-            unitTypes.saveAll(archivedTypes);
-            facility.setStatus(FacilityStatus.setup);
+        List<UnitType> facilityTypes = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId);
+        if (facility.getStatus() == FacilityStatus.maintenance) {
+            boolean hasPublishedType = facilityTypes.stream().anyMatch(type -> type.getStatus() == UnitTypeStatus.active
+                && type.getMonthlyPrice() != null && type.getMonthlyPrice().signum() > 0);
+            if (!hasPublishedType) {
+                throw ApiExceptions.conflict("Cơ sở cần có ít nhất một loại kho đã công bố và có giá thuê để mở lại nhận đơn.");
+            }
+            facility.setStatus(FacilityStatus.active);
         } else {
-            validateAndActivate(facility);
+            List<UnitType> archivedTypes = facilityTypes.stream().filter(type -> type.getStatus() == UnitTypeStatus.archived).toList();
+            if (archivedTypes.isEmpty()) {
+                validateAndActivate(facility);
+            } else {
+                // Legacy facility archive records need a fresh BO pricing review.
+                archivedTypes.forEach(type -> {
+                    type.setMonthlyPrice(BigDecimal.ZERO);
+                    type.setSecurityDepositAmount(BigDecimal.ZERO);
+                    type.setStatus(UnitTypeStatus.awaiting_pricing);
+                });
+                unitTypes.saveAll(archivedTypes);
+                facility.setStatus(FacilityStatus.setup);
+            }
         }
         FacilityResponse after = facilityResponse(facilities.saveAndFlush(facility));
         audit.recordMutation("FACILITY_RESTORED", "Facility", facilityId, facilityId, before, after);

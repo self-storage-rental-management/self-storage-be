@@ -1251,7 +1251,19 @@ public class CustomerReservationService {
             .toList();
 
         ReservationDetailResponse response = new ReservationDetailResponse();
-        response.setReservation(toSummaryResponse(reservation));
+        var summary = toSummaryResponse(reservation);
+        response.setReservation(summary);
+        var facility = reservation.getFacility();
+        if (summary.getFacilitySnapshot() == null && facility != null) {
+            response.setCurrentFacility(new ReservationDetailResponse.CurrentFacility(
+                facility.getName(), facility.getAddress(), facility.getCity(), facility.getPhone(), facility.getAccessHours()));
+        }
+        var unitType = reservation.getUnitType();
+        if (summary.getUnitTypeSnapshot() == null && unitType != null) {
+            response.setCurrentUnitType(new ReservationDetailResponse.CurrentUnitType(
+                unitType.getName(), unitType.getLengthM(), unitType.getWidthM(), unitType.getHeightM(), unitType.getVolumeM3(),
+                unitType.getMaxLoadKg(), unitType.getRackCount(), unitType.getRackLengthM(), unitType.getRackWidthM(), unitType.getRackHeightM()));
+        }
         response.setGoodsCondition(reservation.getGoodsCondition());
         response.setNotes(reservation.getNotes());
         response.setPaymentExpiresAt(reservation.getPaymentExpiresAt());
