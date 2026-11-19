@@ -391,29 +391,18 @@ public class BusinessPolicyService {
             }
         }
 
-        if (targets.isEmpty()) {
-            return;
-        }
-
-        try {
-            policyRepository.deleteAll(targets);
-            policyRepository.flush();
-        } catch (Exception e) {
-            for (RentalPackagePolicy p : targets) {
-                p.setPublicationStatus(PublicationStatus.INACTIVE);
-                p.setActive(false);
-            }
-            policyRepository.saveAll(targets);
-        }
-
         for (RentalPackagePolicy p : targets) {
+            if (p.getPublicationStatus() == PublicationStatus.INACTIVE && !p.isActive()) continue;
+            RentalPackagePolicyResponse before = toResponse(p);
+            p.setPublicationStatus(PublicationStatus.INACTIVE);
+            p.setActive(false);
             auditLogService.recordMutation(
-                "RENTAL_PACKAGE_POLICY_DELETED_ALL",
+                "RENTAL_PACKAGE_POLICY_INACTIVATED",
                 "RentalPackagePolicy",
                 p.getId(),
                 p.getFacility().getId(),
-                toResponse(p),
-                null
+                before,
+                toResponse(p)
             );
         }
     }
