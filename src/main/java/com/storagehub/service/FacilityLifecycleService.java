@@ -721,10 +721,13 @@ public class FacilityLifecycleService {
         return after;
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public FacilityResponse publish(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
+        if (facility.getStatus() == FacilityStatus.inactive || facility.getStatus() == FacilityStatus.maintenance) {
+            throw ApiExceptions.conflict("Cơ sở đang tạm ngưng hoặc đã ngừng hoạt động. Vui lòng mở lại ở mục Trạng thái hoạt động trước khi công bố.");
+        }
         validateAndActivate(facility);
         Facility saved = facilities.save(facility);
         FacilityResponse after = facilityResponse(saved);

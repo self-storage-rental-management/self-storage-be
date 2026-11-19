@@ -6,6 +6,8 @@ import com.storagehub.security.ActorPrincipal;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 import static org.mockito.Mockito.*;
@@ -48,6 +50,24 @@ class FacilityDeletionSafetyTests {
         assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = FacilityStatus.class, names = {"maintenance", "inactive"})
+    void publishRejectsPausedOrArchivedFacilityAfterLocking(FacilityStatus currentStatus) {
+        Facility facility = new Facility();
+        facility.setStatus(currentStatus);
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+
+        assertThatThrownBy(() -> service.publish(actor, id))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class, error -> {
+                assertThat(error.getStatus().value()).isEqualTo(409);
+                assertThat(error.getMessage()).contains("Trạng thái hoạt động");
+            });
+        assertThat(facility.getStatus()).isEqualTo(currentStatus);
+        verify(facilities).findByIdForUpdate(id);
+        verifyNoMoreInteractions(facilities);
+        verifyNoInteractions(unitTypes);
     }
 
     @Test void reopeningPausedFacilityPreservesArchivedUnitTypes() {
