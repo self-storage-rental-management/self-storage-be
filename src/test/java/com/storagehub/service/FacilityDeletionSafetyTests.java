@@ -50,6 +50,26 @@ class FacilityDeletionSafetyTests {
         verify(facilities, never()).delete(any());
     }
 
+    @Test void reopeningPausedFacilityPreservesArchivedUnitTypes() {
+        Facility facility = new Facility();
+        org.springframework.test.util.ReflectionTestUtils.setField(facility, "id", id);
+        facility.setStatus(FacilityStatus.maintenance);
+        UnitType published = new UnitType();
+        published.setStatus(UnitTypeStatus.active);
+        published.setMonthlyPrice(new java.math.BigDecimal("1000000"));
+        UnitType archived = new UnitType();
+        archived.setStatus(UnitTypeStatus.archived);
+        archived.setMonthlyPrice(new java.math.BigDecimal("2000000"));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(unitTypes.findByFacility_IdOrderByCodeAsc(id)).thenReturn(List.of(published, archived));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
+
+        assertThat(service.restoreFacility(actor, id).status()).isEqualTo(FacilityStatus.active);
+        assertThat(archived.getStatus()).isEqualTo(UnitTypeStatus.archived);
+        assertThat(archived.getMonthlyPrice()).isEqualByComparingTo("2000000");
+        verify(unitTypes, never()).saveAll(anyList());
+    }
+
     @Test void archivesFacilityWithoutChangingUnitTypesOrDeletingPhysicalUnits() {
         Facility facility = new Facility();
         when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));

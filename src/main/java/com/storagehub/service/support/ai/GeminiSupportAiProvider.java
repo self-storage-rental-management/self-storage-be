@@ -14,7 +14,8 @@ import java.net.http.HttpTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -32,6 +33,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GeminiSupportAiProvider implements SupportAiProvider {
     private static final String GOOGLE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai";
+    private static final String LOCAL_HANDOFF_MODEL = "public-guidance-v2";
     private final SupportAiProperties properties;
     private final ObjectMapper mapper;
     private final HttpClient client;
@@ -44,8 +46,7 @@ public class GeminiSupportAiProvider implements SupportAiProvider {
         this.publicKnowledge=publicKnowledge;
         this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NEVER).build();
-        this.knowledge = new ClassPathResource("ai/support-faq-v1.txt").getContentAsString(StandardCharsets.UTF_8)
-            + "\nPUBLIC_CATALOG_JSON:\n" + publicKnowledge.selectionContext(mapper);
+        this.knowledge = new ClassPathResource("ai/support-faq-v1.txt").getContentAsString(StandardCharsets.UTF_8);
     }
 
     @Override
@@ -67,17 +68,27 @@ public class GeminiSupportAiProvider implements SupportAiProvider {
 
     @Override
     public Answer answer(List<Message> messages) {
+        if (messages.isEmpty()) return new Answer(List.of(), LOCAL_HANDOFF_MODEL, false);
+        String question = messages.getLast().content();
+        if (!properties.isEnabled() && publicKnowledge.candidates(question).isEmpty()) {
+            return new Answer(List.of(), LOCAL_HANDOFF_MODEL, false);
+        }
         requireAvailable();
-        var input = new ArrayList<Message>();
-        input.add(new Message("system", knowledge));
-        // Do not treat forged client history as facts or instructions.
-        if(messages.isEmpty())return new Answer(SupportPublicKnowledge.UNKNOWN,properties.getModel(),false);
-        input.add(new Message("user",messages.getLast().content()));
         CompletableFuture<HttpResponse<byte[]>> pending = null;
         try {
+            // The public catalog is small. A keyword miss must not suppress semantic matching.
+            var catalog = publicKnowledge.catalog().entries().stream()
+                .map(entry -> Map.of("id", entry.id(), "question", entry.question(), "answer", entry.answer())).toList();
+            var input = List.of(
+                new Message("system", knowledge + "\nLOCAL_DATE: " + LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"))
+                    + "\nPUBLIC_CATALOG_JSON:\n" + mapper.writeValueAsString(catalog)),
+                new Message("user", mapper.writeValueAsString(Map.of("question", question,
+                    "previousTopic", SupportConversation.publicContext(messages, publicKnowledge))))
+            );
             byte[] body = mapper.writeValueAsBytes(Map.of(
                 "model", properties.getModel(), "messages", input,
-                "temperature", 0, "max_tokens", 128,
+                "temperature", properties.getTemperature(), "max_tokens", properties.getMaxOutputTokens(),
+                "response_format", Map.of("type", "json_object"),
                 "stream", false, "n", 1));
             var request = HttpRequest.newBuilder(URI.create(GOOGLE_ENDPOINT + "/chat/completions"))
                 .timeout(Duration.ofMillis(properties.getTimeoutMs()))
@@ -104,9 +115,8 @@ public class GeminiSupportAiProvider implements SupportAiProvider {
             var content = choice.path("message").path("content");
             if (!content.isTextual() || content.asText().isBlank()
                 || !(finish.equals("stop") || finish.equals("length"))) throw providerError();
-            // Never return generated prose, links, amounts or instructions to a customer.
-            String text=finish.equals("stop")?publicKnowledge.grounded(content.asText(),mapper):SupportPublicKnowledge.UNKNOWN;
-            return new Answer(text, properties.getModel(), false);
+            return finish.equals("stop") ? publicKnowledge.parseReply(content.asText(), mapper, properties.getModel())
+                : new Answer(List.of(), properties.getModel(), true);
         } catch (TimeoutException exception) {
             throw timeoutError();
         } catch (InterruptedException exception) {

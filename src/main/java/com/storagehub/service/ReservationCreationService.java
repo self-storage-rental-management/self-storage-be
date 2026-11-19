@@ -312,7 +312,7 @@ public class ReservationCreationService {
             || reservationDeposit.compareTo(quote.getReservationDepositAmount()) != 0
             || securityDeposit.compareTo(quote.getSecurityDepositAmount()) != 0;
         if (policyInvalid || priceChanged) {
-            throw ApiExceptions.conflict("Quote is no longer valid because pricing has changed");
+            throw ApiExceptions.conflict("Giá thuê hoặc điều kiện gói thuê đã thay đổi. Vui lòng lấy báo giá mới trước khi đặt kho.");
         }
     }
 

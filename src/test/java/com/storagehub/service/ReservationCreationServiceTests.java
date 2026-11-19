@@ -43,6 +43,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -391,6 +393,28 @@ class ReservationCreationServiceTests {
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId())).thenReturn(Optional.of(quote));
         assertThatThrownBy(() -> service.create(actor, input, "old-quote"))
             .hasMessageContaining("lấy báo giá mới");
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"price", "policyVersion"})
+    void requestsNewQuoteAfterPriceOrPackageVersionChanges(String change) {
+        if ("price".equals(change)) {
+            quote.getUnitType().setMonthlyPrice(new BigDecimal("6000000.00"));
+        } else {
+            policy.setPolicyVersion("2026-02");
+        }
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId())).thenReturn(Optional.of(quote));
+        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
+        when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), quote.getPricingPackageCode()))
+            .thenReturn(Optional.of(policy));
+
+        var input = request();
+        assertThatThrownBy(() -> service.create(actor, input, "stale-quote"))
+            .isInstanceOfSatisfying(ApiException.class, error -> {
+                assertThat(error.getStatus().value()).isEqualTo(409);
+                assertThat(error.getMessage()).contains("Vui lòng lấy báo giá mới trước khi đặt kho.");
+            });
         org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
     }
 
