@@ -302,10 +302,4 @@ public class CustomerReservationController {
         );
     }
 
-    @DeleteMapping("/{reservationId}/history")
-    public ApiResponse<Void> deleteHistory(@PathVariable UUID reservationId) {
-        customerReservationService.deleteHistory(actorContext.required(), reservationId);
-        return new ApiResponse<>(null, CorrelationIdContext.current());
-    }
-
 }
