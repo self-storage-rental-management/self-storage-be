@@ -197,14 +197,39 @@ class CheckInHandoverServiceTests {
     void completesInventoryAndOccupiesAssignedUnit() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(true);
+        var first = entityWithId(new ReservationGoodsItem());
+        first.setQuantity(1);
+        var second = entityWithId(new ReservationGoodsItem());
+        second.setQuantity(2);
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of(first, second));
 
-        var response = service.complete(actor, checkIn.getId(), validCompletionRequest());
+        var base = validCompletionRequest();
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), base))
+            .hasMessageContaining("kiểm kê đủ từng dòng hàng");
+        var firstMeasurements = new CompleteCheckInRequest.InventoryMeasurements(
+            new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("25"), new BigDecimal("60"));
+        var secondMeasurements = new CompleteCheckInRequest.InventoryMeasurements(
+            new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("50"), new BigDecimal("40"));
+        var lines = List.of(
+            new CompleteCheckInRequest.InventoryLine(first.getId(), 2, CompleteCheckInRequest.InventoryLine.Condition.INTACT,
+                "Thừa một kiện", firstMeasurements),
+            new CompleteCheckInRequest.InventoryLine(second.getId(), 1, CompleteCheckInRequest.InventoryLine.Condition.INTACT,
+                "Thiếu một kiện", secondMeasurements)
+        );
+        var measurements = new CheckInMeasurements(new BigDecimal("50"), new BigDecimal("100"), new BigDecimal("100"),
+            new BigDecimal("100"), BigDecimal.ONE, true);
+        var request = new CompleteCheckInRequest(base.checklist(), base.identityDocumentNumber(),
+            base.identityVerificationNote(), measurements, base.varianceReason(), base.initialUnitCondition(),
+            base.goodsCondition(), base.packageCount(), base.goodsCategory(), base.evidenceReferences(),
+            base.handedOverItems(), base.notes(), base.lockReference(), lines);
+        var response = service.complete(actor, checkIn.getId(), request);
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.completed);
         assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.COMPLETED);
         assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.COMPLETED);
         assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.occupied);
-        assertThat(response.handover()).isNotNull();
+        assertThat(response.handover().inventoryLines()).containsExactlyElementsOf(lines);
         verify(rentalRepository).saveAndFlush(checkIn.getRental());
     }
 
