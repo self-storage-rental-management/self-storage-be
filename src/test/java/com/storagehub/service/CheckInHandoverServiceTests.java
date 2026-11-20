@@ -253,6 +253,28 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void allowsStaffToUpdateAndVerifyIdentityWhenMismatchedWithDeclared() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        reservation.setIdentityDocumentNumber("074204005211");
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
+            .thenReturn(Optional.of(assignment));
+
+        var response = service.verifyIdentity(
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("07420400521", "Khách hàng đổi CCCD mới")
+        );
+
+        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("07420400521");
+        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("07420400521");
+        assertThat(checkIn.getIdentityVerificationNote()).contains("07420400521");
+        assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
+    }
+
+    @Test
     void preventsInventoryVerificationBeforeCustomerSetupIsCompleted() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));

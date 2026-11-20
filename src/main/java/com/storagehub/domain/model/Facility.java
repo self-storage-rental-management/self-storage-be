@@ -33,7 +33,11 @@ public class Facility extends BaseEntity {
     private String phone;
 
     @Column(length = 120)
-    private String accessHours;
+    private String accessHours = "24/7";
+
+    public String getAccessHours() {
+        return "24/7";
+    }
 
     @Lob
     @Column(columnDefinition = "LONGTEXT")
