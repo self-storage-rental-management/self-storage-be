@@ -606,6 +606,35 @@ class RackLayoutCalculatorTests {
             .anyMatch(z -> z.compareTo(value("40")) == 0);
     }
 
+    @Test
+    void reportsTheoreticalLayersEvenWhenTheCurrentPalletUsesOnlyOneLayer() {
+        UnitType unit = unit(600);
+        unit.setLengthM(new BigDecimal("12"));
+        unit.setWidthM(new BigDecimal("11.6"));
+        RackLayout.Rack rack = v6Rack("R01", 30, 30);
+        RackLayout.Pallet pallet = new RackLayout.Pallet(210, 170, value(18), value(40), value(500));
+        var configuration = new RackLayout.Configuration(
+            new RackLayout.Clearances(value(0), value(0), value(0), value(0)), List.of(rack), pallet, true,
+            List.of(new RackLayout.PalletRating(210, 170, value(18), value(40), value(500))));
+        var layout = RackLayoutCalculator.calculate(unit, configuration);
+        var item = new GoodsItemRequest(GoodsCategory.FURNITURE, null, "Gỗ", null, "Một kiện xếp chồng", null,
+            1, value(100), value(80), value(40), value(5), false);
+        item.setStackable(true);
+
+        var result = PalletPacking.fit(layout, List.of(item));
+        var allocation = result.plan().items().getFirst().allocations().getFirst();
+
+        assertThat(result.issue()).isNull();
+        assertThat(result.plan().palletMaxPayloadKg()).isEqualByComparingTo("500");
+        assertThat(result.plan().pallets().getFirst().placements()).allSatisfy(placement ->
+            assertThat(placement.zCm()).isEqualByComparingTo("0"));
+        assertThat(allocation.capacity().usableLayers()).isGreaterThan(1);
+        assertThat(allocation.capacity().maxLoadedKg()).isEqualByComparingTo("100");
+        assertThat(allocation.capacity().cargoWeightLimitKg()).isEqualByComparingTo("67.87");
+        assertThat(result.plan().items().getFirst().allowedStackLayers())
+            .isEqualTo(allocation.capacity().usableLayers());
+    }
+
     static UnitType unit(int maxLoad) {
         UnitType unit = new UnitType();
         unit.setLengthM(value(8));

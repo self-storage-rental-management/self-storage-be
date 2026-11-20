@@ -410,21 +410,12 @@ public class CheckInHandoverService {
         UUID checkInId,
         CompleteCheckInSetupRequest request
     ) {
-        CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.setup_in_progress);
-        Reservation reservation = checkIn.getReservation();
-        User operator = requireActor(actor);
-        checkIn.setPerformedBy(operator);
-        checkIn.setStatus(CheckInStatus.setup_completed);
-        Instant completedAt = Instant.now();
-        checkIn.setSetupCompletedAt(completedAt);
-        if (checkIn.getRental() != null) {
-            checkIn.getRental().setMoveInCompletedAt(completedAt);
-            rentalRepository.saveAndFlush(checkIn.getRental());
-        }
-        CheckIn saved = checkInRepository.saveAndFlush(checkIn);
-        recordWorkflowAudit(operator, reservation, saved, "CHECKIN_SETUP_COMPLETED",
-            CheckInStatus.setup_in_progress, CheckInStatus.setup_completed);
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        // The customer portal is the only actor allowed to announce that the
+        // preparation phase is complete. Staff must not bypass that gate and
+        // open inventory while the customer is still moving goods in.
+        throw ApiExceptions.conflict("Chỉ khách hàng được xác nhận đã chuẩn bị xong trước khi kiểm kê hàng hóa");
     }
 
     @Transactional
