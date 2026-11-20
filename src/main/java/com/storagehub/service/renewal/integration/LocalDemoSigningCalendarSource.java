@@ -22,7 +22,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-/** Local-demo signing calendar: Vietnam time, daily 08:00-17:00, 30-minute slots, one at a time per facility. */
+/** Local-demo signing calendar: Vietnam time, daily 24/7, 30-minute slots, one at a time per facility. */
 @Component
 @RequiredArgsConstructor
 @ConditionalOnExpression("${storagehub.integration.local-demo-operational-sources.enabled:false} && !${storagehub.integration.renewal-signing-calendar.enabled:false}")
