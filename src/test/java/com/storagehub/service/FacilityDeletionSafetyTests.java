@@ -16,6 +16,7 @@ class FacilityDeletionSafetyTests {
     @Mock FacilityRepository facilities;
     @Mock UnitTypeRepository unitTypes;
     @Mock StorageUnitRepository units;
+    @Mock ReservationCapacityService reservationCapacity;
     @Mock RentalPackagePolicyRepository packages;
     @Mock FacilityScopeService scopes;
     @Mock AdminAuthorizationService authorization;

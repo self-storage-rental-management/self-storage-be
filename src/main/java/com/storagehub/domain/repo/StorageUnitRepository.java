@@ -18,6 +18,22 @@ public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> 
     @Query("select u from StorageUnit u where u.id = :id")
     java.util.Optional<StorageUnit> findByIdForUpdate(@Param("id") UUID id);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        select u from StorageUnit u
+        where u.unitType.id = :unitTypeId
+        order by u.code, u.id
+        """)
+    java.util.List<StorageUnit> findByUnitTypeIdForUpdate(@Param("unitTypeId") UUID unitTypeId);
+
+    @Query("""
+        select u.id from StorageUnit u
+        where u.unitType.id = :unitTypeId
+          and u.status = com.storagehub.domain.model.StorageUnitStatus.available
+        order by u.code, u.id
+        """)
+    java.util.List<UUID> findAvailableUnitIds(@Param("unitTypeId") UUID unitTypeId);
+
     long countByFacility_IdAndUnitType_IdAndStatus(
         UUID facilityId,
         UUID unitTypeId,
@@ -72,4 +88,11 @@ public interface StorageUnitRepository extends JpaRepository<StorageUnit, UUID> 
         @Param("q") String q,
         Pageable pageable
     );
+
+    @Query("""
+        select u from StorageUnit u
+        where u.id in :ids and u.status = com.storagehub.domain.model.StorageUnitStatus.available
+          and (:q is null or lower(u.code) like lower(concat('%', :q, '%')))
+        """)
+    Page<StorageUnit> findAssignablePalletUnits(@Param("ids") Collection<UUID> ids, @Param("q") String q, Pageable pageable);
 }
