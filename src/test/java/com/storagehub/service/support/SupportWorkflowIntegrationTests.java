@@ -456,7 +456,23 @@ class SupportWorkflowIntegrationTests {
     }
     @Test void inactiveFacilityRejected(){
         facility.setStatus(FacilityStatus.inactive);em.flush();
-        assertThatThrownBy(()->create()).isInstanceOf(ApiException.class).hasMessageContaining("not active");
+        assertThatThrownBy(()->create()).isInstanceOf(ApiException.class).hasMessageContaining("không tiếp nhận yêu cầu hỗ trợ mới");
+    }
+    @Test void pausedFacilityAcceptsOnlySupportLinkedToAnOwnedRecord() {
+        var rental = rentalFixture();
+        facility.setStatus(FacilityStatus.maintenance);
+        em.flush();
+
+        var linkedRental = new Create("Hỗ trợ hồ sơ", "Cần hỗ trợ", null, new Link(LinkType.RENTAL, rental.getId()), List.of());
+        var linkedReservation = new Create("Hỗ trợ đơn", "Cần hỗ trợ", null,
+            new Link(LinkType.RESERVATION, rental.getReservation().getId()), List.of());
+        assertThat(service.create(c, linkedRental, "paused-rental").facilityId()).isEqualTo(facility.getId());
+        assertThat(service.create(c, linkedReservation, "paused-reservation").facilityId()).isEqualTo(facility.getId());
+        assertThatThrownBy(() -> service.create(c, new Create("Tư vấn", "Cần hỗ trợ", facility.getId(), null, List.of()), "paused-general"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("tạm ngưng nhận đơn mới");
+        var other = actor(otherCustomer, RoleCode.CUSTOMER, null);
+        assertThatThrownBy(() -> service.create(other, linkedRental, "paused-foreign"))
+            .isInstanceOf(ApiException.class).hasMessageContaining("Owned linked record not found");
     }
     @Test void ownershipAndFacilityScopeApplyBeforeCountAndPagination(){
         var t=create();service.create(actor(otherCustomer,RoleCode.CUSTOMER,null),new Create("Private","Other owner",otherFacility.getId(),null,List.of()),"other");

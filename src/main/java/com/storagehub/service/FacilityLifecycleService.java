@@ -108,24 +108,9 @@ public class FacilityLifecycleService {
             .array();
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void deleteFacility(ActorPrincipal actor, UUID facilityId) {
-        requireBusiness(actor);
-        Facility facility = facility(facilityId);
-        if (facility.getStatus() == FacilityStatus.inactive) {
-            throw ApiExceptions.conflict("Cơ sở đã ngừng hoạt động. Vui lòng dùng chức năng Khôi phục hoạt động trước khi chỉnh sửa.");
-        }
-        if (units.countByFacility_IdAndStatusIn(facilityId, List.of(
-            StorageUnitStatus.occupied, StorageUnitStatus.reserved,
-            StorageUnitStatus.assigned, StorageUnitStatus.held)) > 0) {
-            throw ApiExceptions.conflict("Không thể ngừng hoạt động cơ sở đang có gian kho đang thuê hoặc giữ chỗ.");
-        }
-        FacilityResponse before = facilityResponse(facility);
-        facility.setStatus(FacilityStatus.inactive);
-        facilities.saveAndFlush(facility);
-        unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).forEach(type -> type.setStatus(UnitTypeStatus.archived));
-        unitTypes.flush();
-        audit.recordMutation("FACILITY_ARCHIVED", "Facility", facilityId, facilityId, before, facilityResponse(facility));
+        archiveFacility(actor, facilityId);
     }
 
     /**
@@ -133,10 +118,10 @@ public class FacilityLifecycleService {
      * not archive unit types behind the scenes. Unit types remain available to
      * the restore and pricing workflow.
      */
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public FacilityResponse archiveFacility(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
         requireArchiveReady(facility);
         FacilityResponse before = facilityResponse(facility);
         facility.setStatus(FacilityStatus.inactive);
@@ -145,10 +130,10 @@ public class FacilityLifecycleService {
         return after;
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public FacilityResponse updateFacility(ActorPrincipal actor, UUID facilityId, UpdateFacilityRequest request) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
         FacilityResponse before = facilityResponse(facility);
         facility.setName(request.name().trim());
         facility.setAddress(request.address().trim());
@@ -162,11 +147,6 @@ public class FacilityLifecycleService {
             if (request.status() == FacilityStatus.active) {
                 validateAndActivate(facility);
             } else if (request.status() == FacilityStatus.inactive) {
-                if (units.countByFacility_IdAndStatusIn(facilityId, List.of(
-                    StorageUnitStatus.occupied, StorageUnitStatus.reserved,
-                    StorageUnitStatus.assigned, StorageUnitStatus.held)) > 0) {
-                    throw ApiExceptions.conflict("Không thể ngừng hoạt động cơ sở đang có gian kho đang thuê hoặc giữ chỗ.");
-                }
                 requireArchiveReady(facility);
                 facility.setStatus(FacilityStatus.inactive);
             } else {
@@ -234,7 +214,7 @@ public class FacilityLifecycleService {
             .map(this::lifecycleChangeResponse).toList();
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public com.storagehub.api.facility.FacilityLifecycleChangeResponse reviewFacilityLifecycleChange(
         ActorPrincipal actor, UUID requestId, com.storagehub.api.facility.FacilityLifecycleReviewRequest decision
     ) {
@@ -248,12 +228,12 @@ public class FacilityLifecycleService {
             throw ApiExceptions.conflict("Vui lòng nhập lý do từ chối.");
         }
 
-        Facility facility = facilities.findById(change.getFacilityId())
-            .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
         if (decision.approved()) {
-            FacilityLifecycleSummary summary = lifecycleSummary(facility);
+            Facility facility = lockFacility(change.getFacilityId());
             if (change.getRequestedStatus() == FacilityStatus.inactive) {
-                requireArchiveReady(summary);
+                requireArchiveReady(facility);
+            } else if (facility.getStatus() == FacilityStatus.inactive) {
+                throw ApiExceptions.conflict("Cơ sở đã được lưu trữ. Hãy xử lý lại đề nghị này.");
             }
             FacilityResponse before = facilityResponse(facility);
             facility.setStatus(change.getRequestedStatus());
@@ -272,25 +252,34 @@ public class FacilityLifecycleService {
     @Transactional
     public FacilityResponse restoreFacility(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
         if (facility.getStatus() != FacilityStatus.inactive && facility.getStatus() != FacilityStatus.maintenance) {
             throw ApiExceptions.conflict("Cơ sở hiện không ở trạng thái có thể khôi phục.");
         }
 
         FacilityResponse before = facilityResponse(facility);
-        List<UnitType> archivedTypes = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).stream()
-            .filter(type -> type.getStatus() == UnitTypeStatus.archived).toList();
-        if (!archivedTypes.isEmpty()) {
-            // Legacy facility archive records need a fresh BO pricing review.
-            archivedTypes.forEach(type -> {
-                type.setMonthlyPrice(BigDecimal.ZERO);
-                type.setSecurityDepositAmount(BigDecimal.ZERO);
-                type.setStatus(UnitTypeStatus.awaiting_pricing);
-            });
-            unitTypes.saveAll(archivedTypes);
-            facility.setStatus(FacilityStatus.setup);
+        List<UnitType> facilityTypes = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId);
+        if (facility.getStatus() == FacilityStatus.maintenance) {
+            boolean hasPublishedType = facilityTypes.stream().anyMatch(type -> type.getStatus() == UnitTypeStatus.active
+                && type.getMonthlyPrice() != null && type.getMonthlyPrice().signum() > 0);
+            if (!hasPublishedType) {
+                throw ApiExceptions.conflict("Cơ sở cần có ít nhất một loại kho đã công bố và có giá thuê để mở lại nhận đơn.");
+            }
+            facility.setStatus(FacilityStatus.active);
         } else {
-            validateAndActivate(facility);
+            List<UnitType> archivedTypes = facilityTypes.stream().filter(type -> type.getStatus() == UnitTypeStatus.archived).toList();
+            if (archivedTypes.isEmpty()) {
+                validateAndActivate(facility);
+            } else {
+                // Legacy facility archive records need a fresh BO pricing review.
+                archivedTypes.forEach(type -> {
+                    type.setMonthlyPrice(BigDecimal.ZERO);
+                    type.setSecurityDepositAmount(BigDecimal.ZERO);
+                    type.setStatus(UnitTypeStatus.awaiting_pricing);
+                });
+                unitTypes.saveAll(archivedTypes);
+                facility.setStatus(FacilityStatus.setup);
+            }
         }
         FacilityResponse after = facilityResponse(facilities.saveAndFlush(facility));
         audit.recordMutation("FACILITY_RESTORED", "Facility", facilityId, facilityId, before, after);
@@ -645,7 +634,7 @@ public class FacilityLifecycleService {
 
         if (reservationCapacity.hasLiveCapacityHold(unitTypeId)) {
             throw ApiExceptions.conflict(
-                "Không thể lưu trữ loại kho vì còn đơn đặt chỗ đang giữ chỗ hoặc đã thanh toán cọc.");
+                "Không thể lưu trữ loại kho vì còn đơn đặt kho đang xử lý, kể cả đơn chưa được phân gian.");
         }
 
         UnitTypeResponse before = unitTypeResponse(type);
@@ -745,10 +734,13 @@ public class FacilityLifecycleService {
         return after;
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public FacilityResponse publish(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
+        if (facility.getStatus() == FacilityStatus.inactive || facility.getStatus() == FacilityStatus.maintenance) {
+            throw ApiExceptions.conflict("Cơ sở đang tạm ngưng hoặc đã ngừng hoạt động. Vui lòng mở lại ở mục Trạng thái hoạt động trước khi công bố.");
+        }
         validateAndActivate(facility);
         Facility saved = facilities.save(facility);
         FacilityResponse after = facilityResponse(saved);
@@ -958,6 +950,11 @@ public class FacilityLifecycleService {
 
     private void requireArchiveReady(Facility facility) {
         requireArchiveReady(lifecycleSummary(facility));
+        if (units.countByFacility_IdAndStatusIn(facility.getId(), List.of(
+            StorageUnitStatus.occupied, StorageUnitStatus.reserved,
+            StorageUnitStatus.assigned, StorageUnitStatus.held)) > 0) {
+            throw ApiExceptions.conflict("Không thể ngừng hoạt động cơ sở đang có gian kho đang thuê hoặc giữ chỗ.");
+        }
     }
 
     private void requireArchiveReady(com.storagehub.api.facility.FacilityLifecycleSummary summary) {
@@ -1006,6 +1003,10 @@ public class FacilityLifecycleService {
 
     private Facility facility(UUID id) {
         return facilities.findById(id).orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
+    }
+
+    private Facility lockFacility(UUID id) {
+        return facilities.findByIdForUpdate(id).orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
     }
 
     private FacilityResponse facilityResponse(Facility f) {

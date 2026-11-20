@@ -46,6 +46,21 @@ class RenewalCalendarStoreTests {
         store=new RenewalCalendarStore(jdbc);
     }
     @AfterEach void closeSchemaConnection() throws Exception {if(schemaConnection!=null)schemaConnection.close();}
+    @Test void signingCanBeReservedAtPausedFacilitiesButNotArchivedOnes() {
+        jdbc.update("update facilities set status='maintenance' where id=?", bytes(facilityA));
+        assertThat(store.facilityAllowsSigning(facilityA)).isTrue();
+        tx.executeWithoutResult(status -> {
+            store.lockFacility(facilityA);
+            store.lockStaff(staff);
+            store.reserve(a, facilityA, staff, quote, start, end, start.minusSeconds(60));
+        });
+        assertThat(store.current(a, false)).isPresent();
+
+        jdbc.update("update facilities set status='inactive' where id=?", bytes(facilityA));
+        assertThat(store.facilityAllowsSigning(facilityA)).isFalse();
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> store.lockFacility(facilityA)))
+            .hasMessageContaining("không tiếp nhận lịch ký gia hạn");
+    }
     @Test void competingBookingsAtDifferentFacilitiesCannotDoubleBookTheSameStaff() throws Exception {
         var barrier=new CyclicBarrier(2);var accepted=new AtomicInteger();var pool=Executors.newFixedThreadPool(2);
         try {
