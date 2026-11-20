@@ -140,10 +140,12 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
-        var account = bookingUsers.findByIdForUpdate(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
-        if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
-            throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+        if (bookingUsers != null) {
+            var account = bookingUsers.findByIdForUpdate(actor.userId())
+                .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
+            if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
+                throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+            }
         }
         long unpaid = reservationRepository.countByCustomer_IdAndStatusIn(actor.userId(), java.util.List.of(
             ReservationStatus.AWAITING_EMAIL, ReservationStatus.AWAITING_REVIEW, ReservationStatus.AWAITING_PAYMENT,
@@ -189,6 +191,7 @@ public class ReservationCreationService {
             quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate,
             rentalEndDate, request.getGoodsCondition(), quotedGoodsItems
         );
+        capacityService.lockFacilityForNewReservation(quote.getFacility().getId());
         capacityService.lockAndRequireAvailableCapacity(
             quote.getFacility().getId(), quote.getUnitType().getId(),
             handoverDate, rentalEndDate
@@ -261,17 +264,17 @@ public class ReservationCreationService {
             quote.getCustomer(), "RESERVATION_CREATED", "Reservation", saved.getId(),
             null, null, response
         );
-        customerEmails.reservationCreated(saved);
+        if (customerEmails != null) {
+            customerEmails.reservationCreated(saved);
+        }
         return response;
     }
 
     private void validateQuoteStillCurrent(ReservationQuote quote) {
         RentalPackagePolicy policy = policyRepository
             .findByFacility_IdAndCode(quote.getFacility().getId(), quote.getPricingPackageCode())
-            .or(() -> policyRepository.findByFacility_IdOrderByRentalMonthsAsc(quote.getFacility().getId()).stream()
-                .filter(p -> p.getRentalMonths() == quote.getRentalMonths() && p.isActive())
-                .findFirst())
-            .orElseThrow(() -> ApiExceptions.conflict("Rental package is no longer available"));
+            .filter(RentalPackagePolicy::isActive)
+            .orElseThrow(() -> ApiExceptions.conflict("Gói thuê trong báo giá đã ngừng áp dụng. Vui lòng lấy báo giá mới."));
         BigDecimal currentMonthlyPrice = money(quote.getUnitType().getMonthlyPrice());
         BigDecimal subtotal = money(currentMonthlyPrice.multiply(BigDecimal.valueOf(quote.getRentalMonths())));
         BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
@@ -301,8 +304,7 @@ public class ReservationCreationService {
         BigDecimal reservationDeposit = money(totalAfterDiscount.add(securityDeposit).multiply(depositRate));
 
 
-        boolean policyInvalid = !policy.isActive()
-            || !policy.getPolicyVersion().equals(quote.getPolicyVersion())
+        boolean policyInvalid = !policy.getPolicyVersion().equals(quote.getPolicyVersion())
             || policy.getRentalMonths() != quote.getRentalMonths()
             || policy.getFreeSetupDays() != quote.getFreeSetupDays()
             || policy.getEffectiveFrom().isAfter(quote.getStartDate())
@@ -315,7 +317,7 @@ public class ReservationCreationService {
             || reservationDeposit.compareTo(quote.getReservationDepositAmount()) != 0
             || securityDeposit.compareTo(quote.getSecurityDepositAmount()) != 0;
         if (policyInvalid || priceChanged) {
-            throw ApiExceptions.conflict("Quote is no longer valid because pricing has changed");
+            throw ApiExceptions.conflict("Giá thuê hoặc điều kiện gói thuê đã thay đổi. Vui lòng lấy báo giá mới trước khi đặt kho.");
         }
     }
 

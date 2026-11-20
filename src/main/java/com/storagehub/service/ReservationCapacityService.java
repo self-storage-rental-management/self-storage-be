@@ -1,9 +1,11 @@
 package com.storagehub.service;
 
 import com.storagehub.common.api.ApiExceptions;
+import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import java.time.Instant;
@@ -37,6 +39,17 @@ public class ReservationCapacityService {
     private final UnitTypeRepository unitTypeRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final ReservationRepository reservationRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private FacilityRepository facilityRepository;
+
+    public void lockFacilityForNewReservation(UUID facilityId) {
+        var facility = facilityRepository.findByIdForUpdate(facilityId)
+            .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
+        if (facility.getStatus() != FacilityStatus.active) {
+            throw ApiExceptions.conflict("Cơ sở hiện không nhận đơn đặt kho mới.");
+        }
+    }
 
     public java.util.Set<UUID> livePalletHoldUnitIds(UUID unitTypeId) {
         // An unassigned pallet hold reserves one physical unit until it is assigned or released.
@@ -78,6 +91,39 @@ public class ReservationCapacityService {
         }
 
         if (availableCount(facilityId, unitTypeId, startDate, endDate) < 1) {
+            throw ApiExceptions.conflict(
+                "No storage unit is available for the selected rental period"
+            );
+        }
+    }
+
+    public void lockAndRequireAvailableCapacityForReschedule(
+        UUID facilityId,
+        UUID unitTypeId,
+        LocalDate startDate,
+        LocalDate endDate,
+        LocalDate previousStartDate,
+        LocalDate previousEndDate,
+        boolean currentlyHoldingCapacity
+    ) {
+        var lockedUnitType = unitTypeRepository.findByIdForUpdate(unitTypeId)
+            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (!lockedUnitType.getFacility().getId().equals(facilityId)) {
+            throw ApiExceptions.validation("Unit type does not belong to the selected facility", null);
+        }
+        long operationalAvailableUnits = storageUnitRepository
+            .countByFacility_IdAndUnitType_IdAndStatus(
+                facilityId, unitTypeId, StorageUnitStatus.available
+            );
+        long unassignedActiveHolds = reservationRepository.countCapacityHoldingReservations(
+            facilityId, unitTypeId, startDate, endDate, Instant.now(),
+            TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES
+        );
+        boolean overlapsPrevious = currentlyHoldingCapacity
+            && previousStartDate != null && previousEndDate != null
+            && previousStartDate.isBefore(endDate) && previousEndDate.isAfter(startDate);
+        long competingHolds = overlapsPrevious ? Math.max(0, unassignedActiveHolds - 1) : unassignedActiveHolds;
+        if (operationalAvailableUnits - competingHolds < 1) {
             throw ApiExceptions.conflict(
                 "No storage unit is available for the selected rental period"
             );

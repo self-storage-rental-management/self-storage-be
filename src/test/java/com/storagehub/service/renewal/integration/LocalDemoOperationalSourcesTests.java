@@ -78,9 +78,10 @@ class LocalDemoOperationalSourcesTests {
         UUID facilityId = UUID.randomUUID(), renewalId = UUID.randomUUID();
         Facility facility = mock(Facility.class);
         when(facility.getId()).thenReturn(facilityId);
-        when(facility.getStatus()).thenReturn(com.storagehub.domain.model.FacilityStatus.active);
+        when(facility.getStatus()).thenReturn(com.storagehub.domain.model.FacilityStatus.maintenance);
         when(em.find(eq(Facility.class), eq(facilityId), eq(LockModeType.PESSIMISTIC_WRITE))).thenReturn(facility);
-        Rental rental = mockRental(UUID.randomUUID(), facilityId);
+        Rental rental = mock(Rental.class);
+        when(rental.getFacility()).thenReturn(facility);
         Renewal renewal = mock(Renewal.class);
         when(renewal.getId()).thenReturn(renewalId);
         when(renewal.getRental()).thenReturn(rental);
@@ -110,14 +111,16 @@ class LocalDemoOperationalSourcesTests {
         when(em.find(eq(Facility.class), eq(facilityId), eq(LockModeType.PESSIMISTIC_WRITE))).thenReturn(facility);
         Renewal renewal = mock(Renewal.class);
         when(renewal.getId()).thenReturn(renewalId);
-        Rental rental = mockRental(UUID.randomUUID(), facilityId);
+        Rental rental = mock(Rental.class);
+        when(rental.getFacility()).thenReturn(facility);
         when(renewal.getRental()).thenReturn(rental);
         var source = new LocalDemoSigningCalendarSource(jdbc, em);
         Instant start = java.time.LocalDate.of(2026, 10, 12).atTime(8, 0)
             .atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
         var slot = new RenewalOperationSources.Slot(facilityId + ":" + start, start, start.plusSeconds(1800));
+        assertThat(source.feasible(rental, start.minusSeconds(60), slot.end())).contains(false);
         assertThatThrownBy(() -> tx.executeWithoutResult(status -> source.reserve(renewal, slot, start.minusSeconds(60))))
-            .hasMessageContaining("facility is not active");
+            .hasMessageContaining("không tiếp nhận lịch ký gia hạn");
         assertThat(jdbc.queryForObject("select count(*) from renewal_demo_signing_appointments", Integer.class)).isZero();
     }
 

@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 
@@ -48,13 +47,13 @@ import org.springframework.data.domain.PageImpl;
 class ReservationGoodsReviewServiceTests {
 
     @Mock private ReservationRepository reservationRepository;
+    @Mock private UnitTypeRepository capacityMutex;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private FileAssetRepository fileAssetRepository;
     @Mock private UserRepository userRepository;
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private AuditLogService auditLogService;
     @Mock private NotificationService notificationService;
-    @Mock private UnitTypeRepository capacityMutex;
 
     private ReservationGoodsReviewService service;
     private ActorPrincipal staff;
@@ -62,7 +61,6 @@ class ReservationGoodsReviewServiceTests {
     private Facility facility;
     private Reservation reservation;
     private ReservationGoodsItem goodsItem;
-    private UnitType unitType;
 
     @BeforeEach
     void setUp() {
@@ -70,6 +68,7 @@ class ReservationGoodsReviewServiceTests {
             reservationRepository, goodsItemRepository, fileAssetRepository, userRepository,
             authorizationService, new FacilityScopeService(), auditLogService, notificationService
         );
+        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
         reviewer = entityWithId(new User());
         facility = entityWithId(new Facility());
         staff = new ActorPrincipal(
@@ -78,7 +77,7 @@ Set.of("reservations:read", "reservations:approve"),
 Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         );
 
-        unitType = entityWithId(new UnitType());
+        UnitType unitType = entityWithId(new UnitType());
         User customer = entityWithId(new User());
         customer.setEmail("customer@example.com");
 
@@ -92,8 +91,6 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         reservation.setStartDate(LocalDate.of(2026, 10, 10));
         reservation.setEndDate(LocalDate.of(2026, 11, 10));
         reservation.setGoodsReviewDueAt(Instant.now().plusSeconds(3600));
-        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
-        lenient().when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
 
         goodsItem = entityWithId(new ReservationGoodsItem());
         goodsItem.setReservation(reservation);
@@ -158,8 +155,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
 
     @Test
     void rejectionRequiresReason() {
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
 
         assertThatThrownBy(() -> service.review(
             staff, reservation.getId(),
@@ -201,8 +197,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     void staffCannotReviewReservationFromAnotherFacility() {
         Facility otherFacility = entityWithId(new Facility());
         reservation.setFacility(otherFacility);
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
 
         assertThatThrownBy(() -> service.review(
             staff, reservation.getId(),
@@ -215,8 +210,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     @Test
     void expiredReviewCannotBeApproved() {
         reservation.setGoodsReviewDueAt(Instant.now().minusSeconds(1));
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
 
         assertThatThrownBy(() -> service.review(
             staff, reservation.getId(),
@@ -227,12 +221,17 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     }
 
     private void mockReviewData() {
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
         when(userRepository.findById(staff.userId())).thenReturn(Optional.of(reviewer));
         when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
             .thenReturn(List.of(goodsItem));
         when(reservationRepository.saveAndFlush(reservation)).thenReturn(reservation);
+    }
+
+    private void mockLockedReservation() {
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        UnitType unitType = reservation.getUnitType();
+        when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
     }
 
     private <T> T entityWithId(T entity) {

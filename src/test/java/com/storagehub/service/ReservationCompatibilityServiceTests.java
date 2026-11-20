@@ -257,7 +257,7 @@ class ReservationCompatibilityServiceTests {
     @Test
     void comparesBothTypesUsingTheSelectedPeriodEvenWhenTheSmallerTypeDoesNotFit() {
         var smaller = unitType("SMALL", new BigDecimal("6"));
-        smaller.setMaxLoadKg(new BigDecimal("299"));
+        smaller.setMaxLoadKg(new BigDecimal("80"));
         smaller.setMonthlyPrice(new BigDecimal("5500000"));
         var larger = unitType("MEDIUM", new BigDecimal("7"));
         larger.setMaxLoadKg(new BigDecimal("1200"));
@@ -272,7 +272,7 @@ class ReservationCompatibilityServiceTests {
         item.setLengthCm(new BigDecimal("40"));
         item.setWidthCm(new BigDecimal("30"));
         item.setHeightCm(new BigDecimal("30"));
-        item.setQuantity(60);
+        item.setQuantity(20);
         item.setWeightPerItemKg(new BigDecimal("5"));
         item.setMaxStackLayers(3);
 

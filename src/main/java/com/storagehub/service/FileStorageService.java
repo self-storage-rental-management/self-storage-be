@@ -253,7 +253,7 @@ public class FileStorageService {
         }
         String normalized = entityType.trim().toUpperCase(java.util.Locale.ROOT);
         if(com.storagehub.service.integration.DuongFileEvidence.handles(normalized))return normalized;
-        if (!Set.of("CONTRACT", "CHECK_IN", "RETURN_CASE", "SUPPORT_TICKET", "RESERVATION_GOODS_ITEM", "MAINTENANCE_TASK", "OTHER").contains(normalized)) {
+        if (!Set.of("CHECK_IN", "RETURN_CASE", "RESERVATION_GOODS_ITEM", "MAINTENANCE_TASK").contains(normalized)) {
             throw ApiExceptions.validation("entityType is not supported", null);
         }
         return normalized;
@@ -312,8 +312,14 @@ public class FileStorageService {
             }
             return;
         }
-        if (!"RESERVATION_GOODS_ITEM".equals(entityType)) {
+        if (entityType == null) {
+            if (entityId != null) {
+                throw ApiExceptions.validation("entityId is not allowed without entityType", null);
+            }
             return;
+        }
+        if (!"RESERVATION_GOODS_ITEM".equals(entityType)) {
+            throw ApiExceptions.validation("entityType is not supported", null);
         }
         if (entityId == null) {
             throw ApiExceptions.validation("entityId is required for a goods image", null);
