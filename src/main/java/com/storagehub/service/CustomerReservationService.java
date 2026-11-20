@@ -291,14 +291,30 @@ public class CustomerReservationService {
     public void archiveExpiredHistory(ActorPrincipal actor, UUID reservationId) {
         Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
-        if (reservation.getStatus() != ReservationStatus.EXPIRED
-            && reservation.getStatus() != ReservationStatus.COMPLETED) {
-            throw ApiExceptions.conflict("Only expired or completed reservations can be removed from history");
+        ReservationStatus status = reservation.getStatus();
+        if (status != ReservationStatus.EXPIRED
+            && status != ReservationStatus.COMPLETED
+            && status != ReservationStatus.CANCELLED
+            && status != ReservationStatus.REJECTED) {
+            throw ApiExceptions.conflict("Only ended reservations can be removed from active history");
         }
+        Instant now = Instant.now();
         if (reservation.getCustomerArchivedAt() == null) {
-            reservation.setCustomerArchivedAt(Instant.now());
-            reservationRepository.saveAndFlush(reservation);
+            reservation.setCustomerArchivedAt(now);
         }
+        if (reservation.getArchivedAt() == null) {
+            reservation.setArchivedAt(now);
+        }
+        reservationRepository.saveAndFlush(reservation);
+        auditLogService.recordMutation(
+            reservation.getCustomer(), "RESERVATION_HISTORY_DELETED", "Reservation", reservation.getId(),
+            reservation.getFacility().getId(), null, Map.of("status", status)
+        );
+    }
+
+    @Transactional
+    public void deleteHistory(ActorPrincipal actor, UUID reservationId) {
+        archiveExpiredHistory(actor, reservationId);
     }
 
     @Transactional(readOnly = true)
@@ -1133,26 +1149,7 @@ public class CustomerReservationService {
         return response;
     }
 
-    @Transactional
-    public void deleteHistory(ActorPrincipal actor, UUID reservationId) {
-        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
-            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
-        ReservationStatus status = reservation.getStatus();
-        if (status != ReservationStatus.EXPIRED
-            && status != ReservationStatus.COMPLETED
-            && status != ReservationStatus.CANCELLED
-            && status != ReservationStatus.REJECTED) {
-            throw ApiExceptions.conflict("Only ended reservations can be removed from active history");
-        }
-        if (reservation.getArchivedAt() == null) {
-            reservation.setArchivedAt(Instant.now());
-            reservationRepository.saveAndFlush(reservation);
-            auditLogService.recordMutation(
-                reservation.getCustomer(), "RESERVATION_HISTORY_DELETED", "Reservation", reservation.getId(),
-                reservation.getFacility().getId(), null, Map.of("status", status)
-            );
-        }
-    }
+
 
     private boolean releaseAssignedUnitAfterCancellation(Reservation reservation, Instant cancelledAt) {
         if (assignmentRepository == null || storageUnitRepository == null || checkInRepository == null
