@@ -29,7 +29,9 @@ import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.time.BusinessTime;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -59,9 +61,16 @@ public class MaintenanceService {
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
 
+    private static void validateDueDate(LocalDate dueAt) {
+        if (dueAt != null && dueAt.isBefore(LocalDate.now(BusinessTime.ZONE))) {
+            throw ApiExceptions.validation("Hạn xử lý phải từ hôm nay trở đi.", null);
+        }
+    }
+
     @Transactional
     public MaintenanceTaskResponse createTask(ActorPrincipal actor, CreateMaintenanceTaskRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_INVENTORY);
+        validateDueDate(request.dueAt());
         StorageUnit unit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
 
@@ -169,13 +178,16 @@ public class MaintenanceService {
             throw ApiExceptions.conflict("Cannot change storage unit status directly while unit is " + previousStatus);
         }
 
+        boolean shouldCreateTask = !Boolean.FALSE.equals(request.createMaintenanceTask());
+        if (newStatus == StorageUnitStatus.maintenance && shouldCreateTask) {
+            validateDueDate(request.dueAt());
+        }
         unit.setStatus(newStatus);
         storageUnitRepository.save(unit);
 
         MaintenanceTask createdOrCompletedTask = null;
 
         if (newStatus == StorageUnitStatus.maintenance) {
-            boolean shouldCreateTask = request.createMaintenanceTask() == null || request.createMaintenanceTask();
             if (shouldCreateTask) {
                 User reportedBy = userRepository.findById(actor.userId())
                     .orElseThrow(() -> ApiExceptions.notFound("User not found"));

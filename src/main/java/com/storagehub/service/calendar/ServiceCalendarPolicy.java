@@ -9,12 +9,12 @@ import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Objects;
 
-/** Team service hours. A valid start time does not certify staff or facility availability. */
+/** Continuous 24/7 service hours. A valid start time does not certify staff or facility availability. */
 public final class ServiceCalendarPolicy {
     public static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
-    public static final LocalTime OPEN = LocalTime.of(8, 0);
-    public static final LocalTime CLOSE = LocalTime.of(17, 0);
-    public static final LocalTime LAST_APPOINTMENT_START = LocalTime.of(16, 30);
+    public static final LocalTime OPEN = LocalTime.MIDNIGHT;
+    public static final LocalTime CLOSE = LocalTime.MAX;
+    public static final LocalTime LAST_APPOINTMENT_START = LocalTime.of(23, 30);
     public static final int SLOT_STEP_MINUTES = 30;
     public static final List<DayOfWeek> WORKING_DAYS = List.of(DayOfWeek.values());
 
@@ -23,21 +23,7 @@ public final class ServiceCalendarPolicy {
     public static Instant addWorkingHours(Instant value, long hours) {
         Objects.requireNonNull(value, "value");
         if (hours < 0) throw new IllegalArgumentException("Working hours must be non-negative");
-        ZonedDateTime cursor = value.atZone(ZONE);
-        Duration remaining = Duration.ofHours(hours);
-        while (!remaining.isZero()) {
-            if (!WORKING_DAYS.contains(cursor.getDayOfWeek())) {
-                cursor = nextDay(cursor);
-                continue;
-            }
-            if (cursor.toLocalTime().isBefore(OPEN)) cursor = cursor.with(OPEN);
-            else if (!cursor.toLocalTime().isBefore(CLOSE)) cursor = nextDay(cursor);
-            Duration available = Duration.between(cursor, cursor.with(CLOSE));
-            Duration consumed = remaining.compareTo(available) <= 0 ? remaining : available;
-            cursor = cursor.plus(consumed);
-            remaining = remaining.minus(consumed);
-        }
-        return cursor.toInstant();
+        return value.plus(Duration.ofHours(hours));
     }
 
     public static Instant addWorkingDays(Instant value, long days) {
@@ -54,7 +40,7 @@ public final class ServiceCalendarPolicy {
 
     public static Instant endOfWorkingDay(Instant value) {
         Objects.requireNonNull(value, "value");
-        return value.atZone(ZONE).with(LAST_APPOINTMENT_START).withSecond(0).withNano(0).toInstant();
+        return value.atZone(ZONE).with(LocalTime.MAX).toInstant();
     }
 
     public static Instant nextAppointmentAt(Instant value) {

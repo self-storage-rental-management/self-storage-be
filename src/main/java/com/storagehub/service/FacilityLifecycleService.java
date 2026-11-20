@@ -139,7 +139,7 @@ public class FacilityLifecycleService {
         facility.setAddress(request.address().trim());
         facility.setCity(request.city().trim());
         facility.setPhone(clean(request.phone()));
-        facility.setAccessHours(clean(request.accessHours()));
+        facility.setAccessHours("24/7");
         facility.setImageUrl(clean(request.imageUrl()));
         if (request.climateControlled() != null) facility.setClimateControlled(request.climateControlled());
         facility.setSecurityDescription(clean(request.securityDescription()));
