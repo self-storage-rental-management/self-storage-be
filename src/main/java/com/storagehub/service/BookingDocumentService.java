@@ -45,7 +45,9 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class BookingDocumentService {
 
-    private static final String CURRENT_FILE_PREFIX = "phieu-xac-nhan-giu-kho-";
+    // Bump this value whenever the PDF layout or displayed snapshot fields change.
+    // The generate command then replaces previously issued files exactly once.
+    private static final String CURRENT_FILE_PREFIX = "phieu-xac-nhan-giu-kho-v2-";
     private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
 
     private final BookingDocumentRepository documentRepository;

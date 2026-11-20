@@ -1173,27 +1173,33 @@ public class ReturnSettlementService {
     }
     private record Calculation(BigDecimal deductions, BigDecimal refund, BigDecimal due) {}
     private Calculation calculateSettlement(ReturnCase rc, BigDecimal deductions, BigDecimal rentalCharge, BigDecimal rentalRefund) {
-        // For an active rental, the rental refund already accounts for the repriced rent.
         BigDecimal total = deductions.add(rc.isSetupEarlyExit() ? rentalCharge : BigDecimal.ZERO);
-        BigDecimal balance = zeroIfNull(rc.getDepositAmount()).add(rentalRefund).subtract(total);
+        // Normal returns settle only the security deposit against recorded fees.
+        // Setup early exits are a separate flow where verified prepaid rent is also refundable.
+        BigDecimal refundableFunds = zeroIfNull(rc.getDepositAmount());
+        if (rc.isSetupEarlyExit()) {
+            refundableFunds = refundableFunds.add(rentalRefund);
+        }
+        BigDecimal balance = refundableFunds.subtract(total);
         return new Calculation(total.setScale(2, RoundingMode.HALF_UP),
             balance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
             balance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
     }
 
-    private static final String EARLY_RETURN_AMOUNTS_OUTDATED =
-        "Bảng kê trả kho trước hạn cần được cơ sở đối soát lại trước khi xác nhận hoặc thu, hoàn tiền.";
+    private Calculation expectedEarlyReturnSettlement(ReturnCase rc) {
+        BigDecimal deductions = zeroIfNull(rc.getDamageFee()).add(zeroIfNull(rc.getCleaningFee()))
+            .add(zeroIfNull(rc.getLostItemFee())).add(zeroIfNull(rc.getOverdueFee()))
+            .add(zeroIfNull(rc.getOutstandingFee()));
+        return calculateSettlement(rc, deductions, zeroIfNull(rc.getEarlyTerminationCharge()),
+            zeroIfNull(rc.getRentalRefundAmount()));
+    }
 
     private boolean hasOutdatedEarlyReturnAmounts(ReturnCase rc) {
         if (rc.getStatus() == ReturnCaseStatus.completed || rc.getInspectedAt() == null
             || rc.isSetupExitRequested() || !rc.isActiveReturnRepricingRequired()) {
             return false;
         }
-        BigDecimal deductions = zeroIfNull(rc.getDamageFee()).add(zeroIfNull(rc.getCleaningFee()))
-            .add(zeroIfNull(rc.getLostItemFee())).add(zeroIfNull(rc.getOverdueFee()))
-            .add(zeroIfNull(rc.getOutstandingFee()));
-        var expected = calculateSettlement(rc, deductions, zeroIfNull(rc.getEarlyTerminationCharge()),
-            zeroIfNull(rc.getRentalRefundAmount()));
+        var expected = expectedEarlyReturnSettlement(rc);
         return expected.deductions().compareTo(zeroIfNull(rc.getTotalDeductions())) != 0
             || expected.refund().compareTo(zeroIfNull(rc.getNetRefundAmount())) != 0
             || expected.due().compareTo(zeroIfNull(rc.getAmountDueFromCustomer())) != 0;
@@ -1201,7 +1207,10 @@ public class ReturnSettlementService {
 
     private void requireCurrentEarlyReturnAmounts(ReturnCase rc) {
         if (hasOutdatedEarlyReturnAmounts(rc)) {
-            throw ApiExceptions.conflict(EARLY_RETURN_AMOUNTS_OUTDATED);
+            var expected = expectedEarlyReturnSettlement(rc);
+            rc.setTotalDeductions(expected.deductions());
+            rc.setNetRefundAmount(expected.refund());
+            rc.setAmountDueFromCustomer(expected.due());
         }
     }
     private BigDecimal settlementOverdueFee(ReturnCase rc,BigDecimal requested,com.storagehub.service.ledger.ReturnFinancialReconciliation.View view) {
@@ -1303,8 +1312,10 @@ public class ReturnSettlementService {
         var settlementReceipt=finances==null?null:finances.settledReceipt(rc,recovery!=null);
         var overdueSettlement=finances==null?null:finances.overdueSettlement(rc,recovery!=null);
         String settlementBlocker=null;
-        if (hasOutdatedEarlyReturnAmounts(rc))
-            settlementBlocker = EARLY_RETURN_AMOUNTS_OUTDATED;
+        Calculation displayedSettlement = hasOutdatedEarlyReturnAmounts(rc)
+            ? expectedEarlyReturnSettlement(rc)
+            : new Calculation(zeroIfNull(rc.getTotalDeductions()), zeroIfNull(rc.getNetRefundAmount()),
+                zeroIfNull(rc.getAmountDueFromCustomer()));
         if (rc.isSetupExitRequested() && rc.getInspectedAt() != null && rc.getSetupReturnedAt() == null)
             settlementBlocker = "Hồ sơ thời gian chuẩn bị cũ thiếu chứng cứ trả kho và bảng kê theo điều khoản đã chấp nhận; cần đối soát thủ công.";
         if (rc.isSetupExitRequested() && rc.getStatus() != ReturnCaseStatus.completed
@@ -1352,9 +1363,9 @@ public class ReturnSettlementService {
             rc.getLostItemFee(),
             rc.getOverdueFee(),
             rc.getOutstandingFee(),
-            rc.getTotalDeductions(),
-            rc.getNetRefundAmount(),
-            rc.getAmountDueFromCustomer(),
+            displayedSettlement.deductions(),
+            displayedSettlement.refund(),
+            displayedSettlement.due(),
             rc.getOverdueDays(),
             rc.isCustomerConfirmed(),
             rc.getCustomerConfirmedAt(),
