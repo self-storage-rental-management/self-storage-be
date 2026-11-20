@@ -390,6 +390,9 @@ public class RentalContractLifecycleService {
         if (actor == null) {
             throw ApiExceptions.unauthorized("Authentication required");
         }
+        if (actor.hasRole(RoleCode.CUSTOMER) || (!actor.hasRole(RoleCode.ADMIN) && !actor.hasRole(RoleCode.MANAGER) && !actor.hasRole(RoleCode.STAFF))) {
+            throw ApiExceptions.forbidden("Only authorized operators can terminate contracts");
+        }
         Contract contract = contractRepository.findById(contractId)
             .orElseThrow(() -> ApiExceptions.notFound("Contract was not found"));
 

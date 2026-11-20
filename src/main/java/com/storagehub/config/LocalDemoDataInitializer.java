@@ -232,7 +232,7 @@ public class LocalDemoDataInitializer {
                 unitType.setWidthM(decimal(definition.widthM()));
                 unitType.setHeightM(decimal(definition.heightM()));
                 if (unitType.getMonthlyPrice() == null || unitType.getMonthlyPrice().signum() <= 0) unitType.setMonthlyPrice(decimal(definition.monthlyPrice()));
-                if (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().signum() <= 0) unitType.setSecurityDepositAmount(decimal(definition.monthlyPrice()));
+                unitType.setSecurityDepositAmount(BigDecimal.ZERO);
                 unitType.setMaxLoadKg(decimal(definition.maxLoadKg()));
                 unitType.setMaxStoredLoadKg(decimal(definition.maxStoredLoadKg()));
                 unitType.setStorageAisleWidthM(decimal(definition.storageAisleWidthM()));
@@ -386,7 +386,7 @@ public class LocalDemoDataInitializer {
                     unit.setCode(code);
                     unit.setFloor(String.valueOf(definition.floor()));
                     unit.setZone(definition.zone());
-                    unit.setStatus(StorageUnitStatus.available);
+                    unit.setStatus(number == 1 ? StorageUnitStatus.available : StorageUnitStatus.inactive);
                     unit.setRackLayoutJson(unitType.getRackLayoutJson());
                     StorageUnit saved = storageUnitRepository.saveAndFlush(unit);
                     existing.put(saved.getCode(), saved);
@@ -406,9 +406,9 @@ public class LocalDemoDataInitializer {
     private int seedUsers(Map<String, Facility> facilities) {
         int seededCount = 0;
         for (DemoUserDefinition definition : List.of(
-            new DemoUserDefinition("customer@storagehub.demo", "Demo Customer", "+84 908 123 456", RoleCode.CUSTOMER, "Customer@1234!", "HCM-Q1-F01", FacilityScopeLevel.READ),
-            new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "HCM-Q1-F01", FacilityScopeLevel.OPERATE),
-            new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "HCM-Q1-F01", FacilityScopeLevel.MANAGE),
+            new DemoUserDefinition("customer@storagehub.demo", "Demo Customer", "+84 908 123 456", RoleCode.CUSTOMER, "Customer@1234!", "FPT-TD-F01", FacilityScopeLevel.READ),
+            new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "FPT-TD-F01", FacilityScopeLevel.OPERATE),
+            new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "FPT-TD-F01", FacilityScopeLevel.MANAGE),
             new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", null, null),
             new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", null, null)
         )) {

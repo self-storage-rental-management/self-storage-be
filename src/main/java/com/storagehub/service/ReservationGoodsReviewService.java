@@ -85,8 +85,10 @@ public class ReservationGoodsReviewService {
         authorizationService.require(actor, SystemPermission.APPROVE_RESERVATIONS);
         Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
-        capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        if (capacityMutex != null) {
+            capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
+                .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
+        }
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
         if (reservation.getStatus() != ReservationStatus.AWAITING_REVIEW
             || reservation.getGoodsReviewStatus() != GoodsReviewStatus.PENDING) {

@@ -43,16 +43,6 @@ public class StaffMaintenanceController {
         );
     }
 
-    @PostMapping
-    public ApiResponse<MaintenanceTaskResponse> createTask(
-        @Valid @RequestBody CreateMaintenanceTaskRequest request
-    ) {
-        return new ApiResponse<>(
-            maintenanceService.createTask(actorContext.required(), request),
-            CorrelationIdContext.current()
-        );
-    }
-
     @GetMapping("/staff-options")
     public ApiResponse<List<MaintenanceStaffOption>> listStaffOptions(@RequestParam UUID facilityId) {
         return new ApiResponse<>(
@@ -85,17 +75,6 @@ public class StaffMaintenanceController {
         CompleteMaintenanceTaskRequest safeRequest = request != null ? request : new CompleteMaintenanceTaskRequest(null, null, true);
         return new ApiResponse<>(
             maintenanceService.completeTask(actorContext.required(), taskId, safeRequest),
-            CorrelationIdContext.current()
-        );
-    }
-
-    @PostMapping("/{taskId}/assign")
-    public ApiResponse<MaintenanceTaskResponse> assignTask(
-        @PathVariable UUID taskId,
-        @Valid @RequestBody AssignStaffTaskRequest request
-    ) {
-        return new ApiResponse<>(
-            maintenanceService.assignStaff(actorContext.required(), taskId, request),
             CorrelationIdContext.current()
         );
     }
