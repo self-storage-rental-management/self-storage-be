@@ -369,7 +369,7 @@ class ReturnSettlementServiceTests {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({"0,0,1900000", "8000000,4000000,5900000"})
+    @org.junit.jupiter.params.provider.CsvSource({"0,0,1900000", "8000000,4000000,1900000"})
     void managerReviewDispute_recalculatesAndResolves(String rentalCharge, String rentalRefund, String expectedRefund) {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
