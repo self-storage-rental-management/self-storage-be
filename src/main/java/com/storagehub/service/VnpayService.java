@@ -94,6 +94,7 @@ public class VnpayService {
     private static final String VERSION = "2.1.0";
     private static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final DateTimeFormatter DATE_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZONE);
+    private static final Duration CLOCK_SKEW_TOLERANCE = Duration.ofMinutes(5);
 
     private final VnpayProperties properties;
     private final PaymentRepository paymentRepository;
@@ -363,7 +364,7 @@ public class VnpayService {
         payment.setProcessedAt(Instant.now());
         if (success) {
             Instant gatewayPaidAt = parseGatewayPayDate(payment.getGatewayPayDate());
-            if (gatewayPaidAt == null || gatewayPaidAt.isAfter(Instant.now())) {
+            if (gatewayPaidAt == null || gatewayPaidAt.isAfter(Instant.now().plus(CLOCK_SKEW_TOLERANCE))) {
                 paymentRepository.saveAndFlush(payment);
                 return new CallbackResult("04", "Invalid payment date", payment.getId(), reservationId, renewalId, false, false);
             }
@@ -1209,7 +1210,7 @@ public class VnpayService {
             &&"00".equals(query.get("vnp_ResponseCode"))&&"00".equals(query.get("vnp_TransactionStatus"))
             &&query.get("vnp_TransactionNo")!=null&&!query.get("vnp_TransactionNo").isBlank()
             &&query.get("vnp_PayDate")!=null&&gatewayPaidAt.equals(parseGatewayPayDate(query.get("vnp_PayDate")))
-            &&!gatewayPaidAt.isAfter(Instant.now())
+            &&!gatewayPaidAt.isAfter(Instant.now().plus(CLOCK_SKEW_TOLERANCE))
             &&gatewayPaidAt.equals(payment.getPaidAt())&&payment.getPaymentDeadline()!=null
             &&!gatewayPaidAt.isAfter(payment.getPaymentDeadline());
     }
