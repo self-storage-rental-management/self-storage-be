@@ -8,6 +8,7 @@ import com.storagehub.domain.model.UnitReleaseDisposition;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 public record CheckInResponse(
@@ -64,8 +65,11 @@ public record CheckInResponse(
     BigDecimal dueAtCheckIn,
     CompleteCheckInRequest handover,
     String setupEarlyExitPolicyVersion,
-    BigDecimal setupEarlyExitFee
+    BigDecimal setupEarlyExitFee,
+    List<DeclaredGoodsLine> declaredGoodsLines
 ) {
+    public record DeclaredGoodsLine(UUID id, String code, String name, int quantity,
+        BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {}
     /** Existing readers can omit the new setup settlement projection fields. */
     public CheckInResponse(
         UUID checkInId,
@@ -119,7 +123,7 @@ public record CheckInResponse(
         BigDecimal dueAtCheckIn,
         CompleteCheckInRequest handover
     ) {
-        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null);
+        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null, List.of());
     }
 
 }
