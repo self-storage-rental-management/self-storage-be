@@ -57,6 +57,7 @@ public class ReservationCreationService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     private static final java.security.SecureRandom PUBLIC_CODE_RANDOM = new java.security.SecureRandom();
+    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -439,8 +440,9 @@ public class ReservationCreationService {
 
     static String generateReservationCode() {
         StringBuilder code = new StringBuilder("RSV-");
-        for (int index = 0; index < 6; index++) {
-            code.append(PUBLIC_CODE_RANDOM.nextInt(10));
+        for (int index = 0; index < 12; index++) {
+            if (index > 0 && index % 4 == 0) code.append('-');
+            code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
         }
         return code.toString();
     }
