@@ -89,6 +89,11 @@ public class ManagerPaymentHistoryService {
             : firstNonBlank(payment.getGatewayProvider(), payment.getGatewayBankCode());
         Instant occurredAt = payment.getPaidAt() != null ? payment.getPaidAt()
             : payment.getProcessedAt() != null ? payment.getProcessedAt() : payment.getCreatedAt();
+        String reservationCode = payment.getReservation() != null
+            ? payment.getReservation().getReservationCode()
+            : payment.getRenewal() != null && payment.getRenewal().getRental() != null && payment.getRenewal().getRental().getReservation() != null
+                ? payment.getRenewal().getRental().getReservation().getReservationCode()
+                : null;
         return new ManagerPaymentHistoryResponse(
             payment.getId().toString(), reference, customerName, payment.getPurpose().name(),
             payment.getStatus().name(), payment.getAmount(), payment.getCurrency(),
@@ -97,7 +102,8 @@ public class ManagerPaymentHistoryService {
             payment.getRenewal()==null?null:payment.getRenewal().getId(),
             paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null,
             payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
-            transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable()
+            transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable(),
+            reservationCode, payment.getGatewayTransactionNo()
         );
     }
 
@@ -105,6 +111,9 @@ public class ManagerPaymentHistoryService {
         boolean refund = returnCase.getNetRefundAmount() != null
             && returnCase.getNetRefundAmount().signum() > 0;
         BigDecimal amount = refund ? returnCase.getNetRefundAmount() : returnCase.getAmountDueFromCustomer();
+        String reservationCode = returnCase.getRental() != null && returnCase.getRental().getReservation() != null
+            ? returnCase.getRental().getReservation().getReservationCode()
+            : null;
         return new ManagerPaymentHistoryResponse(
             returnCase.getId().toString(),
             firstNonBlank(returnCase.getSettlementPaymentId(), "RETURN-" + returnCase.getId()),
@@ -115,7 +124,9 @@ public class ManagerPaymentHistoryService {
             "VND",
             BigDecimal.ZERO,
             null,
-            returnCase.getSettlementPaidAt()
+            returnCase.getSettlementPaidAt(),
+            null, null, null, null, null, null, null,
+            reservationCode, returnCase.getSettlementPaymentId()
         );
     }
 
