@@ -369,7 +369,9 @@ public class LocalDemoDataInitializer {
             for (UnitTypeDefinition definition : unitTypeDefinitions()) {
                 UnitType unitType = unitTypes.get(unitTypeKey(facilityCode, definition.code()));
                 if (unitType.getStatus() != UnitTypeStatus.active) continue;
-                for (int number = 1; number <= 5; number++) {
+                boolean palletDemo = PALLET_DEMO_FACILITIES.contains(facilityCode);
+                int physicalUnitCount = palletDemo ? definition.demoPhysicalUnitCount() : 5;
+                for (int number = 1; number <= physicalUnitCount; number++) {
                     String code = "%s-%s-%03d".formatted(facilityCode, definition.code(), number);
                     if (existing.containsKey(code)) {
                         StorageUnit current = existing.get(code);
@@ -386,7 +388,7 @@ public class LocalDemoDataInitializer {
                     unit.setCode(code);
                     unit.setFloor(String.valueOf(definition.floor()));
                     unit.setZone(definition.zone());
-                    unit.setStatus(number == 1 ? StorageUnitStatus.available : StorageUnitStatus.inactive);
+                    unit.setStatus(palletDemo || number == 1 ? StorageUnitStatus.available : StorageUnitStatus.inactive);
                     unit.setRackLayoutJson(unitType.getRackLayoutJson());
                     StorageUnit saved = storageUnitRepository.saveAndFlush(unit);
                     existing.put(saved.getCode(), saved);
@@ -489,10 +491,10 @@ public class LocalDemoDataInitializer {
 
     private List<UnitTypeDefinition> unitTypeDefinitions() {
         return List.of(
-            new UnitTypeDefinition("S", "Kho Nhỏ (S)", "Phù hợp đồ gia dụng nhẹ và thùng carton", 12.0, 11.6, 5.0, 5_500_000, 600, 2500, 3.0, 2.5, 2.4, 3.0, 5.0, 0.3, 4, 2.5, "Xe đẩy tay / xe sàn nhỏ", 120, 40, "/images/customer-units/kho-s.jpg", 1, "Khu A"),
-            new UnitTypeDefinition("M", "Kho Trung (M)", "Phù hợp thiết bị văn phòng và nội thất vừa", 17.3, 11.8, 5.0, 9_500_000, 1_200, 4000, 3.2, 2.7, 2.6, 3.2, 5.0, 0.3, 6, 2.7, "Xe đẩy sàn phẳng", 240, 80, "/images/customer-units/kho-m.jpg", 2, "Khu B"),
-            new UnitTypeDefinition("L", "Kho Lớn (L)", "Phù hợp pallet hàng và tồn kho kinh doanh", 23.0, 12.0, 5.0, 15_000_000, 2_400, 6000, 3.4, 2.9, 2.8, 3.4, 5.0, 0.3, 8, 2.9, "Xe nâng tay pallet", 480, 160, "/images/customer-units/kho-l.jpg", 3, "Khu C"),
-            new UnitTypeDefinition("XL", "Kho Rất Lớn (XL)", "Phù hợp máy móc, hàng nặng và pallet công nghiệp", 29.1, 12.2, 5.0, 22_500_000, 3_600, 8000, 3.6, 3.1, 3.0, 3.5, 5.0, 0.3, 10, 3.1, "Xe nâng điện dắt bộ", 720, 240, "/images/customer-units/kho-xl.jpg", 4, "Khu D")
+            new UnitTypeDefinition("S", "Kho Nhỏ (S)", "Phù hợp đồ gia dụng nhẹ và thùng carton", 12.0, 11.6, 5.0, 5_500_000, 600, 2500, 3.0, 2.5, 2.4, 3.0, 5.0, 0.3, 4, 2.5, "Xe đẩy tay / xe sàn nhỏ", 120, 40, "/images/customer-units/kho-s.jpg", 1, "Khu A", 1),
+            new UnitTypeDefinition("M", "Kho Trung (M)", "Phù hợp thiết bị văn phòng và nội thất vừa", 17.3, 11.8, 5.0, 9_500_000, 1_200, 4000, 3.2, 2.7, 2.6, 3.2, 5.0, 0.3, 6, 2.7, "Xe đẩy sàn phẳng", 240, 80, "/images/customer-units/kho-m.jpg", 2, "Khu B", 2),
+            new UnitTypeDefinition("L", "Kho Lớn (L)", "Phù hợp pallet hàng và tồn kho kinh doanh", 23.0, 12.0, 5.0, 15_000_000, 2_400, 6000, 3.4, 2.9, 2.8, 3.4, 5.0, 0.3, 8, 2.9, "Xe nâng tay pallet", 480, 160, "/images/customer-units/kho-l.jpg", 3, "Khu C", 3),
+            new UnitTypeDefinition("XL", "Kho Rất Lớn (XL)", "Phù hợp máy móc, hàng nặng và pallet công nghiệp", 29.1, 12.2, 5.0, 22_500_000, 3_600, 8000, 3.6, 3.1, 3.0, 3.5, 5.0, 0.3, 10, 3.1, "Xe nâng điện dắt bộ", 720, 240, "/images/customer-units/kho-xl.jpg", 4, "Khu D", 4)
         );
     }
 
@@ -547,7 +549,8 @@ public class LocalDemoDataInitializer {
         int largeBoxCapacity,
         String imageUrl,
         int floor,
-        String zone
+        String zone,
+        int demoPhysicalUnitCount
     ) {}
 
     private record DemoUserDefinition(

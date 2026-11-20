@@ -976,11 +976,18 @@ public class ReturnSettlementService {
         var rc=returnCaseRepository.findById(returnId).orElseThrow(()->ApiExceptions.notFound("Return case not found"));
         facilityScopeService.assertCanOperate(actor, rc.getFacility().getId());
         lockRecoveryReturn(rc);
+        boolean cashCollection = "CASH".equals(request.paymentMethod())
+            && zeroIfNull(rc.getAmountDueFromCustomer()).signum() > 0;
         if (rc.getStatus() == ReturnCaseStatus.completed) {
             BigDecimal settledAmount = zeroIfNull(rc.getAmountDueFromCustomer()).signum() > 0
                 ? rc.getAmountDueFromCustomer() : rc.getNetRefundAmount();
+            String reference = request.transactionReference();
+            if (cashCollection && (reference == null || reference.isBlank()
+                || ("TM-" + rc.getId()).equals(rc.getSettlementPaymentId()))) {
+                reference = rc.getSettlementPaymentId();
+            }
             if (settledAmount == null || request.amount() == null || settledAmount.compareTo(request.amount()) != 0
-                || !requireFinance().recordedReceiptMatches(rc, request.paymentMethod(), request.transactionReference(), request.receiptFileId())) {
+                || !requireFinance().recordedReceiptMatches(rc, request.paymentMethod(), reference, request.receiptFileId())) {
                 throw ApiExceptions.conflict("Yêu cầu gửi lại không khớp với biên lai quyết toán đã hoàn tất.");
             }
             return toResponse(rc);
@@ -1000,14 +1007,17 @@ public class ReturnSettlementService {
         if (finance() == null) {
             throw ApiExceptions.conflict("Financial reconciliation is unavailable; the return case cannot be settled");
         }
-        if(!finance().recordedReceiptMatches(rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId())) {
-            finance().receipt(actor,rc,request.paymentMethod(),request.transactionReference(),request.receiptFileId());
-            finance().settle(rc,actor.userId(),request.transactionReference(),true);
+        String reference = cashCollection && rc.getStatus() == ReturnCaseStatus.payment_due
+            ? "TM-" + rc.getId() : request.transactionReference();
+        if (reference == null || reference.isBlank()) {
+            throw ApiExceptions.validation("Vui lòng nhập mã giao dịch hoặc biên nhận.", null);
         }
+        finance().receipt(actor, rc, request.paymentMethod(), reference, request.receiptFileId());
+        finance().settle(rc, actor.userId(), reference, true);
         rc.setStatus(ReturnCaseStatus.completed);
         rc.setCompletedAt(Instant.now());
         rc.setSettlementPaidAt(Instant.now());
-        rc.setSettlementPaymentId(request.transactionReference());
+        rc.setSettlementPaymentId(reference);
         returnCaseRepository.saveAndFlush(rc);
         finalizeRentalAndUnit(rc);
         auditLogService.recordMutation("RETURN_FINANCIAL_SETTLED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));
