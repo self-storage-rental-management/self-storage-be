@@ -11,10 +11,10 @@ class RenewalOverdueTimelineTests {
     private static final ZoneId VIETNAM=ZoneId.of("Asia/Ho_Chi_Minh");
     private static final LocalDate LAST_DAY=LocalDate.of(2026,10,10);
 
-    @Test void seventhDayClosesAtFiveAndRecoveryBecomesEligibleOnEighthMorning() {
+    @Test void seventhDayClosesAtEndOfLocalDayAndRecoveryIsEligibleAtMidnight() {
         var term=RenewalOverdueTimeline.term("policy","1",LAST_DAY,VIETNAM);
-        assertThat(term.recoveryCutoff()).isEqualTo(Instant.parse("2026-10-17T10:00:00Z"));
-        assertThat(term.recoveryStart()).isEqualTo(Instant.parse("2026-10-18T01:00:00Z"));
+        assertThat(term.recoveryCutoff()).isEqualTo(Instant.parse("2026-10-17T16:59:59.999999999Z"));
+        assertThat(term.recoveryStart()).isEqualTo(Instant.parse("2026-10-17T17:00:00Z"));
         assertThat(term.recoveryFromDay()).isEqualTo(8);
         assertThat(RenewalOverdueTimeline.severity(7,term.recoveryCutoff().minusNanos(1),term.recoveryCutoff())).isEqualTo("URGENT");
         assertThat(RenewalOverdueTimeline.severity(7,term.recoveryCutoff(),term.recoveryCutoff())).isEqualTo("RENEWAL_CLOSED");
