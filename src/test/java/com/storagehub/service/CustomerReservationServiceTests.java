@@ -138,6 +138,24 @@ class CustomerReservationServiceTests {
     }
 
     @Test
+    void ownedReservationAtPausedFacilityCanDisplayMissingHistoricalContactAndUnitDetails() {
+        reservation.getFacility().setStatus(com.storagehub.domain.model.FacilityStatus.maintenance);
+        reservation.getFacility().setName("Cơ sở tạm ngưng");
+        reservation.getFacility().setAddress("Địa chỉ cơ sở");
+        reservation.getUnitType().setName("Kho nhỏ");
+        when(reservationRepository.findByIdAndCustomer_Id(reservation.getId(), actor.userId())).thenReturn(Optional.of(reservation));
+
+        var detail = service.getDetail(actor, reservation.getId());
+
+        assertThat(detail.getCurrentFacility().name()).isEqualTo("Cơ sở tạm ngưng");
+        assertThat(detail.getCurrentFacility().address()).isEqualTo("Địa chỉ cơ sở");
+        assertThat(detail.getCurrentUnitType().name()).isEqualTo("Kho nhỏ");
+        assertThat(detail.getCurrentUnitType().volumeM3()).isEqualByComparingTo("64");
+        assertThat(detail.getReservation().getFacilitySnapshot()).isNull();
+        assertThat(detail.getReservation().getUnitTypeSnapshot()).isNull();
+    }
+
+    @Test
     void classifiesIdenticallyNamedCheckInDocumentsByTheirWorkflowReferences() {
         ReflectionTestUtils.setField(service, "paymentProvenance", paymentProvenance);
         ReflectionTestUtils.setField(service, "objectMapper", new com.fasterxml.jackson.databind.ObjectMapper());
@@ -279,7 +297,7 @@ class CustomerReservationServiceTests {
 
     @Test
     void listsOnlyReservationsOwnedByCustomer() {
-        when(reservationRepository.findCustomerVisibleReservations(any(), any()))
+        when(reservationRepository.findCustomerVisibleReservations(eq(actor.userId()), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));
@@ -357,7 +375,7 @@ class CustomerReservationServiceTests {
         snapshot.setVoucherDiscountAmount(new BigDecimal("100000.00"));
         snapshot.setNetRentalAmount(new BigDecimal("11040000.00"));
 
-        when(reservationRepository.findCustomerVisibleReservations(any(), any()))
+        when(reservationRepository.findCustomerVisibleReservations(eq(actor.userId()), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));

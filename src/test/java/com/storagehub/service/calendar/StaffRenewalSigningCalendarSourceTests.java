@@ -34,7 +34,7 @@ class StaffRenewalSigningCalendarSourceTests {
         var acceptedQuote=mock(com.storagehub.service.renewal.persistence.RenewalQuote.class);
         when(em.find(com.storagehub.service.renewal.persistence.RenewalWorkflow.class,id)).thenReturn(workflow);
         when(workflow.getAcceptedRevision()).thenReturn(revision);when(revision.getQuote()).thenReturn(acceptedQuote);when(acceptedQuote.getId()).thenReturn(quote);
-        when(store.facilityActive(facilityId)).thenReturn(true);return n;
+        when(store.facilityAllowsSigning(facilityId)).thenReturn(true);return n;
     }
     @Test void capacityIsBoundToCurrentStaffAndReferenceDoesNotExposeStaffId() {
         var n=renewal();var slot=source.slot(n,at).orElseThrow();

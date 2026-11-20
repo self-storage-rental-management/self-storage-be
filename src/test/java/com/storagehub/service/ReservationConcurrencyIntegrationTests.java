@@ -118,7 +118,15 @@ class ReservationConcurrencyIntegrationTests {
         Facility facility = facilityRepository.saveAndFlush(draft);
         UnitType type = unitType(facility);
         ActorPrincipal manager = manager(facility);
-        RackLayout.Save layout = previewLayout(manager, type);
+        type.setAisleWidthM(BigDecimal.ONE);
+        var configuration = RackLayoutCalculatorTests.config(
+            RackLayoutCalculatorTests.rack("R01", 0, 3, 2, 100, 1200));
+        var draftLayout = new RackLayout.Draft(
+            type.getLengthM(), type.getWidthM(), type.getHeightM(), null, null, null,
+            type.getMaxLoadKg(), null, type.getAisleWidthM(), null, null, null, null, null,
+            null, null, null, null, null, null, configuration, null);
+        var preview = rackLayouts.previewDraft(manager, facility.getId(), draftLayout);
+        var layout = new RackLayout.Save(configuration, preview.previewKey());
 
         assertThatThrownBy(() -> facilityLifecycle.createUnitType(manager, facility.getId(), typeRequest(type, null)))
             .isInstanceOf(ApiException.class).hasMessageContaining("xác nhận");
@@ -128,17 +136,19 @@ class ReservationConcurrencyIntegrationTests {
         var created = facilityLifecycle.createUnitType(manager, facility.getId(), typeRequest(type, layout));
         var shared = rackLayouts.readForManager(manager, created.id());
         assertThat(created.totalCount()).isEqualTo(3);
-        assertThat(shared.result().palletSlotCount()).isEqualTo(12);
+        assertThat(shared.result().palletSlotCount()).isPositive().isEqualTo(preview.result().palletSlotCount());
+        String storedLayout = unitTypeRepository.findById(created.id()).orElseThrow().getRackLayoutJson();
+        assertThat(storedLayout).isNotBlank();
         assertThat(storageUnitRepository.findByFacility_Id(facility.getId()))
             .hasSize(3)
             .allSatisfy(unit -> {
                 assertThat(unit.getUnitType().getId()).isEqualTo(created.id());
-                assertThat(unit.getRackLayoutJson()).isNotBlank();
+                assertThat(unit.getRackLayoutJson()).isEqualTo(storedLayout);
             });
     }
 
     @Test
-    void confirmedV8TypeUsesGeneratedPalletDimensionsWithoutPersistingRatingInput() {
+    void confirmedTypeUsesCalculatedPalletCapacityWithoutStoringLegacyRatingCatalog() {
         Facility draft = facility();
         draft.setCode("RATING-F01");
         Facility facility = facilityRepository.saveAndFlush(draft);
@@ -160,8 +170,9 @@ class ReservationConcurrencyIntegrationTests {
         UnitType saved = unitTypeRepository.saveAndFlush(type);
 
         assertThat(saved.getPalletRatingCatalogJson()).isNull();
-        assertThat(rackLayouts.readForManager(manager, saved.getId()).result().maxFeasiblePalletCount())
-            .isEqualTo(2);
+        var result = rackLayouts.readForManager(manager, saved.getId()).result();
+        assertThat(result.rulesVersion()).isEqualTo(StorageHubRules.RULES_VERSION);
+        assertThat(result.maxFeasiblePalletCount()).isEqualTo(preview.result().maxFeasiblePalletCount());
     }
 
     private RackLayout.Save previewLayout(ActorPrincipal manager, UnitType type) {
@@ -173,7 +184,7 @@ class ReservationConcurrencyIntegrationTests {
     private ManagerUnitTypeRequest typeRequest(UnitType type, RackLayout.Save layout) {
         return new ManagerUnitTypeRequest(null, type.getName(), null, type.getLengthM(), type.getWidthM(),
             type.getHeightM(), type.getMaxLoadKg(), 0, type.getRackLengthM(), type.getRackWidthM(), type.getRackHeightM(),
-            BigDecimal.valueOf(3), "Xe đẩy", 0, 0, null, 3, "2", "Khu Z", null, List.of(), List.of(), layout);
+            type.getAisleWidthM(), "Xe đẩy", 0, 0, null, 3, "2", "Khu Z", null, List.of(), List.of(), layout);
     }
 
     private ActorPrincipal manager(Facility facility) {
