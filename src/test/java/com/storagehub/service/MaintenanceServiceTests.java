@@ -143,6 +143,19 @@ class MaintenanceServiceTests {
     }
 
     @Test
+    void rejectsPastDueDateBeforeCreatingMaintenanceTask() {
+        var yesterday = LocalDate.now(com.storagehub.time.BusinessTime.ZONE).minusDays(1);
+        var request = new CreateMaintenanceTaskRequest(
+            unit.getId(), "Bảo trì", "Kiểm tra kho", TaskPriority.medium, null, null, yesterday, null
+        );
+
+        assertThatThrownBy(() -> maintenanceService.createTask(managerActor, request))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class)
+            .hasMessage("Hạn xử lý phải từ hôm nay trở đi.");
+        org.mockito.Mockito.verifyNoInteractions(maintenanceTaskRepository, storageUnitRepository);
+    }
+
+    @Test
     void createTask_success() {
         CreateMaintenanceTaskRequest req = new CreateMaintenanceTaskRequest(
             unit.getId(),
