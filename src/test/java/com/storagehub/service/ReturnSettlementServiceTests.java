@@ -602,6 +602,26 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void cashCollectionGeneratesOneReceiptCodeForRepeatedSubmissions() {
+        var rc = setupReturn(ReturnCaseStatus.payment_due);
+        var amount = new BigDecimal("500000");
+        rc.setAmountDueFromCustomer(amount);
+        var file = UUID.randomUUID();
+        String reference = "TM-" + rc.getId();
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        var request = new com.storagehub.api.returns.StaffReturnSettlementRequest("CASH", null, file, true, amount);
+
+        assertThat(service.recordSettlement(staffActor, rc.getId(), request).settlementPaymentId())
+            .isEqualTo(reference);
+
+        when(returnFinance.recordedReceiptMatches(rc, "CASH", reference, file)).thenReturn(true);
+        assertThat(service.recordSettlement(staffActor, rc.getId(), request).settlementPaymentId())
+            .isEqualTo(reference);
+        verify(returnFinance).receipt(staffActor, rc, "CASH", reference, file);
+        verify(returnFinance).settle(rc, staffActor.userId(), reference, true);
+    }
+
+    @Test
     void repeatedVerifiedReceiptReturnsCompletedResultWithoutAnotherPayout() {
         var rc = setupReturn(ReturnCaseStatus.completed);
         rc.setNetRefundAmount(new BigDecimal("5700000"));
