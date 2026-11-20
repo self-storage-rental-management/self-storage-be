@@ -46,6 +46,7 @@ import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.PaymentRepository;
 import com.storagehub.domain.repo.MaintenanceTaskRepository;
+import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationRepository;
@@ -57,6 +58,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -264,12 +267,14 @@ public class CheckInHandoverService {
         CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.scheduled);
         Reservation reservation = checkIn.getReservation();
         String actualIdentity = normalizeIdentityDocument(request.identityDocumentNumber());
-        String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
-        if (declaredIdentity == null) {
-            throw ApiExceptions.conflict("Customer identity declared on the reservation is missing");
+        if (actualIdentity == null) {
+            throw ApiExceptions.validation("identityDocumentNumber is required", null);
         }
-        if (!declaredIdentity.equals(actualIdentity)) {
-            throw ApiExceptions.conflict("Customer identity does not match the reservation");
+        String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
+        boolean mismatch = declaredIdentity != null && !declaredIdentity.equals(actualIdentity);
+        if (mismatch || declaredIdentity == null) {
+            reservation.setIdentityDocumentNumber(actualIdentity);
+            reservationRepository.saveAndFlush(reservation);
         }
 
         User operator = requireActor(actor);
@@ -278,7 +283,12 @@ public class CheckInHandoverService {
         checkIn.setStatus(CheckInStatus.identity_verified);
         checkIn.setIdentityVerifiedAt(now);
         checkIn.setVerifiedIdentityDocument(actualIdentity);
-        checkIn.setIdentityVerificationNote(clean(request.note()));
+        String note = clean(request.note());
+        if (mismatch) {
+            String auditNote = "[Cập nhật CCCD/CMND theo giấy tờ gốc: " + actualIdentity + " (khai báo cũ: " + declaredIdentity + ")]";
+            note = note == null ? auditNote : note + " " + auditNote;
+        }
+        checkIn.setIdentityVerificationNote(note);
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
         recordWorkflowAudit(operator, reservation, saved, "CHECKIN_IDENTITY_VERIFIED",
             CheckInStatus.scheduled, CheckInStatus.identity_verified);
@@ -413,21 +423,12 @@ public class CheckInHandoverService {
         UUID checkInId,
         CompleteCheckInSetupRequest request
     ) {
-        CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.setup_in_progress);
-        Reservation reservation = checkIn.getReservation();
-        User operator = requireActor(actor);
-        checkIn.setPerformedBy(operator);
-        checkIn.setStatus(CheckInStatus.setup_completed);
-        Instant completedAt = Instant.now();
-        checkIn.setSetupCompletedAt(completedAt);
-        if (checkIn.getRental() != null) {
-            checkIn.getRental().setMoveInCompletedAt(completedAt);
-            rentalRepository.saveAndFlush(checkIn.getRental());
-        }
-        CheckIn saved = checkInRepository.saveAndFlush(checkIn);
-        recordWorkflowAudit(operator, reservation, saved, "CHECKIN_SETUP_COMPLETED",
-            CheckInStatus.setup_in_progress, CheckInStatus.setup_completed);
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        // The customer portal is the only actor allowed to announce that the
+        // preparation phase is complete. Staff must not bypass that gate and
+        // open inventory while the customer is still moving goods in.
+        throw ApiExceptions.conflict("Chỉ khách hàng được xác nhận đã chuẩn bị xong trước khi kiểm kê hàng hóa");
     }
 
     @Transactional
@@ -486,7 +487,9 @@ public class CheckInHandoverService {
         if (!dimensionsFit(request, unit)) {
             throw ApiExceptions.conflict("Actual goods dimensions do not fit the storage unit");
         }
-        validateVariance(reservation, request);
+        var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId());
+        validateVariance(reservation, request, goodsItems);
+        validateInventoryLines(goodsItems, request);
         validateEvidence(checkInId, request.evidenceReferences());
         validateNoPasswordHandover(request);
         requireRemainingPayment(reservation);
@@ -964,7 +967,8 @@ public class CheckInHandoverService {
         Rental rental = checkIn == null ? null : checkIn.getRental();
         var pricing=pricingSnapshotRepository==null?null:pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
         Integer setupDays=ReservationSnapshotView.pricingComplete(reservation,pricing)?pricing.getFreeSetupDays():null;
-        BigDecimal[] declaredDimensions = declaredGoodsDimensions(reservation.getId());
+        var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId());
+        BigDecimal[] declaredDimensions = declaredGoodsDimensions(goodsItems);
         return new CheckInResponse(
             checkIn == null ? null : checkIn.getId(),
             checkIn == null ? null : checkIn.getStatus(),
@@ -999,12 +1003,18 @@ public class CheckInHandoverService {
             reservation.getCustomer().getPhone(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), unit.getId(), unit.getCode(), unit.getStatus(),
             assignment.getId(), assignment.getStatus(), reservation.getStartDate(),
-            reservation.getEndDate(), declaredPackageCount(reservation.getId()),
+            reservation.getEndDate(), declaredPackageCount(goodsItems),
             reservation.getTotalGoodsWeightKg(),
             reservation.getTotalGoodsVolumeM3(), declaredDimensions[0], declaredDimensions[1],
             declaredDimensions[2], dueAtCheckIn(reservation.getId()), readHandover(checkIn),
             pricing == null ? null : pricing.getSetupEarlyExitPolicyVersion(),
-            pricing == null ? null : pricing.getSetupEarlyExitFee()
+            pricing == null ? null : pricing.getSetupEarlyExitFee(),
+            goodsItems.stream()
+                .map(item -> new CheckInResponse.DeclaredGoodsLine(item.getId(), item.getGoodsCode(),
+                    item.getCustomGoodsName() == null || item.getCustomGoodsName().isBlank()
+                        ? item.getCategoryName() : item.getCustomGoodsName(),
+                    item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg()))
+                .toList()
         );
     }
 
@@ -1063,8 +1073,7 @@ public class CheckInHandoverService {
         );
     }
 
-    private Integer declaredPackageCount(UUID reservationId) {
-        var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId);
+    private Integer declaredPackageCount(List<ReservationGoodsItem> goodsItems) {
         if (goodsItems.isEmpty()) {
             return null;
         }
@@ -1076,9 +1085,9 @@ public class CheckInHandoverService {
      * These values are shown to the operator and are also used to prevent a
      * handover from silently accepting a materially different package size.
      */
-    private BigDecimal[] declaredGoodsDimensions(UUID reservationId) {
+    private BigDecimal[] declaredGoodsDimensions(List<ReservationGoodsItem> goodsItems) {
         BigDecimal[] largest = {null, null, null};
-        for (var item : goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId)) {
+        for (var item : goodsItems) {
             if (item.getLengthCm() == null || item.getWidthCm() == null || item.getHeightCm() == null) {
                 continue;
             }
@@ -1143,8 +1152,69 @@ public class CheckInHandoverService {
         }
     }
 
-    private void validateVariance(Reservation reservation, CompleteCheckInRequest request) {
-        Integer declaredPackageCount = declaredPackageCount(reservation.getId());
+    private void validateInventoryLines(List<ReservationGoodsItem> declared, CompleteCheckInRequest request) {
+        var lines = request.inventoryLines() == null ? List.<CompleteCheckInRequest.InventoryLine>of() : request.inventoryLines();
+        if (declared.size() != lines.size()) {
+            throw ApiExceptions.validation("Cần kiểm kê đủ từng dòng hàng đã khai báo.", null);
+        }
+        if (declared.isEmpty()) return;
+
+        var byId = new HashMap<UUID, Integer>();
+        declared.forEach(item -> byId.put(item.getId(), item.getQuantity()));
+        var seen = new HashSet<UUID>();
+        long total = 0;
+        boolean hasMeasurements = lines.stream().anyMatch(line -> line.measurements() != null);
+        BigDecimal[] largest = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        BigDecimal weight = BigDecimal.ZERO;
+        BigDecimal volume = BigDecimal.ZERO;
+        for (var line : lines) {
+            Integer expected = byId.get(line.goodsItemId());
+            if (expected == null || !seen.add(line.goodsItemId())) {
+                throw ApiExceptions.validation("Dòng hàng kiểm kê bị trùng hoặc không thuộc đơn đặt kho.", null);
+            }
+            int actual = line.actualQuantity();
+            var condition = line.condition();
+            if ((actual == 0) != (condition == CompleteCheckInRequest.InventoryLine.Condition.NOT_PRESENT)) {
+                throw ApiExceptions.validation("Tình trạng hàng phải phù hợp với số kiện thực tế.", null);
+            }
+            var measurements = line.measurements();
+            if (hasMeasurements && (actual > 0) != (measurements != null)) {
+                throw ApiExceptions.validation("Cần nhập số đo cho từng dòng hàng có kiện thực tế.", null);
+            }
+            if (measurements != null) {
+                BigDecimal[] dimensions = {measurements.lengthCm(), measurements.widthCm(), measurements.heightCm()};
+                Arrays.sort(dimensions);
+                for (int i = 0; i < dimensions.length; i++) {
+                    largest[i] = largest[i].max(dimensions[i]);
+                }
+                weight = weight.add(measurements.weightKg());
+                volume = volume.add(dimensions[0].multiply(dimensions[1]).multiply(dimensions[2])
+                    .multiply(BigDecimal.valueOf(actual)).movePointLeft(6));
+            }
+            if ((actual != expected || condition == CompleteCheckInRequest.InventoryLine.Condition.DAMAGED)
+                && (line.note() == null || line.note().isBlank())) {
+                throw ApiExceptions.validation("Cần ghi chú cho dòng hàng thiếu, thừa hoặc hư hỏng.", null);
+            }
+            total += actual;
+        }
+        if (total != request.packageCount()) {
+            throw ApiExceptions.validation("Tổng số kiện phải bằng tổng số kiện của các dòng kiểm kê.", null);
+        }
+        if (hasMeasurements) {
+            var summary = request.actualMeasurements();
+            BigDecimal[] dimensions = {summary.lengthCm(), summary.widthCm(), summary.heightCm()};
+            Arrays.sort(dimensions);
+            if (dimensions[0].compareTo(largest[0]) != 0 || dimensions[1].compareTo(largest[1]) != 0
+                || dimensions[2].compareTo(largest[2]) != 0
+                || summary.weightKg().subtract(weight).abs().compareTo(new BigDecimal("0.000000001")) > 0
+                || summary.actualVolumeM3().subtract(volume).abs().compareTo(new BigDecimal("0.000000001")) > 0) {
+                throw ApiExceptions.validation("Số đo tổng hợp phải khớp kết quả kiểm kê từng dòng hàng.", null);
+            }
+        }
+    }
+
+    private void validateVariance(Reservation reservation, CompleteCheckInRequest request, List<ReservationGoodsItem> goodsItems) {
+        Integer declaredPackageCount = declaredPackageCount(goodsItems);
         boolean packageCountVaries = declaredPackageCount != null
             && request.packageCount() != declaredPackageCount;
         boolean weightVaries = exceedsTolerance(
@@ -1153,7 +1223,7 @@ public class CheckInHandoverService {
         boolean volumeVaries = exceedsTolerance(
             request.actualMeasurements().actualVolumeM3(), reservation.getTotalGoodsVolumeM3(), new BigDecimal("0.000100")
         );
-        BigDecimal[] declaredDimensions = declaredGoodsDimensions(reservation.getId());
+        BigDecimal[] declaredDimensions = declaredGoodsDimensions(goodsItems);
         boolean dimensionsVaries = false;
         if (declaredDimensions[0] != null) {
             BigDecimal[] actualDimensions = {
