@@ -129,7 +129,7 @@ public class SimulatedPaymentService {
                     + " đã thanh toán cọc và đang chờ nhân viên phân kho.",
                 reservation.getId()
             );
-            sendSimulatedReservationPaymentBillEmail(payment, reservation, now);
+            sendSimulatedReservationPaymentBillEmail(payment, reservation, snapshot, now);
             message = "Payment was recorded successfully and the reservation is confirmed";
         } else if (outcome == PaymentSimulationOutcome.NOT_RECEIVED) {
             payment.setStatus(PaymentStatus.NOT_RECEIVED);
@@ -210,7 +210,9 @@ public class SimulatedPaymentService {
         return nf.format(amount) + " đ";
     }
 
-    private void sendSimulatedReservationPaymentBillEmail(Payment payment, Reservation reservation, Instant paidAt) {
+    private void sendSimulatedReservationPaymentBillEmail(
+        Payment payment, Reservation reservation, ReservationPricingSnapshot snapshot, Instant paidAt
+    ) {
         if (transactionalEmailService == null || reservation == null) return;
         try {
             var customer = reservation.getCustomer();
@@ -225,14 +227,14 @@ public class SimulatedPaymentService {
             String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
                 .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(paidAt != null ? paidAt : Instant.now());
 
-            String unitInfo = reservation.getUnitType() != null ? reservation.getUnitType().getName() : "Gian kho lưu trữ";
-            if (reservation.getAssignedUnit() != null) {
-                unitInfo += " (" + reservation.getAssignedUnit().getCode() + ")";
+            String unitInfo = ReservationSnapshotView.unitTypeName(reservation, snapshot);
+            String assignedUnitCode = ReservationSnapshotView.assignedUnitCode(reservation, snapshot);
+            if (assignedUnitCode != null) {
+                unitInfo += " (" + assignedUnitCode + ")";
             }
 
-            String facilityName = reservation.getFacility() != null ? reservation.getFacility().getName() : "StorageHub";
-            String facilityAddress = reservation.getFacility() != null && reservation.getFacility().getAddress() != null
-                ? reservation.getFacility().getAddress() : "";
+            String facilityName = ReservationSnapshotView.facilityName(reservation, snapshot);
+            String facilityAddress = ReservationSnapshotView.facilityAddress(reservation, snapshot);
 
             String periodOrAppointment = "";
             if (reservation.getAppointmentAt() != null) {

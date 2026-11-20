@@ -57,6 +57,7 @@ public class ReservationCreationService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     private static final java.security.SecureRandom PUBLIC_CODE_RANDOM = new java.security.SecureRandom();
+    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -178,7 +179,7 @@ public class ReservationCreationService {
         );
         if (request.getAppointmentAt() != null
             && !checkInWindow.contains(request.getAppointmentAt())) {
-            String message = "Lịch nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
+            String message = "Ngày nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
             throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
         }
         java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
@@ -190,16 +191,15 @@ public class ReservationCreationService {
             quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate,
             rentalEndDate, request.getGoodsCondition(), quotedGoodsItems
         );
-        CompatibilityCheckResponse compatibility = compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
-        if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
-            throw ApiExceptions.conflict("Goods are not compatible with the selected unit type");
-        }
-        validateQuoteStillCurrent(quote);
-
         capacityService.lockAndRequireAvailableCapacity(
             quote.getFacility().getId(), quote.getUnitType().getId(),
             handoverDate, rentalEndDate
         );
+        CompatibilityCheckResponse compatibility = compatibilityService.checkQuotedSnapshot(actor, compatibilityRequest);
+        if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
+            throw ApiExceptions.conflict(String.join(" ", compatibility.getIssues()));
+        }
+        validateQuoteStillCurrent(quote);
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
         reservation.setReservationCode(uniqueReservationCode(reservationRepository,
@@ -215,6 +215,7 @@ public class ReservationCreationService {
         reservation.setRequestFingerprint(requestFingerprint);
         reservation.setFacility(quote.getFacility());
         reservation.setUnitType(quote.getUnitType());
+        reservation.setPalletHeldUnit(compatibility.getPalletHeldUnit());
         reservation.setStatus(reviewRequired ? ReservationStatus.AWAITING_REVIEW : ReservationStatus.AWAITING_PAYMENT);
         reservation.setGoodsReviewStatus(reviewRequired ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
         reservation.setCompatibilityResult(compatibility.getResult());
@@ -297,7 +298,7 @@ public class ReservationCreationService {
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
         BigDecimal securityDeposit = money(
             (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
-                ? BigDecimal.ZERO
+                ? currentMonthlyPrice
                 : quote.getUnitType().getSecurityDepositAmount()
         );
         BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
@@ -343,6 +344,11 @@ public class ReservationCreationService {
         item.setHeightCm(request.getHeightCm());
         item.setWeightKg(request.getWeightPerItemKg());
         item.setFragile(request.isFragile());
+        item.setStackable(request.allowsStacking());
+        item.setMaxStackLayers(request.hasStackabilityDeclaration()
+            ? 1
+            : request.isFragile() ? 1 : request.getMaxStackLayers());
+        item.setAllowHorizontalPlacement(request.allowsHorizontalPlacement());
         item.setCustomerNote(clean(request.getCustomerNote()));
         item.setRequiresStaffReview(reviewRequired);
         item.setReviewStatus(reviewRequired ? GoodsReviewStatus.PENDING : GoodsReviewStatus.NOT_REQUIRED);
@@ -352,6 +358,14 @@ public class ReservationCreationService {
     private ReservationPricingSnapshot toSnapshot(Reservation reservation, ReservationQuote quote) {
         ReservationPricingSnapshot snapshot = new ReservationPricingSnapshot();
         snapshot.setReservation(reservation);
+        snapshot.setFacilitySnapshotJson(quote.getFacilitySnapshotJson());
+        snapshot.setUnitTypeSnapshotJson(quote.getUnitTypeSnapshotJson());
+        snapshot.setGoodsSnapshotJson(quote.getGoodsSnapshotJson());
+        snapshot.setSnapshotHash(quote.getSnapshotHash() != null
+            ? quote.getSnapshotHash()
+            : ReservationSnapshotCodec.hash(
+                quote.getGoodsSnapshotJson(), quote.getFacilitySnapshotJson(), quote.getUnitTypeSnapshotJson()
+            ));
         snapshot.setPricingPackageCode(quote.getPricingPackageCode());
         snapshot.setPricingPolicyVersion(quote.getPolicyVersion());
         snapshot.setRentalMonths(quote.getRentalMonths());
@@ -410,7 +424,6 @@ public class ReservationCreationService {
         response.setEarlyTerminationFeeCoefficient(snapshot.getEarlyTerminationFeeCoefficient());
         response.setEarlyTerminationNoticeDays(snapshot.getEarlyTerminationNoticeDays());
         response.setEarlyTerminationFee(snapshot.getEarlyTerminationFee());
-        response.setUnitTypeName(ReservationSnapshotView.unitTypeName(reservation));
         ReservationSnapshotView.describe(response,reservation,snapshot);
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
@@ -431,14 +444,14 @@ public class ReservationCreationService {
         return value.trim();
     }
 
-    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
-
     static String generateReservationCode() {
-        StringBuilder code = new StringBuilder("RSV");
+        StringBuilder code = new StringBuilder("RSV-");
         for (int group = 0; group < 3; group++) {
-            code.append('-');
+            if (group > 0) code.append('-');
             for (int index = 0; index < 4; index++) {
-                code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
+                code.append(PUBLIC_CODE_ALPHABET.charAt(
+                    PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())
+                ));
             }
         }
         return code.toString();
@@ -495,6 +508,9 @@ public class ReservationCreationService {
                 append(canonical, decimal(item.getHeightCm()));
                 append(canonical, decimal(item.getWeightPerItemKg()));
                 append(canonical, item.isFragile());
+                if (item.hasStackabilityDeclaration()) append(canonical, item.allowsStacking());
+                else if (item.getMaxStackLayers() > 1) append(canonical, item.getMaxStackLayers());
+                append(canonical, item.allowsHorizontalPlacement());
             }
         }
         return sha256(canonical.toString());
@@ -531,6 +547,9 @@ public class ReservationCreationService {
             append(canonical, decimal(item.getHeightCm()));
             append(canonical, decimal(item.getWeightKg()));
             append(canonical, item.isFragile());
+            if (item.isStackable()) append(canonical, true);
+            else if (item.getMaxStackLayers() > 1) append(canonical, item.getMaxStackLayers());
+            append(canonical, item.isAllowHorizontalPlacement());
         }
         return sha256(canonical.toString());
     }

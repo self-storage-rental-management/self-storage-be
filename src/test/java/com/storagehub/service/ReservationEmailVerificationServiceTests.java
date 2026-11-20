@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import com.storagehub.api.reservation.ReservationEmailVerificationRequest;
 import com.storagehub.common.api.ApiException;
@@ -17,6 +18,7 @@ import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.ReservationEmailVerificationRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.security.JwtService;
 import java.time.Instant;
@@ -40,6 +42,7 @@ class ReservationEmailVerificationServiceTests {
     @Mock private JwtService jwtService;
     @Mock private AuthEmailService emailService;
     @Mock private AuditLogService auditLogService;
+    @Mock private UnitTypeRepository capacityMutex;
 
     private ReservationEmailVerificationService service;
     private ActorPrincipal actor;
@@ -62,10 +65,15 @@ class ReservationEmailVerificationServiceTests {
         ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
         reservation.setCustomer(customer);
         reservation.setFacility(facility);
+        var unitType = new com.storagehub.domain.model.UnitType();
+        ReflectionTestUtils.setField(unitType, "id", UUID.randomUUID());
+        reservation.setUnitType(unitType);
         reservation.setReservationCode("RSV-VERIFY001");
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setGoodsReviewStatus(GoodsReviewStatus.NOT_REQUIRED);
         reservation.setHoldExpiresAt(Instant.now().plusSeconds(600));
+        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
+        lenient().when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
 
         actor = new ActorPrincipal(
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()

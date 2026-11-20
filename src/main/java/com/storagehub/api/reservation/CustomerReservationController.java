@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -122,6 +123,12 @@ public class CustomerReservationController {
             customerReservationService.getDetail(actorContext.required(), reservationId),
             CorrelationIdContext.current()
         );
+    }
+
+    @DeleteMapping("/{reservationId}/history")
+    public ApiResponse<Void> deleteExpiredReservationHistory(@PathVariable UUID reservationId) {
+        customerReservationService.archiveExpiredHistory(actorContext.required(), reservationId);
+        return new ApiResponse<>(null, CorrelationIdContext.current());
     }
 
     @GetMapping("/payment-history")

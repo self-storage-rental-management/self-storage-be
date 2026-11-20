@@ -48,6 +48,9 @@ public class StorageUnit extends BaseEntity {
     @Column
     private Instant lastReleasedAt;
 
+    @Column(name = "rack_layout_json", columnDefinition = "LONGTEXT")
+    private String rackLayoutJson;
+
     @Version
     private long version;
 }
