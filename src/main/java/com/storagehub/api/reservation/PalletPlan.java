@@ -5,13 +5,14 @@ import java.math.BigDecimal;
 import java.util.List;
 
 public record PalletPlan(int palletLengthCm, int palletWidthCm, BigDecimal palletHeightCm,
-                         BigDecimal emptyPalletKg, int requiredPallets, int availableSlots,
+                         BigDecimal emptyPalletKg, BigDecimal palletMaxPayloadKg,
+                         int requiredPallets, int availableSlots,
                          BigDecimal totalLoadedWeightKg, List<Item> items, List<Rack> racks,
                          List<Pallet> pallets) {
     public PalletPlan(int palletLengthCm, int palletWidthCm, BigDecimal palletHeightCm,
                       BigDecimal emptyPalletKg, int requiredPallets, int availableSlots,
                       BigDecimal totalLoadedWeightKg, List<Item> items, List<Rack> racks) {
-        this(palletLengthCm, palletWidthCm, palletHeightCm, emptyPalletKg, requiredPallets, availableSlots,
+        this(palletLengthCm, palletWidthCm, palletHeightCm, emptyPalletKg, null, requiredPallets, availableSlots,
             totalLoadedWeightKg, items, racks, List.of());
     }
 
