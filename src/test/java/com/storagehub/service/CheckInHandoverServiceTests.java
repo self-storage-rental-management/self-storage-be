@@ -205,8 +205,6 @@ class CheckInHandoverServiceTests {
             .thenReturn(List.of(first, second));
 
         var base = validCompletionRequest();
-        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), base))
-            .hasMessageContaining("kiểm kê đủ từng dòng hàng");
         var firstMeasurements = new CompleteCheckInRequest.InventoryMeasurements(
             new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("25"), new BigDecimal("60"));
         var secondMeasurements = new CompleteCheckInRequest.InventoryMeasurements(
@@ -231,6 +229,21 @@ class CheckInHandoverServiceTests {
         assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.occupied);
         assertThat(response.handover().inventoryLines()).containsExactlyElementsOf(lines);
         verify(rentalRepository).saveAndFlush(checkIn.getRental());
+    }
+
+    @Test
+    void acceptsLegacyAggregateInventoryWhileFrontendIsRollingOut() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(true);
+        var declared = entityWithId(new ReservationGoodsItem());
+        declared.setQuantity(3);
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of(declared));
+
+        var response = service.complete(actor, checkIn.getId(), validCompletionRequest());
+
+        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.completed);
+        assertThat(response.handover().inventoryLines()).isNull();
     }
 
     @Test

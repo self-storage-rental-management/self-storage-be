@@ -443,8 +443,21 @@ public class CustomerReservationService {
         if (checkIn.getStatus() == CheckInStatus.setup_completed) {
             return toDetailResponse(reservation);
         }
-        if (checkIn.getStatus() != CheckInStatus.setup_in_progress) {
+        CheckInStatus previousCheckInStatus = checkIn.getStatus();
+        // Some reservations created before the two customer confirmation gates were
+        // introduced can already be PREPARING while their check-in still carries the
+        // old handover_pending_receipt status. PREPARING is only written after the
+        // customer has received the unit, so it is safe to repair that stale check-in
+        // before recording the customer's inventory-readiness confirmation.
+        boolean staleReceiptStatus = reservation.getStatus() == ReservationStatus.PREPARING
+            && previousCheckInStatus == CheckInStatus.handover_pending_receipt;
+        if (previousCheckInStatus != CheckInStatus.setup_in_progress && !staleReceiptStatus) {
             throw ApiExceptions.conflict("Đơn chưa ở thời gian chuẩn bị hàng hoặc đã chuyển sang bước kiểm kê.");
+        }
+        if (staleReceiptStatus && checkIn.getRental() == null) {
+            Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId)
+                .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê của thời gian chuẩn bị hàng."));
+            checkIn.setRental(rental);
         }
         Instant completedAt = Instant.now();
         checkIn.setStatus(CheckInStatus.setup_completed);
@@ -468,7 +481,7 @@ public class CustomerReservationService {
         auditLogService.recordMutation(
             reservation.getCustomer(), "CUSTOMER_PREPARATION_COMPLETED", "CheckIn", checkIn.getId(),
             reservation.getFacility().getId(),
-            Map.of("checkInStatus", CheckInStatus.setup_in_progress),
+            Map.of("checkInStatus", previousCheckInStatus),
             Map.of("checkInStatus", CheckInStatus.setup_completed)
         );
         notificationService.createFacilityOperationsNotifications(
