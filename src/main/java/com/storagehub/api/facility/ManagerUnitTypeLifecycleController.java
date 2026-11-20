@@ -26,6 +26,11 @@ public class ManagerUnitTypeLifecycleController {
         lifecycle.deleteUnitType(actors.required(), unitTypeId);
     }
 
+    @PostMapping("/unit-types/{unitTypeId}/restore")
+    public ApiResponse<UnitTypeResponse> restore(@PathVariable UUID unitTypeId) {
+        return new ApiResponse<>(lifecycle.restoreUnitType(actors.required(), unitTypeId), CorrelationIdContext.current());
+    }
+
     @PostMapping("/facilities/{facilityId}/unit-types")
     public ApiResponse<UnitTypeResponse> create(
         @PathVariable UUID facilityId,

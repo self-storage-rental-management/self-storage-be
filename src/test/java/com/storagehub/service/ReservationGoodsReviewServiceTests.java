@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 
@@ -23,6 +24,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
@@ -52,6 +54,7 @@ class ReservationGoodsReviewServiceTests {
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private AuditLogService auditLogService;
     @Mock private NotificationService notificationService;
+    @Mock private UnitTypeRepository capacityMutex;
 
     private ReservationGoodsReviewService service;
     private ActorPrincipal staff;
@@ -59,6 +62,7 @@ class ReservationGoodsReviewServiceTests {
     private Facility facility;
     private Reservation reservation;
     private ReservationGoodsItem goodsItem;
+    private UnitType unitType;
 
     @BeforeEach
     void setUp() {
@@ -74,7 +78,7 @@ Set.of("reservations:read", "reservations:approve"),
 Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         );
 
-        UnitType unitType = entityWithId(new UnitType());
+        unitType = entityWithId(new UnitType());
         User customer = entityWithId(new User());
         customer.setEmail("customer@example.com");
 
@@ -88,6 +92,8 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         reservation.setStartDate(LocalDate.of(2026, 10, 10));
         reservation.setEndDate(LocalDate.of(2026, 11, 10));
         reservation.setGoodsReviewDueAt(Instant.now().plusSeconds(3600));
+        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
+        lenient().when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
 
         goodsItem = entityWithId(new ReservationGoodsItem());
         goodsItem.setReservation(reservation);

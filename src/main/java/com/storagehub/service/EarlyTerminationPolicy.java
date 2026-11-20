@@ -136,10 +136,13 @@ public final class EarlyTerminationPolicy {
         BigDecimal totalCharge = usageCharge.add(earlyTerminationFee)
             .min(total)
             .setScale(2, RoundingMode.HALF_UP);
+        Integer pricingTierMonths = underThreeMonths
+            ? Integer.valueOf(0)
+            : tier == null ? null : Integer.valueOf(tier.rentalMonths());
         return new ActiveReturnCalculation(
             true,
             completedMonths,
-            underThreeMonths ? Integer.valueOf(0) : (tier == null ? null : tier.rentalMonths()),
+            pricingTierMonths,
             setupDaysUsed,
             chargeableSetupDays,
             rentalDaysUsed,

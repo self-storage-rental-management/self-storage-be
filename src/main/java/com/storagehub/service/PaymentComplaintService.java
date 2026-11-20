@@ -345,6 +345,8 @@ public class PaymentComplaintService {
         response.setHeightCm(item.getHeightCm());
         response.setWeightPerItemKg(item.getWeightKg());
         response.setFragile(item.isFragile());
+        response.setStackable(item.isStackable());
+        response.setAllowHorizontalPlacement(item.isAllowHorizontalPlacement());
         response.setCustomerNote(item.getCustomerNote());
         return response;
     }
