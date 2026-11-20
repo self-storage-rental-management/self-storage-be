@@ -3,6 +3,7 @@ package com.storagehub.api.reservation;
 import com.storagehub.domain.model.GoodsCategory;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -37,6 +38,18 @@ public class GoodsItemRequest {
     @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal heightCm;
     @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal weightPerItemKg;
     private boolean fragile;
+    /**
+     * New declarations use this flag instead of entering a layer count.
+     * Null is retained for old clients and old quote snapshots.
+     */
+    private Boolean stackable;
+    @Min(1) @Max(100) private int maxStackLayers = 1;
+    /**
+     * Null keeps old quote snapshots and old clients compatible. A missing
+     * value has the same meaning as false: keep the original upright
+     * orientation and only rotate the item on the pallet surface.
+     */
+    private Boolean allowHorizontalPlacement;
 
     public GoodsItemRequest() {
     }
@@ -83,4 +96,18 @@ public class GoodsItemRequest {
     public void setWeightPerItemKg(BigDecimal weightPerItemKg) { this.weightPerItemKg = weightPerItemKg; }
     public boolean isFragile() { return fragile; }
     public void setFragile(boolean fragile) { this.fragile = fragile; }
+    public Boolean getStackable() { return stackable; }
+    public void setStackable(Boolean stackable) { this.stackable = stackable; }
+    public boolean hasStackabilityDeclaration() { return stackable != null; }
+    public boolean allowsStacking() {
+        if (fragile) return false;
+        return stackable != null ? stackable : maxStackLayers > 1;
+    }
+    public int getMaxStackLayers() { return maxStackLayers; }
+    public void setMaxStackLayers(int maxStackLayers) { this.maxStackLayers = maxStackLayers; }
+    public Boolean getAllowHorizontalPlacement() { return allowHorizontalPlacement; }
+    public void setAllowHorizontalPlacement(Boolean allowHorizontalPlacement) {
+        this.allowHorizontalPlacement = allowHorizontalPlacement;
+    }
+    public boolean allowsHorizontalPlacement() { return Boolean.TRUE.equals(allowHorizontalPlacement); }
 }

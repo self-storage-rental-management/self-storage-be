@@ -66,6 +66,10 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal maxLoadKg;
 
+    /** Optional gross stored-load limit, including empty pallets. */
+    @Column(name = "max_stored_load_kg", precision = 12, scale = 2)
+    private BigDecimal maxStoredLoadKg;
+
     @Column(nullable = false)
     private int rackCount;
 
@@ -81,6 +85,25 @@ public class UnitType extends BaseEntity {
     @Column(name = "aisle_width_m", precision = 10, scale = 2)
     private BigDecimal aisleWidthM;
 
+    /** Designed clear gap between rack envelopes, in metres. */
+    @Column(name = "storage_aisle_width_m", precision = 10, scale = 2)
+    private BigDecimal storageAisleWidthM;
+
+    /** Optional clear gate dimensions used for an operational review. */
+    @Column(name = "gate_width_m", precision = 10, scale = 2)
+    private BigDecimal gateWidthM;
+
+    @Column(name = "gate_height_m", precision = 10, scale = 2)
+    private BigDecimal gateHeightM;
+
+    /** Lowest known obstruction or ceiling elevation, in metres. */
+    @Column(name = "lowest_obstruction_height_m", precision = 10, scale = 2)
+    private BigDecimal lowestObstructionHeightM;
+
+    /** Required clear gap below the obstruction or ceiling, in metres. */
+    @Column(name = "overhead_clearance_m", precision = 10, scale = 2)
+    private BigDecimal overheadClearanceM;
+
     @Column(name = "trolley_type", length = 160)
     private String trolleyType;
 
@@ -89,6 +112,13 @@ public class UnitType extends BaseEntity {
 
     @Column(name = "large_box_capacity")
     private Integer largeBoxCapacity;
+
+    @Column(name = "rack_layout_json", columnDefinition = "LONGTEXT")
+    private String rackLayoutJson;
+
+    /** Rating pallet theo kích thước, tách riêng để migration và đồng bộ dữ liệu cũ. */
+    @Column(name = "pallet_rating_catalog_json", columnDefinition = "LONGTEXT")
+    private String palletRatingCatalogJson;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)

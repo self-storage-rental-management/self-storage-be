@@ -36,6 +36,26 @@ public class ReservationPricingSnapshot extends BaseEntity {
     @Column(nullable = false, length = 50)
     private String pricingPolicyVersion;
 
+    /** Exact facility identity and address accepted for this reservation. */
+    @Column(name = "facility_snapshot_json", updatable = false, columnDefinition = "LONGTEXT")
+    private String facilitySnapshotJson;
+
+    /** Exact unit type, rack layout and pallet rating accepted for this reservation. */
+    @Column(name = "unit_type_snapshot_json", updatable = false, columnDefinition = "LONGTEXT")
+    private String unitTypeSnapshotJson;
+
+    /** Goods declaration used for the quote and reservation. */
+    @Column(name = "goods_snapshot_json", updatable = false, columnDefinition = "LONGTEXT")
+    private String goodsSnapshotJson;
+
+    /** Current physical storage unit assignment, captured when operations assigns it. */
+    @Column(name = "assigned_unit_snapshot_json", columnDefinition = "LONGTEXT")
+    private String assignedUnitSnapshotJson;
+
+    /** Integrity hash of the immutable quote-time snapshots. */
+    @Column(name = "snapshot_hash", updatable = false, length = 64)
+    private String snapshotHash;
+
     @Column(nullable = false)
     private int rentalMonths;
 

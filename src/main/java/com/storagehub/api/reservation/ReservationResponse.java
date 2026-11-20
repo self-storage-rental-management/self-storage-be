@@ -75,6 +75,25 @@ public class ReservationResponse {
     private UnitTypeSnapshot unitTypeSnapshot;
     public record UnitTypeSnapshot(String name,BigDecimal lengthM,BigDecimal widthM,BigDecimal heightM,
         BigDecimal areaM2,BigDecimal volumeM3,BigDecimal maxLoadKg,int rackCount,BigDecimal rackLengthM,BigDecimal rackWidthM,BigDecimal rackHeightM) {}
+    private FacilitySnapshot facilitySnapshot;
+    private StorageConfigurationSnapshot storageConfigurationSnapshot;
+    private StorageUnitSnapshot assignedUnitSnapshot;
+    public record FacilitySnapshot(
+        String snapshotVersion, Instant capturedAt, String code, String name, String address,
+        String city, String phone, String accessHours, Boolean climateControlled,
+        String securityDescription
+    ) {}
+    public record StorageConfigurationSnapshot(
+        String snapshotVersion, Instant capturedAt, BigDecimal maxStoredLoadKg,
+        BigDecimal aisleWidthM, BigDecimal storageAisleWidthM, BigDecimal gateWidthM,
+        BigDecimal gateHeightM, BigDecimal lowestObstructionHeightM, BigDecimal overheadClearanceM,
+        String rackLayoutJson, String palletRatingCatalogJson
+    ) {}
+    public record StorageUnitSnapshot(
+        UUID id, String code, String floor, String zone, String status,
+        String rackLayoutJson, String unitTypeCode, String unitTypeName,
+        String snapshotVersion, Instant capturedAt
+    ) {}
     public String getPricingPolicyVersion(){return pricingPolicyVersion;}
     public void setPricingPolicyVersion(String value){pricingPolicyVersion=value;}
     public String getPricingSnapshotStatus(){return pricingSnapshotStatus;}
@@ -83,6 +102,12 @@ public class ReservationResponse {
     public void setSnapshotWarnings(java.util.List<String> value){snapshotWarnings=value;}
     public UnitTypeSnapshot getUnitTypeSnapshot(){return unitTypeSnapshot;}
     public void setUnitTypeSnapshot(UnitTypeSnapshot value){unitTypeSnapshot=value;}
+    public FacilitySnapshot getFacilitySnapshot(){return facilitySnapshot;}
+    public void setFacilitySnapshot(FacilitySnapshot value){facilitySnapshot=value;}
+    public StorageConfigurationSnapshot getStorageConfigurationSnapshot(){return storageConfigurationSnapshot;}
+    public void setStorageConfigurationSnapshot(StorageConfigurationSnapshot value){storageConfigurationSnapshot=value;}
+    public StorageUnitSnapshot getAssignedUnitSnapshot(){return assignedUnitSnapshot;}
+    public void setAssignedUnitSnapshot(StorageUnitSnapshot value){assignedUnitSnapshot=value;}
     private boolean setupExitReviewRequired;
     private java.time.Instant setupGoodsRevisionUsedAt;
     private BigDecimal monthlyPrice;

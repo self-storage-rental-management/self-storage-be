@@ -1,0 +1,20 @@
+CREATE TABLE facility_lifecycle_change_requests (
+    id BINARY(16) NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    facility_id BINARY(16) NOT NULL,
+    facility_name VARCHAR(255) NOT NULL,
+    requested_by BINARY(16) NOT NULL,
+    requester_name VARCHAR(255) NOT NULL,
+    requested_status VARCHAR(24) NOT NULL,
+    reason VARCHAR(1000) NULL,
+    status VARCHAR(24) NOT NULL,
+    reviewed_by BINARY(16) NULL,
+    reviewed_at DATETIME(6) NULL,
+    rejection_reason VARCHAR(1000) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_facility_lifecycle_request_status (facility_id, status, created_at),
+    CONSTRAINT fk_facility_lifecycle_request_facility FOREIGN KEY (facility_id) REFERENCES facilities(id),
+    CONSTRAINT fk_facility_lifecycle_requester FOREIGN KEY (requested_by) REFERENCES users(id),
+    CONSTRAINT fk_facility_lifecycle_reviewer FOREIGN KEY (reviewed_by) REFERENCES users(id)
+) ENGINE=InnoDB;

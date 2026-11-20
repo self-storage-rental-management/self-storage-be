@@ -17,6 +17,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
     long countByCustomer_IdAndStatusIn(UUID customerId, java.util.Collection<ReservationStatus> statuses);
+    long countByFacility_IdAndStatusIn(UUID facilityId, java.util.Collection<ReservationStatus> statuses);
     boolean existsByReservationCode(String reservationCode);
     boolean existsByFacility_Id(UUID facilityId);
     boolean existsByUnitType_Id(UUID unitTypeId);
@@ -45,15 +46,31 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     Page<Reservation> findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
         UUID customerId, ReservationStatus excludedStatus, Pageable pageable
     );
+    @Query("""
+        select reservation from Reservation reservation
+        where reservation.customer.id = :customerId
+          and reservation.customerArchivedAt is null
+          and reservation.status <> com.storagehub.domain.model.ReservationStatus.REJECTED
+          and (
+            reservation.archivedAt is null
+            or reservation.status = com.storagehub.domain.model.ReservationStatus.EXPIRED
+          )
+        """)
+    Page<Reservation> findCustomerVisibleReservations(
+        @Param("customerId") UUID customerId,
+        Pageable pageable
+    );
     Page<Reservation> findAllByCustomer_IdAndStatus(
         UUID customerId,
         ReservationStatus status,
         Pageable pageable
     );
+    Page<Reservation> findAllByCustomer_IdAndStatusAndCustomerArchivedAtIsNull(
+        UUID customerId, ReservationStatus status, Pageable pageable
+    );
     Page<Reservation> findAllByCustomer_IdAndStatusAndArchivedAtIsNull(
         UUID customerId, ReservationStatus status, Pageable pageable
     );
-
     @Query("""
         select count(reservation) from Reservation reservation
         where reservation.facility.id = :facilityId
@@ -77,6 +94,57 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         """)
     long countCapacityHoldingReservations(
         @Param("facilityId") UUID facilityId,
+        @Param("unitTypeId") UUID unitTypeId,
+        @Param("startDate") LocalDate startDate,
+        @Param("endDate") LocalDate endDate,
+        @Param("now") Instant now,
+        @Param("temporaryStatuses") java.util.Collection<ReservationStatus> temporaryStatuses,
+        @Param("permanentStatuses") java.util.Collection<ReservationStatus> permanentStatuses
+    );
+
+    @Query("""
+        select case when count(reservation) > 0 then true else false end
+        from Reservation reservation
+        where reservation.unitType.id = :unitTypeId
+          and (
+            reservation.status in :permanentStatuses
+            or (
+              reservation.status in :temporaryStatuses
+              and reservation.holdExpiresAt > :now
+            )
+          )
+        """)
+    boolean existsLiveCapacityHoldByUnitTypeId(
+        @Param("unitTypeId") UUID unitTypeId,
+        @Param("now") Instant now,
+        @Param("temporaryStatuses") java.util.Collection<ReservationStatus> temporaryStatuses,
+        @Param("permanentStatuses") java.util.Collection<ReservationStatus> permanentStatuses
+    );
+
+    @Query("""
+        select r.palletHeldUnit.id from Reservation r
+        where r.unitType.id = :unitTypeId
+          and r.palletHeldUnit is not null and r.assignedUnit is null
+          and (r.status in :permanentStatuses
+            or (r.status in :temporaryStatuses and r.holdExpiresAt > :now))
+        """)
+    java.util.List<UUID> findLivePalletHoldUnitIds(
+        @Param("unitTypeId") UUID unitTypeId,
+        @Param("now") Instant now,
+        @Param("temporaryStatuses") java.util.Collection<ReservationStatus> temporaryStatuses,
+        @Param("permanentStatuses") java.util.Collection<ReservationStatus> permanentStatuses
+    );
+
+    @Query("""
+        select r.palletHeldUnit.id from Reservation r
+        where r.unitType.id = :unitTypeId
+          and r.palletHeldUnit is not null and r.assignedUnit is null
+          and r.startDate < :endDate
+          and r.endDate > :startDate
+          and (r.status in :permanentStatuses
+            or (r.status in :temporaryStatuses and r.holdExpiresAt > :now))
+        """)
+    java.util.List<UUID> findLivePalletHoldUnitIdsForPeriod(
         @Param("unitTypeId") UUID unitTypeId,
         @Param("startDate") LocalDate startDate,
         @Param("endDate") LocalDate endDate,

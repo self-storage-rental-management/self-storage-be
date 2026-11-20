@@ -32,6 +32,11 @@ public record CustomerPaymentReceiptResponse(
     String reservationCode,
     String invoiceNumber,
     InvoiceStatus invoiceStatus,
-    Instant invoiceIssuedAt
+    Instant invoiceIssuedAt,
+    String facilityCode,
+    String facilityName,
+    String facilityAddress,
+    String unitTypeName,
+    String assignedUnitCode
 ) {
 }

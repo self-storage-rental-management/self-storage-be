@@ -249,6 +249,8 @@ public class ReservationGoodsReviewService {
         response.setHeightCm(item.getHeightCm());
         response.setWeightPerItemKg(item.getWeightKg());
         response.setFragile(item.isFragile());
+        response.setStackable(item.isStackable());
+        response.setAllowHorizontalPlacement(item.isAllowHorizontalPlacement());
         response.setCustomerNote(item.getCustomerNote());
         response.setRequiresStaffReview(item.isRequiresStaffReview());
         response.setReviewStatus(item.getReviewStatus());
