@@ -134,6 +134,11 @@ public class ReturnSettlementService {
         // Only verified check-in funds establish the available security deposit.
         BigDecimal depositAmount = securityDeposit(rental);
 
+        LocalDate today = LocalDate.now(BusinessTime.ZONE);
+        if (request.scheduledDate() != null && request.scheduledDate().isBefore(today)) {
+            throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+        }
+
         ReturnCase returnCase = new ReturnCase();
         returnCase.setRental(rental);
         returnCase.setFacility(rental.getFacility());
@@ -142,7 +147,7 @@ public class ReturnSettlementService {
         returnCase.setRequestedBy(customer);
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setRequestedAt(Instant.now());
-        returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : LocalDate.now(BusinessTime.ZONE));
+        returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : today);
         returnCase.setCustomerNotes(request.notes());
         returnCase.setDepositAmount(depositAmount);
         returnCase.setSetupExitRequested(setupExit);
@@ -182,6 +187,15 @@ public class ReturnSettlementService {
             NotificationType.RETURN,
             "Yêu cầu trả kho đã được ghi nhận",
             "Yêu cầu trả kho cho gian " + rental.getStorageUnit().getCode() + " đã được tiếp nhận.",
+            saved.getId()
+        );
+
+        notificationService.createFacilityOperationsNotifications(
+            rental.getFacility().getId(),
+            NotificationType.RETURN,
+            "Yêu cầu trả kho mới",
+            "Khách hàng " + customer.getFullName() + " đã gửi yêu cầu trả kho cho gian "
+                + rental.getStorageUnit().getCode() + ". Vui lòng kiểm tra và nghiệm thu kho.",
             saved.getId()
         );
 
@@ -602,6 +616,35 @@ public class ReturnSettlementService {
         }
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
+
+        if (request.decision() == CustomerDecision.disputed) {
+            notificationService.createFacilityOperationsNotifications(
+                saved.getFacility().getId(),
+                NotificationType.RETURN,
+                "Khách khiếu nại quyết toán trả kho",
+                "Khách hàng " + saved.getCustomer().getFullName() + " đã khiếu nại quyết toán gian "
+                    + saved.getStorageUnit().getCode() + ": " + request.note(),
+                saved.getId()
+            );
+        } else if (saved.getStatus() == ReturnCaseStatus.refund_pending) {
+            notificationService.createFacilityOperationsNotifications(
+                saved.getFacility().getId(),
+                NotificationType.RETURN,
+                "Khách đã xác nhận - Cần hoàn cọc trả kho",
+                "Khách hàng " + saved.getCustomer().getFullName() + " đã đồng ý quyết toán gian "
+                    + saved.getStorageUnit().getCode() + ". Vui lòng hoàn tiền cọc cho khách.",
+                saved.getId()
+            );
+        } else if (saved.getStatus() == ReturnCaseStatus.payment_due) {
+            notificationService.createFacilityOperationsNotifications(
+                saved.getFacility().getId(),
+                NotificationType.RETURN,
+                "Khách đã xác nhận - Chờ thu thêm tiền",
+                "Khách hàng " + saved.getCustomer().getFullName() + " đã đồng ý quyết toán gian "
+                    + saved.getStorageUnit().getCode() + ". Cần thu thêm tiền còn thiếu.",
+                saved.getId()
+            );
+        }
 
         auditLogService.recordMutation(
             request.decision() == CustomerDecision.disputed ? "RETURN_SETTLEMENT_DISPUTED" : "RETURN_SETTLEMENT_CONFIRMED",
