@@ -1153,7 +1153,13 @@ public class CheckInHandoverService {
     }
 
     private void validateInventoryLines(List<ReservationGoodsItem> declared, CompleteCheckInRequest request) {
-        var lines = request.inventoryLines() == null ? List.<CompleteCheckInRequest.InventoryLine>of() : request.inventoryLines();
+        // inventoryLines was added after the aggregate inventory form had already
+        // been deployed. Keep accepting requests from that form during the rolling
+        // upgrade; all aggregate measurements, capacity, variance and evidence
+        // checks above still apply. New clients send a non-null list and receive the
+        // stricter per-line validation below.
+        if (request.inventoryLines() == null) return;
+        var lines = request.inventoryLines();
         if (declared.size() != lines.size()) {
             throw ApiExceptions.validation("Cần kiểm kê đủ từng dòng hàng đã khai báo.", null);
         }
@@ -1299,7 +1305,7 @@ public class CheckInHandoverService {
         try {
             assetIds = references.stream().map(UUID::fromString).distinct().toList();
         } catch (IllegalArgumentException exception) {
-            throw ApiExceptions.validation("Every evidence reference must be a file asset ID", null);
+            throw ApiExceptions.validation("Mỗi bằng chứng phải là mã tệp đã tải lên hợp lệ", null);
         }
         if (assetIds.size() != references.size()) {
             throw ApiExceptions.validation("Evidence references must be unique", null);
