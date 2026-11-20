@@ -49,7 +49,8 @@ public class RenewalSigningSlotsReadService {
         String coverage=demo?"LOCAL_DEMO":"VERIFIED";
         if(!source.feasible(renewal,now,deadline))return new View(id,detail.expectedVersion(),now,date,coverage,List.of(),availableAt,latestStart);
         var result=new ArrayList<RenewalOperationSources.Slot>();
-        for(LocalTime time=ServiceCalendarPolicy.OPEN;!time.isAfter(ServiceCalendarPolicy.LAST_APPOINTMENT_START);time=time.plusMinutes(ServiceCalendarPolicy.SLOT_STEP_MINUTES)) {
+        for(int minute=0;minute<24*60;minute+=ServiceCalendarPolicy.SLOT_STEP_MINUTES) {
+            LocalTime time=LocalTime.MIDNIGHT.plusMinutes(minute);
             Instant at=date.atTime(time).atZone(ServiceCalendarPolicy.ZONE).toInstant();
             if(!at.isAfter(now)||!at.isBefore(deadline))continue;
             var candidate=source.slot(renewal,at);

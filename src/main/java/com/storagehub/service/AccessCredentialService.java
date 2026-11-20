@@ -44,8 +44,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
@@ -53,8 +51,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -64,13 +60,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class AccessCredentialService {
-
-    private static final Pattern ACCESS_WINDOW = Pattern.compile("(\\d{1,2}:\\d{2}).*?(\\d{1,2}:\\d{2})");
-    private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
-    private static final Pattern ACCESS_HOURS_PATTERN = Pattern.compile(
-        "(\\d{1,2})(?::|h)?(\\d{2})?\\s*[--]\\s*(\\d{1,2})(?::|h)?(\\d{2})?",
-        Pattern.CASE_INSENSITIVE
-    );
 
     private final AccessCredentialRepository credentialRepository;
     private final CheckInRepository checkInRepository;
@@ -135,11 +124,7 @@ public class AccessCredentialService {
         credential.setSecretHash(null);
         credential.setIssuedBy(staff);
         credential.setIssuedAt(Instant.now());
-        String accessHours = clean(reservation.getFacility().getAccessHours());
-        String accessPolicy = accessHours == null
-            ? "Truy cập theo giờ mở cửa cơ sở; thời điểm kích hoạt và thu hồi được ghi nhận trong nhật ký vận hành"
-            : "Truy cập trong giờ mở cửa cơ sở (" + accessHours
-                + "); thời điểm kích hoạt và thu hồi được ghi nhận trong nhật ký vận hành";
+        String accessPolicy = "Truy cập 24/24; thời điểm kích hoạt và thu hồi được ghi nhận trong nhật ký vận hành";
         String requestNote = clean(request.note());
         credential.setNote(requestNote == null ? accessPolicy : requestNote + ". " + accessPolicy);
         AccessCredential saved = credentialRepository.saveAndFlush(credential);
@@ -191,12 +176,10 @@ public class AccessCredentialService {
         boolean active = credential.getStatus() == AccessCredentialStatus.ACTIVE;
         boolean rentalOpen = rental != null
             && (rental.getStatus() == RentalStatus.setup || rental.getStatus() == RentalStatus.active);
-        boolean withinHours = withinAccessHours(credential.getFacility().getAccessHours(), occurredAt);
-        boolean allowed = active && rentalOpen && withinHours;
+        boolean allowed = active && rentalOpen;
         String reason = !active ? "Credential đã bị thu hồi"
             : !rentalOpen ? "Hồ sơ thuê không còn trong thời gian chuẩn bị hoặc đang thuê"
-            : !withinHours ? "Ngoài giờ mở cửa cơ sở"
-            : "Truy cập hợp lệ trong giờ mở cửa";
+            : "Truy cập hợp lệ 24/24";
 
         User staff = requireActor(actor);
         auditLogService.recordMutation(
@@ -326,20 +309,15 @@ public class AccessCredentialService {
         if (accessedAt.isAfter(Instant.now().plusSeconds(30))) {
             throw ApiExceptions.validation("Access time cannot be in the future", null);
         }
-        String accessHours = clean(credential.getFacility().getAccessHours());
-        boolean withinOpeningHours = isWithinOpeningHours(accessHours, accessedAt);
+        String accessHours = "24/7";
         Rental rental = credential.getRental();
         boolean duringSetup = rental != null && rental.getStatus() == RentalStatus.setup;
-        boolean allowed = credential.getStatus() == AccessCredentialStatus.ACTIVE && withinOpeningHours;
+        boolean allowed = credential.getStatus() == AccessCredentialStatus.ACTIVE;
         String reason;
         if (credential.getStatus() != AccessCredentialStatus.ACTIVE) {
             reason = "Credential đã bị thu hồi";
-        } else if (accessHours == null) {
-            reason = "Cơ sở chưa cấu hình giờ mở cửa";
-        } else if (!withinOpeningHours) {
-            reason = "Ngoài giờ mở cửa cơ sở (" + accessHours + ")";
         } else {
-            reason = "Được phép truy cập trong giờ mở cửa cơ sở";
+            reason = "Được phép truy cập 24/24";
         }
 
         Map<String, Object> accessLog = new LinkedHashMap<>();
@@ -347,7 +325,7 @@ public class AccessCredentialService {
         accessLog.put("rentalId", rental == null ? null : rental.getId());
         accessLog.put("accessedAt", accessedAt);
         accessLog.put("duringSetup", duringSetup);
-        accessLog.put("withinOpeningHours", withinOpeningHours);
+        accessLog.put("withinOpeningHours", true);
         accessLog.put("allowed", allowed);
         accessLog.put("source", request == null ? null : clean(request.source()));
         accessLog.put("note", request == null ? null : clean(request.note()));
@@ -537,46 +515,6 @@ public class AccessCredentialService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private boolean withinAccessHours(String raw, Instant occurredAt) {
-        if (raw == null || raw.isBlank()) return true;
-        Matcher matcher = ACCESS_WINDOW.matcher(raw);
-        if (!matcher.find()) return true;
-        try {
-            LocalTime start = LocalTime.parse(matcher.group(1));
-            LocalTime end = LocalTime.parse(matcher.group(2));
-            LocalTime now = occurredAt.atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalTime();
-            if (start.equals(end)) return true;
-            return start.isBefore(end)
-                ? !now.isBefore(start) && now.isBefore(end)
-                : !now.isBefore(start) || now.isBefore(end);
-        } catch (RuntimeException ignored) {
-            return true;
-        }
-    }
-
-    private boolean isWithinOpeningHours(String accessHours, Instant instant) {
-        if (accessHours == null) return false;
-        Matcher matcher = ACCESS_HOURS_PATTERN.matcher(accessHours);
-        if (!matcher.find()) return false;
-        try {
-            LocalTime opens = parseTime(matcher.group(1), matcher.group(2));
-            LocalTime closes = parseTime(matcher.group(3), matcher.group(4));
-            LocalTime current = instant.atZone(VIETNAM_ZONE).toLocalTime();
-            if (opens.equals(closes)) return true;
-            if (opens.isBefore(closes)) {
-                return !current.isBefore(opens) && current.isBefore(closes);
-            }
-            return !current.isBefore(opens) || current.isBefore(closes);
-        } catch (RuntimeException ignored) {
-            return false;
-        }
-    }
-
-    private LocalTime parseTime(String hourValue, String minuteValue) {
-        int hour = Integer.parseInt(hourValue);
-        int minute = minuteValue == null || minuteValue.isBlank() ? 0 : Integer.parseInt(minuteValue);
-        return LocalTime.of(hour, minute);
-    }
     private AccessCredentialResponse toResponse(AccessCredential credential) {
         return new AccessCredentialResponse(
             credential.getId(), credential.getReservation().getId(), credential.getReservation().getReservationCode(),
