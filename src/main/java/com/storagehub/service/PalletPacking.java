@@ -228,9 +228,12 @@ final class PalletPacking {
                 .map(state -> allocationFor(state, line))
                 .toList();
             int largest = itemStates.stream().mapToInt(state -> state.itemQuantity(line.itemNumber)).max().orElse(0);
-            int layers = itemStates.stream().mapToInt(state -> state.itemLayers(line.itemNumber)).max().orElse(1);
+            int allowedLayers = itemStates.stream()
+                .mapToInt(state -> theoreticalCapacity(state, line).usableLayers())
+                .max()
+                .orElse(line.cargo.maxLayers() == null ? 1 : line.cargo.maxLayers());
             planItems.add(new PalletPlan.Item(line.itemNumber, line.quantity, itemStates.size(), largest,
-                layers, line.cargo.weightKg(), allocations));
+                allowedLayers, line.cargo.weightKg(), allocations));
         }
         List<PalletPlan.Rack> usedRacks = racks.stream()
             .filter(rack -> rack.usedSlots > 0)
@@ -240,7 +243,7 @@ final class PalletPacking {
                 rack.preview.bayLengthCm(), rack.preview.bayWidthCm(), rack.preview.maxCargoHeightCm(), rack.preview.levels()))
             .toList();
         int used = states.size();
-        return new Result(new PalletPlan(pallet.lengthCm(), pallet.widthCm(), pallet.heightCm(), pallet.emptyKg(),
+        return new Result(new PalletPlan(pallet.lengthCm(), pallet.widthCm(), pallet.heightCm(), pallet.emptyKg(), pallet.maxPayloadKg(),
             used, layout.palletSlotCount(), cargoWeightKg.add(pallet.emptyKg().multiply(BigDecimal.valueOf(used))),
             List.copyOf(planItems), usedRacks, palletPlans), null, used, layout.palletSlotCount());
     }
@@ -350,24 +353,38 @@ final class PalletPacking {
 
     private static PalletPlan.Allocation allocationFor(PalletState state, Line3d line) {
         int pieces = state.itemQuantity(line.itemNumber);
-        int piecesPerLayer = state.boxes.stream().filter(box -> box.itemNumber == line.itemNumber)
-            .collect(java.util.stream.Collectors.groupingBy(box -> box.layer, java.util.stream.Collectors.counting()))
-            .values().stream().mapToInt(Long::intValue).max().orElse(pieces);
-        int layers = state.itemLayers(line.itemNumber);
-        int theoretical = palletCapacityForAvailableCargo(state.pallet, line.cargo, state.cargoHeightCm,
-            state.compartment.cargoCapacityKg.min(state.pallet.maxPayloadKg())).maxPieces();
-        PalletPlan.Capacity capacity = new PalletPlan.Capacity(
-            state.pallet.emptyKg().add(state.compartment.cargoCapacityKg.min(state.pallet.maxPayloadKg())),
-            state.compartment.cargoCapacityKg.min(state.pallet.maxPayloadKg()), piecesPerLayer, layers,
-            theoretical, floor(state.compartment.cargoCapacityKg.min(state.pallet.maxPayloadKg()), line.cargo.weightKg(), Integer.MAX_VALUE),
-            theoretical, state.boxes.stream().filter(box -> box.itemNumber == line.itemNumber).findFirst()
-                .map(box -> box.length).orElse(line.cargo.lengthCm()),
-            state.boxes.stream().filter(box -> box.itemNumber == line.itemNumber).findFirst()
-                .map(box -> box.width).orElse(line.cargo.widthCm()),
-            state.boxes.stream().filter(box -> box.itemNumber == line.itemNumber).findFirst()
-                .map(box -> box.height).orElse(line.cargo.heightCm()));
+        // The capacity in an allocation describes what one pallet could hold,
+        // not only what happened to be placed on this particular pallet.  The
+        // old code used itemLayers() here, so a pallet carrying one layer was
+        // reported as a one-layer pallet even when the compartment had room
+        // for more layers.  That made the customer explanation disagree with
+        // the 3D packing rules.
+        PalletPlan.Capacity capacity = theoreticalCapacity(state, line);
         return new PalletPlan.Allocation(state.rack.preview.code(), state.compartment.number, 1,
             state.compartment.cargoCapacityKg, pieces, state.pallet.emptyKg().add(state.cargoWeightKg), capacity);
+    }
+
+    private static PalletPlan.Capacity theoreticalCapacity(PalletState state, Line3d line) {
+        BigDecimal cargoWeightLimit = state.compartment.cargoCapacityKg
+            .min(state.pallet.maxPayloadKg()).max(BigDecimal.ZERO);
+        PalletPlan.Capacity best = palletCapacityForAvailableCargo(state.pallet, line.cargo, state.cargoHeightCm,
+            cargoWeightLimit);
+        PlacedBox placed = state.boxes.stream()
+            .filter(box -> box.itemNumber == line.itemNumber)
+            .findFirst()
+            .orElse(null);
+        if (placed == null) return best;
+        PlacementCapacity actualPlacement = placementCapacities(state.pallet, line.cargo, state.cargoHeightCm,
+                cargoWeightLimit).stream()
+            .filter(candidate -> candidate.placement().lengthCm().compareTo(placed.length) == 0
+                && candidate.placement().widthCm().compareTo(placed.width) == 0
+                && candidate.placement().heightCm().compareTo(placed.height) == 0)
+            .findFirst()
+            .orElse(null);
+        if (actualPlacement == null) return best;
+        return new PalletPlan.Capacity(state.pallet.emptyKg().add(cargoWeightLimit), cargoWeightLimit,
+            actualPlacement.piecesPerLayer(), actualPlacement.usableLayers(), actualPlacement.maxPiecesByDimensions(),
+            actualPlacement.maxPiecesByWeight(), actualPlacement.maxPieces(), placed.length, placed.width, placed.height);
     }
 
     private static String packingIssue3d(RackLayout.Result layout, Line3d line,
@@ -495,8 +512,8 @@ final class PalletPacking {
                 rack.preview.effectiveRackLoadKg(), rack.preview.maxBeamPairLoadKg(), rack.preview.compartmentCount(),
                 rack.preview.bayLengthCm(), rack.preview.bayWidthCm(), rack.preview.maxCargoHeightCm(), rack.preview.levels())).toList();
         int used = planItems.stream().mapToInt(PalletPlan.Item::requiredPallets).sum();
-        return new Result(new PalletPlan(pallet.lengthCm(), pallet.widthCm(), pallet.heightCm(), emptyPalletKg, used, layout.palletSlotCount(),
-            cargoWeightKg.add(emptyPalletKg.multiply(BigDecimal.valueOf(used))), List.copyOf(planItems), placed), null,
+        return new Result(new PalletPlan(pallet.lengthCm(), pallet.widthCm(), pallet.heightCm(), emptyPalletKg, pallet.maxPayloadKg(), used, layout.palletSlotCount(),
+            cargoWeightKg.add(emptyPalletKg.multiply(BigDecimal.valueOf(used))), List.copyOf(planItems), placed, List.of()), null,
             used, layout.palletSlotCount());
     }
 
