@@ -108,6 +108,7 @@ class RackLayoutServiceTests {
 
         RackLayout.Saved saved = service.save(manager, typeId, new RackLayout.Save(demoConfiguration, preview.previewKey()));
 
+        assertThat(saved.result()).isEqualTo(preview.result());
         assertThat(service.readForBusiness(actor(RoleCode.BUSINESS), typeId)).isEqualTo(saved);
         var customer = service.readForCustomer(actor(RoleCode.CUSTOMER), facilityId, typeId);
         assertThat(customer.withSamplePlans(null, null, null)).isEqualTo(saved.result());
@@ -146,6 +147,7 @@ class RackLayoutServiceTests {
 
     @Test
     void newTypeRequiresTheConfirmedDraftAndUsesCalculatedSummary() {
+        ReflectionTestUtils.setField(type, "id", null);
         var draft = new RackLayout.Draft(type.getLengthM(), type.getWidthM(), type.getHeightM(), type.getMaxLoadKg(), configuration);
         var preview = service.previewDraft(manager, facilityId, draft);
         assertThat(type.getRackLayoutJson()).isNull();
@@ -155,15 +157,15 @@ class RackLayoutServiceTests {
         assertThatThrownBy(() -> service.confirmNewType(manager, type, new RackLayout.Save(configuration, preview.previewKey())))
             .isInstanceOf(ApiException.class).hasMessageContaining("kiểm tra lại");
         type.setMaxLoadKg(draft.maxLoadKg());
-        when(units.findByFacility_Id(facilityId)).thenReturn(List.of());
         service.confirmNewType(manager, type, new RackLayout.Save(configuration, preview.previewKey()));
         assertThat(type.getRackCount()).isEqualTo(1);
         assertThat(type.getSmallBoxCapacity()).isEqualTo(preview.result().smallBoxesPerUnit());
-        org.mockito.Mockito.verify(units).findByFacility_Id(facilityId);
+        verifyNoInteractions(units);
     }
 
     @Test
     void newTypeCanConfirmTheConfigurationReturnedByAutomaticPreview() {
+        ReflectionTestUtils.setField(type, "id", null);
         type.setLengthM(new BigDecimal("12"));
         type.setWidthM(new BigDecimal("11.6"));
         type.setHeightM(new BigDecimal("5"));
@@ -176,7 +178,9 @@ class RackLayoutServiceTests {
         type.setStorageAisleWidthM(new BigDecimal("2.5"));
 
         RackLayout.Draft draft = new RackLayout.Draft(
-            type.getLengthM(), type.getWidthM(), type.getHeightM(), type.getMaxLoadKg(), null, 4);
+            type.getLengthM(), type.getWidthM(), type.getHeightM(), null, null, null,
+            type.getMaxLoadKg(), null, type.getAisleWidthM(), type.getStorageAisleWidthM(),
+            null, null, null, null, null, null, null, null, null, 4, null, null);
         RackLayout.Preview preview = service.previewDraft(manager, facilityId, draft);
 
         // The UI submits the calculated configuration returned by the preview,
@@ -184,13 +188,12 @@ class RackLayoutServiceTests {
         assertThat(preview.result().configuration().racks())
             .allSatisfy(rack -> assertThat(rack.maxLoadedPalletKg()).isEqualTo(new BigDecimal("100")));
 
-        when(units.findByFacility_Id(facilityId)).thenReturn(List.of());
         service.confirmNewType(manager, type,
             new RackLayout.Save(preview.result().configuration(), preview.previewKey()));
 
         assertThat(type.getRackCount()).isEqualTo(4);
         assertThat(type.getRackLayoutJson()).isNotBlank();
-        org.mockito.Mockito.verify(units).findByFacility_Id(facilityId);
+        verifyNoInteractions(units);
     }
 
     @Test

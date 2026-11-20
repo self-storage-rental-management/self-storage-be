@@ -511,7 +511,13 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
             }
             if(facility==null)throw ApiExceptions.notFound("Owned linked record not found");if(requested!=null&&!facility.getId().equals(requested))throw ApiExceptions.validation("Facility conflicts with linked record",null);
         } else {if(requested==null)throw ApiExceptions.validation("Facility required when no owned linked record is supplied",null);facility=em.find(Facility.class,requested);if(facility==null)throw ApiExceptions.notFound("Facility not found");}
-        if(facility.getStatus()!=FacilityStatus.active)throw ApiExceptions.conflict("Support facility is not active");return facility;
+        if (facility.getStatus() == FacilityStatus.maintenance && link == null) {
+            throw ApiExceptions.conflict("Cơ sở đang tạm ngưng nhận đơn mới. Hãy mở đơn đặt kho hoặc hồ sơ thuê của bạn để gửi yêu cầu hỗ trợ.");
+        }
+        if (facility.getStatus() != FacilityStatus.active && facility.getStatus() != FacilityStatus.maintenance) {
+            throw ApiExceptions.conflict("Cơ sở hiện không tiếp nhận yêu cầu hỗ trợ mới.");
+        }
+        return facility;
     }
     private SupportMessage append(ActorPrincipal actor,SupportTicket ticket,SupportState state,String role,Visibility visibility,String body,List<UUID> requested) {
         var files=files(requested);

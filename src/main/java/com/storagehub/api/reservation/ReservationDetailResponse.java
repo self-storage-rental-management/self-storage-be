@@ -9,6 +9,8 @@ import java.math.BigDecimal;
 public class ReservationDetailResponse {
 
     private ReservationResponse reservation;
+    private CurrentFacility currentFacility;
+    private CurrentUnitType currentUnitType;
     private String goodsCondition;
     private String notes;
     private Instant paymentExpiresAt;
@@ -25,11 +27,20 @@ public class ReservationDetailResponse {
     private String checkInStatus;
     private String rentalStatus;
 
+    public record CurrentFacility(String name, String address, String city, String phone, String accessHours) {}
+    public record CurrentUnitType(String name, BigDecimal lengthM, BigDecimal widthM, BigDecimal heightM,
+        BigDecimal volumeM3, BigDecimal maxLoadKg, Integer rackCount, BigDecimal rackLengthM,
+        BigDecimal rackWidthM, BigDecimal rackHeightM) {}
+
     public ReservationDetailResponse() {
     }
 
     public ReservationResponse getReservation() { return reservation; }
     public void setReservation(ReservationResponse reservation) { this.reservation = reservation; }
+    public CurrentFacility getCurrentFacility() { return currentFacility; }
+    public void setCurrentFacility(CurrentFacility value) { currentFacility = value; }
+    public CurrentUnitType getCurrentUnitType() { return currentUnitType; }
+    public void setCurrentUnitType(CurrentUnitType value) { currentUnitType = value; }
     public String getGoodsCondition() { return goodsCondition; }
     public void setGoodsCondition(String goodsCondition) { this.goodsCondition = goodsCondition; }
     public String getNotes() { return notes; }

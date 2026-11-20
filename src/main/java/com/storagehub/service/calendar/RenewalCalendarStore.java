@@ -36,13 +36,20 @@ public class RenewalCalendarStore {
         jdbc.update("insert into renewal_calendar_staff_locks(staff_id) values(?) on duplicate key update staff_id=staff_id",bytes(id));
         jdbc.queryForObject("select staff_id from renewal_calendar_staff_locks where staff_id=? for update",byte[].class,bytes(id));
     }
-    public boolean facilityActive(UUID id) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("select status='active' from facilities where id=?",Boolean.class,bytes(id)));
+    public boolean facilityAllowsSigning(UUID id) {
+        return jdbc.query("select status from facilities where id=?", (rs, i) -> rs.getString(1), bytes(id))
+            .stream().anyMatch(RenewalCalendarStore::allowsSigning);
     }
     public void lockFacility(UUID id) {
         writable();
         var statuses=jdbc.query("select status from facilities where id=? for update",(rs,i)->rs.getString(1),bytes(id));
-        if(statuses.size()!=1||!"active".equals(statuses.getFirst()))throw ApiExceptions.conflict("Signing facility is not active");
+        if (statuses.size() != 1 || !allowsSigning(statuses.getFirst())) {
+            throw ApiExceptions.conflict("Cơ sở hiện không tiếp nhận lịch ký gia hạn.");
+        }
+    }
+    private static boolean allowsSigning(String status) {
+        return java.util.Arrays.stream(com.storagehub.domain.model.FacilityStatus.values())
+            .anyMatch(value -> value.name().equals(status) && value.allowsRenewalSigning());
     }
     public List<Interval> busy(UUID staff,Instant start,Instant end,UUID excluding) {
         String lock=atomic()&&!TransactionSynchronizationManager.isCurrentTransactionReadOnly()?" for update":"";

@@ -320,13 +320,18 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void marksPastAppointmentAsNoShowWithoutCancellingReservation() {
+    void marksPastAppointmentAsNoShowAndReleasesAssignedUnit() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        reservation.setAssignedUnit(unit);
+        unit.setStatus(StorageUnitStatus.reserved);
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.findByReservation_IdAndStatus(reservation.getId(), UnitAssignmentStatus.ACTIVE))
+            .thenReturn(Optional.of(assignment));
+        when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
 
@@ -335,8 +340,10 @@ class CheckInHandoverServiceTests {
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.no_show);
-        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
-        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
+        assertThat(reservation.getAssignedUnit()).isNull();
+        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
     }
 
     @Test
