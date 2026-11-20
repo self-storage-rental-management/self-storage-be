@@ -74,8 +74,13 @@ public class RackLayoutService {
         type.setHeightM(draft.heightM());
         type.setMaxLoadKg(draft.maxLoadKg());
         type.setMaxStoredLoadKg(draft.maxStoredLoadKg());
-        type.setAisleWidthM(draft.aisleWidthM());
-        type.setStorageAisleWidthM(draft.storageAisleWidthM());
+        // Older clients may omit the optional operational widths. Use the
+        // same defaults as automatic layout generation so the preview key can
+        // be confirmed after the UnitType is created with those values.
+        type.setAisleWidthM(draft.aisleWidthM() == null
+            ? BigDecimal.valueOf(3) : draft.aisleWidthM());
+        type.setStorageAisleWidthM(draft.storageAisleWidthM() == null
+            ? BigDecimal.valueOf(2.5) : draft.storageAisleWidthM());
         type.setGateWidthM(draft.gateWidthM());
         type.setGateHeightM(draft.gateHeightM());
         type.setLowestObstructionHeightM(draft.lowestObstructionHeightM());
@@ -195,7 +200,7 @@ public class RackLayoutService {
         // so a later template edit cannot rewrite an active unit's history.
         if (type.getId() != null) {
             var physicalUnits = units.findByFacility_Id(type.getFacility().getId()).stream()
-                .filter(unit -> unit.getUnitType().getId().equals(type.getId()))
+                .filter(unit -> unit.getUnitType() != null && unit.getUnitType().getId().equals(type.getId()))
                 .filter(unit -> unit.getRackLayoutJson() == null
                     || unit.getStatus() == StorageUnitStatus.available
                     || unit.getStatus() == StorageUnitStatus.maintenance)
@@ -333,8 +338,8 @@ public class RackLayoutService {
             + ":" + type.getWidthM().stripTrailingZeros() + ":" + type.getHeightM().stripTrailingZeros()
             + ":" + type.getMaxLoadKg().stripTrailingZeros()
             + ":" + (type.getMaxStoredLoadKg() == null ? "" : type.getMaxStoredLoadKg().stripTrailingZeros())
-            + ":" + value(type.getStorageAisleWidthM())
-            + ":" + value(type.getAisleWidthM())
+            + ":" + valueOr(type.getStorageAisleWidthM(), BigDecimal.valueOf(2.5))
+            + ":" + valueOr(type.getAisleWidthM(), BigDecimal.valueOf(3))
             + ":" + value(type.getGateWidthM())
             + ":" + value(type.getGateHeightM())
             + ":" + value(type.getLowestObstructionHeightM())
@@ -625,6 +630,10 @@ public class RackLayoutService {
 
     private String value(BigDecimal value) {
         return value == null ? "" : value.stripTrailingZeros().toPlainString();
+    }
+
+    private String valueOr(BigDecimal value, BigDecimal fallback) {
+        return value(value == null ? fallback : value);
     }
 
     private boolean isLegacyPalletLayout(RackLayout.Configuration configuration) {

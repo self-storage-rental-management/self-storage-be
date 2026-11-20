@@ -85,6 +85,7 @@ class ReservationCreationServiceTests {
         ReflectionTestUtils.setField(unitType, "id", UUID.randomUUID());
         unitType.setFacility(facility);
         unitType.setMonthlyPrice(new BigDecimal("5500000.00"));
+        unitType.setSecurityDepositAmount(new BigDecimal("5500000.00"));
 
         User customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
@@ -201,7 +202,8 @@ class ReservationCreationServiceTests {
         assertThat(captured.getFreeSetupDays()).isEqualTo(originalSetup);
         assertThat(captured.getMonthlyPrice()).isEqualByComparingTo(originalPrice);
         assertThat(captured.getPricingPolicyVersion()).isEqualTo(originalVersion);
-        assertThat(response.getReservationCode()).matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
+        assertThat(response.getReservationCode())
+            .matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
     }
 
     @Test

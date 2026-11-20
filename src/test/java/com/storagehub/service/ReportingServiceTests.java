@@ -208,6 +208,27 @@ class ReportingServiceTests {
     }
 
     @Test
+    void getBusinessRevenueReport_withFacilityIdAndRefunds_filtersAndSubTractsRefunds() {
+        Payment p1 = new Payment();
+        p1.setStatus(PaymentStatus.PAID);
+        p1.setPurpose(PaymentType.MONTHLY_RENT);
+        p1.setAmount(new BigDecimal("3000000"));
+        p1.setRefundedAmount(new BigDecimal("500000"));
+        p1.setPaidAt(Instant.now());
+
+        when(facilityRepository.findById(facilityId)).thenReturn(Optional.of(facility));
+        when(paymentRepository.findPaidPaymentsByFacility(facilityId)).thenReturn(List.of(p1));
+
+        BusinessRevenueReportResponse resp = service.getBusinessRevenueReport(businessActor, 6, facilityId);
+
+        assertThat(resp.totalRevenueCollected()).isEqualByComparingTo("3000000");
+        assertThat(resp.totalRefunds()).isEqualByComparingTo("500000");
+        assertThat(resp.netRevenue()).isEqualByComparingTo("2500000");
+        assertThat(resp.facilityBreakdown()).hasSize(1);
+        verify(facilityScopeService).assertCanRead(businessActor, facilityId);
+    }
+
+    @Test
     void getBusinessPerformanceReport_success() {
         when(facilityRepository.findAll()).thenReturn(List.of(facility));
         when(storageUnitRepository.countByFacility_IdAndStatusIn(

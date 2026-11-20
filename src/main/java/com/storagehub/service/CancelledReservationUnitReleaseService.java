@@ -107,7 +107,7 @@ public class CancelledReservationUnitReleaseService {
         ReleaseAssignedUnitRequest request
     ) {
         requireStaffActor(actor);
-        authorizationService.require(actor, SystemPermission.ASSIGN_UNITS);
+        authorizationService.require(actor, SystemPermission.VIEW_UNITS);
         validateIdempotencyKey(idempotencyKey);
         String fingerprint = fingerprint(reservationId, request);
 

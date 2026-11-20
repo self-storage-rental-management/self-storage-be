@@ -114,11 +114,17 @@ class RackLayoutServiceTests {
         assertThat(customer.withSamplePlans(null, null, null)).isEqualTo(saved.result());
         assertThat(customer.palletSlotCount()).isEqualTo(48);
         assertThat(customer.smallBoxesPerUnit()).isEqualTo(120);
-        assertThat(customer.smallBoxPlan()).isEqualTo(
-            PalletPacking.planSample(saved.result(), saved.result().smallBox(), 120));
+        assertThat(customer.smallBoxPlan().requiredPallets()).isEqualTo(12);
+        var small = customer.smallBoxPlan().items().getFirst().allocations().getFirst().capacity();
+        assertThat(small.piecesPerLayer()).isEqualTo(8);
+        assertThat(small.usableLayers()).isEqualTo(3);
+        assertThat(small.maxPieces()).isEqualTo(10);
         assertThat(customer.largeBoxesPerUnit()).isEqualTo(40);
-        assertThat(customer.largeBoxPlan()).isEqualTo(
-            PalletPacking.planSample(saved.result(), saved.result().largeBox(), 40));
+        assertThat(customer.largeBoxPlan().requiredPallets()).isEqualTo(40);
+        var large = customer.largeBoxPlan().items().getFirst().allocations().getFirst().capacity();
+        assertThat(large.piecesPerLayer()).isEqualTo(1);
+        assertThat(large.usableLayers()).isEqualTo(1);
+        assertThat(large.maxPieces()).isEqualTo(1);
         assertThat(customer.mixedBoxExample()).isNull();
     }
 

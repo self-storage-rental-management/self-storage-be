@@ -37,11 +37,10 @@ final class ReservationCheckInPolicy {
 
     record Window(Instant availableAt, Instant deadlineAt) {
         boolean contains(Instant appointmentAt) {
-            if (appointmentAt == null) return false;
+            if (appointmentAt == null || appointmentAt.isBefore(availableAt)) return false;
             LocalDate appointmentDate = appointmentAt.atZone(VIETNAM_ZONE).toLocalDate();
-            LocalDate firstDate = availableAt.atZone(VIETNAM_ZONE).toLocalDate();
             LocalDate lastDate = deadlineAt.atZone(VIETNAM_ZONE).toLocalDate();
-            return !appointmentDate.isBefore(firstDate) && !appointmentDate.isAfter(lastDate);
+            return !appointmentDate.isAfter(lastDate);
         }
     }
 }

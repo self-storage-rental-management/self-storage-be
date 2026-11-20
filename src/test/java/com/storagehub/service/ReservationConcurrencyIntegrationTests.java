@@ -225,6 +225,7 @@ class ReservationConcurrencyIntegrationTests {
         unitType.setWidthM(new BigDecimal("10"));
         unitType.setHeightM(new BigDecimal("5"));
         unitType.setMonthlyPrice(new BigDecimal("5500000"));
+        unitType.setSecurityDepositAmount(new BigDecimal("5500000"));
         unitType.setMaxLoadKg(new BigDecimal("1000"));
         unitType.setRackCount(4);
         unitType.setRackLengthM(new BigDecimal("2"));
