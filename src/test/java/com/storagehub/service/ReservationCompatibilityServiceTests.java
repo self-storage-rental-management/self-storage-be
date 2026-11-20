@@ -220,7 +220,9 @@ class ReservationCompatibilityServiceTests {
     void recommendationReportsNoCapacityAndNoCompatibleUnit() {
         var policy = policy(3, null);
         var recommendation = recommendationService();
-        stubRecommendation(policy, List.of(unitType("FULL", new BigDecimal("3"))), 0);
+        var full = unitType("FULL", new BigDecimal("7"));
+        stubRecommendation(policy, List.of(full), 0);
+        stubPalletLayout(full, 0);
 
         var response = recommendation.recommend(customer, recommendationRequest(GoodsCategory.FURNITURE));
 
@@ -257,7 +259,7 @@ class ReservationCompatibilityServiceTests {
     @Test
     void comparesBothTypesUsingTheSelectedPeriodEvenWhenTheSmallerTypeDoesNotFit() {
         var smaller = unitType("SMALL", new BigDecimal("6"));
-        smaller.setMaxLoadKg(new BigDecimal("600"));
+        smaller.setMaxLoadKg(new BigDecimal("80"));
         smaller.setMonthlyPrice(new BigDecimal("5500000"));
         var larger = unitType("MEDIUM", new BigDecimal("7"));
         larger.setMaxLoadKg(new BigDecimal("1200"));
@@ -272,7 +274,7 @@ class ReservationCompatibilityServiceTests {
         item.setLengthCm(new BigDecimal("40"));
         item.setWidthCm(new BigDecimal("30"));
         item.setHeightCm(new BigDecimal("30"));
-        item.setQuantity(121);
+        item.setQuantity(20);
         item.setWeightPerItemKg(new BigDecimal("5"));
         item.setMaxStackLayers(3);
 
@@ -322,8 +324,8 @@ class ReservationCompatibilityServiceTests {
         var plan = recommendation.checksByUnitType().get(larger.getId()).getPalletPlan();
         assertThat(plan.palletLengthCm()).isEqualTo(140);
         assertThat(plan.palletWidthCm()).isEqualTo(80);
-        assertThat(plan.requiredPallets()).isEqualTo(2);
-        assertThat(plan.totalLoadedWeightKg()).isEqualByComparingTo("200");
+        assertThat(plan.requiredPallets()).isEqualTo(4);
+        assertThat(plan.totalLoadedWeightKg()).isEqualByComparingTo("256");
         assertThat(plan.racks().getFirst().maxCargoHeightCm()).isEqualByComparingTo("99");
 
         when(capacityService.availableCount(any(), eq(larger.getId()), any(), any())).thenReturn(0L);

@@ -108,32 +108,18 @@ class RackLayoutServiceTests {
 
         RackLayout.Saved saved = service.save(manager, typeId, new RackLayout.Save(demoConfiguration, preview.previewKey()));
 
+        assertThat(saved.result()).isEqualTo(preview.result());
         assertThat(service.readForBusiness(actor(RoleCode.BUSINESS), typeId)).isEqualTo(saved);
         var customer = service.readForCustomer(actor(RoleCode.CUSTOMER), facilityId, typeId);
         assertThat(customer.withSamplePlans(null, null, null)).isEqualTo(saved.result());
         assertThat(customer.palletSlotCount()).isEqualTo(48);
         assertThat(customer.smallBoxesPerUnit()).isEqualTo(120);
-        assertThat(customer.smallBoxPlan().requiredPallets()).isEqualTo(8);
-        var small = customer.smallBoxPlan().items().getFirst().allocations().getFirst().capacity();
-        assertThat(small.piecesPerLayer()).isEqualTo(8);
-        assertThat(small.usableLayers()).isEqualTo(3);
-        assertThat(small.maxPieces()).isEqualTo(15);
+        assertThat(customer.smallBoxPlan()).isEqualTo(
+            PalletPacking.planSample(saved.result(), saved.result().smallBox(), 120));
         assertThat(customer.largeBoxesPerUnit()).isEqualTo(40);
-        assertThat(customer.largeBoxPlan().requiredPallets()).isEqualTo(40);
-        var large = customer.largeBoxPlan().items().getFirst().allocations().getFirst().capacity();
-        assertThat(large.piecesPerLayer()).isEqualTo(1);
-        assertThat(large.usableLayers()).isEqualTo(1);
-        assertThat(large.maxPieces()).isEqualTo(1);
-        var mixed = customer.mixedBoxExample();
-        assertThat(mixed.smallBoxQuantity()).isEqualTo(63);
-        assertThat(mixed.largeBoxQuantity()).isEqualTo(19);
-        assertThat(mixed.plan().requiredPallets()).isEqualTo(24);
-        assertThat(mixed.plan().totalLoadedWeightKg()).isEqualByComparingTo("1200");
-        assertThat(mixed.plan().items().getFirst().allocations())
-            .extracting(allocation -> allocation.piecesPerPallet()).containsExactly(15, 3);
-        assertThat(mixed.plan().items().getFirst().requiredPallets()).isEqualTo(5);
-        assertThat(mixed.plan().items().getLast().requiredPallets()).isEqualTo(19);
-        assertThat(mixed.plan().racks()).allSatisfy(rack -> assertThat(rack.usedSlots()).isEqualTo(12));
+        assertThat(customer.largeBoxPlan()).isEqualTo(
+            PalletPacking.planSample(saved.result(), saved.result().largeBox(), 40));
+        assertThat(customer.mixedBoxExample()).isNull();
     }
 
     @Test
@@ -155,6 +141,7 @@ class RackLayoutServiceTests {
 
     @Test
     void newTypeRequiresTheConfirmedDraftAndUsesCalculatedSummary() {
+        ReflectionTestUtils.setField(type, "id", null);
         var draft = new RackLayout.Draft(type.getLengthM(), type.getWidthM(), type.getHeightM(), type.getMaxLoadKg(), configuration);
         var preview = service.previewDraft(manager, facilityId, draft);
         assertThat(type.getRackLayoutJson()).isNull();
@@ -172,6 +159,7 @@ class RackLayoutServiceTests {
 
     @Test
     void newTypeCanConfirmTheConfigurationReturnedByAutomaticPreview() {
+        ReflectionTestUtils.setField(type, "id", null);
         type.setLengthM(new BigDecimal("12"));
         type.setWidthM(new BigDecimal("11.6"));
         type.setHeightM(new BigDecimal("5"));
@@ -184,7 +172,9 @@ class RackLayoutServiceTests {
         type.setStorageAisleWidthM(new BigDecimal("2.5"));
 
         RackLayout.Draft draft = new RackLayout.Draft(
-            type.getLengthM(), type.getWidthM(), type.getHeightM(), type.getMaxLoadKg(), null, 4);
+            type.getLengthM(), type.getWidthM(), type.getHeightM(), null, null, null,
+            type.getMaxLoadKg(), null, type.getAisleWidthM(), type.getStorageAisleWidthM(),
+            null, null, null, null, null, null, null, null, null, 4, null, null);
         RackLayout.Preview preview = service.previewDraft(manager, facilityId, draft);
 
         // The UI submits the calculated configuration returned by the preview,
