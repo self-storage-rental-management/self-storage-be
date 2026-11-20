@@ -220,9 +220,7 @@ class ReservationCompatibilityServiceTests {
     void recommendationReportsNoCapacityAndNoCompatibleUnit() {
         var policy = policy(3, null);
         var recommendation = recommendationService();
-        var full = unitType("FULL", new BigDecimal("7"));
-        stubRecommendation(policy, List.of(full), 0);
-        stubPalletLayout(full, 0);
+        stubRecommendation(policy, List.of(unitType("FULL", new BigDecimal("6"))), 0);
 
         var response = recommendation.recommend(customer, recommendationRequest(GoodsCategory.FURNITURE));
 
@@ -438,9 +436,7 @@ class ReservationCompatibilityServiceTests {
             .filter(candidate -> candidate.getId().equals(invocation.getArgument(0)))
             .findFirst());
         when(capacityService.availableCount(any(), any(), any(), any())).thenReturn(availableCount);
-        if (availableCount > 0) {
-            for (var candidate : candidates) stubPalletLayout(candidate, availableCount);
-        }
+        for (var candidate : candidates) stubPalletLayout(candidate, availableCount);
     }
 
     private RentalPackagePolicy policy(int months, LocalDate effectiveTo) {

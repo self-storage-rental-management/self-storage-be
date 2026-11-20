@@ -57,7 +57,7 @@ public class ReservationCreationService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     private static final java.security.SecureRandom PUBLIC_CODE_RANDOM = new java.security.SecureRandom();
-    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    private static final String PUBLIC_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
     private static final BigDecimal RESERVATION_DEPOSIT_RATE = RentalDepositPolicy.RATE;
     private final ReservationRepository reservationRepository;
     private final ReservationQuoteRepository quoteRepository;
@@ -140,10 +140,12 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
-        var account = bookingUsers.findByIdForUpdate(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
-        if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
-            throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+        if (bookingUsers != null) {
+            var account = bookingUsers.findByIdForUpdate(actor.userId())
+                .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
+            if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
+                throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+            }
         }
         long unpaid = reservationRepository.countByCustomer_IdAndStatusIn(actor.userId(), java.util.List.of(
             ReservationStatus.AWAITING_EMAIL, ReservationStatus.AWAITING_REVIEW, ReservationStatus.AWAITING_PAYMENT,
@@ -262,7 +264,9 @@ public class ReservationCreationService {
             quote.getCustomer(), "RESERVATION_CREATED", "Reservation", saved.getId(),
             null, null, response
         );
-        customerEmails.reservationCreated(saved);
+        if (customerEmails != null) {
+            customerEmails.reservationCreated(saved);
+        }
         return response;
     }
 
@@ -440,9 +444,13 @@ public class ReservationCreationService {
 
     static String generateReservationCode() {
         StringBuilder code = new StringBuilder("RSV-");
-        for (int index = 0; index < 12; index++) {
-            if (index > 0 && index % 4 == 0) code.append('-');
-            code.append(PUBLIC_CODE_ALPHABET.charAt(PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())));
+        for (int group = 0; group < 3; group++) {
+            if (group > 0) code.append('-');
+            for (int index = 0; index < 4; index++) {
+                code.append(PUBLIC_CODE_ALPHABET.charAt(
+                    PUBLIC_CODE_RANDOM.nextInt(PUBLIC_CODE_ALPHABET.length())
+                ));
+            }
         }
         return code.toString();
     }

@@ -600,6 +600,11 @@ public class FacilityLifecycleService {
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         UUID facilityId = type.getFacility().getId();
         requireManager(actor, facilityId);
+        if (units.countByFacility_IdAndUnitType_IdAndStatusIn(facilityId, unitTypeId, List.of(
+            StorageUnitStatus.occupied, StorageUnitStatus.reserved,
+            StorageUnitStatus.assigned, StorageUnitStatus.held)) > 0) {
+            throw ApiExceptions.conflict("Không thể lưu trữ loại kho đang có gian kho đang thuê hoặc giữ chỗ.");
+        }
         if (changes.existsByUnitTypeIdAndStatus(unitTypeId, "PENDING")) {
             throw ApiExceptions.conflict("Không thể xóa loại kho đang chờ BO duyệt thay đổi.");
         }
@@ -713,6 +718,14 @@ public class FacilityLifecycleService {
         type.setMonthlyPrice(request.monthlyPrice());
         type.setSecurityDepositAmount(request.securityDepositAmount());
         if (type.getStatus() == UnitTypeStatus.draft) type.setStatus(UnitTypeStatus.awaiting_pricing);
+        if (type.getStatus() == UnitTypeStatus.awaiting_pricing
+            && type.getFacility().getStatus() == FacilityStatus.active
+            && type.getMonthlyPrice() != null && type.getMonthlyPrice().signum() > 0
+            && units.countByFacility_IdAndUnitType_IdAndStatus(
+                type.getFacility().getId(), type.getId(), StorageUnitStatus.available) > 0) {
+            type.setStatus(UnitTypeStatus.active);
+            if (type.getPublishedRevision() == 0) type.setPublishedRevision(1);
+        }
         UnitType saved = unitTypes.save(type);
         UnitTypeResponse after = unitTypeResponse(saved);
         audit.recordMutation("UNIT_TYPE_PRICED_BY_BUSINESS", "UnitType", saved.getId(), saved.getFacility().getId(), before, after);
@@ -937,6 +950,11 @@ public class FacilityLifecycleService {
 
     private void requireArchiveReady(Facility facility) {
         requireArchiveReady(lifecycleSummary(facility));
+        if (units.countByFacility_IdAndStatusIn(facility.getId(), List.of(
+            StorageUnitStatus.occupied, StorageUnitStatus.reserved,
+            StorageUnitStatus.assigned, StorageUnitStatus.held)) > 0) {
+            throw ApiExceptions.conflict("Không thể ngừng hoạt động cơ sở đang có gian kho đang thuê hoặc giữ chỗ.");
+        }
     }
 
     private void requireArchiveReady(com.storagehub.api.facility.FacilityLifecycleSummary summary) {

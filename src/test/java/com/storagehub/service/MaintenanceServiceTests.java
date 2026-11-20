@@ -196,7 +196,7 @@ class MaintenanceServiceTests {
             LocalDate.now().plusDays(1)
         );
 
-        when(storageUnitRepository.findById(unit.getId())).thenReturn(Optional.of(unit));
+        when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
         when(userRepository.findById(managerActor.userId())).thenReturn(Optional.of(managerUser));
         when(userRepository.findById(staffUser.getId())).thenReturn(Optional.of(staffUser));
         when(maintenanceTaskRepository.save(any(MaintenanceTask.class))).thenAnswer(invocation -> {
@@ -234,7 +234,7 @@ class MaintenanceServiceTests {
             null
         );
 
-        when(storageUnitRepository.findById(unit.getId())).thenReturn(Optional.of(unit));
+        when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
         when(maintenanceTaskRepository.findByStorageUnit_IdAndStatusIn(eq(unit.getId()), any()))
             .thenReturn(List.of(openTask));
 
@@ -262,7 +262,7 @@ class MaintenanceServiceTests {
             null
         );
 
-        when(storageUnitRepository.findById(unit.getId())).thenReturn(Optional.of(unit));
+        when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
 
         assertThatThrownBy(() -> maintenanceService.updateUnitStatus(managerActor, unit.getId(), req))
             .isInstanceOf(ApiException.class)
