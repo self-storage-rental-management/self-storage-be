@@ -264,12 +264,14 @@ public class CheckInHandoverService {
         CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.scheduled);
         Reservation reservation = checkIn.getReservation();
         String actualIdentity = normalizeIdentityDocument(request.identityDocumentNumber());
-        String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
-        if (declaredIdentity == null) {
-            throw ApiExceptions.conflict("Customer identity declared on the reservation is missing");
+        if (actualIdentity == null) {
+            throw ApiExceptions.validation("identityDocumentNumber is required", null);
         }
-        if (!declaredIdentity.equals(actualIdentity)) {
-            throw ApiExceptions.conflict("Customer identity does not match the reservation");
+        String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
+        boolean mismatch = declaredIdentity != null && !declaredIdentity.equals(actualIdentity);
+        if (mismatch || declaredIdentity == null) {
+            reservation.setIdentityDocumentNumber(actualIdentity);
+            reservationRepository.saveAndFlush(reservation);
         }
 
         User operator = requireActor(actor);
@@ -278,7 +280,12 @@ public class CheckInHandoverService {
         checkIn.setStatus(CheckInStatus.identity_verified);
         checkIn.setIdentityVerifiedAt(now);
         checkIn.setVerifiedIdentityDocument(actualIdentity);
-        checkIn.setIdentityVerificationNote(clean(request.note()));
+        String note = clean(request.note());
+        if (mismatch) {
+            String auditNote = "[Cập nhật CCCD/CMND theo giấy tờ gốc: " + actualIdentity + " (khai báo cũ: " + declaredIdentity + ")]";
+            note = note == null ? auditNote : note + " " + auditNote;
+        }
+        checkIn.setIdentityVerificationNote(note);
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
         recordWorkflowAudit(operator, reservation, saved, "CHECKIN_IDENTITY_VERIFIED",
             CheckInStatus.scheduled, CheckInStatus.identity_verified);
