@@ -276,7 +276,8 @@ class CustomerReservationServiceTests {
         assertThat(history.data().getFirst().reservationCode()).isEqualTo(reservation.getReservationCode());
         assertThat(history.data().getFirst().createdAt()).isEqualTo(payment.getCreatedAt());
         verify(paymentRepository).findAllByReservation_Customer_Id(actor.userId(), pageable);
-        org.mockito.Mockito.verifyNoInteractions(snapshotRepository, reservationRepository);
+        verify(snapshotRepository).findByReservation_Id(reservation.getId());
+        org.mockito.Mockito.verifyNoInteractions(reservationRepository);
     }
 
     @Test
@@ -295,7 +296,7 @@ class CustomerReservationServiceTests {
 
     @Test
     void listsOnlyReservationsOwnedByCustomer() {
-        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
+        when(reservationRepository.findCustomerVisibleReservations(eq(actor.userId()), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));
@@ -304,9 +305,7 @@ class CustomerReservationServiceTests {
 
         assertThat(response.data()).hasSize(1);
         assertThat(response.data().get(0).getId()).isEqualTo(reservation.getId());
-        verify(reservationRepository).findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
-            eq(actor.userId()), eq(ReservationStatus.REJECTED), any()
-        );
+        verify(reservationRepository).findCustomerVisibleReservations(eq(actor.userId()), any());
     }
 
     @Test
@@ -375,7 +374,7 @@ class CustomerReservationServiceTests {
         snapshot.setVoucherDiscountAmount(new BigDecimal("100000.00"));
         snapshot.setNetRentalAmount(new BigDecimal("11040000.00"));
 
-        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
+        when(reservationRepository.findCustomerVisibleReservations(eq(actor.userId()), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));

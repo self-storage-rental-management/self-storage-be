@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -14,9 +15,11 @@ import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationEmailVerification;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.ReservationEmailVerificationRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.security.JwtService;
 import java.time.Instant;
@@ -37,6 +40,7 @@ class ReservationEmailVerificationServiceTests {
 
     @Mock private ReservationRepository reservationRepository;
     @Mock private ReservationEmailVerificationRepository verificationRepository;
+    @Mock private UnitTypeRepository capacityMutex;
     @Mock private JwtService jwtService;
     @Mock private AuthEmailService emailService;
     @Mock private AuditLogService auditLogService;
@@ -51,17 +55,22 @@ class ReservationEmailVerificationServiceTests {
         service = new ReservationEmailVerificationService(
             reservationRepository, verificationRepository, jwtService, emailService, auditLogService
         );
+        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
 
         User customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
         customer.setEmail("customer@example.com");
         Facility facility = new Facility();
         ReflectionTestUtils.setField(facility, "id", UUID.randomUUID());
+        UnitType unitType = new UnitType();
+        ReflectionTestUtils.setField(unitType, "id", UUID.randomUUID());
+        unitType.setFacility(facility);
 
         reservation = new Reservation();
         ReflectionTestUtils.setField(reservation, "id", UUID.randomUUID());
         reservation.setCustomer(customer);
         reservation.setFacility(facility);
+        reservation.setUnitType(unitType);
         reservation.setReservationCode("RSV-VERIFY001");
         reservation.setStatus(ReservationStatus.AWAITING_EMAIL);
         reservation.setGoodsReviewStatus(GoodsReviewStatus.NOT_REQUIRED);
@@ -255,5 +264,8 @@ class ReservationEmailVerificationServiceTests {
     private void mockOwnedReservation() {
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
+        // Resending an OTP does not lock capacity, but verifying it does.
+        UnitType unitType = reservation.getUnitType();
+        lenient().when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
     }
 }

@@ -1260,8 +1260,10 @@ public class CustomerReservationService {
         }
         var unitType = reservation.getUnitType();
         if (summary.getUnitTypeSnapshot() == null && unitType != null) {
+            BigDecimal volume = unitType.getLengthM() == null || unitType.getWidthM() == null || unitType.getHeightM() == null
+                ? null : unitType.getVolumeM3();
             response.setCurrentUnitType(new ReservationDetailResponse.CurrentUnitType(
-                unitType.getName(), unitType.getLengthM(), unitType.getWidthM(), unitType.getHeightM(), unitType.getVolumeM3(),
+                unitType.getName(), unitType.getLengthM(), unitType.getWidthM(), unitType.getHeightM(), volume,
                 unitType.getMaxLoadKg(), unitType.getRackCount(), unitType.getRackLengthM(), unitType.getRackWidthM(), unitType.getRackHeightM()));
         }
         response.setGoodsCondition(reservation.getGoodsCondition());
