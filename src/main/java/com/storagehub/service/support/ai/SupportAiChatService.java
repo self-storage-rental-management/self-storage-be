@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -31,7 +32,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
-/** Stateless pilot: no ticket, notification, record lookup or database transaction around Gemini. */
+/** Resolves public answers without a database transaction around the Gemini call. */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -43,6 +44,8 @@ public class SupportAiChatService {
     private final SupportAiProvider provider;
     private final SupportQuickFaq quickFaq;
     private final SupportPublicKnowledge publicKnowledge;
+    private final SupportPublicFacility publicFacility;
+    private final SupportPublicBooking publicBooking;
     private final Semaphore slots = new Semaphore(8);
     private final Map<RequestKey, Attempt> attempts = new HashMap<>();
     private final Map<UUID, Window> windows = new HashMap<>();
@@ -54,8 +57,11 @@ public class SupportAiChatService {
     public SupportAiReplyResponse reply(ActorPrincipal actor, SupportAiReplyRequest body, UUID requestId) {
         authorize(actor);
         var messages = messages(body);
-        var quickAnswer = quickFaq.answer(body.message());
-        if (quickAnswer.isEmpty()) provider.requireAvailable();
+        var previous = SupportConversation.previousQuestions(messages);
+        var quickAnswer = SupportConversation.answer(body.message(), previous).or(() -> quickFaq.answer(body.message()));
+        var facilityQuery = quickAnswer.isPresent() ? Optional.<SupportPublicFacility.Query>empty()
+            : SupportPublicFacility.conversationQuery(body.message(), previous, publicKnowledge);
+        boolean useGemini = quickAnswer.isEmpty() && facilityQuery.isEmpty();
         String fingerprint = fingerprint(messages);
         var key = new RequestKey(actor.userId(), requestId);
         Attempt attempt;
@@ -73,7 +79,7 @@ public class SupportAiChatService {
                 var window = windows.get(actor.userId());
                 if (attempts.size() >= 2000 || windows.size() >= 2000
                     || (window != null && window.count() >= 10)) throw rateLimit();
-                if (quickAnswer.isEmpty() && !slots.tryAcquire()) throw rateLimit();
+                if (useGemini && !slots.tryAcquire()) throw rateLimit();
                 windows.put(actor.userId(), new Window(window == null ? now : window.start(), window == null ? 1 : window.count() + 1));
                 attempt = new Attempt(fingerprint, now, new CompletableFuture<>());
                 attempts.put(key, attempt);
@@ -83,12 +89,24 @@ public class SupportAiChatService {
         if (owner) {
             long started = System.nanoTime();
             try {
-                var answer = quickAnswer.isPresent()
-                    ? new SupportAiProvider.Answer(quickAnswer.get(), "public-guidance-v2", false)
-                    : provider.answer(messages);
-                String source = quickAnswer.isPresent() ? "FAQ" : "GEMINI";
-                attempt.result().complete(new SupportAiReplyResponse(requestId, "AI", source, publicKnowledge.approved(answer.text()), answer.model(),
-                    KNOWLEDGE_VERSION, Instant.now(), answer.truncated()));
+                String source = useGemini ? "GEMINI" : "FAQ";
+                String text;
+                String model;
+                boolean truncated = false;
+                if (useGemini) {
+                    var answer = provider.answer(messages);
+                    text = render(actor, answer, body.message());
+                    model = answer.model();
+                    truncated = answer.truncated();
+                } else if (facilityQuery.isPresent()) {
+                    text = publicFacility.answer(facilityQuery.get());
+                    model = "public-facility-v1";
+                } else {
+                    text = quickAnswer.orElseThrow();
+                    model = "public-guidance-v2";
+                }
+                attempt.result().complete(new SupportAiReplyResponse(requestId, "AI", source, text, model,
+                    KNOWLEDGE_VERSION, Instant.now(), truncated));
                 log.info("Support assistant reply: source={}, elapsedMs={}", source, (System.nanoTime() - started) / 1_000_000);
             } catch (ApiException exception) {
                 attempt.result().completeExceptionally(exception);
@@ -96,7 +114,7 @@ public class SupportAiChatService {
                 attempt.result().completeExceptionally(new ApiException(ErrorCode.AI_UNAVAILABLE,
                     HttpStatus.SERVICE_UNAVAILABLE, "Trợ lý AI chưa sẵn sàng. Bạn có thể gặp nhân viên."));
             } finally {
-                if (quickAnswer.isEmpty()) slots.release();
+                if (useGemini) slots.release();
             }
         }
         try {
@@ -111,6 +129,20 @@ public class SupportAiChatService {
         } catch (TimeoutException exception) {
             throw ApiExceptions.conflict("Yêu cầu đang được xử lý. Giữ nguyên Idempotency-Key khi kiểm tra lại.");
         }
+    }
+
+    private String render(ActorPrincipal actor, SupportAiProvider.Answer answer, String question) {
+        return switch (answer.action()) {
+            case ANSWER, CLARIFY -> publicKnowledge.display(answer);
+            case CAPABILITIES -> SupportConversation.introduction();
+            case HOURS, PHONE, CONTACT -> {
+                String facility = SupportPublicBooking.mentioned(question, answer.lookup().facility()).orElse("");
+                yield publicFacility.answer(new SupportPublicFacility.Query(facility,
+                    answer.action() != SupportAiProvider.Action.PHONE, answer.action() != SupportAiProvider.Action.HOURS, true));
+            }
+            case PRICE, AVAILABILITY -> publicBooking.answer(actor, answer.action(), answer.lookup(), question);
+            case HANDOFF -> SupportPublicKnowledge.UNKNOWN;
+        };
     }
 
     private void authorize(ActorPrincipal actor) {

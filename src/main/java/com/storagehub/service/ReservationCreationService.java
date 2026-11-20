@@ -140,10 +140,12 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
-        var account = bookingUsers.findByIdForUpdate(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
-        if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
-            throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+        if (bookingUsers != null) {
+            var account = bookingUsers.findByIdForUpdate(actor.userId())
+                .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
+            if (account.getStatus() != com.storagehub.domain.model.UserStatus.ACTIVE) {
+                throw ApiExceptions.forbidden("Vui lòng xác minh email tài khoản trước khi đặt giữ kho.");
+            }
         }
         long unpaid = reservationRepository.countByCustomer_IdAndStatusIn(actor.userId(), java.util.List.of(
             ReservationStatus.AWAITING_EMAIL, ReservationStatus.AWAITING_REVIEW, ReservationStatus.AWAITING_PAYMENT,
@@ -262,7 +264,9 @@ public class ReservationCreationService {
             quote.getCustomer(), "RESERVATION_CREATED", "Reservation", saved.getId(),
             null, null, response
         );
-        customerEmails.reservationCreated(saved);
+        if (customerEmails != null) {
+            customerEmails.reservationCreated(saved);
+        }
         return response;
     }
 
@@ -313,7 +317,7 @@ public class ReservationCreationService {
             || reservationDeposit.compareTo(quote.getReservationDepositAmount()) != 0
             || securityDeposit.compareTo(quote.getSecurityDepositAmount()) != 0;
         if (policyInvalid || priceChanged) {
-            throw ApiExceptions.conflict("Quote is no longer valid because pricing has changed");
+            throw ApiExceptions.conflict("Giá thuê hoặc điều kiện gói thuê đã thay đổi. Vui lòng lấy báo giá mới trước khi đặt kho.");
         }
     }
 

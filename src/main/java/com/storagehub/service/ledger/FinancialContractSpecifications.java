@@ -43,10 +43,12 @@ public final class FinancialContractSpecifications {
             || s.getPricingPolicyVersion() == null || s.getPricingPolicyVersion().isBlank()) fail("Initial pricing identity incomplete");
         for (var v : Arrays.asList(s.getMonthlyPrice(),s.getGrossRentalAmount(),s.getDiscountAmount(),s.getNetRentalAmount(),
             s.getReservationDepositAmount(),s.getSecurityDepositAmount(),s.getRemainingRentalAmount(),s.getDueAtCheckIn(),s.getTotalInitialObligation())) money(v);
+        BigDecimal voucher = s.getVoucherDiscountAmount() != null ? s.getVoucherDiscountAmount() : BigDecimal.ZERO;
+        if (s.getVoucherDiscountAmount() != null) money(voucher);
         rate(s.getDiscountRate());
         equal(s.getMonthlyPrice().multiply(BigDecimal.valueOf(s.getRentalMonths())), s.getGrossRentalAmount());
         equal(s.getGrossRentalAmount().multiply(s.getDiscountRate()).setScale(2,RoundingMode.HALF_UP), s.getDiscountAmount());
-        equal(s.getGrossRentalAmount().subtract(s.getDiscountAmount()), s.getNetRentalAmount());
+        equal(s.getGrossRentalAmount().subtract(s.getDiscountAmount()).subtract(voucher), s.getNetRentalAmount());
         equal(s.getReservationDepositAmount().add(s.getRemainingRentalAmount()),s.getNetRentalAmount());
         equal(s.getRemainingRentalAmount().add(s.getSecurityDepositAmount()),s.getDueAtCheckIn());
         equal(s.getNetRentalAmount().add(s.getSecurityDepositAmount()),s.getTotalInitialObligation());

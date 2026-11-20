@@ -252,25 +252,34 @@ public class FacilityLifecycleService {
     @Transactional
     public FacilityResponse restoreFacility(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
         if (facility.getStatus() != FacilityStatus.inactive && facility.getStatus() != FacilityStatus.maintenance) {
             throw ApiExceptions.conflict("Cơ sở hiện không ở trạng thái có thể khôi phục.");
         }
 
         FacilityResponse before = facilityResponse(facility);
-        List<UnitType> archivedTypes = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).stream()
-            .filter(type -> type.getStatus() == UnitTypeStatus.archived).toList();
-        if (!archivedTypes.isEmpty()) {
-            // Legacy facility archive records need a fresh BO pricing review.
-            archivedTypes.forEach(type -> {
-                type.setMonthlyPrice(BigDecimal.ZERO);
-                type.setSecurityDepositAmount(BigDecimal.ZERO);
-                type.setStatus(UnitTypeStatus.awaiting_pricing);
-            });
-            unitTypes.saveAll(archivedTypes);
-            facility.setStatus(FacilityStatus.setup);
+        List<UnitType> facilityTypes = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId);
+        if (facility.getStatus() == FacilityStatus.maintenance) {
+            boolean hasPublishedType = facilityTypes.stream().anyMatch(type -> type.getStatus() == UnitTypeStatus.active
+                && type.getMonthlyPrice() != null && type.getMonthlyPrice().signum() > 0);
+            if (!hasPublishedType) {
+                throw ApiExceptions.conflict("Cơ sở cần có ít nhất một loại kho đã công bố và có giá thuê để mở lại nhận đơn.");
+            }
+            facility.setStatus(FacilityStatus.active);
         } else {
-            validateAndActivate(facility);
+            List<UnitType> archivedTypes = facilityTypes.stream().filter(type -> type.getStatus() == UnitTypeStatus.archived).toList();
+            if (archivedTypes.isEmpty()) {
+                validateAndActivate(facility);
+            } else {
+                // Legacy facility archive records need a fresh BO pricing review.
+                archivedTypes.forEach(type -> {
+                    type.setMonthlyPrice(BigDecimal.ZERO);
+                    type.setSecurityDepositAmount(BigDecimal.ZERO);
+                    type.setStatus(UnitTypeStatus.awaiting_pricing);
+                });
+                unitTypes.saveAll(archivedTypes);
+                facility.setStatus(FacilityStatus.setup);
+            }
         }
         FacilityResponse after = facilityResponse(facilities.saveAndFlush(facility));
         audit.recordMutation("FACILITY_RESTORED", "Facility", facilityId, facilityId, before, after);
@@ -591,6 +600,11 @@ public class FacilityLifecycleService {
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         UUID facilityId = type.getFacility().getId();
         requireManager(actor, facilityId);
+        if (units.countByFacility_IdAndUnitType_IdAndStatusIn(facilityId, unitTypeId, List.of(
+            StorageUnitStatus.occupied, StorageUnitStatus.reserved,
+            StorageUnitStatus.assigned, StorageUnitStatus.held)) > 0) {
+            throw ApiExceptions.conflict("Không thể lưu trữ loại kho đang có gian kho đang thuê hoặc giữ chỗ.");
+        }
         if (changes.existsByUnitTypeIdAndStatus(unitTypeId, "PENDING")) {
             throw ApiExceptions.conflict("Không thể xóa loại kho đang chờ BO duyệt thay đổi.");
         }
@@ -704,6 +718,14 @@ public class FacilityLifecycleService {
         type.setMonthlyPrice(request.monthlyPrice());
         type.setSecurityDepositAmount(request.securityDepositAmount());
         if (type.getStatus() == UnitTypeStatus.draft) type.setStatus(UnitTypeStatus.awaiting_pricing);
+        if (type.getStatus() == UnitTypeStatus.awaiting_pricing
+            && type.getFacility().getStatus() == FacilityStatus.active
+            && type.getMonthlyPrice() != null && type.getMonthlyPrice().signum() > 0
+            && units.countByFacility_IdAndUnitType_IdAndStatus(
+                type.getFacility().getId(), type.getId(), StorageUnitStatus.available) > 0) {
+            type.setStatus(UnitTypeStatus.active);
+            if (type.getPublishedRevision() == 0) type.setPublishedRevision(1);
+        }
         UnitType saved = unitTypes.save(type);
         UnitTypeResponse after = unitTypeResponse(saved);
         audit.recordMutation("UNIT_TYPE_PRICED_BY_BUSINESS", "UnitType", saved.getId(), saved.getFacility().getId(), before, after);
@@ -712,10 +734,13 @@ public class FacilityLifecycleService {
         return after;
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public FacilityResponse publish(ActorPrincipal actor, UUID facilityId) {
         requireBusiness(actor);
-        Facility facility = facility(facilityId);
+        Facility facility = lockFacility(facilityId);
+        if (facility.getStatus() == FacilityStatus.inactive || facility.getStatus() == FacilityStatus.maintenance) {
+            throw ApiExceptions.conflict("Cơ sở đang tạm ngưng hoặc đã ngừng hoạt động. Vui lòng mở lại ở mục Trạng thái hoạt động trước khi công bố.");
+        }
         validateAndActivate(facility);
         Facility saved = facilities.save(facility);
         FacilityResponse after = facilityResponse(saved);
@@ -925,6 +950,11 @@ public class FacilityLifecycleService {
 
     private void requireArchiveReady(Facility facility) {
         requireArchiveReady(lifecycleSummary(facility));
+        if (units.countByFacility_IdAndStatusIn(facility.getId(), List.of(
+            StorageUnitStatus.occupied, StorageUnitStatus.reserved,
+            StorageUnitStatus.assigned, StorageUnitStatus.held)) > 0) {
+            throw ApiExceptions.conflict("Không thể ngừng hoạt động cơ sở đang có gian kho đang thuê hoặc giữ chỗ.");
+        }
     }
 
     private void requireArchiveReady(com.storagehub.api.facility.FacilityLifecycleSummary summary) {

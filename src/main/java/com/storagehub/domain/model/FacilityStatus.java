@@ -4,5 +4,9 @@ public enum FacilityStatus {
     setup,
     active,
     maintenance,
-    inactive
+    inactive;
+
+    public boolean allowsRenewalSigning() {
+        return this == active || this == maintenance;
+    }
 }

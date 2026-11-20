@@ -164,7 +164,9 @@ class ReservationExpirationServiceTests {
 
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.EXPIRED);
         assertThat(reservation.getComplaintExpiresAt()).isNull();
-        assertThat(reservation.getArchivedAt()).isNotNull();
+        assertThat(reservation.getExpiredAt()).isNotNull();
+        assertThat(reservation.getArchivedAt()).isEqualTo(reservation.getExpiredAt());
+        assertThat(reservation.getCustomerArchivedAt()).isNull();
         verify(notificationService).createNotification(any(), any(), any(), any(), any());
     }
 
@@ -232,6 +234,8 @@ class ReservationExpirationServiceTests {
 
         assertThat(expired).isEqualTo(1);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.EXPIRED);
-        assertThat(reservation.getArchivedAt()).isNotNull();
+        assertThat(reservation.getExpiredAt()).isNotNull();
+        assertThat(reservation.getArchivedAt()).isEqualTo(reservation.getExpiredAt());
+        assertThat(reservation.getCustomerArchivedAt()).isNull();
     }
 }

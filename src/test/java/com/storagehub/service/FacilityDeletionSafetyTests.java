@@ -6,6 +6,8 @@ import com.storagehub.security.ActorPrincipal;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 import static org.mockito.Mockito.*;
@@ -48,6 +50,44 @@ class FacilityDeletionSafetyTests {
         assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = FacilityStatus.class, names = {"maintenance", "inactive"})
+    void publishRejectsPausedOrArchivedFacilityAfterLocking(FacilityStatus currentStatus) {
+        Facility facility = new Facility();
+        facility.setStatus(currentStatus);
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+
+        assertThatThrownBy(() -> service.publish(actor, id))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class, error -> {
+                assertThat(error.getStatus().value()).isEqualTo(409);
+                assertThat(error.getMessage()).contains("Trạng thái hoạt động");
+            });
+        assertThat(facility.getStatus()).isEqualTo(currentStatus);
+        verify(facilities).findByIdForUpdate(id);
+        verifyNoMoreInteractions(facilities);
+        verifyNoInteractions(unitTypes);
+    }
+
+    @Test void reopeningPausedFacilityPreservesArchivedUnitTypes() {
+        Facility facility = new Facility();
+        org.springframework.test.util.ReflectionTestUtils.setField(facility, "id", id);
+        facility.setStatus(FacilityStatus.maintenance);
+        UnitType published = new UnitType();
+        published.setStatus(UnitTypeStatus.active);
+        published.setMonthlyPrice(new java.math.BigDecimal("1000000"));
+        UnitType archived = new UnitType();
+        archived.setStatus(UnitTypeStatus.archived);
+        archived.setMonthlyPrice(new java.math.BigDecimal("2000000"));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(unitTypes.findByFacility_IdOrderByCodeAsc(id)).thenReturn(List.of(published, archived));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
+
+        assertThat(service.restoreFacility(actor, id).status()).isEqualTo(FacilityStatus.active);
+        assertThat(archived.getStatus()).isEqualTo(UnitTypeStatus.archived);
+        assertThat(archived.getMonthlyPrice()).isEqualByComparingTo("2000000");
+        verify(unitTypes, never()).saveAll(anyList());
     }
 
     @Test void archivesFacilityWithoutChangingUnitTypesOrDeletingPhysicalUnits() {

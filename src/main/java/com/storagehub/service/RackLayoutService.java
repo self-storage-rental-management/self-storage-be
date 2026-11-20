@@ -344,7 +344,7 @@ public class RackLayoutService {
             + ":" + value(type.getGateHeightM())
             + ":" + value(type.getLowestObstructionHeightM())
             + ":" + value(type.getOverheadClearanceM())
-            + ":" + json(configuration);
+            + ":" + json(result.configuration());
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(state.getBytes(StandardCharsets.UTF_8));
             return new RackLayout.Preview(HexFormat.of().formatHex(digest), result);
