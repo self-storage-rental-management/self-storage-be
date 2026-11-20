@@ -33,13 +33,13 @@ public class StaffRenewalSigningCalendarSource implements RenewalOperationSource
         if(rental==null||rental.getFacility()==null||now==null||deadline==null)return Optional.empty();
         UUID facility=rental.getFacility().getId();
         if(store.legacyAppointmentsUncovered(now))return Optional.empty();
-        return Optional.of(store.facilityActive(facility)&&anySlot(eligibleStaff(facility),now,deadline,null));
+        return Optional.of(store.facilityAllowsSigning(facility)&&anySlot(eligibleStaff(facility),now,deadline,null));
     }
     @Override public boolean feasible(Renewal renewal,Instant now,Instant deadline) {
         var rental=renewal.getRental();UUID facility=rental.getFacility().getId();
         if(store.legacyAppointmentsUncovered(now,renewal.getId()))throw deferred("Historical signing appointments require calendar reconciliation");
         List<UUID> staff=eligibleStaff(facility);
-        return store.facilityActive(facility)&&anySlot(staff,now,deadline,renewal.getId());
+        return store.facilityAllowsSigning(facility)&&anySlot(staff,now,deadline,renewal.getId());
     }
     private boolean anySlot(List<UUID> staff,Instant now,Instant deadline,UUID own) {
         if(now==null||deadline==null||!deadline.isAfter(now)||Duration.between(now,deadline).compareTo(Duration.ofDays(366))>0)return false;
@@ -57,7 +57,7 @@ public class StaffRenewalSigningCalendarSource implements RenewalOperationSource
     @Override public Optional<RenewalOperationSources.Slot> slot(Renewal renewal,Instant start) {
         if(!ServiceCalendarPolicy.isAppointmentStart(start))return Optional.empty();
         UUID facility=renewal.getRental().getFacility().getId();
-        if(!store.facilityActive(facility))return Optional.empty();
+        if(!store.facilityAllowsSigning(facility))return Optional.empty();
         Instant end=start.plus(LENGTH);
         if(eligibleStaff(facility).stream().noneMatch(staff->store.busy(staff,start,end,renewal.getId()).isEmpty()))return Optional.empty();
         return Optional.of(new RenewalOperationSources.Slot(reference(renewal,start),start,end));

@@ -57,43 +57,9 @@ public class ManagerReturnController {
         );
     }
 
-    @PostMapping("/{returnId}/confirm")
-    public ApiResponse<ReturnCaseResponse> confirmSettlement(
-        @PathVariable UUID returnId,
-        @Valid @RequestBody(required = false) CustomerConfirmSettlementRequest request
-    ) {
-        return new ApiResponse<>(
-            returnSettlementService.staffConfirmSettlement(actorContext.required(), returnId, request),
-            CorrelationIdContext.current()
-        );
-    }
-
-    @PostMapping("/{returnId}/complete-refund")
-    public ApiResponse<ReturnCaseResponse> completeRefund(
-        @PathVariable UUID returnId,
-        @Valid @RequestBody(required = false) StaffCompleteRefundRequest request
-    ) {
-        StaffCompleteRefundRequest safeRequest = request != null ? request : new StaffCompleteRefundRequest(null, null);
-        return new ApiResponse<>(
-            returnSettlementService.staffCompleteRefund(actorContext.required(), returnId, safeRequest),
-            CorrelationIdContext.current()
-        );
-    }
-
-    @PostMapping("/{returnId}/settlement-receipts")
-    public ApiResponse<ReturnCaseResponse> recordSettlement(
-        @PathVariable UUID returnId,
-        @Valid @RequestBody StaffReturnSettlementRequest request
-    ) {
-        return new ApiResponse<>(
-            returnSettlementService.recordSettlement(actorContext.required(), returnId, request),
-            CorrelationIdContext.current()
-        );
-    }
-
     @PostMapping("/scan-auto-settlement")
     public ApiResponse<java.util.Map<String, Object>> scanAutoSettlement() {
-        int processed = returnSettlementService.autoSettleExpiredReturns();
+        int processed = returnSettlementService.autoSettleExpiredReturns(actorContext.required());
         return new ApiResponse<>(java.util.Map.of("processed", processed, "timestamp", java.time.Instant.now()), CorrelationIdContext.current());
     }
 }

@@ -10,7 +10,9 @@ import static org.mockito.Mockito.when;
 
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.Facility;
+import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.UnitType;
+import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
@@ -30,6 +32,7 @@ class ReservationCapacityServiceTests {
     @Mock private UnitTypeRepository unitTypeRepository;
     @Mock private StorageUnitRepository storageUnitRepository;
     @Mock private ReservationRepository reservationRepository;
+    @Mock private FacilityRepository facilityRepository;
 
     private ReservationCapacityService service;
     private UUID facilityId;
@@ -51,6 +54,20 @@ class ReservationCapacityServiceTests {
         org.mockito.Mockito.lenient()
             .when(unitTypeRepository.findByIdForUpdate(unitTypeId))
             .thenReturn(Optional.of(unitType));
+    }
+
+    @Test
+    void rejectsNewReservationWhenFacilityWasPausedAfterQuoting() {
+        Facility facility = new Facility();
+        facility.setStatus(FacilityStatus.maintenance);
+        ReflectionTestUtils.setField(service, "facilityRepository", facilityRepository);
+        when(facilityRepository.findByIdForUpdate(facilityId)).thenReturn(Optional.of(facility));
+
+        assertThatThrownBy(() -> service.lockFacilityForNewReservation(facilityId))
+            .isInstanceOfSatisfying(ApiException.class, error -> {
+                assertThat(error.getStatus().value()).isEqualTo(409);
+                assertThat(error.getMessage()).contains("không nhận đơn đặt kho mới");
+            });
     }
 
     @Test
