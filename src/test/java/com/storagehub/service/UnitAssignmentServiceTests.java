@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import com.storagehub.api.unitassignment.CreateUnitAssignmentRequest;
 import com.storagehub.common.api.ApiException;
@@ -24,6 +25,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
+import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
@@ -50,6 +52,8 @@ class UnitAssignmentServiceTests {
     @Mock private FacilityScopeService facilityScopeService;
     @Mock private AuditLogService auditLogService;
     @Mock private NotificationService notificationService;
+    @Mock private PalletInventoryService palletInventory;
+    @Mock private UnitTypeRepository capacityMutex;
 
     private UnitAssignmentService service;
     private ActorPrincipal actor;
@@ -61,8 +65,9 @@ class UnitAssignmentServiceTests {
     void setUp() {
         service = new UnitAssignmentService(
             reservationRepository, storageUnitRepository, assignmentRepository, userRepository,
-            authorizationService, facilityScopeService, auditLogService, notificationService
+            authorizationService, facilityScopeService, auditLogService, notificationService, palletInventory
         );
+        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
         operator = entityWithId(new User());
         UUID facilityId = UUID.randomUUID();
         actor = new ActorPrincipal(
@@ -75,6 +80,7 @@ class UnitAssignmentServiceTests {
         facility.setName("Facility A");
         UnitType unitType = entityWithId(new UnitType());
         unitType.setName("Medium");
+        lenient().when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
 
         User customer = entityWithId(new User());
         customer.setFullName("Customer A");
@@ -118,6 +124,7 @@ class UnitAssignmentServiceTests {
             eq(com.storagehub.domain.model.NotificationType.RESERVATION),
             any(), any(), eq(reservation.getId())
         );
+        verify(palletInventory).requireCompatibleAssignment(reservation, unit);
     }
 
     @Test

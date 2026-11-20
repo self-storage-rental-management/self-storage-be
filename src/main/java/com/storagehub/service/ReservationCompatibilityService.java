@@ -5,6 +5,9 @@ import com.storagehub.api.reservation.CompatibilityCheckResponse;
 import com.storagehub.api.reservation.GoodsItemRequest;
 import com.storagehub.api.reservation.ReservationRecommendationRequest;
 import com.storagehub.api.reservation.ReservationRecommendationResponse;
+import com.storagehub.api.reservation.ReservationRecommendationStatus;
+import com.storagehub.api.reservation.ReservationPackagePricing;
+import com.storagehub.api.reservation.ReservationStorageLimits;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.CompatibilityResult;
@@ -25,6 +28,8 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -34,13 +39,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class ReservationCompatibilityService {
 
     private static final BigDecimal CUBIC_CENTIMETERS_PER_CUBIC_METER = new BigDecimal("1000000");
-    private static final BigDecimal RACK_UTILIZATION_RATE = new BigDecimal("0.80");
 
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
     private final RentalPackagePolicyRepository policyRepository;
     private final ReservationCapacityService capacityService;
     private final GoodsCatalogService goodsCatalogService;
+    private final PalletInventoryService palletInventory;
 
     @Autowired
     public ReservationCompatibilityService(
@@ -48,32 +53,25 @@ public class ReservationCompatibilityService {
         UnitTypeRepository unitTypeRepository,
         RentalPackagePolicyRepository policyRepository,
         ReservationCapacityService capacityService,
-        GoodsCatalogService goodsCatalogService
+        GoodsCatalogService goodsCatalogService,
+        PalletInventoryService palletInventory
     ) {
         this.facilityRepository = facilityRepository;
         this.unitTypeRepository = unitTypeRepository;
         this.policyRepository = policyRepository;
         this.capacityService = capacityService;
         this.goodsCatalogService = goodsCatalogService;
-    }
-
-    // Kept for focused unit tests; production always injects the database-backed catalog.
-    ReservationCompatibilityService(
-        FacilityRepository facilityRepository,
-        UnitTypeRepository unitTypeRepository,
-        ReservationCapacityService capacityService
-    ) {
-        this(facilityRepository, unitTypeRepository, null, capacityService, null);
+        this.palletInventory = palletInventory;
     }
 
     @Transactional(readOnly = true)
     public CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request) {
-        return check(actor, request, true);
+        return check(actor, request, true, false);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public CompatibilityCheckResponse checkQuotedSnapshot(ActorPrincipal actor, CompatibilityCheckRequest request) {
-        return check(actor, request, false);
+        return check(actor, request, false, true);
     }
 
     @Transactional(readOnly = true)
@@ -112,10 +110,17 @@ public class ReservationCompatibilityService {
             .toList();
         List<UUID> evaluatedIds = candidates.stream().map(UnitType::getId).toList();
         List<UUID> incompatibleIds = new ArrayList<>();
+        List<UUID> physicallyFitButUnavailableIds = new ArrayList<>();
         List<String> issues = new ArrayList<>();
         List<RecommendationCandidate> compatibleCandidates = new ArrayList<>();
+        Map<UUID, CompatibilityCheckResponse> checks = new LinkedHashMap<>();
+        Map<UUID, ReservationPackagePricing> pricing = new LinkedHashMap<>();
+        ReservationStorageLimits maxSupportedStorageLimits = null;
 
         for (UnitType candidate : candidates) {
+            if (policy != null && candidate.getMonthlyPrice() != null && candidate.getMonthlyPrice().signum() > 0) {
+                pricing.put(candidate.getId(), ReservationQuoteService.priceForPackage(candidate, policy, rentalMonths));
+            }
             CompatibilityCheckResponse result;
             try {
                 result = check(actor, new CompatibilityCheckRequest(
@@ -125,11 +130,25 @@ public class ReservationCompatibilityService {
             } catch (ApiException exception) {
                 incompatibleIds.add(candidate.getId());
                 addIssue(issues, exception.getMessage());
+                checks.put(candidate.getId(), new CompatibilityCheckResponse(facility.getId(), candidate.getId(),
+                    request.getStartDate(), request.getEndDate(), CompatibilityResult.INCOMPATIBLE, null, null,
+                    candidate.getVolumeM3(), candidate.getMaxLoadKg(), null, null, 0, 0, 0, false, List.of(exception.getMessage())));
                 continue;
             }
 
-            if (result.getResult() == CompatibilityResult.INCOMPATIBLE || result.getAvailableUnitCount() <= 0) {
+            checks.put(candidate.getId(), result);
+            maxSupportedStorageLimits = maxLimits(maxSupportedStorageLimits, result);
+            boolean physicallyFits = "FIT".equals(result.getPhysicalFitStatus())
+                || (result.getPhysicalFitStatus() == null
+                    && result.getPalletPlan() != null
+                    && result.getResult() != CompatibilityResult.INCOMPATIBLE);
+            if (!physicallyFits) {
                 incompatibleIds.add(candidate.getId());
+                result.getIssues().forEach(issue -> addIssue(issues, issue));
+                continue;
+            }
+            if (result.getAvailableUnitCount() <= 0) {
+                physicallyFitButUnavailableIds.add(candidate.getId());
                 result.getIssues().forEach(issue -> addIssue(issues, issue));
                 continue;
             }
@@ -150,6 +169,16 @@ public class ReservationCompatibilityService {
         }
 
         CompatibilityCheckResponse selectedResult = selected == null ? null : selected.result();
+        ReservationRecommendationStatus status = selected != null
+            ? ReservationRecommendationStatus.ALTERNATIVE_AVAILABLE
+            : physicallyFitButUnavailableIds.isEmpty()
+                ? ReservationRecommendationStatus.NO_COMPATIBLE_WAREHOUSE
+                : ReservationRecommendationStatus.NO_VACANT_WAREHOUSE;
+        String noAlternativeReason = selected == null
+            ? physicallyFitButUnavailableIds.isEmpty()
+                ? "Không có loại kho nào tại cơ sở này phù hợp với toàn bộ hàng hóa. Chưa có loại kho nào vừa toàn bộ hàng và còn gian trống trong kỳ thuê đã chọn."
+                : "Có loại kho phù hợp với toàn bộ hàng hóa nhưng hiện không còn gian trống trong kỳ thuê đã chọn."
+            : null;
         return new ReservationRecommendationResponse(
             facility.getId(),
             selected == null ? null : selected.unitType().getId(),
@@ -162,7 +191,33 @@ public class ReservationCompatibilityService {
             selectedResult == null ? 0 : selectedResult.getAvailableUnitCount(),
             evaluatedIds,
             List.copyOf(incompatibleIds),
-            List.copyOf(issues)
+            List.copyOf(issues),
+            Map.copyOf(checks),
+            Map.copyOf(pricing),
+            noAlternativeReason,
+            status,
+            List.copyOf(physicallyFitButUnavailableIds),
+            maxSupportedStorageLimits
+        );
+    }
+
+    private ReservationStorageLimits maxLimits(ReservationStorageLimits current,
+                                               CompatibilityCheckResponse check) {
+        if (check.getMaxCargoLengthCm() == null || check.getMaxCargoWidthCm() == null
+            || check.getMaxCargoHeightCm() == null || check.getMaxCargoWeightKg() == null) {
+            return current;
+        }
+        if (current == null) {
+            return new ReservationStorageLimits(
+                check.getMaxCargoLengthCm(), check.getMaxCargoWidthCm(),
+                check.getMaxCargoHeightCm(), check.getMaxCargoWeightKg()
+            );
+        }
+        return new ReservationStorageLimits(
+            current.maxCargoLengthCm().max(check.getMaxCargoLengthCm()),
+            current.maxCargoWidthCm().max(check.getMaxCargoWidthCm()),
+            current.maxCargoHeightCm().max(check.getMaxCargoHeightCm()),
+            current.maxCargoWeightKg().max(check.getMaxCargoWeightKg())
         );
     }
 
@@ -186,13 +241,17 @@ public class ReservationCompatibilityService {
             copy.setCategoryCode(item.getCategoryCode());
             copy.setCategoryName(item.getCategoryName());
             copy.setMaterialCode(item.getMaterialCode());
+            copy.setStackable(item.getStackable());
+            copy.setMaxStackLayers(item.getMaxStackLayers());
+            copy.setAllowHorizontalPlacement(item.getAllowHorizontalPlacement());
             return copy;
         }).toList();
     }
 
     private record RecommendationCandidate(UnitType unitType, CompatibilityCheckResponse result) {}
 
-    private CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request, boolean validateCurrentCatalog) {
+    private CompatibilityCheckResponse check(ActorPrincipal actor, CompatibilityCheckRequest request,
+                                             boolean validateCurrentCatalog, boolean lockUnit) {
         if (!actor.hasRole(RoleCode.CUSTOMER)) {
             throw ApiExceptions.forbidden("Only customers can check reservation compatibility");
         }
@@ -219,7 +278,6 @@ public class ReservationCompatibilityService {
         BigDecimal totalVolume = BigDecimal.ZERO;
         BigDecimal totalWeight = BigDecimal.ZERO;
         boolean reviewRequired = false;
-        List<String> issues = new ArrayList<>();
 
         for (int index = 0; index < request.getGoodsItems().size(); index++) {
             GoodsItemRequest item = request.getGoodsItems().get(index);
@@ -235,46 +293,51 @@ public class ReservationCompatibilityService {
                 .divide(CUBIC_CENTIMETERS_PER_CUBIC_METER);
             totalVolume = totalVolume.add(itemVolume);
             totalWeight = totalWeight.add(item.getWeightPerItemKg().multiply(quantity));
-            if (!fitsInsideRack(item, unitType)) {
-                issues.add("goodsItems[" + index + "] does not fit inside one rack in any orientation");
-            }
             reviewRequired = reviewRequired || isOther(item);
         }
 
-        BigDecimal unitVolume = unitType.getVolumeM3();
-        BigDecimal usableVolumePerRack = unitType.getRackLengthM()
-            .multiply(unitType.getRackWidthM())
-            .multiply(unitType.getRackHeightM())
-            .multiply(RACK_UTILIZATION_RATE);
-        int requiredRackCount = usableVolumePerRack.signum() > 0
-            ? totalVolume.divide(usableVolumePerRack, 0, RoundingMode.CEILING).intValueExact()
-            : Integer.MAX_VALUE;
-        if (unitType.getRackCount() <= 0 || requiredRackCount > unitType.getRackCount()) {
-            issues.add("Total goods volume requires more racks than the selected unit type provides");
-        }
-        if (totalWeight.compareTo(unitType.getMaxLoadKg()) > 0) {
-            issues.add("Total goods weight exceeds the selected unit type capacity");
-        }
-        if (availableCount == 0) {
-            issues.add("No physical unit is currently available for the selected unit type");
-        }
+        var fit = palletInventory.check(
+            unitType,
+            request.getGoodsItems(),
+            availableCount,
+            request.getStartDate(),
+            request.getEndDate(),
+            lockUnit
+        );
+        boolean layoutReviewRequired = fit.reviewRequired();
+        CompatibilityResult result = layoutReviewRequired
+            ? CompatibilityResult.REVIEW_REQUIRED
+            : fit.plan() == null
+                ? CompatibilityResult.INCOMPATIBLE
+                : reviewRequired ? CompatibilityResult.REVIEW_REQUIRED : CompatibilityResult.COMPATIBLE;
 
-        CompatibilityResult result = !issues.isEmpty()
-            ? CompatibilityResult.INCOMPATIBLE
-            : reviewRequired ? CompatibilityResult.REVIEW_REQUIRED : CompatibilityResult.COMPATIBLE;
-
-        return new CompatibilityCheckResponse(
+        var response = new CompatibilityCheckResponse(
             facility.getId(), unitType.getId(), request.getStartDate(), request.getEndDate(), result,
             totalVolume.setScale(6, RoundingMode.HALF_UP),
             totalWeight.setScale(2, RoundingMode.HALF_UP),
-            unitVolume.setScale(6, RoundingMode.HALF_UP),
-            unitType.getMaxLoadKg().setScale(2, RoundingMode.HALF_UP),
-            RACK_UTILIZATION_RATE,
-            usableVolumePerRack.setScale(6, RoundingMode.HALF_UP),
-            requiredRackCount,
-            unitType.getRackCount(),
-            availableCount, reviewRequired, List.copyOf(issues)
+            unitType.getVolumeM3().setScale(6, RoundingMode.HALF_UP),
+            palletInventory.cargoLimitKg(unitType).setScale(2, RoundingMode.HALF_UP),
+            null, null, fit.plan() == null ? 0 : fit.plan().racks().size(), 0,
+            fit.fittingUnits(), reviewRequired || layoutReviewRequired, fit.issues()
         );
+        response.setPalletPlan(fit.plan());
+        response.setRequiredPallets(fit.requiredPallets());
+        response.setAvailablePalletSlots(fit.availableSlots());
+        response.setPalletLayoutMissing(fit.layoutMissing());
+        response.setPalletHeldUnit(fit.heldUnit());
+        PalletInventoryService.StorageLimits storageLimits = palletInventory.storageLimits(unitType);
+        if (storageLimits != null) {
+            response.setMaxCargoLengthCm(storageLimits.maxCargoLengthCm());
+            response.setMaxCargoWidthCm(storageLimits.maxCargoWidthCm());
+            response.setMaxCargoHeightCm(storageLimits.maxCargoHeightCm());
+            response.setMaxCargoWeightKg(storageLimits.maxCargoWeightKg());
+        }
+        response.setPhysicalFitStatus(fit.layoutMissing() || layoutReviewRequired
+            ? "REVIEW_REQUIRED" : fit.plan() == null ? "INCOMPATIBLE" : "FIT");
+        response.setAvailabilityStatus(fit.layoutMissing() || layoutReviewRequired
+            ? "NOT_EVALUATED" : fit.plan() == null
+            ? "NOT_EVALUATED" : fit.fittingUnits() > 0 ? "AVAILABLE" : "NO_VACANT_WAREHOUSE");
+        return response;
     }
 
     private void validateDates(LocalDate startDate, LocalDate endDate) {
@@ -310,25 +373,6 @@ public class ReservationCompatibilityService {
         return "ELECTRONICS".equals(code)
             || "CAMERA_EQUIPMENT".equals(code)
             || "MUSICAL_INSTRUMENTS".equals(code);
-    }
-
-    private boolean fitsInsideRack(GoodsItemRequest item, UnitType unitType) {
-        List<BigDecimal> itemDimensions = new ArrayList<>(List.of(
-            item.getLengthCm(), item.getWidthCm(), item.getHeightCm()
-        ));
-        List<BigDecimal> rackDimensions = new ArrayList<>(List.of(
-            unitType.getRackLengthM().movePointRight(2),
-            unitType.getRackWidthM().movePointRight(2),
-            unitType.getRackHeightM().movePointRight(2)
-        ));
-        itemDimensions.sort(Comparator.naturalOrder());
-        rackDimensions.sort(Comparator.naturalOrder());
-        for (int index = 0; index < itemDimensions.size(); index++) {
-            if (itemDimensions.get(index).compareTo(rackDimensions.get(index)) > 0) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private boolean isBlank(String value) {
