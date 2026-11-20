@@ -83,6 +83,7 @@ class ReservationCreationServiceTests {
         ReflectionTestUtils.setField(unitType, "id", UUID.randomUUID());
         unitType.setFacility(facility);
         unitType.setMonthlyPrice(new BigDecimal("5500000.00"));
+        unitType.setSecurityDepositAmount(new BigDecimal("5500000.00"));
 
         User customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());

@@ -82,6 +82,8 @@ public class CheckInHandoverService {
     private PaymentProvenance paymentProvenance;
     @Autowired
     private com.storagehub.service.ledger.SandboxPaymentRecognitionPolicy sandboxPaymentPolicy;
+    @Autowired(required = false)
+    private com.storagehub.domain.repo.PaymentComplaintRepository paymentComplaintRepository;
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final UnitAssignmentRepository assignmentRepository;
@@ -190,8 +192,8 @@ public class CheckInHandoverService {
 
         User operator = requireActor(actor);
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElseGet(CheckIn::new);
-        if (checkIn.getId() != null && checkIn.getStatus() == CheckInStatus.completed) {
-            throw ApiExceptions.conflict("Check-in is already completed");
+        if (checkIn.getId() != null && checkIn.getStatus() != CheckInStatus.scheduled) {
+            throw ApiExceptions.conflict("Only a scheduled check-in can be rescheduled");
         }
         checkIn.setReservation(reservation);
         checkIn.setPerformedBy(operator);
@@ -342,6 +344,7 @@ public class CheckInHandoverService {
         Reservation reservation = checkIn.getReservation();
         requireRemainingPayment(reservation);
         String lockReference = request.lockReference().trim();
+        validateNoPasswordReference(lockReference);
         if (request.initialUnitCondition() == null || request.initialUnitCondition().isBlank()) {
             throw ApiExceptions.validation("Cần ghi nhận tình trạng kho trống trước khi bàn giao.", null);
         }
@@ -634,9 +637,36 @@ public class CheckInHandoverService {
             throw ApiExceptions.conflict("Check-in appointment has not started yet");
         }
         User operator = requireActor(actor);
+        Instant now = Instant.now();
+        String reason = request.reason().trim();
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.no_show);
-        checkIn.setReadinessNote("NO_SHOW: " + request.reason().trim());
+        checkIn.setReadinessNote("NO_SHOW: " + reason);
+
+        UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
+            reservation.getId(), UnitAssignmentStatus.ACTIVE
+        ).orElse(null);
+        if (assignment != null) {
+            StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
+                .orElse(assignment.getStorageUnit());
+            assignment.setStatus(UnitAssignmentStatus.CANCELLED);
+            assignment.setCancelledBy(operator);
+            assignment.setCancelledAt(now);
+            assignment.setCancelReason("NO_SHOW: " + reason);
+            assignment.setReleaseDisposition(UnitReleaseDisposition.AVAILABLE);
+            assignment.setPreviousStorageUnitStatus(unit.getStatus());
+            unit.setStatus(StorageUnitStatus.available);
+            unit.setAvailableFrom(now);
+            unit.setLastReleasedAt(now);
+            storageUnitRepository.saveAndFlush(unit);
+            assignmentRepository.saveAndFlush(assignment);
+        }
+        reservation.setAssignedUnit(null);
+        reservation.setStatus(ReservationStatus.CANCELLED);
+        reservation.setCancelledAt(now);
+        reservation.setArchivedAt(now);
+        reservation.setCancelReason("NO_SHOW: " + reason);
+        reservationRepository.saveAndFlush(reservation);
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
         auditLogService.recordMutation(
             operator, "CHECKIN_NO_SHOW", "CheckIn", saved.getId(),
@@ -801,9 +831,21 @@ public class CheckInHandoverService {
                 || payment.getRefundedAmount() == null
                 || payment.getRefundedAmount().signum() != 0) return false;
             var proof = paymentProvenance.classify(payment);
-            return proof == PaymentProvenance.Classification.VERIFIED
-                || proof == PaymentProvenance.Classification.SANDBOX
-                    && sandboxPaymentPolicy.evaluate(payment, proof).eligibleForReconciliation();
+            if (proof == PaymentProvenance.Classification.VERIFIED
+                || (proof == PaymentProvenance.Classification.SANDBOX
+                    && sandboxPaymentPolicy.evaluate(payment, proof).eligibleForReconciliation())) {
+                return true;
+            }
+            if (paymentComplaintRepository != null && proof == PaymentProvenance.Classification.UNVERIFIED) {
+                var complaint = paymentComplaintRepository.findByReservation_Id(reservation.getId()).orElse(null);
+                return complaint != null
+                    && complaint.getStatus() == com.storagehub.domain.model.PaymentComplaintStatus.APPROVED
+                    && complaint.getPayment() != null
+                    && payment.getId().equals(complaint.getPayment().getId())
+                    && complaint.getReviewedBy() != null
+                    && complaint.getReviewedAt() != null;
+            }
+            return false;
         });
         if (!paid) throw ApiExceptions.conflict(
             "Khoản trả trước khi đặt kho chưa được xác minh đã thanh toán hoặc cần đối soát; chưa thể check-in."
@@ -1155,10 +1197,14 @@ public class CheckInHandoverService {
     }
 
     private void validateNoPasswordHandover(CompleteCheckInRequest request) {
-        boolean mentionsPassword = request.handedOverItems().stream()
-            .map(value -> value == null ? "" : value.toLowerCase(Locale.ROOT))
-            .anyMatch(value -> value.contains("password") || value.contains("mật khẩu") || value.matches(".*\\bpin\\b.*"));
-        if (mentionsPassword) {
+        if (request.handedOverItems() != null) {
+            request.handedOverItems().forEach(this::validateNoPasswordReference);
+        }
+    }
+
+    private void validateNoPasswordReference(String rawValue) {
+        String normalized = rawValue == null ? "" : rawValue.toLowerCase(Locale.ROOT);
+        if (normalized.contains("password") || normalized.contains("mật khẩu") || normalized.matches(".*\\bpin\\b.*")) {
             throw ApiExceptions.validation("New handover data must contain only the lock/key reference, not a password or PIN", null);
         }
     }

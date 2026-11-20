@@ -248,8 +248,8 @@ public class AccessCredentialService {
         Rental rental = rentalRepository.findByIdForUpdate(rentalId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
         facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
-        if (rental.getStatus() != RentalStatus.active) {
-            throw ApiExceptions.conflict("Access credentials can only be reissued for an active rental");
+        if (rental.getStatus() != RentalStatus.active && rental.getStatus() != RentalStatus.setup) {
+            throw ApiExceptions.conflict("Access credentials can only be reissued for an active or setup rental");
         }
 
         AccessCredential current = credentialRepository.findByIdForUpdate(request.credentialId())
@@ -458,7 +458,7 @@ public class AccessCredentialService {
                 reservation.getId(), UnitAssignmentStatus.ACTIVE
             ).isEmpty()) continue;
             CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId()).orElse(null);
-            if (checkIn == null || checkIn.getStatus() != CheckInStatus.scheduled
+            if (checkIn == null || checkIn.getStatus() != CheckInStatus.payment_collected
                 || credentialRepository.existsByReservation_IdAndStatus(reservation.getId(), AccessCredentialStatus.ACTIVE)) {
                 continue;
             }
