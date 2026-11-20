@@ -164,7 +164,7 @@ public final class ReservationSnapshotView {
             response.setFacilitySnapshot(new ReservationResponse.FacilitySnapshot(
                 text(facility, "snapshotVersion", null), instant(facility, "capturedAt"),
                 text(facility, "code", null), text(facility, "name", null), text(facility, "address", null),
-                text(facility, "city", null), text(facility, "phone", null), text(facility, "accessHours", null),
+                text(facility, "city", null), text(facility, "phone", null), "24/7",
                 facility.has("climateControlled") && !facility.get("climateControlled").isNull()
                     ? facility.get("climateControlled").asBoolean() : null,
                 text(facility, "securityDescription", null)
