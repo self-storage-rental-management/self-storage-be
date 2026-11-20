@@ -24,4 +24,18 @@ public interface RefundRequestRepository extends JpaRepository<RefundRequest, UU
         @Param("paymentId") UUID paymentId,
         @Param("statuses") Collection<RefundRequestStatus> statuses
     );
+
+    @Query("""
+        select count(r) from RefundRequest r
+        join r.payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and r.status in :statuses
+        """)
+    long countOutstandingByFacilityId(
+        @Param("facilityId") UUID facilityId,
+        @Param("statuses") Collection<RefundRequestStatus> statuses
+    );
 }

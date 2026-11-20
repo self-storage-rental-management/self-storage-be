@@ -97,10 +97,10 @@ public class FacilityManagementService {
     private void provisionUnitTypesAndUnits(Facility facility, List<CreateFacilityRequest.UnitSpecRequest> unitSpecs) {
         // Thông số mặc định chuẩn
         Map<String, DefaultSpec> defaults = Map.of(
-            "S", new DefaultSpec("Kho Nhỏ (S)", 8.0, 10.0, 5.0, 5_500_000, 600, 4, 1, "Khu A"),
-            "M", new DefaultSpec("Kho Trung (M)", 12.6, 10.4, 5.0, 9_500_000, 1_200, 6, 2, "Khu B"),
-            "L", new DefaultSpec("Kho Lớn (L)", 18.3, 10.8, 5.0, 15_000_000, 2_400, 8, 3, "Khu C"),
-            "XL", new DefaultSpec("Kho Rất Lớn (XL)", 25.0, 11.2, 5.0, 22_500_000, 3_600, 10, 4, "Khu D")
+            "S", new DefaultSpec("Kho Nhỏ (S)", 12.0, 11.6, 5.0, 5_500_000, 600, 4, 1, "Khu A"),
+            "M", new DefaultSpec("Kho Trung (M)", 17.3, 11.8, 5.0, 9_500_000, 1_200, 6, 2, "Khu B"),
+            "L", new DefaultSpec("Kho Lớn (L)", 23.0, 12.0, 5.0, 15_000_000, 2_400, 8, 3, "Khu C"),
+            "XL", new DefaultSpec("Kho Rất Lớn (XL)", 29.1, 12.2, 5.0, 22_500_000, 3_600, 10, 4, "Khu D")
         );
 
         if (unitSpecs != null && !unitSpecs.isEmpty()) {

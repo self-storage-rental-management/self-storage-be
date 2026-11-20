@@ -4,6 +4,7 @@ import com.storagehub.api.reservation.CompatibilityCheckRequest;
 import com.storagehub.api.reservation.CompatibilityCheckResponse;
 import com.storagehub.api.reservation.ReservationQuoteRequest;
 import com.storagehub.api.reservation.ReservationQuoteResponse;
+import com.storagehub.api.reservation.ReservationPackagePricing;
 import com.storagehub.api.reservation.ReservationRentalPackageResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.CompatibilityResult;
@@ -120,7 +121,7 @@ public class ReservationQuoteService {
         );
         CompatibilityCheckResponse compatibility = compatibilityService.check(actor, compatibilityRequest);
         if (compatibility.getResult() == CompatibilityResult.INCOMPATIBLE) {
-            throw ApiExceptions.conflict("Goods are not compatible with the selected unit type");
+            throw ApiExceptions.conflict(String.join(" ", compatibility.getIssues()));
         }
 
         int rentalMonths = calculateRentalMonths(request.getStartDate(), request.getEndDate());
@@ -138,10 +139,11 @@ public class ReservationQuoteService {
             .orElseThrow(() -> ApiExceptions.notFound("Rental package was not found"));
         validatePolicy(policy, request.getStartDate(), request.getEndDate(), rentalMonths);
 
-        BigDecimal monthlyPrice = money(unitType.getMonthlyPrice());
-        BigDecimal subtotal = money(monthlyPrice.multiply(BigDecimal.valueOf(rentalMonths)));
-        BigDecimal discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
-        BigDecimal baseEligibleAmount = money(subtotal.subtract(discountAmount));
+        var pricing = priceForPackage(unitType, policy, rentalMonths);
+        BigDecimal monthlyPrice = pricing.monthlyPrice();
+        BigDecimal subtotal = pricing.subtotal();
+        BigDecimal discountAmount = pricing.discountAmount();
+        BigDecimal baseEligibleAmount = pricing.rentAfterPackageDiscount();
 
         BigDecimal voucherDiscountAmount = BigDecimal.ZERO;
         String appliedVoucherCode = null;
@@ -159,13 +161,9 @@ public class ReservationQuoteService {
         }
 
         BigDecimal totalAfterDiscount = money(baseEligibleAmount.subtract(voucherDiscountAmount));
-        BigDecimal securityDepositAmount = money(
-            (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
-                ? monthlyPrice
-                : unitType.getSecurityDepositAmount()
-        );
-        BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
-        BigDecimal reservationDepositAmount = money(totalAfterDiscount.add(securityDepositAmount).multiply(depositRate));
+        BigDecimal securityDepositAmount = pricing.securityDepositAmount();
+        BigDecimal depositRate = pricing.reservationDepositRate();
+        BigDecimal reservationDepositAmount = reservationDeposit(totalAfterDiscount, securityDepositAmount, depositRate);
         int earlyTerminationFeeCapMonths = policy.getEarlyTerminationFeeCapMonths() > 0
             ? policy.getEarlyTerminationFeeCapMonths() : EarlyTerminationPolicy.DEFAULT_FEE_CAP_MONTHS;
         BigDecimal earlyTerminationFeeCoefficient = policy.getEarlyTerminationFeeCoefficient() != null
@@ -186,23 +184,11 @@ public class ReservationQuoteService {
         quote.setCustomer(customer);
         quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(request.getGoodsItems()));
         quote.setUnitTypeRevision(unitType.getPublishedRevision());
-        var unitSnapshot = new java.util.LinkedHashMap<String, Object>();
-        unitSnapshot.put("code", unitType.getCode());
-        unitSnapshot.put("name", unitType.getName());
-        unitSnapshot.put("description", unitType.getDescription());
-        unitSnapshot.put("lengthM", unitType.getLengthM());
-        unitSnapshot.put("widthM", unitType.getWidthM());
-        unitSnapshot.put("heightM", unitType.getHeightM());
-        unitSnapshot.put("maxLoadKg", unitType.getMaxLoadKg());
-        unitSnapshot.put("rackCount", unitType.getRackCount());
-        unitSnapshot.put("rackLengthM", unitType.getRackLengthM());
-        unitSnapshot.put("rackWidthM", unitType.getRackWidthM());
-        unitSnapshot.put("rackHeightM", unitType.getRackHeightM());
-        unitSnapshot.put("monthlyPrice", unitType.getMonthlyPrice());
-        unitSnapshot.put("securityDepositAmount", unitType.getSecurityDepositAmount());
-        unitSnapshot.put("publishedRevision", unitType.getPublishedRevision());
-        unitSnapshot.put("acceptedGoodsJson", unitType.getAcceptedGoodsJson());
-        quote.setUnitTypeSnapshotJson(GoodsSnapshotCodec.encodeObject(unitSnapshot));
+        quote.setFacilitySnapshotJson(ReservationSnapshotCodec.facility(policy.getFacility(), quotedAt));
+        quote.setUnitTypeSnapshotJson(ReservationSnapshotCodec.unitType(unitType, quotedAt));
+        quote.setSnapshotHash(ReservationSnapshotCodec.hash(
+            quote.getGoodsSnapshotJson(), quote.getFacilitySnapshotJson(), quote.getUnitTypeSnapshotJson()
+        ));
         quote.setFacility(policy.getFacility());
         quote.setUnitType(unitType);
         quote.setPricingPackageCode(policy.getCode());
@@ -273,7 +259,24 @@ public class ReservationQuoteService {
         }
     }
 
-    private BigDecimal money(BigDecimal value) {
+    static ReservationPackagePricing priceForPackage(UnitType type, RentalPackagePolicy policy, int rentalMonths) {
+        var monthlyPrice = money(type.getMonthlyPrice());
+        var subtotal = money(monthlyPrice.multiply(BigDecimal.valueOf(rentalMonths)));
+        var discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
+        var rentAfterPackageDiscount = money(subtotal.subtract(discountAmount));
+        var configuredSecurityDeposit = type.getSecurityDepositAmount();
+        var securityDeposit = configuredSecurityDeposit == null || configuredSecurityDeposit.signum() <= 0
+            ? monthlyPrice : money(configuredSecurityDeposit);
+        var depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
+        return new ReservationPackagePricing(monthlyPrice, subtotal, policy.getDiscountRate(), discountAmount,
+            rentAfterPackageDiscount, securityDeposit, depositRate, reservationDeposit(rentAfterPackageDiscount, securityDeposit, depositRate));
+    }
+
+    private static BigDecimal reservationDeposit(BigDecimal rent, BigDecimal securityDeposit, BigDecimal rate) {
+        return money(rent.add(securityDeposit).multiply(rate));
+    }
+
+    private static BigDecimal money(BigDecimal value) {
         return value.setScale(2, RoundingMode.HALF_UP);
     }
 

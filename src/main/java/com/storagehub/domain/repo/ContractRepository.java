@@ -17,6 +17,14 @@ public interface ContractRepository extends JpaRepository<Contract, UUID> {
 
     List<Contract> findByStatus(ContractStatus status);
 
+    @Query("""
+        select count(c) from Contract c
+        where c.rental.facility.id = :facilityId
+          and c.status = com.storagehub.domain.model.ContractStatus.SIGNED
+          and c.rental.status = com.storagehub.domain.model.RentalStatus.active
+        """)
+    long countActiveByFacilityId(@Param("facilityId") UUID facilityId);
+
     @Query("select c from Contract c where c.rental.id = :rentalId order by c.createdAt desc")
     List<Contract> findAllByRentalIdOrderByCreatedAtDesc(@Param("rentalId") UUID rentalId);
 
