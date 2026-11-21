@@ -47,7 +47,7 @@ final class ReservationSnapshotCodec {
         snapshot.put("widthM", unitType == null ? null : unitType.getWidthM());
         snapshot.put("heightM", unitType == null ? null : unitType.getHeightM());
         snapshot.put("monthlyPrice", unitType == null ? null : unitType.getMonthlyPrice());
-        snapshot.put("securityDepositAmount", unitType == null ? null : unitType.getSecurityDepositAmount());
+        snapshot.put("securityDepositAmount", unitType == null ? null : unitType.getEffectiveSecurityDepositAmount());
         snapshot.put("maxLoadKg", unitType == null ? null : unitType.getMaxLoadKg());
         snapshot.put("maxStoredLoadKg", unitType == null ? null : unitType.getMaxStoredLoadKg());
         snapshot.put("rackCount", unitType == null ? null : unitType.getRackCount());

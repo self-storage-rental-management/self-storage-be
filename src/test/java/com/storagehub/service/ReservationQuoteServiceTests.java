@@ -142,6 +142,15 @@ class ReservationQuoteServiceTests {
     }
 
     @Test
+    void securityDepositAlwaysUsesOneMonthOfRent() {
+        unitType.setSecurityDepositAmount(new BigDecimal("1"));
+
+        var pricing = ReservationQuoteService.priceForPackage(unitType, policy, 3);
+
+        assertThat(pricing.securityDepositAmount()).isEqualByComparingTo("5500000");
+    }
+
+    @Test
     void appliesCustomPackageReservationDepositRateWhenConfigured() {
         policy.setDepositRate(new BigDecimal("0.1000"));
         ReservationQuoteRequest request = request(LocalDate.of(2026, 10, 10), LocalDate.of(2027, 1, 10));
