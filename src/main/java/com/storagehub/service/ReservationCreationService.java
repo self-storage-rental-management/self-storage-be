@@ -295,11 +295,7 @@ public class ReservationCreationService {
             }
         }
         BigDecimal totalAfterDiscount = money(baseEligible.subtract(voucherDiscountAmount));
-        BigDecimal securityDeposit = money(
-            (quote.getUnitType().getSecurityDepositAmount() == null || quote.getUnitType().getSecurityDepositAmount().compareTo(BigDecimal.ZERO) <= 0)
-                ? currentMonthlyPrice
-                : quote.getUnitType().getSecurityDepositAmount()
-        );
+        BigDecimal securityDeposit = currentMonthlyPrice;
         BigDecimal depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
         BigDecimal reservationDeposit = money(totalAfterDiscount.add(securityDeposit).multiply(depositRate));
 
