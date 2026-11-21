@@ -234,8 +234,8 @@ class ReservationCreationServiceTests {
     }
 
     @Test
-    void createsReservationWhenSecurityDepositDiffersFromMonthlyPrice() {
-        // Cỡ kho có tiền cọc đảm bảo 200.000 khác đơn giá tháng 2.000.000
+    void createsReservationWithSecurityDepositEqualToMonthlyPrice() {
+        // Dữ liệu cũ có thể lưu cọc khác giá thuê, nhưng khi tạo đơn phải dùng đúng một tháng tiền thuê.
         quote.getUnitType().setMonthlyPrice(new BigDecimal("2000000.00"));
         quote.getUnitType().setSecurityDepositAmount(new BigDecimal("200000.00"));
         quote.setMonthlyPrice(new BigDecimal("2000000.00"));
@@ -244,11 +244,11 @@ class ReservationCreationServiceTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("180000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("5820000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("1204000.00"));
-        quote.setSecurityDepositAmount(new BigDecimal("200000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("4616000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("4816000.00"));
-        quote.setTotalInitialObligation(new BigDecimal("6020000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("1564000.00"));
+        quote.setSecurityDepositAmount(new BigDecimal("2000000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("4256000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("6256000.00"));
+        quote.setTotalInitialObligation(new BigDecimal("7820000.00"));
 
         CreateReservationRequest request = request();
         when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-diff-deposit"))
@@ -270,7 +270,7 @@ class ReservationCreationServiceTests {
         var response = service.create(actor, request, "create-diff-deposit");
 
         assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
-        assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("200000.00");
+        assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("2000000.00");
     }
 
     @Test
