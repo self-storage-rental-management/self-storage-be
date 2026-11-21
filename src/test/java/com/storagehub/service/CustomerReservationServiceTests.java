@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.storagehub.api.reservation.CancelReservationRequest;
 import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.api.reservation.CheckInDocumentResponse;
+import com.storagehub.api.reservation.CustomerPreparationCompleteRequest;
 import com.storagehub.api.reservation.GoodsItemRequest;
 import com.storagehub.api.reservation.UpdateSetupGoodsRequest;
 import com.storagehub.common.api.ApiException;
@@ -251,6 +252,38 @@ class CustomerReservationServiceTests {
             new UpdateSetupGoodsRequest(List.of(new GoodsItemRequest()), null)))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("đã bị khóa");
+    }
+
+    @Test
+    void preparationCompletionRepairsLegacyReceiptStatusAndOpensInventory() {
+        reservation.setStatus(ReservationStatus.PREPARING);
+        StorageUnit storageUnit = entityWithId(new StorageUnit());
+        storageUnit.setCode("HCM-Q1-F01-M-004");
+        Rental rental = entityWithId(new Rental());
+        rental.setReservation(reservation);
+        rental.setFacility(reservation.getFacility());
+        rental.setStorageUnit(storageUnit);
+        rental.setStatus(RentalStatus.setup);
+        rental.setInventoryDueAt(Instant.now().plusSeconds(86_400));
+
+        CheckIn checkIn = entityWithId(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setRental(rental);
+        checkIn.setStatus(CheckInStatus.handover_pending_receipt);
+
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+
+        var response = service.markPreparationComplete(actor, reservation.getId(),
+            new CustomerPreparationCompleteRequest("Khách đã sắp xếp hàng xong"));
+
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
+        assertThat(checkIn.getSetupCompletedAt()).isNotNull();
+        assertThat(rental.getMoveInCompletedAt()).isNotNull();
+        assertThat(response.getCheckInStatus()).isEqualTo(CheckInStatus.setup_completed.name());
+        verify(checkInRepository).saveAndFlush(checkIn);
     }
 
     @Test

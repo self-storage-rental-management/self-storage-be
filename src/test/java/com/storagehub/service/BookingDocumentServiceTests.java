@@ -130,7 +130,7 @@ class BookingDocumentServiceTests {
         var response = service.generate(actor, reservation.getId());
 
         assertThat(response.documentType().name()).isEqualTo("BOOKING_CONFIRMATION");
-        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-");
+        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-v2-");
         assertThat(response.checksumSha256()).hasSize(64);
         assertThat(response.contentType()).isEqualTo("application/pdf");
         assertThat(Files.readAllBytes(storedPath.get())).startsWith("%PDF-1.4".getBytes());
@@ -176,7 +176,7 @@ class BookingDocumentServiceTests {
         var response = service.generate(actor, reservation.getId());
 
         assertThat(response).isNotNull();
-        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-");
+        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-v2-");
         assertThat(Files.size(storedPath.get())).isGreaterThan(50_000L);
     }
 
@@ -184,7 +184,7 @@ class BookingDocumentServiceTests {
     void returnsExistingDocumentWithoutGeneratingAnotherFile() {
         FileAsset asset = new FileAsset();
         ReflectionTestUtils.setField(asset, "id", UUID.randomUUID());
-        asset.setOriginalName("phieu-xac-nhan-giu-kho-rsv-test001.pdf");
+        asset.setOriginalName("phieu-xac-nhan-giu-kho-v2-rsv-test001.pdf");
         asset.setContentType("application/pdf");
         asset.setSizeBytes(20);
         asset.setChecksumSha256("a".repeat(64));
@@ -203,7 +203,7 @@ class BookingDocumentServiceTests {
     }
 
     @Test
-    void replacesLegacyEnglishDocumentWithCurrentVietnameseTemplate() throws Exception {
+    void replacesOlderDocumentWithCurrentTemplate() throws Exception {
         UUID fileId = UUID.randomUUID();
         Path legacyPath = temporaryDirectory.resolve(fileId + ".pdf");
         Files.writeString(legacyPath, "legacy booking confirmation");
@@ -212,7 +212,7 @@ class BookingDocumentServiceTests {
         ReflectionTestUtils.setField(asset, "id", fileId);
         asset.setUploadedBy(reservation.getCustomer());
         asset.setStorageKey(legacyPath.toString());
-        asset.setOriginalName("booking-confirmation-rsv-test001.pdf");
+        asset.setOriginalName("phieu-xac-nhan-giu-kho-rsv-test001.pdf");
         asset.setContentType("application/pdf");
         asset.setSizeBytes(Files.size(legacyPath));
         asset.setChecksumSha256("a".repeat(64));
@@ -233,7 +233,7 @@ class BookingDocumentServiceTests {
         var response = service.generate(actor, reservation.getId());
 
         assertThat(response.id()).isEqualTo(document.getId());
-        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-");
+        assertThat(response.fileName()).startsWith("phieu-xac-nhan-giu-kho-v2-");
         assertThat(Files.readAllBytes(legacyPath)).startsWith("%PDF-1.4".getBytes());
         assertThat(Files.size(legacyPath)).isGreaterThan(50_000L);
         verify(documentRepository).saveAndFlush(document);
