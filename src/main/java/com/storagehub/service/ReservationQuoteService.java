@@ -264,9 +264,7 @@ public class ReservationQuoteService {
         var subtotal = money(monthlyPrice.multiply(BigDecimal.valueOf(rentalMonths)));
         var discountAmount = money(subtotal.multiply(policy.getDiscountRate()));
         var rentAfterPackageDiscount = money(subtotal.subtract(discountAmount));
-        var configuredSecurityDeposit = type.getSecurityDepositAmount();
-        var securityDeposit = configuredSecurityDeposit == null || configuredSecurityDeposit.signum() <= 0
-            ? monthlyPrice : money(configuredSecurityDeposit);
+        var securityDeposit = monthlyPrice;
         var depositRate = policy.getDepositRate() != null ? policy.getDepositRate() : RESERVATION_DEPOSIT_RATE;
         return new ReservationPackagePricing(monthlyPrice, subtotal, policy.getDiscountRate(), discountAmount,
             rentAfterPackageDiscount, securityDeposit, depositRate, reservationDeposit(rentAfterPackageDiscount, securityDeposit, depositRate));
