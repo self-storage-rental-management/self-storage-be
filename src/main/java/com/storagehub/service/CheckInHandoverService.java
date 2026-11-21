@@ -37,6 +37,7 @@ import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.UnitAssignment;
 import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.UnitReleaseDisposition;
+import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.User;
@@ -425,10 +426,35 @@ public class CheckInHandoverService {
     ) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
-        // The customer portal is the only actor allowed to announce that the
-        // preparation phase is complete. Staff must not bypass that gate and
-        // open inventory while the customer is still moving goods in.
-        throw ApiExceptions.conflict("Chỉ khách hàng được xác nhận đã chuẩn bị xong trước khi kiểm kê hàng hóa");
+        CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.setup_in_progress);
+        Reservation reservation = checkIn.getReservation();
+        User operator = requireActor(actor);
+        checkIn.setPerformedBy(operator);
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        Instant completedAt = Instant.now();
+        checkIn.setSetupCompletedAt(completedAt);
+        if (request != null && clean(request.note()) != null) {
+            String note = clean(request.note());
+            String existing = clean(checkIn.getReadinessNote());
+            checkIn.setReadinessNote(existing == null ? "Staff xác nhận: " + note : existing + " | Staff xác nhận: " + note);
+        }
+        if (checkIn.getRental() != null) {
+            checkIn.getRental().setMoveInCompletedAt(completedAt);
+            checkIn.getRental().setSetupReminderTwoDaysAt(completedAt);
+            checkIn.getRental().setSetupReminderLastDayAt(completedAt);
+            createInventoryTask(checkIn.getRental(), completedAt);
+            rentalRepository.saveAndFlush(checkIn.getRental());
+        }
+        CheckIn saved = checkInRepository.saveAndFlush(checkIn);
+        recordWorkflowAudit(operator, reservation, saved, "CHECKIN_SETUP_COMPLETED",
+            CheckInStatus.setup_in_progress, CheckInStatus.setup_completed);
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            "Đã xác nhận sẵn sàng kiểm kê",
+            "Đơn " + reservation.getReservationCode() + " đã kết thúc thời gian chuẩn bị và sẵn sàng kiểm kê hàng hóa.",
+            reservation.getId()
+        );
+        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -1040,6 +1066,37 @@ public class CheckInHandoverService {
                 : clean(notes));
             maintenanceTaskRepository.save(task);
         });
+    }
+
+    private void createInventoryTask(Rental rental, Instant now) {
+        if (maintenanceTaskRepository == null
+            || rental.getInventoryTaskCreatedAt() != null
+            || maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(
+                rental.getId(),
+                MaintenanceTaskType.inventory_check,
+                List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)
+            ).stream().findAny().isPresent()) {
+            return;
+        }
+        MaintenanceTask task = new MaintenanceTask();
+        task.setFacility(rental.getFacility());
+        task.setStorageUnit(rental.getStorageUnit());
+        task.setRental(rental);
+        task.setTaskType(MaintenanceTaskType.inventory_check);
+        task.setTitle("Kiểm kê hàng hóa đầu vào · " + rental.getStorageUnit().getCode());
+        task.setReason(
+            "Khách đã báo chuẩn bị hàng xong cho đơn "
+                + rental.getReservation().getReservationCode()
+                + ". Staff cần kiểm kê hàng hóa, không kiểm kê lại gian kho trống."
+        );
+        task.setPriority(com.storagehub.domain.model.TaskPriority.medium);
+        task.setReportedBy(null);
+        task.setStatus(MaintenanceTaskStatus.open);
+        task.setDueAt(rental.getInventoryDueAt() == null
+            ? null
+            : rental.getInventoryDueAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate());
+        maintenanceTaskRepository.saveAndFlush(task);
+        rental.setInventoryTaskCreatedAt(now);
     }
 
     private void requireRemainingPayment(Reservation reservation) {
