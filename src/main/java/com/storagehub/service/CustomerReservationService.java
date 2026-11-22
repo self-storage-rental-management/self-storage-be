@@ -89,6 +89,8 @@ public class CustomerReservationService {
     @Autowired
     private ObjectProvider<ReturnSettlementService> returnSettlementServices;
     @Autowired
+    private BusinessRecordCodes displayCodes;
+    @Autowired
     private PaymentProvenance paymentProvenance;
     @Autowired
     private ObjectMapper objectMapper;
@@ -671,6 +673,9 @@ public class CustomerReservationService {
             rental.setInventoryDueAt(setupEndsAt.plusSeconds(3 * 86_400L));
             rental.setInventoryPending(true);
             rental = rentalRepository.saveAndFlush(rental);
+            if (displayCodes != null) {
+                displayCodes.assign("TH", "TH:" + rental.getId(), rental.getCreatedAt());
+            }
             ensureSignedContract(reservation, rental);
             reservation.setStartDate(rental.getStartDate());
             reservation.setEndDate(rental.getContractEndDate());

@@ -16,6 +16,7 @@ public record MaintenanceTaskResponse(
     UUID storageUnitId,
     String unitCode,
     UUID rentalId,
+    String customerName,
     UUID returnCaseId,
     String title,
     MaintenanceTaskType taskType,

@@ -3,6 +3,8 @@ package com.storagehub.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.checkin.CheckInResponse;
+import com.storagehub.api.checkin.CheckInResponse.IntakeAction;
+import com.storagehub.common.api.ApiException;
 import com.storagehub.api.checkin.CheckInPaymentRequest;
 import com.storagehub.api.checkin.CheckInPaymentResponse;
 import com.storagehub.api.checkin.CompleteCheckInRequest;
@@ -68,7 +70,6 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
@@ -105,12 +106,15 @@ public class CheckInHandoverService {
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
 
+    public enum WorkGroup { ALL, ONGOING, PROCESSED }
+
     @Transactional(readOnly = true)
     public PageResponse<CheckInResponse> list(
         ActorPrincipal actor,
         UUID facilityId,
         String q,
         String status,
+        WorkGroup group,
         Instant scheduledFrom,
         Instant scheduledTo,
         int page,
@@ -133,15 +137,13 @@ public class CheckInHandoverService {
                 Map.of("scheduledFrom", scheduledFrom, "scheduledTo", scheduledTo)
             );
         }
+        Instant now = Instant.now();
         Page<CheckInResponse> result = reservationRepository.findCheckInWork(
+            group.name(), now, ReservationCheckInPolicy.firstValidAppointment(now),
             facilityId, clean(q), statusFilter.enabled(), statusFilter.unscheduled(),
             statusFilter.checkInStatus(), scheduledFrom, scheduledTo, scoped, facilityIds,
             pageRequest(page, pageSize)
-        ).map(reservation -> toResponse(
-            reservation,
-            checkInRepository.findByReservation_Id(reservation.getId()).orElse(null),
-            latestAssignment(reservation.getId())
-        ));
+        ).map(row -> toResponse(actor, row.getReservation(), row.getCheckIn(), row.getAssignment()));
         return PageResponse.from(result, correlationId);
     }
 
@@ -183,37 +185,29 @@ public class CheckInHandoverService {
         Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
-        if (reservation.getStatus() != ReservationStatus.UNIT_RESERVED
-            && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN) {
-            throw ApiExceptions.conflict("Reservation is not ready to schedule check-in");
-        }
-        requirePaidReservationDeposit(reservation);
         UnitAssignment assignment = activeAssignment(reservationId);
-        StorageUnit unit = requireReservedAssignedUnit(reservation, assignment);
-        if (rentalRepository.existsActiveRental(reservationId, unit.getId(), RentalStatus.active)) {
-            throw ApiExceptions.conflict("Reservation or storage unit already has an active rental");
-        }
-
+        StorageUnit unit = lockAssignedUnit(assignment);
         User operator = requireActor(actor);
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId).orElseGet(CheckIn::new);
         if (checkIn.getId() != null && checkIn.getStatus() != CheckInStatus.scheduled) {
             throw ApiExceptions.conflict("Only a scheduled check-in can be rescheduled");
         }
+        // The appointment belongs to the customer. Keep the request field for API
+        // compatibility, but never let a staff actor move the customer appointment.
+        Instant appointmentAt = effectiveAppointment(reservation, checkIn);
+        if (appointmentAt == null) {
+            // Legacy reservations created before appointmentAt was persisted can
+            // still be scheduled once; the value is then pinned for subsequent runs.
+            appointmentAt = request.scheduledAt();
+        }
+        requireIntakeReady(reservation, assignment, unit, appointmentAt);
         checkIn.setReservation(reservation);
         checkIn.setPerformedBy(operator);
         checkIn.setAssignedStaff(resolveAssignedStaff(
             request.assignedStaffId(), operator, reservation.getFacility().getId()
         ));
         checkIn.setStatus(CheckInStatus.scheduled);
-        // The appointment belongs to the customer. Keep the request field for API
-        // compatibility, but never let a staff actor move the customer appointment.
-        Instant appointmentAt = reservation.getAppointmentAt();
-        if (appointmentAt == null) {
-            // Legacy reservations created before appointmentAt was persisted can
-            // still be scheduled once; the value is then pinned for subsequent runs.
-            appointmentAt = request.scheduledAt();
-            reservation.setAppointmentAt(appointmentAt);
-        }
+        reservation.setAppointmentAt(appointmentAt);
         checkIn.setScheduledAt(appointmentAt);
         checkIn.setCheckedInAt(null);
         checkIn.setIdentityVerifiedAt(null);
@@ -256,7 +250,7 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " có lịch nhận kho vào " + appointmentAt + ".",
             reservation.getId()
         );
-        return toResponse(reservation, saved, assignment);
+        return toResponse(actor, reservation, saved, assignment);
     }
 
     @Transactional
@@ -293,7 +287,7 @@ public class CheckInHandoverService {
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
         recordWorkflowAudit(operator, reservation, saved, "CHECKIN_IDENTITY_VERIFIED",
             CheckInStatus.scheduled, CheckInStatus.identity_verified);
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -318,7 +312,7 @@ public class CheckInHandoverService {
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
         recordWorkflowAudit(operator, reservation, saved, "CHECKIN_CONTRACT_SIGNED",
             CheckInStatus.identity_verified, CheckInStatus.contract_signed);
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -342,7 +336,7 @@ public class CheckInHandoverService {
         CheckIn saved = checkInRepository.saveAndFlush(checkIn);
         recordWorkflowAudit(operator, reservation, saved, "CHECKIN_PAYMENT_CONFIRMED",
             CheckInStatus.contract_signed, CheckInStatus.payment_collected);
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -415,7 +409,7 @@ public class CheckInHandoverService {
                 + " đã bàn giao kho trống và đang chờ khách xác nhận nhận kho.",
             reservation.getId()
         );
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -454,7 +448,7 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " đã kết thúc thời gian chuẩn bị và sẵn sàng kiểm kê hàng hóa.",
             reservation.getId()
         );
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -472,7 +466,7 @@ public class CheckInHandoverService {
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
 
         if (checkIn.getStatus() == CheckInStatus.completed) {
-            return toResponse(reservation, checkIn, latestAssignment(reservation.getId()));
+            return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
         }
         Instant now = Instant.now();
         if (checkIn.getStatus() != CheckInStatus.setup_completed) {
@@ -586,7 +580,7 @@ public class CheckInHandoverService {
                 + " đã hoàn tất kiểm kê hàng hóa đầu vào.",
             reservation.getId()
         );
-        return toResponse(reservation, saved, assignment);
+        return toResponse(actor, reservation, saved, assignment);
     }
 
     @Transactional
@@ -607,7 +601,7 @@ public class CheckInHandoverService {
             || !isCheckInReadyStatus(reservation.getStatus())) {
             throw ApiExceptions.conflict("Check-in is not ready to record the remaining payment");
         }
-        requirePaidReservationDeposit(reservation);
+        requireLockedIntakeReady(reservation, checkIn);
         var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
         ReservationSnapshotView.requireSetupDays(reservation,snapshot);
@@ -663,9 +657,11 @@ public class CheckInHandoverService {
         if (checkIn.getStatus() != CheckInStatus.scheduled) {
             throw ApiExceptions.conflict("Only a scheduled check-in can be marked no-show");
         }
-        if (checkIn.getScheduledAt() != null && checkIn.getScheduledAt().isAfter(Instant.now())) {
-            throw ApiExceptions.conflict("Check-in appointment has not started yet");
+        Instant appointmentAt = effectiveAppointment(reservation, checkIn);
+        if (appointmentAt == null || appointmentAt.isAfter(Instant.now())) {
+            throw ApiExceptions.conflict("Chỉ có thể ghi nhận khách vắng từ giờ hẹn nhận kho.");
         }
+        UnitAssignment assignment = requireLockedIntakeReady(reservation, checkIn);
         User operator = requireActor(actor);
         Instant now = Instant.now();
         String reason = request.reason().trim();
@@ -673,24 +669,18 @@ public class CheckInHandoverService {
         checkIn.setStatus(CheckInStatus.no_show);
         checkIn.setReadinessNote("NO_SHOW: " + reason);
 
-        UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
-            reservation.getId(), UnitAssignmentStatus.ACTIVE
-        ).orElse(null);
-        if (assignment != null) {
-            StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
-                .orElse(assignment.getStorageUnit());
-            assignment.setStatus(UnitAssignmentStatus.CANCELLED);
-            assignment.setCancelledBy(operator);
-            assignment.setCancelledAt(now);
-            assignment.setCancelReason("NO_SHOW: " + reason);
-            assignment.setReleaseDisposition(UnitReleaseDisposition.AVAILABLE);
-            assignment.setPreviousStorageUnitStatus(unit.getStatus());
-            unit.setStatus(StorageUnitStatus.available);
-            unit.setAvailableFrom(now);
-            unit.setLastReleasedAt(now);
-            storageUnitRepository.saveAndFlush(unit);
-            assignmentRepository.saveAndFlush(assignment);
-        }
+        StorageUnit unit = assignment.getStorageUnit();
+        assignment.setStatus(UnitAssignmentStatus.CANCELLED);
+        assignment.setCancelledBy(operator);
+        assignment.setCancelledAt(now);
+        assignment.setCancelReason("NO_SHOW: " + reason);
+        assignment.setReleaseDisposition(UnitReleaseDisposition.AVAILABLE);
+        assignment.setPreviousStorageUnitStatus(unit.getStatus());
+        unit.setStatus(StorageUnitStatus.available);
+        unit.setAvailableFrom(now);
+        unit.setLastReleasedAt(now);
+        storageUnitRepository.saveAndFlush(unit);
+        assignmentRepository.saveAndFlush(assignment);
         reservation.setAssignedUnit(null);
         reservation.setStatus(ReservationStatus.CANCELLED);
         reservation.setCancelledAt(now);
@@ -716,7 +706,7 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
             reservation.getId()
         );
-        return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+        return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -735,17 +725,8 @@ public class CheckInHandoverService {
         if (checkIn.getStatus() != CheckInStatus.scheduled) {
             throw ApiExceptions.conflict("Only a scheduled check-in can be rejected");
         }
-        if (!isCheckInReadyStatus(reservation.getStatus())) {
-            throw ApiExceptions.conflict("Reservation is not READY_FOR_CHECKIN");
-        }
-
-        UnitAssignment assignment = activeAssignment(reservation.getId());
-        StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
-        assertReservationUnitMatch(reservation, assignment, unit);
-        if (unit.getStatus() != StorageUnitStatus.reserved) {
-            throw ApiExceptions.conflict("Storage unit is not reserved for this check-in");
-        }
+        UnitAssignment assignment = requireLockedIntakeReady(reservation, checkIn);
+        StorageUnit unit = assignment.getStorageUnit();
         validateEvidence(checkInId, request.evidenceReferences());
 
         User operator = requireActor(actor);
@@ -810,7 +791,7 @@ public class CheckInHandoverService {
             "Đơn " + reservation.getReservationCode() + " chưa thể nhận kho: " + request.reason().trim(),
             reservation.getId()
         );
-        return toResponse(reservation, saved, assignment);
+        return toResponse(actor, reservation, saved, assignment);
     }
 
     private CheckIn requireWorkflowStep(
@@ -833,9 +814,19 @@ public class CheckInHandoverService {
                 "Check-in step is out of order. Expected status: " + expectedStatus
             );
         }
-        requirePaidReservationDeposit(reservation);
+        if (expectedStatus != CheckInStatus.setup_in_progress) {
+            requireLockedIntakeReady(reservation, checkIn);
+        } else {
+            requirePaidReservationDeposit(reservation);
+        }
         checkIn.setReservation(reservation);
         return checkIn;
+    }
+
+    private void requireHandoverWithinDeadline(Instant appointmentAt) {
+        if (ReservationCheckInPolicy.handoverExpired(appointmentAt, Instant.now())) {
+            throw ApiExceptions.conflict("Đã hết hạn nhận kho. Không thể tiếp tục bàn giao.");
+        }
     }
 
     /** The booking prepayment is distinct from the security deposit already included in its quote. */
@@ -923,17 +914,60 @@ public class CheckInHandoverService {
         }
     }
 
-    private StorageUnit requireReservedAssignedUnit(
-        Reservation reservation,
-        UnitAssignment assignment
-    ) {
-        StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
+    private Instant effectiveAppointment(Reservation reservation, CheckIn checkIn) {
+        if (reservation.getAppointmentAt() != null) return reservation.getAppointmentAt();
+        return checkIn == null ? null : checkIn.getScheduledAt();
+    }
+
+    private StorageUnit lockAssignedUnit(UnitAssignment assignment) {
+        return storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
-        assertReservationUnitMatch(reservation, assignment, unit);
-        if (unit.getStatus() != StorageUnitStatus.reserved) {
-            throw ApiExceptions.conflict("Storage unit is not reserved for this reservation");
+    }
+
+    private UnitAssignment requireLockedIntakeReady(Reservation reservation, CheckIn checkIn) {
+        UnitAssignment assignment = activeAssignment(reservation.getId());
+        requireIntakeReady(reservation, assignment, lockAssignedUnit(assignment), effectiveAppointment(reservation, checkIn));
+        return assignment;
+    }
+
+    private void requireIntakeReady(Reservation reservation, UnitAssignment assignment,
+                                    StorageUnit unit, Instant appointmentAt) {
+        if (appointmentAt == null) throw ApiExceptions.conflict("Hồ sơ chưa có lịch hẹn nhận kho.");
+        requireHandoverWithinDeadline(appointmentAt);
+        if ((reservation.getStatus() != ReservationStatus.UNIT_RESERVED
+            && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN)
+            || assignment.getStatus() != UnitAssignmentStatus.ACTIVE) {
+            throw ApiExceptions.conflict("Hồ sơ chưa sẵn sàng nhận kho.");
         }
-        return unit;
+        assertReservationUnitMatch(reservation, assignment, unit);
+        if (unit.getStatus() != StorageUnitStatus.reserved
+            || rentalRepository.existsActiveRental(reservation.getId(), unit.getId(), RentalStatus.active)) {
+            throw ApiExceptions.conflict("Gian kho chưa sẵn sàng bàn giao cho đơn này.");
+        }
+        requirePaidReservationDeposit(reservation);
+    }
+
+    private IntakeAction intakeAction(ActorPrincipal actor, Reservation reservation,
+                                      CheckIn checkIn, UnitAssignment assignment) {
+        if (!actor.hasPermission(SystemPermission.PERFORM_CHECKIN)
+            || !facilityScopeService.canAccessFacility(actor, reservation.getFacility().getId(), FacilityScopeLevel.OPERATE)) {
+            return IntakeAction.NONE;
+        }
+        CheckInStatus status = checkIn == null ? null : checkIn.getStatus();
+        if (status != null) {
+            switch (status) {
+                case completed, no_show, cancelled, rejected -> { return IntakeAction.NONE; }
+                case handover_pending_receipt, setup_in_progress, setup_completed -> { return IntakeAction.CONTINUE; }
+                default -> { }
+            }
+        }
+        try {
+            requireIntakeReady(reservation, assignment, assignment.getStorageUnit(), effectiveAppointment(reservation, checkIn));
+        } catch (ApiException ex) {
+            if (ex.getStatus() != org.springframework.http.HttpStatus.CONFLICT) throw ex;
+            return IntakeAction.NONE;
+        }
+        return status == null || status == CheckInStatus.scheduled ? IntakeAction.START : IntakeAction.CONTINUE;
     }
 
     private void assertReservationUnitMatch(
@@ -986,6 +1020,7 @@ public class CheckInHandoverService {
     }
 
     private CheckInResponse toResponse(
+        ActorPrincipal actor,
         Reservation reservation,
         CheckIn checkIn,
         UnitAssignment assignment
@@ -1042,7 +1077,8 @@ public class CheckInHandoverService {
                         ? item.getCategoryName() : item.getCustomGoodsName(),
                     item.getCategoryName(), declaredGoodsMaterial(item),
                     item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg()))
-                .toList()
+                .toList(),
+            intakeAction(actor, reservation, checkIn, assignment)
         );
     }
 
@@ -1448,7 +1484,7 @@ public class CheckInHandoverService {
         if (page < 0 || pageSize < 1 || pageSize > 100) {
             throw ApiExceptions.validation("page must be >= 0 and pageSize must be between 1 and 100", null);
         }
-        return PageRequest.of(page, pageSize, Sort.by(Sort.Direction.ASC, "startDate"));
+        return PageRequest.of(page, pageSize);
     }
 
     private String clean(String value) {
