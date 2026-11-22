@@ -140,7 +140,7 @@ public class ReservationGoodsReviewService {
         boolean approved = decision == ReservationReviewDecision.APPROVE;
         String content = approved
             ? "Hàng hóa trong đơn " + reservation.getReservationCode()
-                + " đã được chấp thuận. Vui lòng thanh toán cọc trước thời hạn hiển thị trên đơn."
+                + " đã được chấp thuận. Bạn có 15 phút kể từ lúc duyệt để thanh toán khoản trả trước giữ chỗ. Xem giờ bắt đầu và hạn cuối trên đơn."
             : "Hàng hóa trong đơn " + reservation.getReservationCode()
                 + " không được chấp thuận. Suất kho đã được giải phóng. Lý do: " + note;
         notificationService.createNotification(
@@ -160,6 +160,7 @@ public class ReservationGoodsReviewService {
     ) {
         reservation.setGoodsReviewStatus(GoodsReviewStatus.APPROVED);
         reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);
+        reservation.setPaymentStartedAt(now);
         Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
         reservation.setPaymentExpiresAt(paymentDueAt);
         reservation.setHoldExpiresAt(paymentDueAt);
@@ -184,6 +185,7 @@ public class ReservationGoodsReviewService {
         reservation.setRejectionReason(note);
         reservation.setHoldExpiresAt(now);
         reservation.setPaymentExpiresAt(null);
+        reservation.setPaymentStartedAt(null);
         reservation.setComplaintExpiresAt(null);
         for (ReservationGoodsItem item : items) {
             if (item.isRequiresStaffReview()) {

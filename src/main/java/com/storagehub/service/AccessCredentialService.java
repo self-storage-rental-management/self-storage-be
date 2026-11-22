@@ -61,6 +61,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AccessCredentialService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.FacilityRepository facilityRepository;
     private final AccessCredentialRepository credentialRepository;
     private final CheckInRepository checkInRepository;
     private final ReservationRepository reservationRepository;
@@ -93,6 +95,8 @@ public class AccessCredentialService {
         if (request.type() != AccessCredentialType.LOCK) {
             throw ApiExceptions.validation("Only a lock credential can be handed over during check-in", null);
         }
+        String reference = request.reference().trim();
+        validateLockReference(reference);
         UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
             reservation.getId(), UnitAssignmentStatus.ACTIVE
         ).orElseThrow(() -> ApiExceptions.conflict("Reservation has no active unit assignment"));
@@ -108,8 +112,13 @@ public class AccessCredentialService {
             reservation.getId(), AccessCredentialStatus.ACTIVE
         ).stream().filter(item -> item.getType() == request.type()).findFirst();
         if (existing.isPresent()) {
-            if (existing.get().getReference().equals(request.reference().trim())) return toResponse(existing.get());
+            if (existing.get().getReference().equals(reference)) return toResponse(existing.get());
             throw ApiExceptions.conflict("An active credential of this type already exists for the reservation");
+        }
+        lockFacilityForCredentialAssignment(reservation.getFacility().getId());
+        if (credentialRepository.existsByFacility_IdAndStatusAndReferenceIgnoreCase(
+            reservation.getFacility().getId(), AccessCredentialStatus.ACTIVE, reference)) {
+            throw ApiExceptions.conflict("Mã ổ khóa đang được sử dụng tại cơ sở này");
         }
 
         User staff = requireActor(actor);
@@ -120,7 +129,7 @@ public class AccessCredentialService {
         credential.setCustomer(reservation.getCustomer());
         credential.setType(request.type());
         credential.setStatus(AccessCredentialStatus.ACTIVE);
-        credential.setReference(request.reference().trim());
+        credential.setReference(reference);
         credential.setSecretHash(null);
         credential.setIssuedBy(staff);
         credential.setIssuedAt(Instant.now());
@@ -244,6 +253,14 @@ public class AccessCredentialService {
         }
         if (current.getStatus() != AccessCredentialStatus.ACTIVE) {
             throw ApiExceptions.conflict("Access credential is no longer active");
+        }
+        if (current.getType() == AccessCredentialType.LOCK) {
+            validateLockReference(reference);
+            lockFacilityForCredentialAssignment(rental.getFacility().getId());
+            if (credentialRepository.existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
+                rental.getFacility().getId(), AccessCredentialStatus.ACTIVE, reference, current.getId())) {
+                throw ApiExceptions.conflict("Mã ổ khóa đang được sử dụng tại cơ sở này");
+            }
         }
 
         User staff = requireActor(actor);
@@ -513,6 +530,19 @@ public class AccessCredentialService {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private void lockFacilityForCredentialAssignment(UUID facilityId) {
+        facilityRepository.findByIdForUpdate(facilityId)
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy cơ sở"));
+    }
+
+    private void validateLockReference(String reference) {
+        String normalized = reference.toLowerCase(java.util.Locale.ROOT);
+        if (normalized.contains("password") || normalized.contains("mật khẩu")
+            || normalized.matches(".*\\bpin\\b.*")) {
+            throw ApiExceptions.validation("Mã ổ khóa chỉ được chứa mã/nhãn ổ khóa, không nhập mật khẩu hoặc PIN", null);
+        }
     }
 
     private AccessCredentialResponse toResponse(AccessCredential credential) {

@@ -1040,6 +1040,14 @@ public class CheckInHandoverService {
         Integer setupDays=ReservationSnapshotView.pricingComplete(reservation,pricing)?pricing.getFreeSetupDays():null;
         var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId());
         BigDecimal[] declaredDimensions = declaredGoodsDimensions(goodsItems);
+        String paymentEvidenceReference = checkIn == null || checkIn.getPaymentCollectedAt() == null || paymentRepository == null
+            ? null : paymentRepository.findTopByReservation_IdAndPurposeOrderByCreatedAtDesc(
+                reservation.getId(), PaymentType.RENTAL_BALANCE)
+            .filter(payment -> payment.getStatus() == PaymentStatus.PAID)
+            .map(payment -> payment.getReceiptFileId() != null ? payment.getReceiptFileId()
+                : paymentProvenance == null ? null : paymentProvenance.manualReceiptFileId(payment))
+            .map(UUID::toString)
+            .orElse(null);
         return new CheckInResponse(
             checkIn == null ? null : checkIn.getId(),
             checkIn == null ? null : checkIn.getStatus(),
@@ -1085,7 +1093,8 @@ public class CheckInHandoverService {
                     item.getCustomGoodsName() == null || item.getCustomGoodsName().isBlank()
                         ? item.getCategoryName() : item.getCustomGoodsName(),
                     item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg()))
-                .toList()
+                .toList(),
+            paymentEvidenceReference
         );
     }
 

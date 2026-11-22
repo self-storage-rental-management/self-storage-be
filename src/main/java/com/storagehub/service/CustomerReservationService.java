@@ -1314,6 +1314,7 @@ public class CustomerReservationService {
         }
         response.setGoodsCondition(reservation.getGoodsCondition());
         response.setNotes(reservation.getNotes());
+        response.setPaymentStartedAt(reservation.getPaymentStartedAt());
         response.setPaymentExpiresAt(reservation.getPaymentExpiresAt());
         response.setComplaintExpiresAt(reservation.getComplaintExpiresAt());
         response.setArchivedAt(reservation.getArchivedAt());

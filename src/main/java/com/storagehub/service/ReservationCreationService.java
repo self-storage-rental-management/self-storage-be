@@ -242,6 +242,7 @@ public class ReservationCreationService {
             reservation.setHoldExpiresAt(reviewDueAt);
             reservation.setPaymentExpiresAt(null);
         } else {
+            reservation.setPaymentStartedAt(now);
             Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
             reservation.setPaymentExpiresAt(paymentDueAt);
             reservation.setHoldExpiresAt(paymentDueAt);
