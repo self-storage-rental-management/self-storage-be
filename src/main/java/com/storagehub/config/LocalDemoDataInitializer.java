@@ -54,7 +54,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 @RequiredArgsConstructor
 @Slf4j
 public class LocalDemoDataInitializer {
-    private static final Set<String> PALLET_DEMO_FACILITIES = Set.of("BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01");
+    private static final Set<String> PALLET_DEMO_FACILITIES = Set.of("BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01", "FPT-TV-F01");
     // v6 demo pallet: it is supported by both beams and may overhang each side
     // by at most five centimetres.
     private static final RackLayout.Pallet DEMO_PALLET = new RackLayout.Pallet(

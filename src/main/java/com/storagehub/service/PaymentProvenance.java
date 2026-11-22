@@ -28,7 +28,7 @@ public class PaymentProvenance {
             if(s==PaymentComplaintStatus.PENDING || s==PaymentComplaintStatus.REVIEW_OVERDUE)return Classification.DISPUTED;
             if(s==PaymentComplaintStatus.APPROVED)return Classification.UNVERIFIED;
         }
-        if(p.getGatewayIntentId()!=null && p.getGatewayIntentId().startsWith("SIMULATED-"))return Classification.SIMULATED;
+        if(p.getGatewayIntentId()!=null && (p.getGatewayIntentId().startsWith("SIMULATED-") || p.getGatewayIntentId().startsWith("INT-FPT-")))return Classification.SIMULATED;
         // Late funds are the Payment owner's reconciliation case, not available Rental credit.
         if("PAYMENT_AFTER_DEADLINE".equals(p.getFailureCode()))return Classification.UNVERIFIED;
         if(p.getStatus()!=PaymentStatus.PAID)return "VNPAY".equals(p.getGatewayProvider())
