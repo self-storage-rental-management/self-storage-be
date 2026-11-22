@@ -21,6 +21,14 @@ public interface AccessCredentialRepository extends JpaRepository<AccessCredenti
 
     boolean existsByReservation_IdAndStatus(UUID reservationId, AccessCredentialStatus status);
 
+    boolean existsByFacility_IdAndStatusAndReferenceIgnoreCase(
+        UUID facilityId, AccessCredentialStatus status, String reference
+    );
+
+    boolean existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
+        UUID facilityId, AccessCredentialStatus status, String reference, UUID id
+    );
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from AccessCredential c where c.id = :id")
     Optional<AccessCredential> findByIdForUpdate(@Param("id") UUID id);

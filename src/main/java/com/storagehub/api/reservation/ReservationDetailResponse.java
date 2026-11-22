@@ -14,6 +14,7 @@ public class ReservationDetailResponse {
     private String goodsCondition;
     private String notes;
     private Instant paymentExpiresAt;
+    private Instant paymentStartedAt;
     private Instant complaintExpiresAt;
     private Instant archivedAt;
     private Instant confirmedAt;
@@ -47,6 +48,8 @@ public class ReservationDetailResponse {
     public void setNotes(String notes) { this.notes = notes; }
     public Instant getPaymentExpiresAt() { return paymentExpiresAt; }
     public void setPaymentExpiresAt(Instant paymentExpiresAt) { this.paymentExpiresAt = paymentExpiresAt; }
+    public Instant getPaymentStartedAt() { return paymentStartedAt; }
+    public void setPaymentStartedAt(Instant paymentStartedAt) { this.paymentStartedAt = paymentStartedAt; }
     public Instant getComplaintExpiresAt() { return complaintExpiresAt; }
     public void setComplaintExpiresAt(Instant complaintExpiresAt) { this.complaintExpiresAt = complaintExpiresAt; }
     public Instant getArchivedAt() { return archivedAt; }

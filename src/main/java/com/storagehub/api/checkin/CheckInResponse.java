@@ -66,7 +66,8 @@ public record CheckInResponse(
     CompleteCheckInRequest handover,
     String setupEarlyExitPolicyVersion,
     BigDecimal setupEarlyExitFee,
-    List<DeclaredGoodsLine> declaredGoodsLines
+    List<DeclaredGoodsLine> declaredGoodsLines,
+    String paymentEvidenceReference
 ) {
     public record DeclaredGoodsLine(UUID id, String code, String name, int quantity,
         BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {}
@@ -123,7 +124,7 @@ public record CheckInResponse(
         BigDecimal dueAtCheckIn,
         CompleteCheckInRequest handover
     ) {
-        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null, List.of());
+        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null, List.of(), null);
     }
 
 }
