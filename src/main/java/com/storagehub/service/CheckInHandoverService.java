@@ -220,6 +220,7 @@ public class CheckInHandoverService {
         checkIn.setVerifiedIdentityDocument(null);
         checkIn.setIdentityVerificationNote(null);
         checkIn.setContractSignedAt(null);
+        checkIn.setEmergencyContactsSnapshot(null);
         checkIn.setContractEvidenceReference(null);
         checkIn.setPaymentCollectedAt(null);
         checkIn.setSetupStartedAt(null);
@@ -267,7 +268,11 @@ public class CheckInHandoverService {
     ) {
         CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.scheduled);
         Reservation reservation = checkIn.getReservation();
-        String actualIdentity = normalizeIdentityDocument(request.identityDocumentNumber());
+        String actualIdentity = com.storagehub.validation.CccdPolicy.normalize(request.identityDocumentNumber());
+        if (com.storagehub.validation.CccdPolicy.needsBirthdayConfirmation(actualIdentity) && !Boolean.TRUE.equals(request.adulthoodConfirmed()))
+            throw ApiExceptions.validation("Staff cần xác nhận khách đã đủ 18 tuổi theo ngày sinh trên giấy tờ gốc.", null);
+        String identityError = com.storagehub.validation.CccdPolicy.error(actualIdentity);
+        if (identityError != null) throw ApiExceptions.validation(identityError, null);
         if (actualIdentity == null) {
             throw ApiExceptions.validation("identityDocumentNumber is required", null);
         }
@@ -282,11 +287,17 @@ public class CheckInHandoverService {
         Instant now = Instant.now();
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.identity_verified);
+        User customer = userRepository.findByIdForUpdate(reservation.getCustomer().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Customer not found"));
+        CustomerIdentityPolicy.assign(customer, actualIdentity, userRepository);
+        customer.getProfileDetails().setIdentityVerifiedAt(now);
+        CustomerProfilePolicy.validate(customer, true);
+        userRepository.saveAndFlush(customer);
         checkIn.setIdentityVerifiedAt(now);
         checkIn.setVerifiedIdentityDocument(actualIdentity);
         String note = clean(request.note());
         if (mismatch) {
-            String auditNote = "[Cập nhật CCCD/CMND theo giấy tờ gốc: " + actualIdentity + " (khai báo cũ: " + declaredIdentity + ")]";
+            String auditNote = "[Đã điều chỉnh CCCD theo giấy tờ gốc]";
             note = note == null ? auditNote : note + " " + auditNote;
         }
         checkIn.setIdentityVerificationNote(note);
@@ -294,6 +305,35 @@ public class CheckInHandoverService {
         recordWorkflowAudit(operator, reservation, saved, "CHECKIN_IDENTITY_VERIFIED",
             CheckInStatus.scheduled, CheckInStatus.identity_verified);
         return toResponse(reservation, saved, latestAssignment(reservation.getId()));
+    }
+
+    @Transactional
+    public CheckInResponse correctIdentity(ActorPrincipal actor, UUID checkInId, VerifyCheckInIdentityRequest request) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Check-in not found"));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getIdentityVerifiedAt() == null) throw ApiExceptions.conflict("Vui lòng thực hiện bước đối chiếu CCCD trước.");
+        if (request.note() == null || request.note().isBlank()) throw ApiExceptions.validation("Cần lý do sửa CCCD và xác nhận đã đối chiếu lại giấy tờ gốc.", null);
+        User customer = userRepository.findByIdForUpdate(reservation.getCustomer().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Customer not found"));
+        if (com.storagehub.validation.CccdPolicy.needsBirthdayConfirmation(request.identityDocumentNumber()) && !Boolean.TRUE.equals(request.adulthoodConfirmed()))
+            throw ApiExceptions.validation("Staff cần xác nhận khách đã đủ 18 tuổi theo ngày sinh trên giấy tờ gốc.", null);
+        CustomerIdentityPolicy.assign(customer, request.identityDocumentNumber(), userRepository);
+        customer.getProfileDetails().setIdentityVerifiedAt(Instant.now());
+        userRepository.saveAndFlush(customer);
+        String value = customer.getProfileDetails().getIdentityDocumentNumber();
+        checkIn.setVerifiedIdentityDocument(value);
+        checkIn.setIdentityVerificationNote(request.note().replaceAll("[0-9]{12}", "[CCCD đã ẩn]"));
+        reservation.setIdentityDocumentNumber(value);
+        reservationRepository.saveAndFlush(reservation);
+        checkInRepository.saveAndFlush(checkIn);
+        auditLogService.recordMutation(requireActor(actor), "CUSTOMER_IDENTITY_CORRECTED", "User", customer.getId(),
+            reservation.getFacility().getId(), Map.of("identityVerified", true), Map.of("identityCorrected", true, "reason", checkIn.getIdentityVerificationNote()));
+        return toResponse(reservation, checkIn, latestAssignment(reservation.getId()));
     }
 
     @Transactional
@@ -312,6 +352,10 @@ public class CheckInHandoverService {
             throw ApiExceptions.validation("Nhân viên cần xác nhận hợp đồng đã ký có điều khoản phí trả kho trong thời gian chuẩn bị đúng báo giá.", null);
         User operator = requireActor(actor);
         checkIn.setPerformedBy(operator);
+        CustomerProfilePolicy.validate(reservation.getCustomer(), true);
+        if (!java.util.Objects.equals(checkIn.getVerifiedIdentityDocument(), reservation.getCustomer().getProfileDetails().getIdentityDocumentNumber()))
+            throw ApiExceptions.conflict("CCCD trong hồ sơ phải khớp giấy tờ đã được nhân viên đối chiếu trước khi ký hợp đồng.");
+        checkIn.setEmergencyContactsSnapshot(CustomerProfilePolicy.snapshot(reservation.getCustomer()));
         checkIn.setStatus(CheckInStatus.contract_signed);
         checkIn.setContractSignedAt(Instant.now());
         checkIn.setContractEvidenceReference(request.contractEvidenceFileId().toString());
@@ -329,6 +373,7 @@ public class CheckInHandoverService {
     ) {
         CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.contract_signed);
         Reservation reservation = checkIn.getReservation();
+        CustomerProfilePolicy.validate(reservation.getCustomer(), true);
         var snapshot = pricingSnapshotRepository.findByReservation_Id(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
         BigDecimal due = snapshot.getDueAtCheckIn();
@@ -1314,7 +1359,9 @@ public class CheckInHandoverService {
     }
 
     private boolean validateIdentityDocument(Reservation reservation, CompleteCheckInRequest request) {
-        String actualIdentity = normalizeIdentityDocument(request.identityDocumentNumber());
+        String actualIdentity = com.storagehub.validation.CccdPolicy.normalize(request.identityDocumentNumber());
+        String identityError = com.storagehub.validation.CccdPolicy.error(actualIdentity);
+        if (identityError != null) throw ApiExceptions.validation(identityError, null);
         String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
         if (actualIdentity == null) {
             throw ApiExceptions.validation("identityDocumentNumber is required", null);
