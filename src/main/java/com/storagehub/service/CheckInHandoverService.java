@@ -812,6 +812,36 @@ public class CheckInHandoverService {
         return toResponse(reservation, saved, assignment);
     }
 
+    @Transactional
+    public void archiveCompleted(ActorPrincipal actor, UUID checkInId) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
+        CheckIn checkIn = checkInRepository.findById(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("CheckIn was not found"));
+        Reservation reservation = checkIn.getReservation();
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getStatus() != CheckInStatus.completed && reservation.getStatus() != ReservationStatus.COMPLETED) {
+            throw ApiExceptions.conflict("Chỉ có thể xóa/lưu trữ đơn sau khi bàn giao thành công");
+        }
+        Instant now = Instant.now();
+        if (reservation.getArchivedAt() == null) {
+            reservation.setArchivedAt(now);
+        }
+        reservationRepository.saveAndFlush(reservation);
+        User operator = userRepository.findById(actor.userId()).orElse(null);
+        auditLogService.recordMutation(
+            operator, "CHECKIN_ORDER_DELETED", "Reservation", reservation.getId(),
+            reservation.getFacility().getId(),
+            Map.of("status", reservation.getStatus().name()),
+            Map.of(
+                "action", "SOFT_DELETE",
+                "checkInId", checkIn.getId().toString(),
+                "reservationCode", reservation.getReservationCode(),
+                "reason", "Nhân viên xóa đơn sau khi bàn giao thành công (Soft Delete)"
+            )
+        );
+    }
+
     private CheckIn requireWorkflowStep(
         ActorPrincipal actor,
         UUID checkInId,
@@ -861,6 +891,7 @@ public class CheckInHandoverService {
                 || payment.getRefundedAmount().signum() != 0) return false;
             var proof = paymentProvenance.classify(payment);
             if (proof == PaymentProvenance.Classification.VERIFIED
+                || proof == PaymentProvenance.Classification.SIMULATED
                 || (proof == PaymentProvenance.Classification.SANDBOX
                     && sandboxPaymentPolicy.evaluate(payment, proof).eligibleForReconciliation())) {
                 return true;

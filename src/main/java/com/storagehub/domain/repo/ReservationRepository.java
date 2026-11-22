@@ -171,6 +171,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         select reservation from Reservation reservation
         left join reservation.assignedUnit assignedUnit
         where reservation.status in :activeStatuses
+          and reservation.archivedAt is null
           and (:facilityId is null or reservation.facility.id = :facilityId)
           and (:status is null or reservation.status = :status)
           and (:scoped = false or reservation.facility.id in :facilityIds)
@@ -236,6 +237,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             ))
         )
           and reservation.assignedUnit is not null
+          and reservation.archivedAt is null
           and (:facilityId is null or reservation.facility.id = :facilityId)
           and (:scoped = false or reservation.facility.id in :facilityIds)
           and (:q is null

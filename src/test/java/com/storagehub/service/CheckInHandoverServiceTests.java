@@ -3,6 +3,8 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -625,6 +627,33 @@ class CheckInHandoverServiceTests {
             when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
             when(assignmentRepository.saveAndFlush(assignment)).thenReturn(assignment);
         }
+    }
+
+    @Test
+    void archivesCompletedCheckInWithAuditLog() {
+        checkIn.setStatus(CheckInStatus.completed);
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+
+        service.archiveCompleted(actor, checkIn.getId());
+
+        assertThat(reservation.getArchivedAt()).isNotNull();
+        verify(reservationRepository).saveAndFlush(reservation);
+        verify(auditLogService).recordMutation(
+            isNull(), eq("CHECKIN_ORDER_DELETED"), eq("Reservation"), eq(reservation.getId()),
+            eq(reservation.getFacility().getId()), any(), any()
+        );
+    }
+
+    @Test
+    void rejectsArchiveWhenCheckInNotCompleted() {
+        checkIn.setStatus(CheckInStatus.scheduled);
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+
+        assertThatThrownBy(() -> service.archiveCompleted(actor, checkIn.getId()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("Chỉ có thể xóa/lưu trữ đơn sau khi bàn giao thành công");
     }
 
     private CompleteCheckInRequest validCompletionRequest() {
