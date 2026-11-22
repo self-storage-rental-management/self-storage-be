@@ -48,6 +48,24 @@ public class User extends BaseEntity {
     @Column(length = 30)
     private String emergencyContactPhone;
 
+    @JsonIgnore
+    @Column(name = "identity_document_hash", length = 64, unique = true)
+    private String identityDocumentHash;
+
+    @jakarta.persistence.PrePersist
+    @jakarta.persistence.PreUpdate
+    private void updateIdentityHash() {
+        String value = profileDetails == null ? null : com.storagehub.validation.CccdPolicy.normalize(profileDetails.getIdentityDocumentNumber());
+        identityDocumentHash = null;
+        if (value != null && !value.isBlank()) {
+            profileDetails.setIdentityDocumentNumber(value);
+            identityDocumentHash = com.storagehub.service.CustomerIdentityPolicy.hash(value);
+        }
+    }
+
+    @jakarta.persistence.Embedded
+    private CustomerProfileDetails profileDetails = new CustomerProfileDetails();
+
     @Lob
     @Column(columnDefinition = "LONGTEXT")
     private String avatarUrl;

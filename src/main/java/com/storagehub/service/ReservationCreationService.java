@@ -207,7 +207,14 @@ public class ReservationCreationService {
             ReservationCreationService::generateReservationCode));
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
-        reservation.setIdentityDocumentNumber(clean(request.getIdentityDocumentNumber()));
+        // Capture a per-booking copy. Creating a reservation never edits the account profile or older reservations.
+        var profile = quote.getCustomer().getProfileDetails();
+        String profileIdentity = profile == null ? null : com.storagehub.validation.CccdPolicy.normalize(profile.getIdentityDocumentNumber());
+        String bookingIdentity = clean(request.getIdentityDocumentNumber()) == null ? profileIdentity
+            : com.storagehub.validation.CccdPolicy.normalize(request.getIdentityDocumentNumber());
+        if (profile != null && profile.getIdentityVerifiedAt() != null && !java.util.Objects.equals(profileIdentity, bookingIdentity))
+            throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+        reservation.setIdentityDocumentNumber(bookingIdentity);
         reservation.setCustomerPhone(clean(request.getCustomerPhone()) != null
             ? clean(request.getCustomerPhone()) : clean(quote.getCustomer().getPhone()));
         reservation.setCustomerAddress(clean(request.getCustomerAddress()) != null

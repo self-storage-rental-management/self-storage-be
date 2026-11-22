@@ -30,7 +30,7 @@ public class GoodsItemRequest {
     @Size(max = 160) private String customGoodsName;
     @Size(max = 160) private String materialName;
     @Size(max = 120) private String customMaterial;
-    @NotBlank @Size(max = 1000) private String description;
+    @NotBlank @Size(min = 10, max = 1000) private String description;
     @Size(max = 1000) private String customerNote;
     @Min(1) private int quantity;
     @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal lengthCm;
