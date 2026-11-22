@@ -185,7 +185,7 @@ public class TransactionalEmailService {
         UUID userId,
         String toEmail,
         String fullName,
-        String invoiceNumber,
+        UUID paymentId,
         String transactionNo,
         String amountFormatted,
         String paidAtFormatted,
@@ -195,7 +195,7 @@ public class TransactionalEmailService {
         String periodOrAppointment,
         String paymentPurpose
     ) {
-        sendPaymentBillAsync(userId, toEmail, fullName, invoiceNumber, transactionNo, amountFormatted,
+        sendPaymentBillAsync(userId, toEmail, fullName, paymentId, transactionNo, amountFormatted,
             paidAtFormatted, unitInfo, facilityName, facilityAddress, periodOrAppointment, paymentPurpose, null);
     }
 
@@ -203,7 +203,7 @@ public class TransactionalEmailService {
         UUID userId,
         String toEmail,
         String fullName,
-        String invoiceNumber,
+        UUID paymentId,
         String transactionNo,
         String amountFormatted,
         String paidAtFormatted,
@@ -217,7 +217,7 @@ public class TransactionalEmailService {
         Map<String, Object> vars = new HashMap<>();
         vars.put("fullName", fullName);
         vars.put("email", toEmail);
-        vars.put("invoiceNumber", invoiceNumber != null ? invoiceNumber : "N/A");
+        vars.put("paymentId", paymentId.toString());
         vars.put("transactionNo", transactionNo != null ? transactionNo : "N/A");
         vars.put("amount", amountFormatted);
         vars.put("paidAt", paidAtFormatted);
