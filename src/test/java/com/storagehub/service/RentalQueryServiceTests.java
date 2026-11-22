@@ -20,7 +20,7 @@ import org.springframework.util.LinkedMultiValueMap;
 
 class RentalQueryServiceTests {
     RentalRepository repo = mock(RentalRepository.class);
-    RentalQueryService service = new RentalQueryService(repo);
+    RentalQueryService service = new RentalQueryService(repo, mock(BusinessRecordCodes.class));
     UUID facility = UUID.randomUUID(); UUID customer = UUID.randomUUID();
     ActorPrincipal actor(RoleCode role, boolean permission, Map<UUID,FacilityScopeLevel> scopes) {
         return new ActorPrincipal(customer,UUID.randomUUID(),Set.of(role),

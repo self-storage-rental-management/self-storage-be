@@ -40,6 +40,7 @@ public class NotificationService {
 
     private final NotificationRepository notificationRepository;
     @org.springframework.beans.factory.annotation.Autowired private BusinessRecordCodes displayCodes;
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.storagehub.service.renewal.RenewalDisplayIdentity renewalDisplayIdentity;
     private final UserRepository userRepository;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
@@ -100,6 +101,20 @@ public class NotificationService {
         String content,
         UUID relatedEntityId
     ) {
+        Notification saved = saveNotification(userId, type, title, content, relatedEntityId);
+        customerEmails.notification(saved);
+        return saved;
+    }
+
+    /** The payment receipt already supplies the email for this notification. */
+    @Transactional
+    public void notifyRenewalDepositReceived(UUID customerId, UUID renewalId, String amount) {
+        saveNotification(customerId, NotificationType.RENEWAL, "Đã nhận tiền cọc gia hạn qua VNPay",
+            "VNPay đã xác nhận khoản cọc gia hạn " + amount + ". Bạn có thể theo dõi các bước tiếp theo trong hồ sơ gia hạn.",
+            renewalId);
+    }
+
+    private Notification saveNotification(UUID userId, NotificationType type, String title, String content, UUID relatedEntityId) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> ApiExceptions.notFound("User was not found"));
         Notification notification = new Notification();
@@ -109,9 +124,7 @@ public class NotificationService {
         notification.setContent(content);
         notification.setRelatedEntityId(relatedEntityId);
         notification.setRead(false);
-        Notification saved = notificationRepository.save(notification);
-        customerEmails.notification(saved);
-        return saved;
+        return notificationRepository.save(notification);
     }
 
     @Transactional
@@ -207,14 +220,16 @@ public class NotificationService {
     private NotificationResponse toResponse(Notification notification) {
         String content=notification.getContent();
         UUID related=notification.getRelatedEntityId();
-        if(displayCodes!=null&&related!=null){
+        if(related!=null){
             String key=switch(notification.getType()){
-                case RENEWAL -> "GH:"+related;
+                case RENEWAL -> null;
                 case SUPPORT -> "HT:"+related;
                 case OVERDUE -> "RENTAL_TERM:"+related;
                 default -> null;
             };
-            String code=key==null?null:displayCodes.find(key);
+            String code=notification.getType()==NotificationType.RENEWAL&&renewalDisplayIdentity!=null
+                ?renewalDisplayIdentity.find(related).map(com.storagehub.service.renewal.RenewalDisplayIdentity.Identity::label).orElse(null)
+                :key==null||displayCodes==null?null:displayCodes.find(key);
             if(code!=null&&(content==null||!content.contains(code)))content=code+" · "+(content==null?"":content);
         }
         return new NotificationResponse(

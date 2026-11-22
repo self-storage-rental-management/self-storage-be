@@ -903,23 +903,21 @@ public class FacilityLifecycleService {
         String zonePrefix = extractZonePrefix(zone);
         String floorNum = extractFloorNumber(floor);
         int createdCount = 0;
-        int index = 1;
-        while (createdCount < count) {
-            String candidateCode = "%s-%s%02d".formatted(zonePrefix, floorNum, index);
-            if (!units.existsByCode(candidateCode)) {
-                StorageUnit unit = new StorageUnit();
-                unit.setFacility(type.getFacility());
-                unit.setUnitType(type);
-                unit.setCode(candidateCode);
-                unit.setFloor(floor);
-                unit.setZone(zone);
-                unit.setStatus(StorageUnitStatus.available);
-                unit.setRackLayoutJson(type.getRackLayoutJson());
-                units.save(unit);
+        for (int index = 1; index <= 999 && createdCount < count; index++) {
+            String candidate = String.format(java.util.Locale.ROOT, "%s-%s%02d", zonePrefix, floorNum, index);
+            if (units.existsByCode(candidate)) continue;
+            try {
+                // Claim the global code by inserting the unit. A competing insert may win after the lookup.
+                jdbc.update("""
+                    INSERT INTO storage_units
+                        (id, facility_id, unit_type_id, code, floor, zone, status, rack_layout_json, version, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'available', ?, 0, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
+                    """, bytes(UUID.randomUUID()), bytes(type.getFacility().getId()), bytes(type.getId()),
+                    candidate, floor, zone, type.getRackLayoutJson());
                 createdCount++;
+            } catch (org.springframework.dao.DuplicateKeyException taken) {
+                // JDBC leaves the enclosing MySQL transaction usable for the next candidate.
             }
-            index++;
-            if (index > 999) break;
         }
         if (createdCount != count) {
             throw ApiExceptions.conflict("Không đủ mã gian kho cho số lượng yêu cầu ở tầng và khu vực này. Vui lòng chọn vị trí khác hoặc giảm số lượng.");

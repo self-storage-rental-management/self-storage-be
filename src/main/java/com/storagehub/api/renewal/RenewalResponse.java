@@ -17,9 +17,11 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
     @Schema(description="Immutable customer-accepted quote terms; null for legacy records. Not current catalog prices.")
     RenewalQuoteResponse.Terms acceptedTerms,
     @Schema(description="Persisted cancellation reason only; no inferred actor/time.") String cancellationReason,
-    String displayCode,
+    @Schema(description="Legacy renewal alias kept for backward-compatible lookup; do not present it as the primary dossier code.") String displayCode,
     @Schema(description="Independent workflow, receivable and verified transaction read models; null on legacy command replays.")
-    RenewalStatusSummary statusSummary, EffectivePeriod effectivePeriod) {
+    RenewalStatusSummary statusSummary, EffectivePeriod effectivePeriod,
+    @Schema(description="Primary public code of the parent rental dossier.") String rentalDisplayCode,
+    @Schema(description="One-based renewal occurrence within the parent rental dossier.") Integer renewalSequence) {
     public record EffectivePeriod(LocalDate startDate,LocalDate endExclusive,LocalDate newEndDate,boolean finalized) {}
     public RenewalResponse(UUID id,UUID rentalId,Customer customer,Facility facility,Unit storageUnit,
         RenewalStatus status,String reviewState,LocalDate oldEndDate,LocalDate newEndDate,BigDecimal amount,
@@ -29,13 +31,14 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
         RenewalQuoteResponse.Terms acceptedTerms,String cancellationReason,String displayCode,RenewalStatusSummary statusSummary) {
         this(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,newEndDate,amount,currency,createdAt,version,
             requestedBy,acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,extensionHoldRef,
-            financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,statusSummary,null);
+            financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,statusSummary,null,null,null);
     }
     public RenewalResponse withEffectivePeriod(EffectivePeriod period) {
         return new RenewalResponse(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,
             period!=null&&period.finalized()?period.newEndDate():newEndDate,amount,currency,createdAt,version,requestedBy,
             acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,extensionHoldRef,
-            financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,statusSummary,period);
+            financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,statusSummary,period,
+            rentalDisplayCode,renewalSequence);
     }
     public RenewalResponse(UUID id,UUID rentalId,Customer customer,Facility facility,Unit storageUnit,
         RenewalStatus status,String reviewState,LocalDate oldEndDate,LocalDate newEndDate,BigDecimal amount,
@@ -45,12 +48,13 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
         RenewalQuoteResponse.Terms acceptedTerms,String cancellationReason,String displayCode) {
         this(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,newEndDate,amount,currency,createdAt,version,
             requestedBy,acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,extensionHoldRef,
-            financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,null);
+            financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,null,null,null,null);
     }
     public RenewalResponse withStatusSummary(RenewalStatusSummary summary) {
         return new RenewalResponse(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,newEndDate,amount,currency,
             createdAt,version,requestedBy,acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,
-            extensionHoldRef,financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,summary,effectivePeriod);
+            extensionHoldRef,financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,
+            summary,effectivePeriod,rentalDisplayCode,renewalSequence);
     }
     public RenewalResponse(UUID id,UUID rentalId,Customer customer,Facility facility,Unit storageUnit,
         RenewalStatus status,String reviewState,LocalDate oldEndDate,LocalDate newEndDate,BigDecimal amount,
@@ -61,6 +65,12 @@ public record RenewalResponse(UUID id, UUID rentalId, Customer customer, Facilit
         this(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,newEndDate,amount,currency,createdAt,version,
             requestedBy,acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,extensionHoldRef,
             financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,null);
+    }
+    public RenewalResponse withBusinessIdentity(String parentDisplayCode,Integer sequence) {
+        return new RenewalResponse(id,rentalId,customer,facility,storageUnit,status,reviewState,oldEndDate,newEndDate,amount,currency,
+            createdAt,version,requestedBy,acceptedQuoteId,acceptedRevision,reviewerId,reviewedAt,reviewReason,approvedPaymentDeadline,
+            extensionHoldRef,financialCheck,systemVerification,allowedActions,disabledReasons,acceptedTerms,cancellationReason,displayCode,
+            statusSummary,effectivePeriod,parentDisplayCode,sequence);
     }
     public record Customer(UUID id, String fullName) {}
     public record Facility(UUID id, String code, String name) {}
