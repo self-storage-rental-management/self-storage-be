@@ -68,8 +68,15 @@ public record CheckInResponse(
     BigDecimal setupEarlyExitFee,
     List<DeclaredGoodsLine> declaredGoodsLines
 ) {
-    public record DeclaredGoodsLine(UUID id, String code, String name, int quantity,
-        BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {}
+    public record DeclaredGoodsLine(UUID id, String code, String name, String categoryName,
+        String materialName, int quantity, BigDecimal lengthCm, BigDecimal widthCm,
+        BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+        /** Compatibility constructor for readers that only populated the original measurements. */
+        public DeclaredGoodsLine(UUID id, String code, String name, int quantity,
+            BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+            this(id, code, name, null, null, quantity, lengthCm, widthCm, heightCm, weightPerPackageKg);
+        }
+    }
     /** Existing readers can omit the new setup settlement projection fields. */
     public CheckInResponse(
         UUID checkInId,
