@@ -104,7 +104,10 @@ public class RenewalPaymentExpiryService {
             Map.of("status",RenewalStatus.accepted),Map.of("status",RenewalStatus.payment_expired,"paymentId",payment.getId()));
         notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
             "Yêu cầu thanh toán gia hạn đã hết hạn",
-            "Yêu cầu thanh toán gia hạn cho hồ sơ "+renewal.getRental().getId()+" đã hết hạn và được đóng.",renewal.getId());
+            "Yêu cầu thanh toán gia hạn đã hết hạn và được đóng.",renewal.getId());
+        notifications.createFacilityOperationsNotifications(renewal.getRental().getFacility().getId(),NotificationType.RENEWAL,
+            "Yêu cầu gia hạn đã hết hạn thanh toán",
+            "Yêu cầu gia hạn của khách hàng "+renewal.getRental().getCustomer().getFullName()+" đã hết hạn thanh toán; giữ chỗ gia hạn và lịch ký liên quan đã được giải phóng.",renewal.getId());
         return true;
     }
 }

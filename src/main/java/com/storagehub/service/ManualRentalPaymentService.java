@@ -93,7 +93,7 @@ public class ManualRentalPaymentService {
             .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(paidAt);
         String amount = java.text.NumberFormat.getNumberInstance(java.util.Locale.forLanguageTag("vi-VN")).format(payment.getAmount()) + " đ";
         receiptEmails.sendPaymentBillAsync(customer.getId(), customer.getEmail(), customer.getFullName(),
-            payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : payment.getId().toString(),
+            payment.getId(),
             reference, amount, paidAtText, unit == null ? "Chưa phân gian kho" : unit.getCode(),
             facility.getName(), facility.getAddress(),
             reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode() : "Kỳ gia hạn: " + renewal.getId(),
