@@ -525,6 +525,8 @@ public class MaintenanceService {
             } catch (Exception ignored) {
             }
         }
+        User customer = t.getRental() != null ? t.getRental().getCustomer()
+            : t.getReturnCase() != null ? t.getReturnCase().getCustomer() : null;
         return new MaintenanceTaskResponse(
             t.getId(),
             t.getFacility().getId(),
@@ -532,6 +534,7 @@ public class MaintenanceService {
             t.getStorageUnit().getId(),
             t.getStorageUnit().getCode(),
             t.getRental() != null ? t.getRental().getId() : null,
+            customer != null ? customer.getFullName() : null,
             t.getReturnCase() != null ? t.getReturnCase().getId() : null,
             t.getTitle(),
             t.getTaskType() == null ? MaintenanceTaskType.maintenance : t.getTaskType(),

@@ -31,6 +31,7 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
         Collection<MaintenanceTaskStatus> statuses
     );
 
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"rental.customer", "returnCase.customer"})
     @Query("""
         select t from MaintenanceTask t
         where (:facilityId is null or t.facility.id = :facilityId)

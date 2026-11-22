@@ -35,6 +35,15 @@ final class ReservationCheckInPolicy {
         return confirmedAt == null ? null : confirmedAt.plus(Duration.ofHours(MANAGER_ASSIGNMENT_HOURS));
     }
 
+    static boolean handoverExpired(Instant appointmentAt, Instant now) {
+        return appointmentAt != null && appointmentAt.isBefore(firstValidAppointment(now));
+    }
+
+    static Instant firstValidAppointment(Instant now) {
+        return now.atZone(VIETNAM_ZONE).toLocalDate().minusDays(CHECK_IN_WINDOW_DAYS - 1)
+            .atStartOfDay(VIETNAM_ZONE).toInstant();
+    }
+
     record Window(Instant availableAt, Instant deadlineAt) {
         boolean contains(Instant appointmentAt) {
             if (appointmentAt == null || appointmentAt.isBefore(availableAt)) return false;
