@@ -514,6 +514,7 @@ public class CheckInHandoverService {
             throw ApiExceptions.conflict("Actual goods dimensions do not fit the storage unit");
         }
         var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId());
+        validateGoodsDeclaration(goodsItems, request);
         validateVariance(reservation, request, goodsItems);
         validateInventoryLines(goodsItems, request);
         validateEvidence(checkInId, request.evidenceReferences());
@@ -1039,6 +1040,7 @@ public class CheckInHandoverService {
                 .map(item -> new CheckInResponse.DeclaredGoodsLine(item.getId(), item.getGoodsCode(),
                     item.getCustomGoodsName() == null || item.getCustomGoodsName().isBlank()
                         ? item.getCategoryName() : item.getCustomGoodsName(),
+                    item.getCategoryName(), declaredGoodsMaterial(item),
                     item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg()))
                 .toList()
         );
@@ -1311,6 +1313,55 @@ public class CheckInHandoverService {
         if (request.varianceReason() == null || request.varianceReason().isBlank()) {
             throw ApiExceptions.validation("varianceReason is required when actual goods differ", null);
         }
+    }
+
+    private void validateGoodsDeclaration(List<ReservationGoodsItem> declared, CompleteCheckInRequest request) {
+        List<String> declaredCategories = declared.stream()
+            .map(this::declaredGoodsCategory)
+            .filter(value -> value != null)
+            .distinct()
+            .toList();
+        List<String> declaredMaterials = declared.stream()
+            .map(this::declaredGoodsMaterial)
+            .filter(value -> value != null)
+            .distinct()
+            .toList();
+
+        boolean categoryVaries = !declaredCategories.isEmpty()
+            && !matchesDeclaredLabel(request.goodsCategory(), declaredCategories);
+        boolean materialVaries = !declaredMaterials.isEmpty()
+            && !matchesDeclaredLabel(request.goodsMaterial(), declaredMaterials);
+        if (!categoryVaries && !materialVaries) {
+            return;
+        }
+        if (!request.actualMeasurements().varianceAccepted()) {
+            throw ApiExceptions.conflict("Loại hàng hoặc chất liệu chính thực tế khác với thông tin đã đặt kho và chưa được chấp nhận");
+        }
+        if (request.varianceReason() == null || request.varianceReason().isBlank()) {
+            throw ApiExceptions.validation("Cần ghi rõ lý do khi loại hàng hoặc chất liệu chính thực tế khác khai báo", null);
+        }
+    }
+
+    private String declaredGoodsCategory(ReservationGoodsItem item) {
+        String category = clean(item.getCategoryName());
+        return category != null ? category : clean(item.getCustomGoodsName());
+    }
+
+    private String declaredGoodsMaterial(ReservationGoodsItem item) {
+        String customMaterial = clean(item.getCustomMaterial());
+        return customMaterial != null ? customMaterial : clean(item.getMaterialName());
+    }
+
+    private boolean matchesDeclaredLabel(String actual, List<String> declared) {
+        String normalizedActual = normalizeGoodsLabel(actual);
+        return normalizedActual != null && declared.stream()
+            .map(this::normalizeGoodsLabel)
+            .anyMatch(normalizedActual::equals);
+    }
+
+    private String normalizeGoodsLabel(String value) {
+        String normalized = clean(value);
+        return normalized == null ? null : normalized.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
     private boolean validateIdentityDocument(Reservation reservation, CompleteCheckInRequest request) {

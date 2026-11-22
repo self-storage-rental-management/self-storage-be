@@ -452,6 +452,32 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void requiresAcceptedAndExplainedGoodsMaterialDifference() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+        ReservationGoodsItem declaredItem = entityWithId(new ReservationGoodsItem());
+        declaredItem.setQuantity(3);
+        declaredItem.setCategoryName("Đồ gia dụng");
+        declaredItem.setMaterialName("Gỗ");
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of(declaredItem));
+        CompleteCheckInRequest base = validCompletionRequest();
+        CompleteCheckInRequest changed = new CompleteCheckInRequest(
+            base.checklist(), base.identityDocumentNumber(), base.identityVerificationNote(),
+            new CheckInMeasurements(
+                new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
+                new BigDecimal("100"), BigDecimal.ONE, false
+            ), base.varianceReason(), base.initialUnitCondition(), base.goodsCondition(),
+            base.packageCount(), base.goodsCategory(), "Kim loại", base.evidenceReferences(),
+            base.handedOverItems(), base.notes(), base.lockReference(), base.inventoryLines()
+        );
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), changed))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("chất liệu chính");
+    }
+
+    @Test
     void requiresAcceptedAndExplainedDeclaredDimensionDifference() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
