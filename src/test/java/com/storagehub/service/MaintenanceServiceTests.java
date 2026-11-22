@@ -72,6 +72,26 @@ class MaintenanceServiceTests {
     private User managerUser;
     private User staffUser;
 
+    @Test
+    void displaysCustomerFromTaskRentalOrReturn() {
+        MaintenanceTask task = new MaintenanceTask();
+        task.setFacility(facility);
+        task.setStorageUnit(unit);
+        task.setAssignedTo(staffUser);
+        assertThat(maintenanceService.toResponse(task).customerName()).isNull();
+        User customer = new User();
+        customer.setFullName("Nguyễn An");
+        var rental = new com.storagehub.domain.model.Rental();
+        rental.setCustomer(customer);
+        task.setRental(rental);
+        assertThat(maintenanceService.toResponse(task).customerName()).isEqualTo("Nguyễn An");
+        task.setRental(null);
+        var returnCase = new com.storagehub.domain.model.ReturnCase();
+        returnCase.setCustomer(customer);
+        task.setReturnCase(returnCase);
+        assertThat(maintenanceService.toResponse(task).customerName()).isEqualTo("Nguyễn An");
+    }
+
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
