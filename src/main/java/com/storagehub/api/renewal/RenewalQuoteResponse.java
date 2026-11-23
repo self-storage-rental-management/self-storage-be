@@ -24,7 +24,18 @@ public record RenewalQuoteResponse(UUID id,UUID rentalId,UUID customerId,@com.fa
         BigDecimal monthlyPrice,BigDecimal discountRate,BigDecimal subtotal,BigDecimal discountAmount,BigDecimal totalAfterDiscount,
         BigDecimal renewalDepositAmount,BigDecimal remainingRentalAmount,String currency,String renewalPolicyRef,String renewalPolicyVersion,
         UUID storageUnitId,UUID facilityId,String endDateConvention,LocalDate rentalStartDate,RenewalPaymentPlan paymentPlan,
-        Integer signingWindowDays) {
+        Integer signingWindowDays, Boolean continuousPeriod) {
+        public Terms(LocalDate oldEndDate,LocalDate extensionStartDate,LocalDate extensionEndExclusive,LocalDate newEndDate,
+            UUID unitTypeId,String pricingPackageCode,UUID packagePolicyRef,String packagePolicyVersion,int rentalMonths,
+            BigDecimal monthlyPrice,BigDecimal discountRate,BigDecimal subtotal,BigDecimal discountAmount,BigDecimal totalAfterDiscount,
+            BigDecimal renewalDepositAmount,BigDecimal remainingRentalAmount,String currency,String renewalPolicyRef,String renewalPolicyVersion,
+            UUID storageUnitId,UUID facilityId,String endDateConvention,LocalDate rentalStartDate,RenewalPaymentPlan paymentPlan,
+            Integer signingWindowDays) {
+            this(oldEndDate,extensionStartDate,extensionEndExclusive,newEndDate,unitTypeId,pricingPackageCode,packagePolicyRef,
+                packagePolicyVersion,rentalMonths,monthlyPrice,discountRate,subtotal,discountAmount,totalAfterDiscount,
+                renewalDepositAmount,remainingRentalAmount,currency,renewalPolicyRef,renewalPolicyVersion,storageUnitId,facilityId,
+                endDateConvention,rentalStartDate,paymentPlan,signingWindowDays,null);
+        }
         public Terms(LocalDate oldEndDate,LocalDate extensionStartDate,LocalDate extensionEndExclusive,LocalDate newEndDate,
             UUID unitTypeId,String pricingPackageCode,UUID packagePolicyRef,String packagePolicyVersion,int rentalMonths,
             BigDecimal monthlyPrice,BigDecimal discountRate,BigDecimal subtotal,BigDecimal discountAmount,BigDecimal totalAfterDiscount,

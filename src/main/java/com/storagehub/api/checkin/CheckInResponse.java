@@ -88,6 +88,11 @@ public record CheckInResponse(
     String declaredPackagingMethod,
     String paymentEvidenceReference
 ) {
+    public record InventoryVisit(
+        Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
+        String verifiedByName, UUID photoId
+    ) {}
+
     public record DeclaredGoodsLine(UUID id, String code, String name, String categoryName,
         String materialName, int quantity, BigDecimal lengthCm, BigDecimal widthCm,
         BigDecimal heightCm, BigDecimal weightPerPackageKg, UUID catalogCategoryId, UUID catalogMaterialId,

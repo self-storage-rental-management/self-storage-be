@@ -85,6 +85,17 @@ public class CheckIn extends BaseEntity {
     @Column
     private Instant setupCompletedAt;
 
+    private Instant inventoryAppointmentAt;
+    private Instant inventoryArrivedAt;
+    private Instant inventoryIdentityVerifiedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "inventory_identity_verified_by")
+    private User inventoryIdentityVerifiedBy;
+
+    @Column(name = "inventory_identity_photo_id")
+    private java.util.UUID inventoryIdentityPhotoId;
+
     @Column
     private Instant inventoryVerifiedAt;
 
@@ -146,6 +157,11 @@ public class CheckIn extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(length = 20)
     private UnitReleaseDisposition rejectionDisposition;
+
+    private Instant rejectionResolvedAt;
+
+    @Column(length = 1000)
+    private String rejectionResolutionNote;
 
     @Version
     private long version;

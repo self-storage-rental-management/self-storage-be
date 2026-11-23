@@ -161,9 +161,11 @@ public class ReturnSettlementService {
         BigDecimal depositAmount = securityDeposit(rental);
 
         LocalDate today = LocalDate.now(BusinessTime.ZONE);
+        Instant now = Instant.now();
         if (request.scheduledDate() != null && request.scheduledDate().isBefore(today)) {
             throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
         }
+        if (inventoryMismatchReturn) InventoryDeadlinePolicy.requireRemovalDate(rental, request.scheduledDate(), now);
 
         ReturnCase returnCase = new ReturnCase();
         returnCase.setRental(rental);
@@ -172,7 +174,7 @@ public class ReturnSettlementService {
         returnCase.setCustomer(customer);
         returnCase.setRequestedBy(customer);
         returnCase.setStatus(ReturnCaseStatus.requested);
-        returnCase.setRequestedAt(Instant.now());
+        returnCase.setRequestedAt(now);
         returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : today);
         returnCase.setRecoveryEligibleAt(noShowRecoveryEligibleAt(returnCase.getScheduledDate()));
         if (inventoryMismatchReturn && rental.getInventoryRemovalDeadlineAt() != null)
@@ -237,9 +239,15 @@ public class ReturnSettlementService {
         if (!actor.hasRole(com.storagehub.domain.model.RoleCode.CUSTOMER)) throw ApiExceptions.forbidden("Chỉ khách hàng được sửa yêu cầu trả kho.");
         ReturnCase record = returnCaseRepository.findOwnedForUpdate(returnId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
-        if (record.getStatus() != ReturnCaseStatus.requested) throw ApiExceptions.conflict("Yêu cầu đã được nhân viên xử lý, không thể đổi ngày hoặc lý do.");
+        boolean fixedDeadline = record.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            && record.getRental().getInventoryRemovalDeadlineAt() != null;
+        if (record.getStatus() != ReturnCaseStatus.requested
+            && !(fixedDeadline && record.getStatus() == ReturnCaseStatus.scheduled)) {
+            throw ApiExceptions.conflict("Yêu cầu đã được nhân viên xử lý, không thể đổi ngày hoặc lý do.");
+        }
         if (request.scheduledDate().isBefore(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")))) throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
         if (request.notes() == null || request.notes().isBlank()) throw ApiExceptions.validation("Vui lòng nhập lý do trả kho.", null);
+        if (fixedDeadline) InventoryDeadlinePolicy.requireRemovalDate(record.getRental(), request.scheduledDate(), Instant.now());
         var before = toResponse(record);
         if (record.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && record.getRental().getInventoryRemovalPublishedAt() != null)
@@ -258,6 +266,11 @@ public class ReturnSettlementService {
         record.setCustomerNotes(request.notes().trim());
         ReturnCase saved = returnCaseRepository.saveAndFlush(record);
         auditLogService.recordMutation("CUSTOMER_RETURN_REQUEST_UPDATED", "return", saved.getId(), saved.getFacility().getId(), before, toResponse(saved));
+        if (fixedDeadline) {
+            notificationService.createFacilityOperationsNotifications(saved.getFacility().getId(), NotificationType.RETURN,
+                "Khách đã đổi lịch trả kho do kiểm kê sai lệch",
+                "Ngày hẹn mới của gian " + saved.getStorageUnit().getCode() + " là " + saved.getScheduledDate() + ".", saved.getId());
+        }
         return toResponse(saved);
     }
 
@@ -492,6 +505,11 @@ public class ReturnSettlementService {
             && returnCase.getStatus() != ReturnCaseStatus.recovery_required)
             throw ApiExceptions.conflict("Return is not in a state awaiting inspection");
         boolean noShowRecovery = returnCase.getStatus() == ReturnCaseStatus.recovery_required;
+        if (!noShowRecovery && returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            && returnCase.getRental().getInventoryRemovalDeadlineAt() != null
+            && !Instant.now().isBefore(returnCase.getRental().getInventoryRemovalDeadlineAt())) {
+            throw ApiExceptions.conflict("Đã hết hạn đưa hàng ra khỏi kho. Hồ sơ cần được xử lý qua nhiệm vụ thu hồi.");
+        }
         MaintenanceTask noShowTask = noShowRecovery ? requireNoShowRecoveryTask(returnCase) : null;
         if (noShowRecovery) {
             if (!request.unitVacated()
@@ -1039,6 +1057,8 @@ public class ReturnSettlementService {
         if (maintenanceTaskRepository == null) {
             throw new IllegalStateException("Maintenance task repository is not available");
         }
+        boolean removalDeadline = current.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            && current.getRental().getInventoryRemovalDeadlineAt() != null;
         MaintenanceTask recoveryTask = findNoShowRecoveryTask(current);
         if (recoveryTask == null) {
             MaintenanceTask task = new MaintenanceTask();
@@ -1046,10 +1066,11 @@ public class ReturnSettlementService {
             task.setStorageUnit(current.getStorageUnit());
             task.setReturnCase(current);
             task.setRental(current.getRental());
-            task.setTitle(NO_SHOW_RECOVERY_TASK_TITLE);
+            task.setTitle(removalDeadline ? "Thu hồi hàng do quá hạn đưa hàng sai lệch ra khỏi kho" : NO_SHOW_RECOVERY_TASK_TITLE);
             task.setTaskType(MaintenanceTaskType.maintenance);
             task.setRecoveryType(MaintenanceRecoveryType.RETURN_NO_SHOW);
-            task.setReason("Khách hàng đã quá thời gian hẹn trả kho và thời gian ân hạn. "
+            task.setReason((removalDeadline ? "Đã hết hạn đưa hàng sai lệch ra khỏi kho. "
+                : "Khách hàng đã quá thời gian hẹn trả kho và thời gian ân hạn. ")
                 + "Không tự động di chuyển hàng. Cần hai nhân viên kiểm kê, chụp bằng chứng, niêm phong "
                 + "và ghi nhận khu vực lưu tạm trước khi hoàn tất.");
             task.setPriority(TaskPriority.high);
@@ -1061,23 +1082,28 @@ public class ReturnSettlementService {
 
         current.setNoShowAt(now);
         current.setRecoveryTaskCreatedAt(now);
-        current.setRecoveryNotes("Khách không đến ngày trả kho. Hàng chỉ được di chuyển sau khi Staff hoàn tất kiểm kê, bằng chứng và bàn giao hai người.");
+        current.setRecoveryNotes((removalDeadline ? "Đã hết hạn đưa hàng sai lệch ra khỏi kho. " : "Khách không đến ngày trả kho. ")
+            + "Hàng chỉ được di chuyển sau khi Staff hoàn tất kiểm kê, bằng chứng và bàn giao hai người.");
         current.setStatus(ReturnCaseStatus.recovery_required);
         ReturnCase saved = returnCaseRepository.save(current);
+        if (removalDeadline) {
+            auditLogService.recordMutation((User) null, "INVENTORY_REMOVAL_EXPIRED", "return", saved.getId(),
+                saved.getFacility().getId(), null, Map.of("dueAt", saved.getRecoveryEligibleAt(), "recoveryTaskId", recoveryTask.getId()));
+        }
 
         notificationService.createNotification(
             saved.getCustomer().getId(),
             NotificationType.RETURN,
-            "Lịch trả kho đã quá hạn",
-            "Hệ thống ghi nhận bạn chưa đến trả kho theo lịch. Hàng chưa được tự động di chuyển. Vui lòng liên hệ cơ sở để thống nhất thời gian xử lý.",
+            removalDeadline ? "Đã hết hạn đưa hàng ra khỏi kho" : "Lịch trả kho đã quá hạn",
+            "Hồ sơ đã chuyển sang chờ thu hồi. Hàng chưa được tự động di chuyển. Vui lòng liên hệ cơ sở để thống nhất thời gian xử lý.",
             saved.getId()
         );
         notificationService.createFacilityOperationsNotifications(
             saved.getFacility().getId(),
             NotificationType.RETURN,
-            "Cần xử lý khách không đến trả kho",
+            removalDeadline ? "Cần thu hồi hàng do quá hạn đưa hàng ra" : "Cần xử lý khách không đến trả kho",
             "Yêu cầu trả kho của gian " + saved.getStorageUnit().getCode()
-                + " đã quá thời gian ân hạn. Cần phân công hai nhân viên kiểm kê và ghi nhận bàn giao hàng trước khi di chuyển.",
+                + " đã quá hạn xử lý. Cần phân công hai nhân viên kiểm kê và ghi nhận bàn giao hàng trước khi di chuyển.",
             saved.getId()
         );
         return true;
@@ -1747,7 +1773,8 @@ public class ReturnSettlementService {
             rc.getNoShowAt(), rc.getRecoveryEligibleAt(), rc.getRecoveryTaskCreatedAt(),
             noShowTask == null || noShowTask.getRecoveryWitness() == null ? null : noShowTask.getRecoveryWitness().getId(),
             noShowTask == null || noShowTask.getRecoveryWitness() == null ? null : noShowTask.getRecoveryWitness().getFullName(),
-            noShowTask == null ? null : noShowTask.getDeadlineAt()
+            noShowTask == null ? null : noShowTask.getDeadlineAt(),
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? rc.getRental().getInventoryRemovalDeadlineAt() : null
         );
     }
 

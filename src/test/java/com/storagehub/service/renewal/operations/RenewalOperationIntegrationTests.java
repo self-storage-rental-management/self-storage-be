@@ -102,6 +102,7 @@ class RenewalOperationIntegrationTests {
         public void release(Renewal n,Instant now){calendarReleases++;}
         public Instant check(Renewal n,RenewalQuoteResponse.Terms terms,UUID hold,Instant now){if(hold==null)throw ApiExceptions.conflict("TEST missing hold");return NOW.plus(Duration.ofDays(6));}
         public void retain(Renewal n,UUID hold,Instant deadline){}
+        public boolean restoreSigningWindow(Renewal n,RenewalQuoteResponse.Terms terms,UUID hold,Instant deadline){return true;}
         public void consume(Renewal n,UUID hold){consumes++;if(failConsume){var marker=new ActivityLog();marker.setAction("TEST_ROLLBACK_HOLD");marker.setEntityType("TestD3Hold");marker.setEntityId(n.getId());marker.setCorrelationId("test-only-rollback");em.persist(marker);em.flush();throw new IllegalStateException("TEST hold consume failed");}}
         public void consumePeriod(Renewal n,RenewalQuoteResponse.Terms terms,UUID hold,LocalDate start,LocalDate end,Instant now) {
             var day=now.atZone(com.storagehub.time.BusinessTime.ZONE).toLocalDate();
@@ -376,6 +377,20 @@ class RenewalOperationIntegrationTests {
             .setParameter("id",n.getId()).getSingleResult()).isEqualTo(1);
         verify(workflowNotifications).createNotification(eq(rental.getCustomer().getId()),eq(NotificationType.RENEWAL),contains("không đến"),contains("không bị giải phóng"),eq(n.getId()));
     }
+    @Test void paidCustomerCanRescheduleAfterNoShowOnceWithoutPayingAgain() {
+        var renewal=scheduled();var staff=actor(renewal,RoleCode.STAFF);var customer=actor(renewal,RoleCode.CUSTOMER);
+        var initial=service.detail(staff,renewal.getId(),RenewalOperationService.Audience.STAFF);
+        clock.time=initial.appointmentEnd();
+        var missed=service.noShow(staff,renewal.getId(),new NoShow(initial.appointmentRef(),"Khách vắng",initial.expectedVersion()),"no-show-reschedule");
+        var changed=service.appointment(customer,renewal.getId(),
+            new Appointment(clock.time.plusSeconds(3600),"Đổi lịch",missed.state().expectedVersion()),"reschedule-once",true);
+        assertThat(changed.state().phase()).isEqualTo("SIGNING");
+        assertThat(changed.state().depositPaymentRef()).isEqualTo(initial.depositPaymentRef());
+        assertThat(changed.state().effectiveSigningDeadline()).isEqualTo(initial.effectiveSigningDeadline());
+        assertThatThrownBy(()->service.appointment(customer,renewal.getId(),
+            new Appointment(clock.time.plusSeconds(7200),"Đổi tiếp",changed.state().expectedVersion()),"reschedule-twice",true))
+            .hasMessageContaining("đã sử dụng lượt đổi lịch");
+    }
     private void assertArrivalRows(UUID renewalId,long expected) throws Exception {
         try(var connection=datasource.getConnection();var query=connection.prepareStatement("select count(*) from renewal_operation_events where renewal_id=? and kind='ARRIVAL'")) {
             query.setBytes(1,java.nio.ByteBuffer.allocate(16).putLong(renewalId.getMostSignificantBits()).putLong(renewalId.getLeastSignificantBits()).array());
@@ -442,7 +457,7 @@ class RenewalOperationIntegrationTests {
     }
     @Test void customerCannotSeeOtherRentalAndManagerCannotComplete(){var n=fixture();var other=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.CUSTOMER),Set.of(),Map.of());assertThatThrownBy(()->service.detail(other,n.getId(),RenewalOperationService.Audience.CUSTOMER)).hasMessageContaining("not found");assertThatThrownBy(()->service.complete(actor(n,RoleCode.MANAGER),n.getId(),new Completion(version(n),true,UUID.randomUUID(),UUID.randomUUID(),null,effectiveStart(n)),"manager")).hasMessageContaining("Staff role");}
     @Test void slotEndMustFitDeadline(){var n=paid();clock.time=NOW.plus(Duration.ofHours(72)).minusSeconds(1800);assertThatThrownBy(()->service.appointment(actor(n,RoleCode.CUSTOMER),n.getId(),new Appointment(clock.time,null,version(n)),"bad-slot",false)).hasMessageContaining("Entire service slot");}
-    @Test void arrivalDoesNotBypassLateCompletionAndExpiryPreservesHistory(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"late-complete")).hasMessageContaining("deadline");assertThat(service.expire(n.getId())).isTrue();assertThat(service.expire(n.getId())).isFalse();assertThat(n.getStatus()).isEqualTo(RenewalStatus.appointment_scheduled);assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).phase()).isEqualTo("SIGNING_EXPIRED");assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNotNull();assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.available);}
+    @Test void arrivalDoesNotBypassLateCompletionAndExpiryPreservesHistory(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);assertThatThrownBy(()->service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"late-complete")).hasMessageContaining("deadline");assertThat(service.expire(n.getId())).isTrue();assertThat(service.expire(n.getId())).isFalse();assertThat(n.getStatus()).isEqualTo(RenewalStatus.cancelled);assertThat(service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF).phase()).isEqualTo("SIGNING_EXPIRED");assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNull();assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.available);}
     @Test void completeAtExactDeadlinePermitted(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var arrival=service.arrival(staff,n.getId(),new Arrival(state.appointmentRef(),List.of(),version(n)),"arrive");clock.time=NOW.plus(Duration.ofHours(72));var completed=service.complete(staff,n.getId(),new Completion(version(n),true,arrival.state().arrivalRef(),UUID.randomUUID(),null,effectiveStart(n)),"exact");assertThat(completed.state().phase()).isEqualTo("COMPLETED");assertThat(completed.state().renewalSequence()).isEqualTo(1);assertThat(n.getDisplaySequence()).isEqualTo(1);assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,11,10));}
     @Test void revokedAssignmentBlocksReplay(){var n=scheduled();var staff=actor(n,RoleCode.STAFF);var state=service.detail(staff,n.getId(),RenewalOperationService.Audience.STAFF);var body=new Arrival(state.appointmentRef(),List.of(),version(n));service.arrival(staff,n.getId(),body,"replay");ops.authorized=false;assertThatThrownBy(()->service.arrival(staff,n.getId(),body,"replay")).hasMessageContaining("revoked");}
     @Test void cashHistoryRemainsWhenCompletionBlockedByMoneyOrReturn() throws Exception {
@@ -530,7 +545,7 @@ class RenewalOperationIntegrationTests {
                 case "RETURNED" -> rental.setActualReturnedAt(NOW);
                 case "MAINTENANCE" -> {var task=new MaintenanceTask();task.setFacility(rental.getFacility());task.setStorageUnit(rental.getStorageUnit());task.setTitle("TEST");task.setReason("TEST");task.setReportedBy(rental.getCustomer());em.persist(task);}
                 case "RECOVERY" -> em.persist(new com.storagehub.service.overdue.OverdueFollowUp("RENTAL_TERM:"+rental.getId(),rental,"RECOVERY_HANDOFF","TEST",rental.getCustomer().getId(),NOW,UUID.randomUUID(),"TEST","1"));
-                case "BOOKING" -> {var other=new Reservation();other.setReservationCode("OTHER-"+rental.getId().toString().substring(0,8));other.setIdempotencyKey("OTHER-"+rental.getId());other.setCustomer(rental.getCustomer());other.setSourceQuote(rental.getReservation().getSourceQuote());other.setFacility(rental.getFacility());other.setUnitType(rental.getStorageUnit().getUnitType());other.setAssignedUnit(rental.getStorageUnit());other.setStartDate(rental.getStartDate());other.setEndDate(rental.getContractEndDate());other.setStatus(ReservationStatus.CONFIRMED);em.persist(other);}
+                case "BOOKING" -> {var other=new Reservation();other.setReservationCode("OTHER-"+rental.getId().toString().substring(0,8));other.setIdempotencyKey("OTHER-"+rental.getId());other.setCustomer(rental.getCustomer());other.setSourceQuote(rental.getReservation().getSourceQuote());other.setFacility(rental.getFacility());other.setUnitType(rental.getStorageUnit().getUnitType());other.setAssignedUnit(rental.getStorageUnit());other.setStartDate(rental.getContractEndDate().plusDays(1));other.setEndDate(rental.getContractEndDate().plusDays(8));other.setStatus(ReservationStatus.CONFIRMED);em.persist(other);}
             }
             em.flush();var oldEnd=r.getContractEndDate();int before=ops.deposits;
             String expected=switch(kind){case "RETURNED" -> "return state changed";case "MAINTENANCE" -> "Active maintenance";case "RECOVERY" -> "Recovery handoff";default -> "Another booking";};
@@ -551,9 +566,9 @@ class RenewalOperationIntegrationTests {
         clock.time=NOW.plus(Duration.ofHours(72)).plusSeconds(1);
         assertThat(service.expire(n.getId())).isTrue();
         assertThat(s.getPhase()).isEqualTo(RenewalOperationState.Phase.SIGNING_EXPIRED);
-        assertThat(n.getStatus()).isNotEqualTo(RenewalStatus.payment_expired);
+        assertThat(n.getStatus()).isEqualTo(RenewalStatus.cancelled);
         assertThat(s.getFullRentPaidAt()).isEqualTo(NOW);
-        assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNotNull();
+        assertThat(em.find(RenewalOpenSlot.class,n.getRental().getId())).isNull();
     }
     private Renewal fixture(){return fixture(false);}
     private Renewal fixture(boolean exclusive){

@@ -66,6 +66,25 @@ public class GoodsCatalogService {
     }
 
     @Transactional(readOnly = true)
+    public void validateInventorySelection(UUID categoryId, UUID materialId, UUID declaredCategoryId, UUID declaredMaterialId) {
+        if (categoryId == null) {
+            if (declaredCategoryId != null || materialId != null)
+                throw ApiExceptions.validation("Chọn loại hàng thực tế theo danh mục.", null);
+            return;
+        }
+        var category = typeRepository.findById(categoryId)
+            .orElseThrow(() -> ApiExceptions.validation("Loại hàng thực tế không tồn tại.", null));
+        if (category.getStatus() != GoodsCatalogStatus.ACTIVE && !categoryId.equals(declaredCategoryId))
+            throw ApiExceptions.validation("Loại hàng thực tế đã ngừng sử dụng.", null);
+        if (materialId == null) return;
+        var material = materialRepository.findById(materialId)
+            .orElseThrow(() -> ApiExceptions.validation("Chất liệu thực tế không tồn tại.", null));
+        if (!material.getGoodsType().getId().equals(categoryId)
+            || (material.getStatus() != GoodsCatalogStatus.ACTIVE && !materialId.equals(declaredMaterialId)))
+            throw ApiExceptions.validation("Chất liệu thực tế không thuộc loại hàng đã chọn hoặc đã ngừng sử dụng.", null);
+    }
+
+    @Transactional(readOnly = true)
     public GoodsCatalogResponse managerCatalog(ActorPrincipal actor) {
         requireManager(actor);
         return response(typeRepository.findAllByOrderBySortOrderAscCodeAsc(), false);

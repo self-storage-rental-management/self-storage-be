@@ -15,7 +15,7 @@ public final class RenewalEffectivePeriod {
     }
     public static Interval at(RentalPeriod previous,RenewalQuoteResponse.Terms terms,Instant signingAt) {
         RenewalPeriodCompatibility.require(previous,terms);
-        LocalDate start=start(previous,signingAt);
+        LocalDate start=Boolean.TRUE.equals(terms.continuousPeriod()) ? previous.endExclusive() : start(previous,signingAt);
         if(terms.monthly()&&!start.equals(terms.extensionStartDate()))
             throw ApiExceptions.conflict("Điều khoản trả từng tháng cũ cần được đối soát trước khi đổi kỳ gia hạn.");
         LocalDate end=start.plusMonths(terms.rentalMonths());
