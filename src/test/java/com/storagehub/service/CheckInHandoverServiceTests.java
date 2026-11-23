@@ -262,6 +262,43 @@ class CheckInHandoverServiceTests {
         assertThat(response.handover().inventoryLines()).isNull();
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void comparesActualCatalogPerLineAndKeepsOriginalDeclaration(boolean prohibited) throws Exception {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN); mockCompletionChecks(true);
+        var rental=checkIn.getRental(); rental.setSetupCompletionDeadlineAt(Instant.now().plusSeconds(86400));
+        rental.setInventoryArrivedAt(Instant.now()); rental.setInventoryIdentityVerifiedAt(Instant.now());
+        var original=entityWithId(new ReservationGoodsItem()); original.setQuantity(3);
+        original.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);
+        original.setCatalogCategoryId(UUID.randomUUID());original.setCatalogMaterialId(UUID.randomUUID());
+        original.setCategoryName("Đồ gia dụng");original.setMaterialName("Gỗ");
+        original.setLengthCm(new BigDecimal("100"));original.setWidthCm(new BigDecimal("100"));original.setHeightCm(new BigDecimal("100"));
+        original.setWeightKg(new BigDecimal("33.333333"));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())).thenReturn(List.of(original));
+        var actual=new com.storagehub.api.reservation.GoodsItemRequest();
+        actual.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);actual.setCatalogCategoryId(original.getCatalogCategoryId());
+        actual.setCatalogMaterialId(UUID.randomUUID());actual.setCategoryName("Nhãn chưa đối soát");actual.setMaterialName("Vật liệu thực tế");
+        actual.setStackable(false);actual.setAllowHorizontalPlacement(true);actual.setMaxStackLayers(1);
+        var catalog=org.mockito.Mockito.mock(GoodsCatalogService.class);ReflectionTestUtils.setField(service,"goodsCatalogService",catalog);
+        if(prohibited) org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.validation("Vật liệu không được nhận",null)).when(catalog).validateForUnitType(any(),any(com.storagehub.api.reservation.GoodsItemRequest.class),org.mockito.ArgumentMatchers.anyInt());
+        else {
+            org.mockito.Mockito.doAnswer(call->{var g=(com.storagehub.api.reservation.GoodsItemRequest)call.getArgument(1);g.setCategoryName("Đồ gia dụng");g.setMaterialName("Kim loại");return null;}).when(catalog).validateForUnitType(any(),any(com.storagehub.api.reservation.GoodsItemRequest.class),org.mockito.ArgumentMatchers.anyInt());
+            var packing=org.mockito.Mockito.mock(PalletInventoryService.class);ReflectionTestUtils.setField(service,"palletInventory",packing);
+            when(packing.evaluateActualFit(eq(unit),any())).thenReturn(new PalletInventoryService.Fit(org.mockito.Mockito.mock(com.storagehub.api.reservation.PalletPlan.class),1,unit,List.of(),false));
+        }
+        var base=validCompletionRequest();
+        var line=new CompleteCheckInRequest.InventoryLine(original.getId(),3,CompleteCheckInRequest.InventoryLine.Condition.INTACT,"Đã đối chiếu chất liệu",new CompleteCheckInRequest.InventoryMeasurements(new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100")),actual);
+        var measurements=new CheckInMeasurements(new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("3"),true);
+        var request=new CompleteCheckInRequest(base.checklist(),base.identityDocumentNumber(),null,measurements,"Chất liệu và điều kiện xếp thực tế khác khai báo",base.initialUnitCondition(),base.goodsCondition(),3,"Đồ gia dụng","Gỗ",base.evidenceReferences(),base.handedOverItems(),base.notes(),base.lockReference(),List.of(line));
+        var response=service.complete(actor,checkIn.getId(),request);
+        assertThat(response.inventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_CUSTOMER);
+        assertThat(response.inventoryFullFit()).isEqualTo(!prohibited);
+        assertThat(original.getMaterialName()).isEqualTo("Gỗ");
+        assertThat(checkIn.getInventoryActualJson()).contains("actualGoods",actual.getCatalogMaterialId().toString());
+        assertThat(response.handover().inventoryLines().getFirst().actualGoods().getMaterialName()).isEqualTo(prohibited?"Vật liệu thực tế":"Kim loại");
+        if(prohibited) assertThat(rental.getInventoryRemovalDeadlineAt()).isNotNull();
+    }
+
     @Test
     void persistsIdentityVerificationAsTheFirstWorkflowStep() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);

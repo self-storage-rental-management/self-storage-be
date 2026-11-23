@@ -21,6 +21,7 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class ReturnCase extends BaseEntity {
+    @Column private Instant readyForInspectionAt;
 
     @Column(nullable = false)
     private boolean setupExitRequested;

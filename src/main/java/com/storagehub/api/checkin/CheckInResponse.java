@@ -89,7 +89,14 @@ public record CheckInResponse(
 ) {
     public record DeclaredGoodsLine(UUID id, String code, String name, String categoryName,
         String materialName, int quantity, BigDecimal lengthCm, BigDecimal widthCm,
-        BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+        BigDecimal heightCm, BigDecimal weightPerPackageKg, UUID catalogCategoryId, UUID catalogMaterialId,
+        com.storagehub.domain.model.GoodsCategory category, boolean fragile, boolean stackable,
+        boolean allowHorizontalPlacement, int maxStackLayers) {
+        public DeclaredGoodsLine(UUID id, String code, String name, String categoryName, String materialName, int quantity,
+            BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+            this(id, code, name, categoryName, materialName, quantity, lengthCm, widthCm, heightCm, weightPerPackageKg,
+                null, null, null, false, false, false, 1);
+        }
         /** Compatibility constructor for readers that only populated the original measurements. */
         public DeclaredGoodsLine(UUID id, String code, String name, int quantity,
             BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {

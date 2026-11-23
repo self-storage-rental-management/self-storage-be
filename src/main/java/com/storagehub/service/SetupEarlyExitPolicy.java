@@ -15,7 +15,8 @@ public final class SetupEarlyExitPolicy {
         return rc.isSetupExitRequested() && rc.getSetupReturnedAt() != null
             && rental.getSetupStartedAt() != null && rental.getSetupEndsAt() != null
             && !rc.getSetupReturnedAt().isBefore(rental.getSetupStartedAt())
-            && rc.getSetupReturnedAt().isBefore(rental.getSetupEndsAt());
+            && (rental.getSetupCompletionDeadlineAt() != null
+                || rc.getSetupReturnedAt().isBefore(rental.getSetupEndsAt()));
     }
 
     public static void capture(ReturnCase rc, ReservationPricingSnapshot pricing) {

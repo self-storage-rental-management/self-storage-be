@@ -17,6 +17,7 @@ import com.storagehub.api.maintenance.UpdateStorageUnitStatusRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.Facility;
+import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.NotificationType;
@@ -416,6 +417,33 @@ class MaintenanceServiceTests {
         assertThat(response).isNotNull();
         assertThat(task.getStatus()).isEqualTo(MaintenanceTaskStatus.cancelled);
         assertThat(task.getResultReport()).contains("Không cần thiết");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value=com.storagehub.domain.model.MaintenanceRecoveryType.class, names={"SETUP_OVERDUE", "MISMATCH_REMOVAL"})
+    void physicalRecoveryCreatesPendingSettlementWithoutClaimingFinancialCompletion(com.storagehub.domain.model.MaintenanceRecoveryType type) {
+        var task=new MaintenanceTask(); ReflectionTestUtils.setField(task,"id",UUID.randomUUID());
+        task.setFacility(facility);task.setStorageUnit(unit);task.setTitle("Thu hồi hàng quá hạn");task.setStatus(MaintenanceTaskStatus.in_progress);task.setRecoveryType(type);
+        var rental=new com.storagehub.domain.model.Rental();ReflectionTestUtils.setField(rental,"id",UUID.randomUUID());
+        rental.setCustomer(staffUser);rental.setFacility(facility);rental.setStorageUnit(unit);task.setRental(rental);
+        var witness=new User();ReflectionTestUtils.setField(witness,"id",UUID.randomUUID());witness.setFullName("Nguyễn An");witness.setStatus(UserStatus.ACTIVE);witness.setRoles(staffUser.getRoles());
+        var scope=new UserFacilityScope();scope.setScopeLevel(FacilityScopeLevel.OPERATE);
+        when(userRepository.findById(witness.getId())).thenReturn(Optional.of(witness));
+        when(userRepository.findById(staffActor.userId())).thenReturn(Optional.of(staffUser));
+        when(userFacilityScopeRepository.findByUser_IdAndFacility_Id(witness.getId(),facility.getId())).thenReturn(Optional.of(scope));
+        var file=new com.storagehub.domain.model.FileAsset();ReflectionTestUtils.setField(file,"id",UUID.randomUUID());file.setEntityType("MAINTENANCE_TASK");file.setEntityId(task.getId());
+        var fileRepo=org.mockito.Mockito.mock(com.storagehub.domain.repo.FileAssetRepository.class);
+        ReflectionTestUtils.setField(maintenanceService,"fileAssetRepository",fileRepo);
+        when(fileRepo.findById(file.getId())).thenReturn(Optional.of(file));
+        when(maintenanceTaskRepository.findById(task.getId())).thenReturn(Optional.of(task));
+        when(maintenanceTaskRepository.save(any())).thenAnswer(call->call.getArgument(0));
+        when(returnCaseRepository.saveAndFlush(any())).thenAnswer(call->{var rc=(com.storagehub.domain.model.ReturnCase)call.getArgument(0);ReflectionTestUtils.setField(rc,"id",UUID.randomUUID());return rc;});
+        maintenanceService.completeTask(staffActor,task.getId(),new CompleteMaintenanceTaskRequest("Đã đối chiếu danh mục và bàn giao hàng",List.of(file.getId().toString()),false,true,"Khu lưu tạm A, nhân viên nhận Nguyễn An",witness.getId()));
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.maintenance);
+        assertThat(rental.getActualReturnedAt()).isNotNull();assertThat(rental.getCompletedAt()).isNull();
+        assertThat(task.getReturnCase().getStatus()).isEqualTo(com.storagehub.domain.model.ReturnCaseStatus.requested);
+        assertThat(task.getReturnCase().isCustomerConfirmed()).isFalse();
+        assertThat(task.getReturnCase().getRequestedBy()).isEqualTo(staffUser);
     }
 
     @Test

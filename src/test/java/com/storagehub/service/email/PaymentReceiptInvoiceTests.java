@@ -77,6 +77,14 @@ class PaymentReceiptInvoiceTests {
         assertThat(deliveredPayload()).containsEntry("invoiceNumber", null);
     }
 
+    @Test void newlyCommittedReceiptsAreDueWithoutWaitingForTimestampRounding() {
+        for (int i=0; i<16; i++) queue.enqueue(customer, "receipt@example.test", Map.of("paymentId", UUID.randomUUID().toString(), "transactionNo", "BANK-001"));
+        var sender=mock(TransactionalEmailService.class);
+        when(sender.deliverEmail(eq(customer),eq("receipt@example.test"),anyString(),eq("payment-bill"),anyMap(),eq("PAYMENT_BILL_EMAIL_SENT"))).thenReturn(true);
+        queue.deliverPending(sender);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM payment_receipt_emails WHERE delivery_status='SENT'",Integer.class)).isEqualTo(16);
+    }
+
     @Test void aStoredLegacyNumberDisambiguatesPaymentsWithTheSameBankReference() {
         bookingWithReference(customer, "INV-ONE");
         bookingWithReference(customer, "INV-TWO");
