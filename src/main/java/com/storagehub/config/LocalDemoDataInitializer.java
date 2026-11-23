@@ -54,7 +54,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 @RequiredArgsConstructor
 @Slf4j
 public class LocalDemoDataInitializer {
-    private static final Set<String> PALLET_DEMO_FACILITIES = Set.of("BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01");
+    private static final Set<String> PALLET_DEMO_FACILITIES = Set.of("BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01", "FPT-TV-F01");
     // v6 demo pallet: it is supported by both beams and may overhang each side
     // by at most five centimetres.
     private static final RackLayout.Pallet DEMO_PALLET = new RackLayout.Pallet(
@@ -434,11 +434,11 @@ public class LocalDemoDataInitializer {
     private int seedUsers(Map<String, Facility> facilities) {
         int seededCount = 0;
         for (DemoUserDefinition definition : List.of(
-            new DemoUserDefinition("customer@storagehub.demo", "Demo Customer", "+84 908 123 456", RoleCode.CUSTOMER, "Customer@1234!", "HTP-F01", FacilityScopeLevel.READ),
-            new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "HTP-F01", FacilityScopeLevel.OPERATE),
-            new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "HTP-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", "HTP-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", "HTP-F01", FacilityScopeLevel.MANAGE)
+            new DemoUserDefinition("customer@storagehub.demo", "Demo Customer", "+84 908 123 456", RoleCode.CUSTOMER, "Customer@1234!", null, FacilityScopeLevel.READ),
+            new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", null, FacilityScopeLevel.OPERATE),
+            new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", null, FacilityScopeLevel.MANAGE),
+            new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", null, FacilityScopeLevel.MANAGE),
+            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", null, FacilityScopeLevel.MANAGE)
         )) {
             Role role = roleRepository.findByCode(definition.role())
                 .orElseThrow(() -> new IllegalStateException("Role has not been initialized: " + definition.role()));
