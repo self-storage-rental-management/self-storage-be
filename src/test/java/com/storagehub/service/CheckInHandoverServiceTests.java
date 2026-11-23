@@ -31,6 +31,7 @@ import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.Role;
 import com.storagehub.domain.model.UserStatus;
@@ -495,6 +496,28 @@ class CheckInHandoverServiceTests {
         assertThat(reservation.getAssignedUnit()).isNull();
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
         assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        verify(notificationService).createNotification(
+            any(), eq(NotificationType.CHECKIN), eq("Ghi nhận không đến nhận kho"), any(), eq(reservation.getId())
+        );
+    }
+
+    @Test
+    void doesNotAllowNoShowBeforeAppointmentStarts() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        checkIn.setScheduledAt(Instant.now().plusSeconds(3600));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> service.markNoShow(
+            actor, checkIn.getId(), new MarkNoShowRequest("Khách chưa đến trong thời gian hẹn")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("giờ hẹn nhận kho");
+
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
+        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -623,6 +646,9 @@ class CheckInHandoverServiceTests {
         assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.maintenance);
         assertThat(reservation.getAssignedUnit()).isNull();
         verify(rentalRepository, never()).save(any());
+        verify(notificationService).createNotification(
+            any(), eq(NotificationType.CHECKIN), eq("Từ chối nhận kho"), any(), eq(reservation.getId())
+        );
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -943,16 +969,6 @@ class CheckInHandoverServiceTests {
         }
     }
 
-    private FileAsset inventoryPhoto() {
-        FileAsset photo = entityWithId(new FileAsset());
-        photo.setEntityType(FileStorageService.INVENTORY_IDENTITY_ENTITY);
-        photo.setEntityId(checkIn.getId());
-        photo.setUploadedBy(staff);
-        photo.setContentType("image/png");
-        ReflectionTestUtils.setField(photo, "createdAt", checkIn.getInventoryArrivedAt().plusSeconds(1));
-        return photo;
-    }
-
     @Test
     void archivesCompletedCheckInWithAuditLog() {
         checkIn.setStatus(CheckInStatus.completed);
@@ -978,6 +994,80 @@ class CheckInHandoverServiceTests {
         assertThatThrownBy(() -> service.archiveCompleted(actor, checkIn.getId()))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("Chỉ có thể xóa/lưu trữ đơn sau khi bàn giao thành công");
+    }
+
+    @Test
+    void derivesCatalogIdsFromActualGoodsWhenDeserializingInventoryLine() throws Exception {
+        UUID categoryId = UUID.randomUUID();
+        UUID materialId = UUID.randomUUID();
+        String json = "{\"goodsItemId\":\"" + UUID.randomUUID()
+            + "\",\"actualQuantity\":1,\"condition\":\"INTACT\",\"actualGoods\":{\"catalogCategoryId\":\""
+            + categoryId + "\",\"catalogMaterialId\":\"" + materialId + "\"}}";
+        var line = new ObjectMapper().readValue(json, CompleteCheckInRequest.InventoryLine.class);
+        assertThat(line.actualCategoryId()).isEqualTo(categoryId);
+        assertThat(line.actualMaterialId()).isEqualTo(materialId);
+    }
+
+    @Test
+    void requiresPublishedInventoryBeforeSuggestingAlternativeUnits() {
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        assertThatThrownBy(() -> service.inventoryAlternatives(actor, checkIn.getId()))
+            .isInstanceOf(ApiException.class);
+        verify(storageUnitRepository, never()).findByFacility_Id(any());
+    }
+
+    @Test
+    void checksFacilityAccessBeforeReadingInventoryAlternatives() {
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.forbidden("Outside facility scope"))
+            .when(facilityScopeService).assertCanRead(actor, reservation.getFacility().getId());
+        assertThatThrownBy(() -> service.inventoryAlternatives(actor, checkIn.getId()))
+            .hasMessageContaining("Outside facility scope");
+        verify(storageUnitRepository, never()).findByFacility_Id(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void suggestsOnlyUnitsWithACompletePackingPlan(boolean fits) throws Exception {
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setInventoryActualJson("{}");
+        var original = entityWithId(new ReservationGoodsItem());
+        original.setQuantity(3);
+        var base = validCompletionRequest();
+        var line = new CompleteCheckInRequest.InventoryLine(original.getId(), 3,
+            CompleteCheckInRequest.InventoryLine.Condition.INTACT, null,
+            new CompleteCheckInRequest.InventoryMeasurements(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+        var report = new CompleteCheckInRequest(base.checklist(), base.identityDocumentNumber(), null,
+            base.actualMeasurements(), null, base.initialUnitCondition(), base.goodsCondition(), 3,
+            base.goodsCategory(), base.goodsMaterial(), base.evidenceReferences(), base.handedOverItems(),
+            null, base.lockReference(), List.of(line));
+        checkIn.setChecklistJson(new ObjectMapper().writeValueAsString(report));
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())).thenReturn(List.of(original));
+        var candidate = entityWithId(new StorageUnit());
+        candidate.setCode("ALTERNATIVE-01"); candidate.setUnitType(unit.getUnitType());
+        candidate.getUnitType().setStatus(com.storagehub.domain.model.UnitTypeStatus.active);
+        candidate.setStatus(StorageUnitStatus.available);
+        when(storageUnitRepository.findByFacility_Id(reservation.getFacility().getId())).thenReturn(List.of(candidate));
+        var catalog = org.mockito.Mockito.mock(GoodsCatalogService.class);
+        var packing = org.mockito.Mockito.mock(PalletInventoryService.class);
+        ReflectionTestUtils.setField(service, "goodsCatalogService", catalog);
+        ReflectionTestUtils.setField(service, "palletInventory", packing);
+        var plan = fits ? org.mockito.Mockito.mock(com.storagehub.api.reservation.PalletPlan.class) : null;
+        when(packing.evaluateActualFit(eq(candidate), any())).thenReturn(new PalletInventoryService.Fit(plan, 1, candidate, List.of(), false));
+        var suggestions = service.inventoryAlternatives(actor, checkIn.getId());
+        assertThat(suggestions).hasSize(fits ? 1 : 0);
+        if (fits) assertThat(suggestions.getFirst().storageUnitId()).isEqualTo(candidate.getId());
+    }
+
+    private FileAsset inventoryPhoto() {
+        FileAsset photo = entityWithId(new FileAsset());
+        photo.setEntityType(FileStorageService.INVENTORY_IDENTITY_ENTITY);
+        photo.setEntityId(checkIn.getId());
+        photo.setUploadedBy(staff);
+        photo.setContentType("image/png");
+        ReflectionTestUtils.setField(photo, "createdAt", checkIn.getInventoryArrivedAt().plusSeconds(1));
+        return photo;
     }
 
     private CompleteCheckInRequest validCompletionRequest() {

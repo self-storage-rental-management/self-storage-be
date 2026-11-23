@@ -1592,10 +1592,11 @@ public class CustomerReservationService {
                 response.setRentalStatus(rental.getStatus().name());
                 response.setInventoryDueAt(rental.getInventoryDueAt());
                 response.setInventoryFinalDeadlineAt(rental.getInventoryFinalDeadlineAt());
+                response.setInventoryEscalatedAt(rental.getInventoryEscalatedAt());
+                response.setInventoryResultPublishedAt(rental.getInventoryResultPublishedAt());
+                response.setInventoryRemainderDeadlineAt(rental.getInventoryRemainderDeadlineAt());
                 response.setInventoryRemovalPublishedAt(rental.getInventoryRemovalPublishedAt());
                 response.setInventoryRemovalDeadlineAt(rental.getInventoryRemovalDeadlineAt());
-                response.setInventoryRemovalDeadlineAt(rental.getInventoryRemovalDeadlineAt());
-                response.setInventoryEscalatedAt(rental.getInventoryEscalatedAt());
                 response.setSetupStartedAt(rental.getSetupStartedAt());
                 response.setSetupDueAt(rental.getSetupEndsAt());
                 response.setPaidRentalStartsOn(rental.getStartDate());

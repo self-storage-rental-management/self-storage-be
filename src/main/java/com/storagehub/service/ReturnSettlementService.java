@@ -114,8 +114,6 @@ public class ReturnSettlementService {
     private final ObjectMapper objectMapper;
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
-    @org.springframework.beans.factory.annotation.Value("${storagehub.return.auto-settlement.sla-hours:72}")
-    private long autoSettlementSlaHours = 72;
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-grace-hours:24}")
     private long noShowGraceHours = 24;
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-recovery-sla-hours:24}")
@@ -935,57 +933,9 @@ public class ReturnSettlementService {
         CustomerConfirmSettlementRequest request
     ) {
         authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
-        ReturnCase returnCase = returnCaseRepository.findById(returnId)
-            .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
-        facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
-        lockRecoveryReturn(returnCase);
-        if (returnCase.getStatus() == ReturnCaseStatus.completed) {
-            return toResponse(returnCase);
-        }
-        if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation) {
-            throw ApiExceptions.conflict("Return is not awaiting customer confirmation");
-        }
-        requireCurrentEarlyReturnAmounts(returnCase);
-        requireFinance().requireCurrent(returnCase);
-
-        String decisionNote = request != null && request.note() != null && !request.note().isBlank()
-            ? request.note()
-            : "Xác nhận quyết toán trực tiếp tại quầy bởi nhân viên cơ sở.";
-
-        returnCase.setCustomerConfirmed(true);
-        returnCase.setCustomerConfirmedAt(Instant.now());
-        returnCase.setCustomerDecision(CustomerDecision.accepted);
-        returnCase.setCustomerDecisionNote(decisionNote);
-
-        var reconciliation = requireFinance();
-        if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
-            returnCase.setStatus(ReturnCaseStatus.payment_due);
-        } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
-            markRefundPending(returnCase);
-        } else {
-            reconciliation.settle(returnCase, actor.userId(), "STAFF_OFFSET:" + returnCase.getId(), false);
-            returnCase.setStatus(ReturnCaseStatus.completed);
-            returnCase.setCompletedAt(Instant.now());
-            finalizeRentalAndUnit(returnCase);
-        }
-
-        ReturnCase saved = returnCaseRepository.save(returnCase);
-        auditLogService.recordMutation(
-            "RETURN_SETTLEMENT_CONFIRMED_BY_STAFF",
-            "return",
-            saved.getId(),
-            saved.getFacility().getId(),
-            null,
-            toResponse(saved)
+        throw ApiExceptions.conflict(
+            "Customer phải trực tiếp xác nhận hoặc gửi khiếu nại quyết toán. Nhân viên không được bỏ qua bước này."
         );
-        notificationService.createNotification(
-            saved.getCustomer().getId(),
-            NotificationType.RETURN,
-            "Quyết toán trả kho đã được xác nhận",
-            "Nhân viên cơ sở đã hỗ trợ xác nhận quyết toán trực tiếp tại quầy cho gian " + saved.getStorageUnit().getCode(),
-            saved.getId()
-        );
-        return toResponse(saved);
     }
 
     public int autoSettleExpiredReturns(ActorPrincipal actor) {
@@ -1003,25 +953,9 @@ public class ReturnSettlementService {
     }
 
     public int autoSettleExpiredReturns() {
-        Instant cutoff = Instant.now().minus(java.time.Duration.ofHours(autoSettlementSlaHours));
-        List<ReturnCase> expired = returnCaseRepository.findExpiredAwaitingConfirmation(cutoff);
-        int processed = 0;
-        for (ReturnCase rc : expired) {
-            try {
-                var applied = new org.springframework.transaction.support.TransactionTemplate(settlementTransactions).execute(status -> {
-                    var current = returnCaseRepository.findById(rc.getId()).orElseThrow();
-                    if (current.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation || current.isCustomerConfirmed()) return false;
-                    // Explicit customer consent is mandatory for inventory mismatch settlements.
-                    if (current.getReturnType() == ReturnType.INVENTORY_MISMATCH || current.isSetupExitRequested()) return false;
-                    autoConfirmSettlement(current);
-                    return true;
-                });
-                if (Boolean.TRUE.equals(applied)) processed++;
-            } catch (Exception ex) {
-                // Each row rolls back independently; missing proof must never confirm another row.
-            }
-        }
-        return processed;
+        // The 72-hour deadline only escalates and reminds. It must never create
+        // customer consent, a refund, a collection, or a completed return case.
+        return 0;
     }
 
     /**
@@ -1112,52 +1046,6 @@ public class ReturnSettlementService {
             saved.getId()
         );
         return true;
-    }
-
-    private void autoConfirmSettlement(ReturnCase returnCase) {
-        lockRecoveryReturn(returnCase);
-        if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation || returnCase.isCustomerConfirmed()) {
-            return;
-        }
-
-        requireCurrentEarlyReturnAmounts(returnCase);
-        requireFinance().requireCurrent(returnCase);
-        returnCase.setCustomerConfirmed(true);
-        returnCase.setCustomerConfirmedAt(Instant.now());
-        returnCase.setCustomerDecision(CustomerDecision.accepted);
-        returnCase.setCustomerDecisionNote("Hệ thống tự động chốt quyết toán sau " + autoSettlementSlaHours + " giờ không có khiếu nại (Auto-Settlement SLA).");
-
-        var reconciliation = requireFinance();
-        reconciliation.requireCurrent(returnCase);
-        if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
-            returnCase.setStatus(ReturnCaseStatus.payment_due);
-        } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
-            markRefundPending(returnCase);
-        } else {
-            reconciliation.settle(returnCase, returnCase.getCustomer().getId(), "AUTO_OFFSET:" + returnCase.getId(), false);
-            returnCase.setStatus(ReturnCaseStatus.completed);
-            returnCase.setCompletedAt(Instant.now());
-            finalizeRentalAndUnit(returnCase);
-        }
-
-        ReturnCase saved = returnCaseRepository.save(returnCase);
-
-        auditLogService.recordMutation(
-            "RETURN_AUTO_SETTLEMENT_ACCEPTED",
-            "return",
-            saved.getId(),
-            saved.getFacility().getId(),
-            null,
-            toResponse(saved)
-        );
-
-        notificationService.createNotification(
-            saved.getCustomer().getId(),
-            NotificationType.RETURN,
-            "Tự động chốt quyết toán trả kho",
-            "Hồ sơ trả kho cho gian " + saved.getStorageUnit().getCode() + " đã được hệ thống tự động xác nhận sau " + autoSettlementSlaHours + " giờ theo quy định.",
-            saved.getId()
-        );
     }
 
     @Transactional
