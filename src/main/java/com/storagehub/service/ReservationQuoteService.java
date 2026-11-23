@@ -44,9 +44,6 @@ public class ReservationQuoteService {
     private final UserRepository userRepository;
     private final DiscountCodeService discountCodeService;
 
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private CentralizedBusinessPolicyService centralizedPolicyService;
-
     @org.springframework.beans.factory.annotation.Autowired
     public ReservationQuoteService(
         ReservationCompatibilityService compatibilityService,
@@ -165,12 +162,6 @@ public class ReservationQuoteService {
 
         BigDecimal totalAfterDiscount = money(baseEligibleAmount.subtract(voucherDiscountAmount));
         BigDecimal securityDepositAmount = pricing.securityDepositAmount();
-        if (centralizedPolicyService != null) {
-            BigDecimal policyDeposit = centralizedPolicyService.calculateDeposit(monthlyPrice, subtotal);
-            if (policyDeposit != null && policyDeposit.signum() > 0) {
-                securityDepositAmount = money(policyDeposit);
-            }
-        }
         BigDecimal depositRate = pricing.reservationDepositRate();
         BigDecimal reservationDepositAmount = reservationDeposit(totalAfterDiscount, securityDepositAmount, depositRate);
         int earlyTerminationFeeCapMonths = policy.getEarlyTerminationFeeCapMonths() > 0

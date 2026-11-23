@@ -19,6 +19,11 @@ class RegisterRequestValidationTests {
         assertThat(phoneViolations(phone, phone)).isEmpty();
     }
 
+    @org.junit.jupiter.api.Test
+    void rejectsBlankPrimaryPhoneWhileAllowingBlankEmergencyContact() {
+        assertThat(phoneViolations("", "")).containsExactly("phone");
+    }
+
     @ParameterizedTest
     @MethodSource("invalidPhones")
     void rejectsInvalidPhonesForBothContacts(String phone) {
@@ -42,7 +47,7 @@ class RegisterRequestValidationTests {
 
     private static Stream<String> invalidPhones() {
         return Stream.of(
-            "", "0298123456", "0311234567", "0511234567", "0751234567", "0801234567", "0951234567",
+            "0298123456", "0311234567", "0511234567", "0751234567", "0801234567", "0951234567",
             "090812345", "09081234567", "+84908123456",
             "84908123456", "090 812 3456", "090-812-3456", "090.812.3456", "0908A23456"
         );

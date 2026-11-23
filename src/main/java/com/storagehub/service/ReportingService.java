@@ -275,31 +275,24 @@ public class ReportingService {
             .map(entry -> {
                 String month = entry.getKey();
                 List<Payment> monthPayments = entry.getValue();
-                BigDecimal gross = monthPayments.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal refunds = monthPayments.stream().map(p -> p.getRefundedAmount() != null ? p.getRefundedAmount() : BigDecimal.ZERO).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal net = gross.subtract(refunds).max(BigDecimal.ZERO);
-                return new BusinessRevenueReportResponse.MonthlyRevenue(month, net, monthPayments.size());
+                BigDecimal rev = monthPayments.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+                return new BusinessRevenueReportResponse.MonthlyRevenue(month, rev, monthPayments.size());
             })
             .toList();
 
         List<BusinessRevenueReportResponse.FacilityRevenue> facilityBreakdown = facilities.stream()
             .map(fac -> {
                 List<Payment> facPayments = allPaid.stream()
-                    .filter(p -> {
-                        UUID pFacId = resolvePaymentFacilityId(p);
-                        return pFacId != null ? fac.getId().equals(pFacId) : (facilityId != null && fac.getId().equals(facilityId));
-                    })
+                    .filter(p -> fac.getId().equals(resolvePaymentFacilityId(p)))
                     .toList();
-                BigDecimal gross = facPayments.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal refunds = facPayments.stream().map(p -> p.getRefundedAmount() != null ? p.getRefundedAmount() : BigDecimal.ZERO).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal net = gross.subtract(refunds).max(BigDecimal.ZERO);
+                BigDecimal facRevenue = facPayments.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
                 long totalUnits = storageUnitRepository.countByFacility_IdAndStatusIn(fac.getId(), StorageUnitStatus.operationalStatuses());
                 long occupiedUnits = storageUnitRepository.countByFacility_IdAndStatus(fac.getId(), StorageUnitStatus.occupied);
                 double occRate = totalUnits > 0
                     ? BigDecimal.valueOf((occupiedUnits * 100.0) / totalUnits).setScale(1, RoundingMode.HALF_UP).doubleValue()
                     : 0.0;
                 long activeRentals = rentalRepository.countByFacility_IdAndStatus(fac.getId(), RentalStatus.active);
-                return new BusinessRevenueReportResponse.FacilityRevenue(fac.getId(), fac.getName(), net, occRate, activeRentals);
+                return new BusinessRevenueReportResponse.FacilityRevenue(fac.getId(), fac.getName(), facRevenue, occRate, activeRentals);
             })
             .sorted(Comparator.comparing(BusinessRevenueReportResponse.FacilityRevenue::revenue).reversed())
             .toList();
@@ -308,32 +301,11 @@ public class ReportingService {
         List<BusinessRevenueReportResponse.PurposeRevenue> purposeBreakdown = byPurpose.entrySet().stream()
             .map(entry -> {
                 String purpose = entry.getKey().name();
-                BigDecimal gross = entry.getValue().stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal refunds = entry.getValue().stream().map(p -> p.getRefundedAmount() != null ? p.getRefundedAmount() : BigDecimal.ZERO).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal net = gross.subtract(refunds).max(BigDecimal.ZERO);
-                return new BusinessRevenueReportResponse.PurposeRevenue(purpose, net, entry.getValue().size());
+                BigDecimal sum = entry.getValue().stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+                return new BusinessRevenueReportResponse.PurposeRevenue(purpose, sum, entry.getValue().size());
             })
             .sorted(Comparator.comparing(BusinessRevenueReportResponse.PurposeRevenue::amount).reversed())
             .toList();
-
-        long unverifiedCount = 0;
-        BigDecimal unverifiedAmount = BigDecimal.ZERO;
-        for (Payment payment : allPaid) {
-            if (reportingPaymentEvidence != null && !reportingPaymentEvidence.isRealCollected(payment)) {
-                unverifiedCount++;
-                unverifiedAmount = unverifiedAmount.add(payment.getAmount() != null ? payment.getAmount() : BigDecimal.ZERO);
-            }
-        }
-        String reconciliationStatus = "VERIFIED";
-        if (allPaid.isEmpty()) {
-            reconciliationStatus = "VERIFIED";
-        } else if (unverifiedCount == 0) {
-            reconciliationStatus = "VERIFIED";
-        } else if (unverifiedCount < allPaid.size()) {
-            reconciliationStatus = "PARTIAL";
-        } else {
-            reconciliationStatus = "UNVERIFIED";
-        }
 
         return new BusinessRevenueReportResponse(
             totalCollected,
@@ -341,10 +313,7 @@ public class ReportingService {
             netRevenue,
             monthlyBreakdown,
             facilityBreakdown,
-            purposeBreakdown,
-            reconciliationStatus,
-            unverifiedAmount,
-            unverifiedCount
+            purposeBreakdown
         );
     }
 
