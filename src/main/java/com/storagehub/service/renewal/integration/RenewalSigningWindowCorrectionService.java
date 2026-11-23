@@ -5,6 +5,7 @@ import com.storagehub.api.renewal.RenewalQuoteResponse;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.*;
 import com.storagehub.service.AuditLogService;
+import com.storagehub.service.NotificationService;
 import com.storagehub.service.PaymentProvenance;
 import com.storagehub.service.renewal.RenewalSigningDeadline;
 import com.storagehub.service.renewal.operations.*;
@@ -29,6 +30,7 @@ public class RenewalSigningWindowCorrectionService {
     private final RenewalLocalPaymentChecks checks;
     private final ObjectProvider<RenewalOperationSources.SafetySource> safetySources;
     private final AuditLogService audit;
+    private final NotificationService notifications;
 
     @Transactional(readOnly=true)
     public List<UUID> candidates() {
@@ -73,6 +75,12 @@ public class RenewalSigningWindowCorrectionService {
         em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         audit.recordMutation((User)null,"RENEWAL_SIGNING_WINDOW_CORRECTED_V2","Renewal",id,rental.getFacility().getId(),before,
             Map.of("deadline",deadline,"paymentId",paymentId,"paidAt",paid,"cutoff",cutoff,"reason","Separate three-day signing window from appointment duration"));
+        notifications.createNotification(rental.getCustomer().getId(),NotificationType.RENEWAL,
+            "Thời hạn ký gia hạn đã được điều chỉnh",
+            "Hệ thống đã cập nhật lại thời hạn ký gia hạn theo chính sách hiện hành. Vui lòng mở hồ sơ gia hạn để xem thời hạn và lịch ký mới nhất.",id);
+        notifications.createFacilityOperationsNotifications(rental.getFacility().getId(),NotificationType.RENEWAL,
+            "Đã điều chỉnh thời hạn ký gia hạn",
+            "Thời hạn ký gia hạn của khách hàng "+rental.getCustomer().getFullName()+" đã được hệ thống hiệu chỉnh. Vui lòng theo dõi lịch ký mới nhất trong hồ sơ.",id);
         return true;
     }
 }

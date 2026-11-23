@@ -129,7 +129,6 @@ public class SimulatedPaymentService {
                     + " đã thanh toán cọc và đang chờ nhân viên phân kho.",
                 reservation.getId()
             );
-            sendSimulatedReservationPaymentBillEmail(payment, reservation, snapshot, now);
             message = "Payment was recorded successfully and the reservation is confirmed";
         } else if (outcome == PaymentSimulationOutcome.NOT_RECEIVED) {
             payment.setStatus(PaymentStatus.NOT_RECEIVED);
@@ -147,6 +146,9 @@ public class SimulatedPaymentService {
         }
 
         Payment saved = paymentRepository.saveAndFlush(payment);
+        if (outcome == PaymentSimulationOutcome.SUCCESS) {
+            sendSimulatedReservationPaymentBillEmail(saved, reservation, snapshot, now);
+        }
         SimulatedPaymentResponse response = toResponse(saved, outcome, now);
         auditLogService.recordMutation(
             initiator, "SIMULATED_PAYMENT_PROCESSED", "Payment", saved.getId(),
@@ -221,7 +223,6 @@ public class SimulatedPaymentService {
 
             String fullName = customer != null && customer.getFullName() != null ? customer.getFullName() : "Quý khách";
 
-            String invoiceNumber = payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : reservation.getReservationCode();
             String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
             String amountFormatted = formatVnd(payment.getAmount());
             String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
@@ -253,7 +254,7 @@ public class SimulatedPaymentService {
                 userId,
                 email,
                 fullName,
-                invoiceNumber,
+                payment.getId(),
                 transactionNo,
                 amountFormatted,
                 paidAtFormatted,

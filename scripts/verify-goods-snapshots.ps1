@@ -24,8 +24,9 @@ $category=$catalog.categories|Where-Object code -eq TOYS
 $material=$category.materials|Where-Object label -eq 'Gỗ'
 $packages=Request Get "/api/customer/reservations/rental-packages?facilityId=$facilityId" $customer $null
 $package=$packages|Where-Object rentalMonths -eq 3|Select-Object -First 1
-$start=(Get-Date).Date.AddDays(1)
-$end=$start.AddMonths(3).AddDays(-1)
+$appointment=[DateTimeOffset]::UtcNow.AddDays(2).ToOffset([TimeSpan]::FromHours(7))
+$start=$appointment.Date.AddDays($package.freeSetupDays)
+$end=$start.AddMonths($package.rentalMonths)
 $item=@{
     category='TOYS'; catalogCategoryId=$category.id; catalogMaterialId=$material.id
     customGoodsName=$null; materialName=$material.label; customMaterial=$null
@@ -45,6 +46,9 @@ try {
     $headers=@{}+$customer; $headers['Idempotency-Key']=[guid]::NewGuid().ToString()
     $body=@{quoteId=$quote.quoteId;identityDocumentNumber='012345678901';customerPhone='0901234567';customerAddress='Địa chỉ kiểm thử';goodsCondition='Đã đóng gói';goodsItems=@($item)}
     if (!$body.quoteId) { $body.quoteId=$quote.id }
+    $body.appointmentAt=$appointment.ToString('o')
+    $body.acceptedTerms=$true
+    $body.acceptedSetupEarlyExitPolicyVersion=$quote.setupEarlyExitPolicyVersion
     $reservation=Request Post '/api/customer/reservations' $headers $body
     if ($reservation.reservationCode -notmatch '^RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$') { throw 'Mã đơn chưa đúng định dạng ngẫu nhiên ngắn' }
     if ($reservation.startDate -ne $quote.startDate -or $reservation.endDate -ne $quote.endDate) { throw 'Ngày quote và reservation khác nhau' }
@@ -100,6 +104,7 @@ if ($BusinessPassword) {
         $quoteId=$dynamicQuote.quoteId; if (!$quoteId) { $quoteId=$dynamicQuote.id }
         $dynamicReservation=Request Post '/api/customer/reservations' $headers @{
             quoteId=$quoteId;identityDocumentNumber='012345678901';customerPhone='0901234567'
+            appointmentAt=$appointment.ToString('o');acceptedTerms=$true;acceptedSetupEarlyExitPolicyVersion=$dynamicQuote.setupEarlyExitPolicyVersion
             customerAddress='Địa chỉ kiểm thử';goodsCondition='Đã đóng gói';goodsItems=@($dynamicItem)
         }
         $detail=Request Get "/api/customer/reservations/$($dynamicReservation.id)" $customer $null

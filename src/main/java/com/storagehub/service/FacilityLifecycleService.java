@@ -437,7 +437,7 @@ public class FacilityLifecycleService {
         return new com.storagehub.api.facility.UnitTypeChangeResponse(r.getId(), r.getUnitTypeId(), r.getFacilityId(),
             r.getFacilityName(), r.getUnitTypeCode(), r.getRequestedBy(), r.getRequesterName(), r.getCreatedAt(), r.getStatus(),
             readChange(r.getBeforeJson()), readChange(r.getAfterJson()), r.getReviewedBy(), r.getReviewedAt(), r.getRejectionReason(), r.isRequiresRepricing(),
-            current == null ? null : current.getMonthlyPrice(), current == null ? null : current.getSecurityDepositAmount());
+            current == null ? null : current.getMonthlyPrice(), current == null ? null : current.getEffectiveSecurityDepositAmount());
     }
 
     @Transactional(readOnly = true)
@@ -467,9 +467,8 @@ public class FacilityLifecycleService {
                 throw ApiExceptions.conflict("Thông tin gốc đã thay đổi. Hãy từ chối và yêu cầu Manager gửi lại.");
             }
             UnitTypeResponse before = unitTypeResponse(type);
-            if (change.isRequiresRepricing() && (monthlyPrice == null || monthlyPrice.signum() <= 0
-                || securityDepositAmount == null || securityDepositAmount.signum() < 0)) {
-                throw ApiExceptions.validation("Thay đổi này ảnh hưởng giá. BO phải xác nhận giá thuê và tiền đảm bảo trước khi duyệt.", null);
+            if (change.isRequiresRepricing() && (monthlyPrice == null || monthlyPrice.signum() <= 0)) {
+                throw ApiExceptions.validation("Thay đổi này ảnh hưởng giá. BO phải xác nhận giá thuê trước khi duyệt.", null);
             }
             validateOperationalPairs(after);
             validateSharedRackDimensions(type, after);
@@ -480,7 +479,7 @@ public class FacilityLifecycleService {
                 rackLayouts.applyRackSummary(type, rackLayouts.layoutForPacking(type, type.getRackLayoutJson()));
             }
             if (monthlyPrice != null) type.setMonthlyPrice(monthlyPrice);
-            if (securityDepositAmount != null) type.setSecurityDepositAmount(securityDepositAmount);
+            type.setSecurityDepositAmount(type.getMonthlyPrice() == null ? BigDecimal.ZERO : type.getMonthlyPrice());
             type.setPublishedRevision(Math.max(1, type.getPublishedRevision() + 1));
             unitTypes.save(type);
             audit.recordMutation("UNIT_TYPE_CHANGE_APPROVED", "UnitType", type.getId(), change.getFacilityId(), before, unitTypeResponse(type));
@@ -713,10 +712,12 @@ public class FacilityLifecycleService {
             throw ApiExceptions.conflict("Loại kho đã được lưu trữ, không thể cập nhật giá.");
         }
         UnitTypeResponse before = unitTypeResponse(type);
-        boolean priceChanged = !java.util.Objects.equals(type.getMonthlyPrice(), request.monthlyPrice())
-            || !java.util.Objects.equals(type.getSecurityDepositAmount(), request.securityDepositAmount());
-        type.setMonthlyPrice(request.monthlyPrice());
-        type.setSecurityDepositAmount(request.securityDepositAmount());
+        BigDecimal monthlyPrice = request.monthlyPrice();
+        BigDecimal securityDepositAmount = monthlyPrice;
+        boolean priceChanged = !java.util.Objects.equals(type.getMonthlyPrice(), monthlyPrice)
+            || !java.util.Objects.equals(type.getSecurityDepositAmount(), securityDepositAmount);
+        type.setMonthlyPrice(monthlyPrice);
+        type.setSecurityDepositAmount(securityDepositAmount);
         if (type.getStatus() == UnitTypeStatus.draft) type.setStatus(UnitTypeStatus.awaiting_pricing);
         if (type.getStatus() == UnitTypeStatus.awaiting_pricing
             && type.getFacility().getStatus() == FacilityStatus.active
@@ -902,23 +903,21 @@ public class FacilityLifecycleService {
         String zonePrefix = extractZonePrefix(zone);
         String floorNum = extractFloorNumber(floor);
         int createdCount = 0;
-        int index = 1;
-        while (createdCount < count) {
-            String candidateCode = "%s-%s%02d".formatted(zonePrefix, floorNum, index);
-            if (!units.existsByCode(candidateCode)) {
-                StorageUnit unit = new StorageUnit();
-                unit.setFacility(type.getFacility());
-                unit.setUnitType(type);
-                unit.setCode(candidateCode);
-                unit.setFloor(floor);
-                unit.setZone(zone);
-                unit.setStatus(StorageUnitStatus.available);
-                unit.setRackLayoutJson(type.getRackLayoutJson());
-                units.save(unit);
+        for (int index = 1; index <= 999 && createdCount < count; index++) {
+            String candidate = String.format(java.util.Locale.ROOT, "%s-%s%02d", zonePrefix, floorNum, index);
+            if (units.existsByCode(candidate)) continue;
+            try {
+                // Claim the global code by inserting the unit. A competing insert may win after the lookup.
+                jdbc.update("""
+                    INSERT INTO storage_units
+                        (id, facility_id, unit_type_id, code, floor, zone, status, rack_layout_json, version, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'available', ?, 0, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
+                    """, bytes(UUID.randomUUID()), bytes(type.getFacility().getId()), bytes(type.getId()),
+                    candidate, floor, zone, type.getRackLayoutJson());
                 createdCount++;
+            } catch (org.springframework.dao.DuplicateKeyException taken) {
+                // JDBC leaves the enclosing MySQL transaction usable for the next candidate.
             }
-            index++;
-            if (index > 999) break;
         }
         if (createdCount != count) {
             throw ApiExceptions.conflict("Không đủ mã gian kho cho số lượng yêu cầu ở tầng và khu vực này. Vui lòng chọn vị trí khác hoặc giảm số lượng.");
@@ -1030,7 +1029,7 @@ public class FacilityLifecycleService {
     private UnitTypeResponse unitTypeResponse(UnitType t) {
         long available = units.countByFacility_IdAndUnitType_IdAndStatus(t.getFacility().getId(), t.getId(), StorageUnitStatus.available);
         return new UnitTypeResponse(t.getId(), t.getFacility().getId(), t.getCode(), t.getName(), t.getDescription(), t.getLengthM(), t.getWidthM(), t.getHeightM(),
-            t.getAreaM2(), t.getVolumeM3(), t.getMonthlyPrice(), t.getSecurityDepositAmount(), t.getImageUrl(), t.getMaxLoadKg(),
+            t.getAreaM2(), t.getVolumeM3(), t.getMonthlyPrice(), t.getEffectiveSecurityDepositAmount(), t.getImageUrl(), t.getMaxLoadKg(),
             t.getMaxStoredLoadKg(), t.getRackCount(), t.getRackLengthM(), t.getRackWidthM(), t.getRackHeightM(), t.getAisleWidthM(),
             t.getStorageAisleWidthM(), t.getGateWidthM(), t.getGateHeightM(), t.getLowestObstructionHeightM(), t.getOverheadClearanceM(),
             t.getTrolleyType(),
