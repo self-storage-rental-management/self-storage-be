@@ -301,7 +301,7 @@ class CheckInHandoverServiceTests {
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
         assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("074204005212");
         assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("074204005212");
-        assertThat(checkIn.getIdentityVerificationNote()).contains("074204005212");
+        assertThat(checkIn.getIdentityVerificationNote()).contains("Khách hàng đổi CCCD mới");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
     }
 
