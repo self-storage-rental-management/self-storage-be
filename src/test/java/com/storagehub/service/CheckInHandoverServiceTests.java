@@ -125,6 +125,12 @@ class CheckInHandoverServiceTests {
         User customer = entityWithId(new User());
         customer.setFullName("Customer A");
         customer.setEmail("customer@example.com");
+        customer.setPhone("0912345678");
+        customer.setPermanentAddress("123 Duong Le Loi, Q1, TP HCM");
+        customer.setEmergencyContactName("Nguoi Than");
+        customer.setEmergencyContactPhone("0987654321");
+        customer.getProfileDetails().setEmergencyContactRelationship("Bo me");
+        customer.getProfileDetails().setEmergencyContactConsent(true);
 
         unit = entityWithId(new StorageUnit());
         unit.setFacility(facility);
@@ -261,6 +267,7 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
@@ -282,18 +289,19 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
 
         var response = service.verifyIdentity(
-            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("07420400521", "Khách hàng đổi CCCD mới")
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("074204005212", "Khách hàng đổi CCCD mới")
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
-        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("07420400521");
-        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("07420400521");
-        assertThat(checkIn.getIdentityVerificationNote()).contains("07420400521");
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("074204005212");
+        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("074204005212");
+        assertThat(checkIn.getIdentityVerificationNote()).contains("074204005212");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
     }
 
