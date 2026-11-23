@@ -58,7 +58,11 @@ public record CompleteCheckInRequest(
         }
 
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note) {
-            this(goodsItemId, actualQuantity, condition, note, null);
+            this(goodsItemId, actualQuantity, condition, note, null, null, null);
+        }
+        public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note,
+            InventoryMeasurements measurements) {
+            this(goodsItemId, actualQuantity, condition, note, measurements, null, null);
         }
     }
 

@@ -54,6 +54,7 @@ public class LocalDatabaseRenewalWriterProtocol implements RenewalSharedWriterPr
             ||start.isAfter(com.storagehub.service.rental.period.RenewalEffectivePeriod.start(previous,now)))
             throw ApiExceptions.conflict("Renewal extension interval changed");
         guard.requireNoKnownConflict(locked);
+        guard.requireNoBookingConflict(locked, start, end);
         var recovery=recoveries.getIfAvailable();
         if(recovery instanceof RecoveryTaskSource tasks) {
             // A local task receiver certifies only its own persisted handoffs. The shared Rental lock,

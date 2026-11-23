@@ -38,7 +38,9 @@ class RenewalDateConsumerTests {
         when(pricing.read(eq(r),any())).thenReturn(Optional.of(List.of(new RenewalSources.Price(pack,"TEST","v1",type.getId(),1,new BigDecimal("100"),BigDecimal.ZERO,"VND",2))));
         RenewalSources.EligibilitySource eligibility=(r,n) -> Optional.of(new RenewalSources.Eligibility(true,false,true,now.plusSeconds(172800)));
         service=new RenewalWorkflowService(repo,mock(RenewalReadService.class),store,mock(EntityManager.class),mapper,mock(AuditLogService.class),
-            provider(policy),provider(pricing),provider(eligibility),provider(null),provider(null),provider(null),provider(Clock.fixed(now,ZoneOffset.UTC)));
+            provider(policy),provider(pricing),provider(eligibility),
+            provider((RenewalSources.FinancialSource) rental -> Optional.of(new RenewalSources.Financial(now,List.of(),false))),
+            provider(null),provider(null),provider(Clock.fixed(now,ZoneOffset.UTC)));
         periods=mock(RentalPeriodResolver.class);ReflectionTestUtils.setField(service,"periods",periods);proof(RentalPeriod.Convention.EXCLUSIVE);
     }
     <T extends BaseEntity>T id(T e){ReflectionTestUtils.setField(e,"id",UUID.randomUUID());return e;}

@@ -32,7 +32,8 @@ class RenewalLocalPaymentChecksTests {
     @Test void knownUnpaidPastObligationStillBlocksPayment() {
         var c=checks();var due=new LedgerStore.Obligation(UUID.randomUUID(),null,LedgerStore.Kind.RENT,BigDecimal.TEN,now.minusSeconds(1),"old",BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.TEN);
         when(ledger.read(id)).thenReturn(Optional.of(new LedgerStore.Snapshot(id,customer,facility,0,List.of(due),List.of(),List.of())));
-        assertThatThrownBy(()->c.requireKnownFinance(rental,renewal,now)).hasMessageContaining("Recorded due obligations");
+        assertThatThrownBy(()->c.requireKnownFinance(rental,renewal,now)).hasMessageContaining("10 ₫ đến hạn");
+        assertThatThrownBy(()->c.requireKnownFinance(rental,null,now)).hasMessageContaining("10 ₫ đến hạn");
     }
     @Test void currentRenewalObligationIsNotTreatedAsPriorDebt() {
         var c=checks();var due=new LedgerStore.Obligation(UUID.randomUUID(),renewal,LedgerStore.Kind.RENEWAL_REMAINDER,BigDecimal.TEN,now,"current",BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.TEN);

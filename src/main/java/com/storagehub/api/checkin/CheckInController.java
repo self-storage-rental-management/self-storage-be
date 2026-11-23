@@ -71,6 +71,20 @@ public class CheckInController {
         );
     }
 
+    @PostMapping("/{checkInId}/inventory-arrival")
+    public ApiResponse<CheckInResponse> recordInventoryArrival(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.recordInventoryArrival(actorContext.required(), checkInId),
+            CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/inventory-identity")
+    public ApiResponse<CheckInResponse> verifyInventoryIdentity(
+        @PathVariable UUID checkInId, @Valid @RequestBody VerifyInventoryIdentityRequest request
+    ) {
+        return new ApiResponse<>(service.verifyInventoryIdentity(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current());
+    }
+
     @PostMapping("/{checkInId}/identity-verification")
     public ApiResponse<CheckInResponse> verifyIdentity(
         @PathVariable UUID checkInId,
