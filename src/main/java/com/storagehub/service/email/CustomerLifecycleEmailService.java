@@ -101,10 +101,27 @@ public class CustomerLifecycleEmailService {
 
     public void reservationCreated(Reservation reservation) {
         boolean review = reservation.getStatus() == ReservationStatus.AWAITING_REVIEW;
+        String summary = review
+            ? "Đơn của bạn cần nhân viên kiểm tra trước (lý do: hàng cần kiểm tra thêm). Khi đơn được duyệt, bạn sẽ nhận email và có 15 phút để thanh toán. Quá hạn, chỗ giữ được nhả và đơn hết hiệu lực."
+            : "Sau khi bạn xác nhận báo giá, bạn có 15 phút để thanh toán " + money(reservationDeposit(reservation)) + ". Quá hạn, chỗ giữ được nhả và đơn hết hiệu lực.";
         send(reservation.getCustomer(), "reservation-created:" + reservation.getId(), "Đã tạo yêu cầu giữ kho",
-            review ? "Hồ sơ cần nhân viên duyệt hàng hóa trong tối đa 6 giờ. Sau khi được duyệt, bạn có thời hạn thanh toán cọc riêng hiển thị trên đơn."
-                : "Suất kho đang được giữ tạm đến thời hạn bên dưới. Mở đơn để thanh toán cọc. Chỉ sau khi cọc được xác nhận, đơn mới được xác nhận đặt thành công.",
+            summary,
             reservationDetails(reservation), "reservations", reservation.getId(), reservation.getHoldExpiresAt());
+    }
+
+    /** Sends the customer the exact payment window opened by verification or Staff approval. */
+    public void paymentWindowOpened(Reservation reservation, String reason) {
+        String amount = money(reservationDeposit(reservation));
+        String start = reservation.getPaymentStartedAt() == null ? "ngay sau khi duyệt" : TIME.format(reservation.getPaymentStartedAt());
+        String end = reservation.getPaymentExpiresAt() == null ? "theo thời hạn hiển thị trên đơn" : TIME.format(reservation.getPaymentExpiresAt());
+        String summary = "Đơn của bạn đã được xử lý (" + reason + "). Bạn có 15 phút để thanh toán " + amount
+            + ". Thời hạn: từ " + start + " đến " + end + ". Quá hạn, chỗ giữ được nhả và đơn hết hiệu lực.";
+        var details = reservationDetails(reservation);
+        details.put("Bắt đầu hạn thanh toán", start);
+        details.put("Kết thúc hạn thanh toán", end);
+        details.put("Số tiền thanh toán trước 20% (giữ chỗ)", amount);
+        send(reservation.getCustomer(), "payment-window-opened:" + reservation.getId() + ":" + reservation.getPaymentExpiresAt(),
+            "Đã mở thời hạn thanh toán 15 phút", summary, details, "reservations", reservation.getId(), reservation.getPaymentExpiresAt());
     }
 
     public void expiring(Reservation reservation) {
@@ -165,8 +182,12 @@ public class CustomerLifecycleEmailService {
         rows.put("Kích thước kho (D × R × C)", historicalUnitDimensions(reservation, snapshot));
         String assignedUnitCode = com.storagehub.service.ReservationSnapshotView.assignedUnitCode(reservation, snapshot);
         if (assignedUnitCode != null) rows.put("Mã gian kho", assignedUnitCode);
-        if (reservation.getPaymentExpiresAt() != null) rows.put("Hạn thanh toán cọc", TIME.format(reservation.getPaymentExpiresAt()));
+        if (reservation.getPaymentStartedAt() != null) rows.put("Bắt đầu hạn thanh toán", TIME.format(reservation.getPaymentStartedAt()));
+        if (reservation.getPaymentExpiresAt() != null) rows.put("Hạn thanh toán trước 20% (giữ chỗ)", TIME.format(reservation.getPaymentExpiresAt()));
         else if (reservation.getHoldExpiresAt() != null) rows.put("Hạn giữ hồ sơ", TIME.format(reservation.getHoldExpiresAt()));
+        if (reservation.getStatus() == ReservationStatus.AWAITING_PAYMENT && snapshot != null) {
+            rows.put("Số tiền thanh toán trước 20% (giữ chỗ)", money(snapshot.getReservationDepositAmount()));
+        }
         if (reservation.getAppointmentAt() != null) rows.put("Lịch nhận kho", TIME.format(reservation.getAppointmentAt()));
         var checkIns = em.createQuery("select c from CheckIn c where c.reservation.id=:id", CheckIn.class).setParameter("id", reservation.getId()).setMaxResults(1).getResultList();
         if (!checkIns.isEmpty() && checkIns.getFirst().getAssignedStaff() != null) rows.put("Nhân viên phụ trách", checkIns.getFirst().getAssignedStaff().getFullName());
@@ -185,6 +206,12 @@ public class CustomerLifecycleEmailService {
         } catch (RuntimeException ignored) {
             return com.storagehub.service.ReservationSnapshotView.MISSING;
         }
+    }
+
+    private java.math.BigDecimal reservationDeposit(Reservation reservation) {
+        return snapshotRepository.findByReservation_Id(reservation.getId())
+            .map(ReservationPricingSnapshot::getReservationDepositAmount)
+            .orElse(null);
     }
 
     private void send(User user, String key, String title, String summary, Map<String, String> details, String section, UUID reservation, Instant expiry) {
