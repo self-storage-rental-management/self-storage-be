@@ -85,7 +85,8 @@ public record CheckInResponse(
     boolean receiptConfirmationOverdue,
     Instant receiptConfirmationReleaseAt,
     boolean receiptReleaseEligible,
-    String declaredPackagingMethod
+    String declaredPackagingMethod,
+    String paymentEvidenceReference
 ) {
     public record DeclaredGoodsLine(UUID id, String code, String name, String categoryName,
         String materialName, int quantity, BigDecimal lengthCm, BigDecimal widthCm,
@@ -173,7 +174,7 @@ public record CheckInResponse(
             declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover,
             null, null, List.of(), IntakeAction.NONE, null, null, false, false,
             null, null, null, null, null, null, null, null, null, false,
-            null, false, null
+            null, false, null, null
         );
     }
 
