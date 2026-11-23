@@ -476,7 +476,12 @@ public class RenewalOperationService {
         String filter=" where (s.appointmentRef is not null or "+pendingRefund+") and n.id in :ids and n.rental.facility.id in :facilities"+(facilityId==null?"":" and n.rental.facility.id=:facility")+(phase==null?"":" and s.phase=:phase")+(date==null?"":" and s.appointmentStart>=:start and s.appointmentStart<:end");
         var query=em.createQuery("select n"+from+filter+" order by s.appointmentStart,n.id",Renewal.class);var count=em.createQuery("select count(n)"+from+filter,Long.class);
         for(var q:List.of(query,count)){q.setParameter("ids",ids);q.setParameter("facilities",scopeIds);if(facilityId!=null)q.setParameter("facility",facilityId);if(phase!=null)q.setParameter("phase",RenewalOperationState.Phase.valueOf(phase));if(date!=null){var zone=BusinessTime.ZONE;q.setParameter("start",date.atStartOfDay(zone).toInstant());q.setParameter("end",date.plusDays(1).atStartOfDay(zone).toInstant());}}
-        var rows=query.setFirstResult(page*size).setMaxResults(size).getResultList().stream().map(n->{auth.require(actor,n,Capability.READ);return projection(n);}).toList();return PageResponse.from(new PageImpl<>(rows,pageable,count.getSingleResult()),correlation);
+        var rows=query.setFirstResult(page*size).setMaxResults(size).getResultList().stream().map(n->{
+            auth.require(actor,n,Capability.READ);
+            var rental=n.getRental();
+            var details=new RenewalOperationResponse.AppointmentDetails(rental.getCustomer().getFullName(),rental.getCustomer().getEmail(),n.getNewEndDate());
+            return projection(n).withAppointmentDetails(details);
+        }).toList();return PageResponse.from(new PageImpl<>(rows,pageable,count.getSingleResult()),correlation);
     }
     @Transactional(readOnly=true)
     public PageResponse<RenewalOperationResponse.Event> events(ActorPrincipal actor,UUID id,Audience audience,String category,int page,int size,String correlation) {
@@ -612,7 +617,7 @@ public class RenewalOperationService {
             s==null?null:s.getArrivalRef(),s==null?null:s.getConfirmedExceptionRef(),s==null?null:s.getCompletedBy(),s==null?null:s.getCompletedAt(),
             missing,s==null?null:s.getAppointmentStart(),s==null?null:s.getAppointmentEnd(),s==null?null:s.getPendingExceptionRef(),
             s==null?null:s.getFullRentPaymentRef(),s==null?null:s.getFullRentPaidAt(),displayCodes==null?null:displayCodes.find("GH:"+n.getId()),
-            identity.rentalDisplayCode(),identity.renewalSequence());
+            identity.rentalDisplayCode(),identity.renewalSequence(),null);
     }
     private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
         if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
