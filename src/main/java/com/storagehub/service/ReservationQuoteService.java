@@ -208,7 +208,8 @@ public class ReservationQuoteService {
         quote.setFreeSetupDays(policy.getFreeSetupDays());
         quote.setMonthlyPrice(monthlyPrice);
         quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
-        quote.setSetupEarlyExitFee(monthlyPrice);
+        quote.setSetupEarlyExitFee(totalAfterDiscount.multiply(BigDecimal.valueOf(20))
+            .divide(BigDecimal.valueOf(100), 0, RoundingMode.HALF_UP));
         quote.setSubtotal(subtotal);
         quote.setDiscountRate(policy.getDiscountRate());
         quote.setDiscountAmount(discountAmount);

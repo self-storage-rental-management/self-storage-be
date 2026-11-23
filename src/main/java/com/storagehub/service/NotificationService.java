@@ -289,7 +289,7 @@ public class NotificationService {
     @Transactional
     public void notifyStaffOfCheckInAppointmentChange(Reservation reservation, Instant previousAppointmentAt) {
         createFacilityOperationsNotifications(
-            reservation.getFacility().getId(), NotificationType.CHECKIN,
+            reservation.getFacility().getId(), NotificationType.RESERVATION,
             "Khách hàng đã cập nhật lịch nhận kho",
             "Đơn " + reservation.getReservationCode() + " nhận kho lúc "
                 + reservation.getAppointmentAt() + ".",
