@@ -50,15 +50,20 @@ public record CompleteCheckInRequest(
         @NotNull Condition condition,
         @Size(max = 1000) String note,
         @Valid InventoryMeasurements measurements,
-        @Valid com.storagehub.api.reservation.GoodsItemRequest actualGoods
+        @Valid com.storagehub.api.reservation.GoodsItemRequest actualGoods,
+        UUID actualCategoryId,
+        UUID actualMaterialId
     ) {
         public enum Condition { INTACT, DAMAGED, NOT_PRESENT }
-        public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note, InventoryMeasurements measurements) {
-            this(goodsItemId, actualQuantity, condition, note, measurements, null);
-        }
+        public InventoryLine(UUID id, Integer quantity, Condition condition, String note, InventoryMeasurements measurements, com.storagehub.api.reservation.GoodsItemRequest goods) { this(id, quantity, condition, note, measurements, goods, null, null); }
+        public InventoryLine(UUID id, Integer quantity, Condition condition, String note, InventoryMeasurements measurements, UUID category, UUID material) { this(id, quantity, condition, note, measurements, null, category, material); }
 
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note) {
-            this(goodsItemId, actualQuantity, condition, note, null);
+            this(goodsItemId, actualQuantity, condition, note, null, null, null, null);
+        }
+        public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note,
+            InventoryMeasurements measurements) {
+            this(goodsItemId, actualQuantity, condition, note, measurements, null, null, null);
         }
     }
 

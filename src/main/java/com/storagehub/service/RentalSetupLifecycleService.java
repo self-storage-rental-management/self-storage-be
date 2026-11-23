@@ -86,15 +86,24 @@ public class RentalSetupLifecycleService {
             // A published removal window replaces the inventory attendance clock.
             if (rental.getInventoryRemovalPublishedAt() != null) continue;
             if (rental.getInventoryArrivedAt() != null || rental.getInventoryResultPublishedAt() != null) continue;
+            if (rental.getInventoryEscalatedAt() != null) continue;
+            Instant removalDeadline = rental.getInventoryRemovalDeadlineAt();
+            if (removalDeadline != null) {
+                if (!now.isBefore(removalDeadline)) {
+                    escalateInventory(rental, now, true);
+                    rentalRepository.save(rental);
+                }
+                continue;
+            }
+            if (rental.getInventoryFinalDeadlineAt() != null
+                && !now.isBefore(rental.getInventoryFinalDeadlineAt())) {
+                escalateInventory(rental, now, false);
+                rentalRepository.save(rental);
+                continue;
+            }
             if (rental.getInventoryDueAt() != null && !rental.getInventoryDueAt().isAfter(now)
                 && rental.getInventoryDeadlineReminderAt() == null) {
                 remindInventoryDeadline(rental, now);
-                rentalRepository.save(rental);
-            }
-            if (rental.getInventoryFinalDeadlineAt() != null
-                && !rental.getInventoryFinalDeadlineAt().isAfter(now)
-                && rental.getInventoryEscalatedAt() == null) {
-                escalateInventory(rental, now, "Đã quá hạn kiểm kê hàng hóa");
                 rentalRepository.save(rental);
             }
         }
@@ -103,7 +112,7 @@ public class RentalSetupLifecycleService {
     private void remindInventoryDeadline(Rental rental, Instant now) {
         notifyCustomer(rental, "Sắp đến hạn kiểm kê hàng hóa",
             "Hồ sơ hàng hóa của đơn " + rental.getReservation().getReservationCode()
-                + " sắp đến hạn kiểm kê. Staff đã nhận nhiệm vụ và sẽ cập nhật kết quả trên hồ sơ.");
+                + " sắp đến hạn kiểm kê. Nếu chưa chọn lịch, vui lòng đặt lịch trong Hồ sơ thuê.");
         notificationService.createFacilityOperationsNotifications(
             rental.getFacility().getId(), NotificationType.CHECKIN,
             "Sắp đến hạn kiểm kê hàng hóa",
@@ -114,21 +123,21 @@ public class RentalSetupLifecycleService {
         rental.setInventoryDeadlineReminderAt(now);
     }
 
-    private void escalateInventory(Rental rental, Instant now, String title) {
-        createInventoryRecoveryTask(rental, now);
+    private void escalateInventory(Rental rental, Instant now, boolean removalOverdue) {
+        String title = removalOverdue ? "Đã hết hạn đưa hàng sai lệch ra khỏi kho" : "Đã quá hạn kiểm kê hàng hóa";
+        createInventoryRecoveryTask(rental, now, title);
         notifyCustomer(rental, title,
-            "Rental vẫn ACTIVE từ " + rental.getStartDate()
-                + ", nhưng kiểm kê đầu vào đang chờ xử lý. Vui lòng phối hợp với nhân viên cơ sở.");
+            "Hồ sơ đã chuyển sang chờ thu hồi. Vui lòng phối hợp với nhân viên cơ sở để xử lý hàng.");
         notificationService.createFacilityOperationsNotifications(
             rental.getFacility().getId(), NotificationType.CHECKIN, title,
             "Đơn " + rental.getReservation().getReservationCode()
-                + " đã quá hạn kiểm kê hàng hóa. Vui lòng mở nhiệm vụ kiểm kê và xử lý theo quy trình, không tự động hoàn tất hồ sơ.",
+                + " đã quá hạn xử lý. Manager cần phân công nhân viên thực hiện nhiệm vụ thu hồi.",
             rental.getReservation().getId()
         );
         rental.setInventoryEscalatedAt(now);
     }
 
-    private void createInventoryRecoveryTask(Rental rental, Instant now) {
+    private void createInventoryRecoveryTask(Rental rental, Instant now, String reason) {
         if (maintenanceTaskRepository == null || rental.getId() == null || rental.getStorageUnit() == null) {
             return;
         }
@@ -143,11 +152,11 @@ public class RentalSetupLifecycleService {
         task.setFacility(rental.getFacility());
         task.setStorageUnit(rental.getStorageUnit());
         task.setRental(rental);
-        task.setTitle("Thu hồi hàng do quá hạn kiểm kê");
+        task.setTitle("Thu hồi hàng · " + rental.getReservation().getReservationCode());
         task.setTaskType(MaintenanceTaskType.maintenance);
         task.setRecoveryType(MaintenanceRecoveryType.INVENTORY_OVERDUE);
         task.setReason(
-            "Hồ sơ đã quá hạn cuối kiểm kê hàng hóa. Không tự động di chuyển hoặc loại bỏ hàng. "
+            reason + ". Không tự động di chuyển hoặc loại bỏ hàng. "
                 + "Cần hai nhân viên kiểm kê, lập bằng chứng, đưa hàng ra khu vực lưu tạm và ghi nhận bàn giao."
         );
         task.setPriority(TaskPriority.high);
@@ -155,14 +164,6 @@ public class RentalSetupLifecycleService {
         task.setDueAt(now.atZone(VIETNAM_ZONE).toLocalDate());
         task.setDeadlineAt(now.plus(Math.max(1, inventoryRecoverySlaHours), java.time.temporal.ChronoUnit.HOURS));
         maintenanceTaskRepository.saveAndFlush(task);
-        notificationService.createFacilityOperationsNotifications(
-            rental.getFacility().getId(),
-            NotificationType.CHECKIN,
-            "Cần thu hồi hàng quá hạn kiểm kê",
-            "Đơn " + rental.getReservation().getReservationCode()
-                + " đã quá hạn cuối kiểm kê. Cần phân công hai nhân viên xử lý, ghi bằng chứng và bàn giao hàng vào khu vực lưu tạm.",
-            rental.getReservation().getId()
-        );
     }
 
     private void notifyCustomer(Rental rental, String title, String content) {
@@ -172,7 +173,8 @@ public class RentalSetupLifecycleService {
     }
 
     private String timeline(Rental rental) {
-        LocalDate paidStart = rental.getStartDate();
-        return "Thời gian chuẩn bị đến hết " + paidStart.minusDays(1) + ", thời hạn thuê tính từ " + paidStart + ".";
+        String setupEnd = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(VIETNAM_ZONE).format(rental.getSetupEndsAt());
+        return "Thời gian chuẩn bị miễn phí đến " + setupEnd + " (giờ Việt Nam). Kỳ thuê tính từ " + rental.getStartDate() + ".";
     }
 }

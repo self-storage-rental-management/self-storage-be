@@ -70,7 +70,7 @@ class FileStorageServiceTests {
         reservation.setCustomer(customer);
         goodsItem = entity(new ReservationGoodsItem());
         goodsItem.setReservation(reservation);
-        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        org.mockito.Mockito.lenient().when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
     }
 
     @Test
@@ -163,5 +163,45 @@ class FileStorageServiceTests {
     private static <T> T entity(T value) {
         ReflectionTestUtils.setField(value, "id", UUID.randomUUID());
         return value;
+    }
+
+    @Test
+    void customerCannotDownloadInventoryIdentityPhotoEvenIfListedAsUploader() {
+        var asset = entity(new com.storagehub.domain.model.FileAsset());
+        asset.setUploadedBy(customer);
+        asset.setEntityType(FileStorageService.INVENTORY_IDENTITY_ENTITY);
+        asset.setEntityId(UUID.randomUUID());
+        when(fileAssetRepository.findById(asset.getId())).thenReturn(Optional.of(asset));
+
+        assertThatThrownBy(() -> service.download(actor, asset.getId())).hasMessageContaining("File was not found");
+    }
+
+    @Test
+    void staffCanUploadAndDownloadInventoryIdentityPhotoAfterArrival() {
+        User staff = entity(new User());
+        var staffActor = new ActorPrincipal(staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of(), Map.of());
+        Facility facility = entity(new Facility());
+        Reservation reservation = entity(new Reservation());
+        reservation.setFacility(facility);
+        CheckIn checkIn = entity(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setRental(new com.storagehub.domain.model.Rental());
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setInventoryArrivedAt(java.time.Instant.now().minusSeconds(5));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(fileAssetRepository.saveAndFlush(any())).thenAnswer(invocation -> {
+            var asset = entity(invocation.<com.storagehub.domain.model.FileAsset>getArgument(0));
+            when(fileAssetRepository.findById(asset.getId())).thenReturn(Optional.of(asset));
+            return asset;
+        });
+        byte[] png = {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
+
+        var saved = service.store(staffActor, new MockMultipartFile("file", "arrival.png", "image/png", png),
+            FileStorageService.INVENTORY_IDENTITY_ENTITY, checkIn.getId());
+
+        assertThat(service.download(staffActor, saved.id()).contentType()).isEqualTo("image/png");
+        verify(authorizationService).require(staffActor, com.storagehub.domain.model.SystemPermission.VIEW_CHECKINS);
+        verify(facilityScopeService, org.mockito.Mockito.times(2)).assertCanOperate(staffActor, facility.getId());
     }
 }

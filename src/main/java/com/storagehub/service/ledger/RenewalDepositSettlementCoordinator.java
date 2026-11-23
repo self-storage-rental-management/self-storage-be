@@ -10,9 +10,12 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-simple-payment.enabled"},havingValue="true")
 public class RenewalDepositSettlementCoordinator {
     private final RenewalDepositSettlementService deposits;
+    private final com.storagehub.service.renewal.operations.RenewalOperationService operations;
     private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(RenewalDepositSettlementCoordinator.class);
     @Scheduled(initialDelayString="${storagehub.renewal.deposit-settlement.initial-delay-ms:60000}",fixedDelayString="${storagehub.renewal.deposit-settlement.delay-ms:60000}")
     public void reconcile() {
+        for (var id : operations.expiredSigningIds()) try { operations.expire(id); }
+        catch (RuntimeException unavailable) { LOG.warn("Renewal {} signing expiry deferred: {}", id, unavailable.getMessage()); }
         for(var id:deposits.candidates())try{deposits.reconcile(id);}
         catch(RuntimeException unavailable){LOG.warn("Renewal {} deposit settlement deferred: {}",id,unavailable.getMessage());}
     }
