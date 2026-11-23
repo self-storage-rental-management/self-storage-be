@@ -317,6 +317,7 @@ public class NotificationService {
 
     private NotificationResponse toResponse(Notification notification) {
         String content=notification.getContent();
+        content = displayContent(content, notification.getTitle());
         UUID related=notification.getRelatedEntityId();
         if(related!=null){
             String key=switch(notification.getType()){
@@ -334,11 +335,41 @@ public class NotificationService {
             notification.getId(),
             notification.getUser().getId(),
             notification.getType(),
-            notification.getType()==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(notification.getTitle()):notification.getTitle(),
+            notification.getType()==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(notification.getTitle()):displayTitle(notification.getTitle()),
             content,
             notification.getRelatedEntityId(),
             notification.isRead(),
             notification.getCreatedAt()
         );
     }
+
+    // Lifecycle titles are also milestone identifiers, so normalize them only for display.
+    private static String displayTitle(String title) {
+        if (title == null) return null;
+        return switch (title) {
+            case "Nhắc nhở: Hợp đồng thuê kho sắp hết hạn (còn 14 ngày)" -> "Hợp đồng thuê kho còn 14 ngày";
+            case "Cảnh báo: Hợp đồng thuê kho sắp hết hạn (còn 3 ngày)" -> "Hợp đồng thuê kho còn 3 ngày";
+            case "Thông báo: Hợp đồng thuê kho đã hết hạn" -> "Hợp đồng thuê kho đã hết hạn";
+            case "CẢNH BÁO BÀN GIAO: Hợp đồng hết hạn nhưng kho chưa được bàn giao" -> "Hợp đồng hết hạn, khách chưa trả kho";
+            case "Nhắc nhở thanh toán: Khoản phí sắp đến hạn (D-3)" -> "Khoản thanh toán sắp đến hạn";
+            case "Thông báo quá hạn: Khoản phí đến hạn thanh toán (D+1)" -> "Khoản thanh toán đã quá hạn 1 ngày";
+            case "Thông báo: Kết thúc thời gian gia hạn thanh toán (D+3) - Đưa vào diện theo dõi" -> "Đã hết thời gian gia hạn thanh toán";
+            case "THEO DÕI NỢ: Khoản phải thu quá hạn 3 ngày (Hết ân hạn)" -> "Khoản thanh toán quá hạn 3 ngày";
+            case "Cảnh báo quá hạn kéo dài (D+7): Chuyển hồ sơ Manager xem xét" -> "Khoản thanh toán quá hạn từ 7 ngày";
+            case "CẦN MANAGER XEM XÉT (D+7): Hồ sơ quá hạn thanh toán kéo dài" -> "Cần xem xét khoản thanh toán quá hạn";
+            default -> title;
+        };
+    }
+
+    private static String displayContent(String content, String title) {
+        if (content == null) return null;
+        if ("CẢNH BÁO BÀN GIAO: Hợp đồng hết hạn nhưng kho chưa được bàn giao".equals(title)) {
+            content = content.replaceFirst("^Kho (.+) đã hết hạn vào ngày (\\d{4}-\\d{2}-\\d{2}) nhưng chưa được bàn giao\\. Cần theo dõi kiểm tra hiện trạng\\.$",
+                "Hợp đồng thuê kho $1 đã hết hạn ngày $2. Khách hàng chưa trả kho. Vui lòng kiểm tra tình trạng kho.");
+        }
+        if (title == null || title.equals(displayTitle(title))) return content;
+        var matcher = java.util.regex.Pattern.compile("(?<!\\d)(\\d{4})-(\\d{2})-(\\d{2})(?![\\dT])").matcher(content);
+        return matcher.replaceAll("$3/$2/$1");
+    }
+
 }
