@@ -24,6 +24,7 @@ public record CompleteCheckInRequest(
     @NotBlank @Size(max = 1000) String goodsCondition,
     @Min(1) int packageCount,
     @NotBlank @Size(max = 160) String goodsCategory,
+    @NotBlank @Size(max = 160) String goodsMaterial,
     @NotEmpty @Size(max = 10) List<@NotBlank @Size(max = 500) String> evidenceReferences,
     @NotEmpty @Size(max = 20) List<@NotBlank @Size(max = 200) String> handedOverItems,
     @Size(max = 2000) String notes,
@@ -72,7 +73,29 @@ public record CompleteCheckInRequest(
         String notes
     ) {
         this(checklist, identityDocumentNumber, identityVerificationNote, actualMeasurements,
-            varianceReason, initialUnitCondition, goodsCondition, packageCount, goodsCategory,
+            varianceReason, initialUnitCondition, goodsCondition, packageCount, goodsCategory, null,
             evidenceReferences, handedOverItems, notes, "LEGACY-LOCK", null);
+    }
+
+    /** Compatibility constructor for callers that already provide lock and line inventory data. */
+    public CompleteCheckInRequest(
+        CheckInChecklist checklist,
+        String identityDocumentNumber,
+        String identityVerificationNote,
+        CheckInMeasurements actualMeasurements,
+        String varianceReason,
+        String initialUnitCondition,
+        String goodsCondition,
+        int packageCount,
+        String goodsCategory,
+        List<String> evidenceReferences,
+        List<String> handedOverItems,
+        String notes,
+        String lockReference,
+        List<InventoryLine> inventoryLines
+    ) {
+        this(checklist, identityDocumentNumber, identityVerificationNote, actualMeasurements,
+            varianceReason, initialUnitCondition, goodsCondition, packageCount, goodsCategory, null,
+            evidenceReferences, handedOverItems, notes, lockReference, inventoryLines);
     }
 }

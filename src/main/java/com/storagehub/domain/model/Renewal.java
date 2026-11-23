@@ -38,4 +38,8 @@ public class Renewal extends BaseEntity {
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
+
+    /** Stable one-based occurrence assigned only when this renewal completes. */
+    @Column(name = "display_sequence")
+    private Integer displaySequence;
 }

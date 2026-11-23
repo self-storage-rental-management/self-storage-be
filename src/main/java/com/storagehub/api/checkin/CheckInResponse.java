@@ -66,10 +66,19 @@ public record CheckInResponse(
     CompleteCheckInRequest handover,
     String setupEarlyExitPolicyVersion,
     BigDecimal setupEarlyExitFee,
-    List<DeclaredGoodsLine> declaredGoodsLines
+    List<DeclaredGoodsLine> declaredGoodsLines,
+    IntakeAction intakeAction
 ) {
-    public record DeclaredGoodsLine(UUID id, String code, String name, int quantity,
-        BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {}
+    public record DeclaredGoodsLine(UUID id, String code, String name, String categoryName,
+        String materialName, int quantity, BigDecimal lengthCm, BigDecimal widthCm,
+        BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+        /** Compatibility constructor for readers that only populated the original measurements. */
+        public DeclaredGoodsLine(UUID id, String code, String name, int quantity,
+            BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+            this(id, code, name, null, null, quantity, lengthCm, widthCm, heightCm, weightPerPackageKg);
+        }
+    }
+    public enum IntakeAction { START, CONTINUE, NONE }
     /** Existing readers can omit the new setup settlement projection fields. */
     public CheckInResponse(
         UUID checkInId,
@@ -123,7 +132,7 @@ public record CheckInResponse(
         BigDecimal dueAtCheckIn,
         CompleteCheckInRequest handover
     ) {
-        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null, List.of());
+        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null, List.of(), IntakeAction.NONE);
     }
 
 }

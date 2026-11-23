@@ -142,4 +142,12 @@ public class UnitType extends BaseEntity {
     public BigDecimal getVolumeM3() {
         return getAreaM2().multiply(heightM);
     }
+
+    /** The security deposit is always one month of the currently published rent. */
+    public BigDecimal getEffectiveSecurityDepositAmount() {
+        if (monthlyPrice != null && monthlyPrice.signum() > 0) {
+            return monthlyPrice;
+        }
+        return securityDepositAmount == null ? BigDecimal.ZERO : securityDepositAmount;
+    }
 }

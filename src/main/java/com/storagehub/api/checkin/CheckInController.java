@@ -31,13 +31,14 @@ public class CheckInController {
         @RequestParam(required = false) UUID facilityId,
         @RequestParam(required = false) String q,
         @RequestParam(required = false) String status,
+        @RequestParam(defaultValue = "ALL") CheckInHandoverService.WorkGroup group,
         @RequestParam(required = false) Instant scheduledFrom,
         @RequestParam(required = false) Instant scheduledTo,
         @RequestParam(defaultValue = "0") int page,
         @RequestParam(defaultValue = "20") int pageSize
     ) {
         return service.list(
-            actorContext.required(), facilityId, q, status, scheduledFrom, scheduledTo,
+            actorContext.required(), facilityId, q, status, group, scheduledFrom, scheduledTo,
             page, pageSize,
             CorrelationIdContext.current()
         );

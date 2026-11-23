@@ -8,7 +8,6 @@ import java.util.*;
 import java.security.SecureRandom;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
 
@@ -27,6 +26,17 @@ public class BusinessRecordCodes {
             .stream().findFirst().orElse(null);
     }
     @Transactional(readOnly=true)
+    public Map<String,String> findAll(List<String> keys) {
+        if (keys.isEmpty()) return Map.of();
+        var query = new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc);
+        return query.query("select resource_key, display_code from business_record_codes where resource_key in (:keys)",
+            Map.of("keys", keys), rs -> {
+                Map<String,String> result = new HashMap<>();
+                while (rs.next()) result.put(rs.getString(1), rs.getString(2));
+                return result;
+            });
+    }
+    @Transactional(readOnly=true)
     public String resource(String type,String code) {
         if(code==null)return null;
         return jdbc.query("select resource_key from business_record_codes where type_code=? and display_code=?",
@@ -34,20 +44,20 @@ public class BusinessRecordCodes {
     }
     @Transactional(propagation=Propagation.MANDATORY)
     public String assign(String type,String key,Instant recordedAt) {
-        if(!Set.of("GH","HT","QH").contains(type)||key==null||key.isBlank()||key.length()>120||recordedAt==null)
+        if(!Set.of("GH","HT","QH","TH").contains(type)||key==null||key.isBlank()||key.length()>120||recordedAt==null)
             throw ApiExceptions.conflict("Thông tin cấp mã hồ sơ không hợp lệ.");
         String old=find(key);if(old!=null)return old;
         String period=PERIOD.format(recordedAt);
         for(int attempt=0;attempt<MAX_ATTEMPTS;attempt++) {
             String code=String.format(Locale.ROOT,"SH-%06d",CODE_MIN+SECURE_RANDOM.nextInt(CODE_RANGE));
-            try {
-                jdbc.update("insert into business_record_codes(resource_key,type_code,period,display_code,recorded_at) values(?,?,?,?,?)",
-                    key,type,period,code,java.sql.Timestamp.from(recordedAt));
-                return code;
-            } catch(DuplicateKeyException duplicate) {
-                // A concurrent assignment for the same resource wins; a display-code collision gets another random candidate.
-                old=find(key);if(old!=null)return old;
-            }
+            jdbc.update("""
+                INSERT INTO business_record_codes(resource_key, type_code, period, display_code, recorded_at)
+                VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE display_code = display_code
+                """, key, type, period, code, java.sql.Timestamp.from(recordedAt));
+            // A locking read sees the winner even when the caller already established an older snapshot.
+            String assigned = jdbc.query("SELECT display_code FROM business_record_codes WHERE resource_key=? FOR UPDATE",
+                rs -> rs.next() ? rs.getString(1) : null, key);
+            if (assigned != null) return assigned;
         }
         throw ApiExceptions.conflict("Không thể cấp mã hồ sơ duy nhất.");
     }

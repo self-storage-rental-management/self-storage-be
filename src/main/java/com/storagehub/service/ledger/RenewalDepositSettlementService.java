@@ -108,6 +108,9 @@ public class RenewalDepositSettlementService implements RefundSource {
                 em.persist(new RenewalOperationEvent(n,"DEPOSIT_REVIEW_REQUIRED",now(),null,store.canonical(Map.of("status",holdReason))));
                 notifications.createFacilityOperationsNotifications(n.getRental().getFacility().getId(),NotificationType.RENEWAL,
                     "Tiền thuê gia hạn trả trước cần được đối soát trách nhiệm","Có sự cố từ cơ sở hoặc trách nhiệm chưa được xác minh; chưa quyết định khoản trả trước không được hoàn.",id);
+                notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.RENEWAL,
+                    "Khoản trả trước gia hạn đang được đối soát",
+                    "Khoản đã thu đang được giữ nguyên trong khi cơ sở xác minh trách nhiệm và phương án xử lý. Chưa có quyết định hoàn hoặc không hoàn tiền.",id);
             }
             return false;
         }
@@ -129,8 +132,13 @@ public class RenewalDepositSettlementService implements RefundSource {
         var e=new RenewalOperationEvent(n,"DEPOSIT_DISPOSITION",now(),null,store.canonical(data));em.persist(e);em.flush();
         em.lock(p.workflow(),LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         audit.recordMutation((User)null,"RENEWAL_DEPOSIT_DISPOSITION","Renewal",id,n.getRental().getFacility().getId(),null,data);
-        if(status.equals("FORFEITED"))notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.PAYMENT,
-            "Tiền thuê gia hạn trả trước không được hoàn","Hợp đồng đã sang ngày quá hạn thứ 8 và gia hạn chưa hoàn tất. Tiền thuê gia hạn trả trước được ghi nhận không hoàn lại.",id);
+        if(status.equals("FORFEITED")) {
+            notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.PAYMENT,
+                "Tiền thuê gia hạn trả trước không được hoàn","Hợp đồng đã sang ngày quá hạn thứ 8 và gia hạn chưa hoàn tất. Tiền thuê gia hạn trả trước được ghi nhận không hoàn lại.",id);
+            notifications.createFacilityOperationsNotifications(n.getRental().getFacility().getId(),NotificationType.PAYMENT,
+                "Đã chốt khoản trả trước gia hạn không hoàn lại",
+                "Khoản trả trước gia hạn của khách hàng "+n.getRental().getCustomer().getFullName()+" đã được chốt không hoàn lại sau đối soát quá hạn ngày thứ 8.",id);
+        }
         return true;
     }
     @Override @Transactional(propagation=Propagation.MANDATORY)
