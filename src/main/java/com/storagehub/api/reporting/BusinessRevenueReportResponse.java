@@ -10,31 +10,8 @@ public record BusinessRevenueReportResponse(
     BigDecimal netRevenue,
     List<MonthlyRevenue> monthlyBreakdown,
     List<FacilityRevenue> facilityBreakdown,
-    List<PurposeRevenue> paymentPurposeBreakdown,
-    String reconciliationStatus,
-    BigDecimal unverifiedAmount,
-    long unverifiedTransactions
+    List<PurposeRevenue> paymentPurposeBreakdown
 ) {
-    public BusinessRevenueReportResponse(
-        BigDecimal totalRevenueCollected,
-        BigDecimal totalRefunds,
-        BigDecimal netRevenue,
-        List<MonthlyRevenue> monthlyBreakdown,
-        List<FacilityRevenue> facilityBreakdown,
-        List<PurposeRevenue> paymentPurposeBreakdown
-    ) {
-        this(
-            totalRevenueCollected,
-            totalRefunds,
-            netRevenue,
-            monthlyBreakdown,
-            facilityBreakdown,
-            paymentPurposeBreakdown,
-            "VERIFIED",
-            BigDecimal.ZERO,
-            0L
-        );
-    }
     public record MonthlyRevenue(
         String month,
         BigDecimal revenue,
