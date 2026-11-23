@@ -36,6 +36,8 @@ public class RentalContractLifecycleService {
     private final AuditLogService auditLogService;
     private final EntityManager em;
     private final ObjectProvider<Clock> clocks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.rental.period.RentalPeriodResolver rentalPeriods;
 
     public record LifecycleExecutionSummary(
         int expirationsEvaluated,
@@ -113,8 +115,12 @@ public class RentalContractLifecycleService {
                 }
             }
 
-            // Milestone 2: D-3 Pre-expiration reminder (3 days before expiration)
-            if (daysUntilExpiry == 3) {
+            // The period-aware scheduler owns customer expiry notices when its date is available.
+            boolean periodSchedulerOwnsNotice = customer != null && rental.getActualReturnedAt() == null
+                && rentalPeriods != null && rentalPeriods.read(rental).isPresent();
+
+            // Fallback for rentals without verified period evidence.
+            if (daysUntilExpiry == 3 && !periodSchedulerOwnsNotice) {
                 String title = "Cảnh báo: Hợp đồng thuê kho sắp hết hạn (còn 3 ngày)";
                 if (customer != null && !notificationRepository.existsMilestone(customer.getId(), rental.getId(), title)) {
                     notificationService.createNotification(
@@ -153,7 +159,7 @@ public class RentalContractLifecycleService {
 
                 // Customer expiration notification
                 String expTitle = "Thông báo: Hợp đồng thuê kho đã hết hạn";
-                if (customer != null && !notificationRepository.existsMilestone(customer.getId(), rental.getId(), expTitle)) {
+                if (customer != null && !periodSchedulerOwnsNotice && !notificationRepository.existsMilestone(customer.getId(), rental.getId(), expTitle)) {
                     notificationService.createNotification(
                         customer.getId(),
                         NotificationType.SYSTEM,
