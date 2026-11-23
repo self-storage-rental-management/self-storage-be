@@ -11,7 +11,9 @@ final class InventoryDeadlinePolicy {
 
     static void requireInventoryOpen(Rental rental, Instant now) {
         if (rental.getInventoryEscalatedAt() != null
-            || expired(rental.getInventoryFinalDeadlineAt(), now)
+            || (expired(rental.getInventoryFinalDeadlineAt(), now)
+                && (rental.getInventoryArrivedAt() == null
+                    || !rental.getInventoryArrivedAt().isBefore(rental.getInventoryFinalDeadlineAt())))
             || expired(rental.getInventoryRemovalDeadlineAt(), now)) {
             throw ApiExceptions.conflict("Đã hết hạn kiểm kê. Vui lòng liên hệ Manager để xử lý.");
         }
