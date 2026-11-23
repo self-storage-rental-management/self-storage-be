@@ -70,6 +70,17 @@ public class AuditLogService {
         return activityLogRepository.saveAndFlush(log);
     }
 
+    private static boolean isIdentifierKey(String key) {
+        return key.endsWith("id") || key.endsWith("ref") || key.endsWith("no") || key.endsWith("key")
+            || key.endsWith("hash") || key.endsWith("url") || key.endsWith("uri") || key.endsWith("code")
+            || key.contains("uuid") || key.contains("intent") || key.contains("transaction") || key.contains("token");
+    }
+
+    private static String maskCccd(String text) {
+        if (text == null || text.isBlank()) return text;
+        return text.replaceAll("(?<![0-9a-zA-Z\\-_])(?:[0-9][\\s.]*){11}[0-9](?![0-9a-zA-Z\\-_])", "[CCCD đã ẩn]");
+    }
+
     private void redactIdentity(com.fasterxml.jackson.databind.JsonNode node) {
         if (node.isObject()) {
             var object = (com.fasterxml.jackson.databind.node.ObjectNode) node;
@@ -79,14 +90,15 @@ public class AuditLogService {
                 String key = name.toLowerCase(java.util.Locale.ROOT);
                 var value = object.get(name);
                 if (key.contains("identitydocument") || key.contains("identityhash") || key.equals("cccd")) object.put(name, "[REDACTED]");
-                else if (value.isTextual()) object.put(name, value.asText().replaceAll("(?<![0-9])(?:[0-9][\\s.\\-]*){11}[0-9](?![0-9])", "[CCCD đã ẩn]"));
+                else if (isIdentifierKey(key)) continue;
+                else if (value.isTextual()) object.put(name, maskCccd(value.asText()));
                 else redactIdentity(value);
             }
         } else if (node.isArray()) {
             var array = (com.fasterxml.jackson.databind.node.ArrayNode) node;
             for (int i = 0; i < array.size(); i++) {
                 var value = array.get(i);
-                if (value.isTextual()) array.set(i, com.fasterxml.jackson.databind.node.TextNode.valueOf(value.asText().replaceAll("(?<![0-9])(?:[0-9][\\s.\\-]*){11}[0-9](?![0-9])", "[CCCD đã ẩn]")));
+                if (value.isTextual()) array.set(i, com.fasterxml.jackson.databind.node.TextNode.valueOf(maskCccd(value.asText())));
                 else redactIdentity(value);
             }
         }
