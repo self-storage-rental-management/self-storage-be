@@ -22,10 +22,9 @@ public class ReturnAutoSettlementScheduler {
             if (noShowCount > 0) {
                 log.info("[Return no-show] Created recovery task for {} return case(s)", noShowCount);
             }
-            int count = returnSettlementService.autoSettleExpiredReturns();
-            if (count > 0) {
-                log.info("[Auto-Settlement SLA] Successfully auto-settled {} return case(s) past 72h window", count);
-            }
+            // Customer confirmation is mandatory. The deadline scanner only
+            // reminds/escalates through IntakeDeadlineScheduler; it never
+            // accepts a settlement on the customer's behalf.
         } catch (Exception e) {
             log.error("[Auto-Settlement SLA] Error scanning for expired return cases: {}", e.getMessage(), e);
         }
