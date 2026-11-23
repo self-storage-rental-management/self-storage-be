@@ -32,6 +32,12 @@ public class RentalSetupLifecycleService {
     private final RentalRepository rentalRepository;
     private final NotificationService notificationService;
 
+    @Autowired(required = false)
+    private MaintenanceTaskRepository maintenanceTaskRepository;
+
+    @Value("${storagehub.inventory.recovery-sla-hours:24}")
+    private long inventoryRecoverySlaHours = 24;
+
     /** Kept for response compatibility; customers cannot move the paid start earlier. */
     static boolean customerCanStartAfterInventory(Rental rental, Instant now) {
         return false;
