@@ -27,6 +27,10 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class CheckIn extends BaseEntity {
+    @jakarta.persistence.Lob
+    @Column(columnDefinition = "LONGTEXT")
+    private String emergencyContactsSnapshot;
+
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "reservation_id", nullable = false)

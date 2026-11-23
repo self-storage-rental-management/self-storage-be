@@ -1143,6 +1143,7 @@ public class VnpayService {
             throw ApiExceptions.conflict("Renewal payment is currently limited to VNPay Sandbox");
     }
     private void requirePayable(Reservation reservation) {
+        CustomerProfilePolicy.validate(reservation.getCustomer(), true);
         if (reservation.getStatus() != ReservationStatus.AWAITING_PAYMENT) throw ApiExceptions.conflict("Reservation is not awaiting payment");
         Instant deadline = reservation.getPaymentExpiresAt() != null ? reservation.getPaymentExpiresAt() : reservation.getHoldExpiresAt();
         if (deadline == null || !deadline.isAfter(Instant.now())) throw ApiExceptions.conflict("Reservation payment deadline has expired");

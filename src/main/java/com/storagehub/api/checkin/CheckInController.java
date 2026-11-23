@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import java.time.Instant;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,6 +25,16 @@ public class CheckInController {
 
     private final ActorContext actorContext;
     private final CheckInHandoverService service;
+
+    @GetMapping("/{checkInId}/inventory-alternatives")
+    public ApiResponse<java.util.List<CheckInHandoverService.InventoryAlternative>> inventoryAlternatives(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.inventoryAlternatives(actorContext.required(), checkInId), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/identity-correction")
+    public ApiResponse<CheckInResponse> correctIdentity(@PathVariable UUID checkInId, @Valid @RequestBody VerifyCheckInIdentityRequest request) {
+        return new ApiResponse<>(service.correctIdentity(actorContext.required(), checkInId, request), CorrelationIdContext.current());
+    }
 
     @GetMapping
     public PageResponse<CheckInResponse> list(
@@ -196,5 +207,11 @@ public class CheckInController {
             service.confirmPartialInventoryRemoval(actorContext.required(), checkInId, request),
             CorrelationIdContext.current()
         );
+    }
+
+    @DeleteMapping("/{checkInId}")
+    public ApiResponse<Void> deleteCompletedCheckIn(@PathVariable UUID checkInId) {
+        service.archiveCompleted(actorContext.required(), checkInId);
+        return new ApiResponse<>(null, CorrelationIdContext.current());
     }
 }

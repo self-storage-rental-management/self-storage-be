@@ -315,7 +315,7 @@ class ReturnSettlementServiceTests {
         }
         assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.completed);
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.completed);
-        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.maintenance);
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -779,7 +779,7 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
-    void staffConfirmSettlement_transitionsToRefundPendingWhenDepositRefundExpected() {
+    void staffConfirmSettlement_cannotBypassCustomerConsent() {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
         returnCase.setRental(rental);
@@ -791,18 +791,14 @@ class ReturnSettlementServiceTests {
         returnCase.setNetRefundAmount(new BigDecimal("1900000.00"));
         returnCase.setAmountDueFromCustomer(BigDecimal.ZERO);
 
-        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
-        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        ReturnCaseResponse response = service.staffConfirmSettlement(
+        assertThatThrownBy(() -> service.staffConfirmSettlement(
             staffActor,
             returnCase.getId(),
             new CustomerConfirmSettlementRequest(CustomerDecision.accepted, "Khach xac nhan tai quay")
-        );
-
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
-        assertThat(response.customerConfirmed()).isTrue();
-        assertThat(response.customerDecisionNote()).contains("Khach xac nhan tai quay");
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("Customer phải trực tiếp xác nhận");
+        assertThat(returnCase.isCustomerConfirmed()).isFalse();
     }
 
     @Test

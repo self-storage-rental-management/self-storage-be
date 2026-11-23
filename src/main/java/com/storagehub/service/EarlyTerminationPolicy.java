@@ -100,17 +100,15 @@ public final class EarlyTerminationPolicy {
         boolean goodsMovedIn
     ) {
         BigDecimal total = money(totalAfterDiscount);
-        BigDecimal usageCharge = goodsMovedIn
-            ? daysCharge(listMonthlyPrice, Math.max(1, usedDays))
-            : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
-        BigDecimal cappedUsage = usageCharge.min(total).setScale(2, RoundingMode.HALF_UP);
+        // Receipt grants use of the unit, regardless of the move-in declaration.
+        BigDecimal usageCharge = daysCharge(listMonthlyPrice, Math.max(1, usedDays));
         return new SetupExitCalculation(
-            goodsMovedIn ? SetupExitType.GOODS_MOVED_IN : SetupExitType.NO_GOODS_MOVED_IN,
+            SetupExitType.GOODS_MOVED_IN,
             BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
-            goodsMovedIn ? Math.max(1, usedDays) : 0,
-            cappedUsage,
-            cappedUsage,
-            total.subtract(cappedUsage).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)
+            Math.max(1, usedDays),
+            usageCharge,
+            usageCharge,
+            total.subtract(usageCharge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)
         );
     }
 

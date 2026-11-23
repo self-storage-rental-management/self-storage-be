@@ -35,11 +35,11 @@ public class RentalSetupLifecycleService {
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
 
-    @Value("${storagehub.inventory.recovery-sla-hours:4}")
-    private long inventoryRecoverySlaHours = 4;
+    @Value("${storagehub.inventory.recovery-sla-hours:24}")
+    private long inventoryRecoverySlaHours = 24;
 
     static boolean customerCanStartAfterInventory(Rental rental, Instant now) {
-        return rental.getStatus() == RentalStatus.setup
+        return rental.getSetupCompletionDeadlineAt() == null && rental.getStatus() == RentalStatus.setup
             && rental.getReservation() != null
             && rental.getReservation().getStatus() == ReservationStatus.COMPLETED
             && rental.getSetupEndsAt() != null && now.isBefore(rental.getSetupEndsAt())
@@ -83,21 +83,9 @@ public class RentalSetupLifecycleService {
 
         for (Rental rental : rentalRepository.findByInventoryPendingTrueAndStatusIn(
             java.util.List.of(RentalStatus.setup, RentalStatus.active))) {
-            if (rental.getInventoryEscalatedAt() != null) continue;
-            Instant removalDeadline = rental.getInventoryRemovalDeadlineAt();
-            if (removalDeadline != null) {
-                if (!now.isBefore(removalDeadline)) {
-                    escalateInventory(rental, now, true);
-                    rentalRepository.save(rental);
-                }
-                continue;
-            }
-            if (rental.getInventoryFinalDeadlineAt() != null
-                && !now.isBefore(rental.getInventoryFinalDeadlineAt())) {
-                escalateInventory(rental, now, false);
-                rentalRepository.save(rental);
-                continue;
-            }
+            // A published removal window replaces the inventory attendance clock.
+            if (rental.getInventoryRemovalPublishedAt() != null) continue;
+            if (rental.getInventoryArrivedAt() != null || rental.getInventoryResultPublishedAt() != null) continue;
             if (rental.getInventoryDueAt() != null && !rental.getInventoryDueAt().isAfter(now)
                 && rental.getInventoryDeadlineReminderAt() == null) {
                 remindInventoryDeadline(rental, now);

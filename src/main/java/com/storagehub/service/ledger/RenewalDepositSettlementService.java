@@ -238,7 +238,7 @@ public class RenewalDepositSettlementService implements RefundSource {
         var after=ledger.read(n.getRental().getId()).orElseThrow();
         var deposit=after.obligations().stream().filter(o->o.id().equals(p.obligation().id())).findFirst().orElseThrow();
         credits().cancelOutstanding(after,deposit,refund.getAmount(),"refund-deposit:"+id,"CANCELLED_RENEWAL_DEPOSIT_REFUND");
-        refund.setStatus(RefundStatus.COMPLETED);refund.setGatewayRefundId(reference);p.payment().setRefundedAmount(p.payment().getRefundedAmount().add(refund.getAmount()));
+        refund.setStatus(RefundStatus.COMPLETED);refund.setExecutedAt(now);refund.setGatewayRefundId(reference);p.payment().setRefundedAmount(p.payment().getRefundedAmount().add(refund.getAmount()));
         notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.PAYMENT,"Đã ghi nhận hoàn tiền thuê gia hạn trả trước",
             p.environment().equals("SANDBOX")?"Đã ghi nhận chứng từ hoàn tiền thuê gia hạn trả trước trong môi trường Sandbox.":"Cơ sở đã xác nhận hoàn tiền thuê gia hạn trả trước và lưu chứng từ thanh toán.",n.getId());
         return new ExecutedRefund(id,n.getId(),refund.getAmount(),"VND",now,p.environment());

@@ -288,8 +288,8 @@ class CustomerReservationServiceTests {
         assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
         assertThat(checkIn.getSetupCompletedAt()).isNotNull();
         assertThat(rental.getMoveInCompletedAt()).isNotNull();
-        assertThat(rental.getInventoryDueAt()).isEqualTo(checkIn.getSetupCompletedAt().plusSeconds(4 * 86_400));
-        assertThat(rental.getInventoryFinalDeadlineAt()).isEqualTo(checkIn.getSetupCompletedAt().plusSeconds(7 * 86_400));
+        assertThat(rental.getInventoryDueAt()).isEqualTo(InventoryTimelinePolicy.reminderAt(checkIn.getSetupCompletedAt()));
+        assertThat(rental.getInventoryFinalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.inventoryDeadline(checkIn.getSetupCompletedAt()));
         assertThat(rental.getSetupStartedAt()).isEqualTo(setupStart);
         assertThat(rental.getSetupEndsAt()).isEqualTo(setupEnd);
         assertThat(response.getCheckInStatus()).isEqualTo(CheckInStatus.setup_completed.name());

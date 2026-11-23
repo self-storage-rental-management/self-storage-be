@@ -138,6 +138,10 @@ public class Reservation extends BaseEntity {
     @Column
     private Instant paymentExpiresAt;
 
+    /** Start of the customer payment window; kept with the reservation for audit and display. */
+    @Column
+    private Instant paymentStartedAt;
+
     @Column
     private Instant complaintExpiresAt;
 

@@ -114,12 +114,10 @@ public class ReturnSettlementService {
     private final ObjectMapper objectMapper;
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
-    @org.springframework.beans.factory.annotation.Value("${storagehub.return.auto-settlement.sla-hours:72}")
-    private long autoSettlementSlaHours = 72;
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-grace-hours:24}")
     private long noShowGraceHours = 24;
-    @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-recovery-sla-hours:4}")
-    private long noShowRecoverySlaHours = 4;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-recovery-sla-hours:24}")
+    private long noShowRecoverySlaHours = 24;
 
     @Transactional
     public ReturnCaseResponse createCustomerReturnRequest(
@@ -136,18 +134,15 @@ public class ReturnSettlementService {
         var activeReturn = existingReturns.stream().filter(r -> r.getStatus() != ReturnCaseStatus.completed).findFirst();
         if (activeReturn.isPresent()) return toResponse(activeReturn.get());
         boolean inventoryMismatchReturn = request.returnType() == ReturnType.INVENTORY_MISMATCH;
-        if (rental.isInventoryPending() && rental.getInventoryEscalatedAt() != null) {
-            throw ApiExceptions.conflict("Hồ sơ đã chuyển sang chờ thu hồi. Vui lòng liên hệ cơ sở.");
-        }
-        if (!inventoryMismatchReturn && rental.isInventoryPending() && rental.getInventoryRemovalDeadlineAt() != null) {
-            throw ApiExceptions.conflict("Vui lòng đặt lịch trả kho từ kết quả kiểm kê hàng hóa.");
-        }
+        if (inventoryMismatchReturn && rental.getInventoryRemovalPublishedAt() != null)
+            validateRemovalDate(rental, request.scheduledDate());
         if (inventoryMismatchReturn
             && rental.getStatus() != RentalStatus.setup
             && !rental.isInventoryPending()) {
             throw ApiExceptions.conflict("Hồ sơ không còn ở bước kiểm kê hàng hóa để kết thúc do sai lệch.");
         }
         boolean setupExit = inventoryMismatchReturn || rental.getStatus() == RentalStatus.setup
+            || rental.getSetupCompletionDeadlineAt() != null && rental.getInventoryVerifiedAt() == null
             || rental.getSetupStartedAt() != null && rental.getSetupEndsAt() != null && Instant.now().isBefore(rental.getSetupEndsAt());
         if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
             throw ApiExceptions.conflict("Chỉ hồ sơ đang trong thời gian chuẩn bị hoặc đang thuê mới được yêu cầu trả kho");
@@ -179,8 +174,9 @@ public class ReturnSettlementService {
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setRequestedAt(now);
         returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : today);
-        returnCase.setRecoveryEligibleAt(inventoryMismatchReturn && rental.getInventoryRemovalDeadlineAt() != null
-            ? rental.getInventoryRemovalDeadlineAt() : noShowRecoveryEligibleAt(returnCase.getScheduledDate()));
+        returnCase.setRecoveryEligibleAt(noShowRecoveryEligibleAt(returnCase.getScheduledDate()));
+        if (inventoryMismatchReturn && rental.getInventoryRemovalDeadlineAt() != null)
+            returnCase.setRecoveryEligibleAt(rental.getInventoryRemovalDeadlineAt());
         returnCase.setCustomerNotes(request.notes());
         returnCase.setDepositAmount(depositAmount);
         returnCase.setSetupExitRequested(setupExit);
@@ -251,8 +247,14 @@ public class ReturnSettlementService {
         if (request.notes() == null || request.notes().isBlank()) throw ApiExceptions.validation("Vui lòng nhập lý do trả kho.", null);
         if (fixedDeadline) InventoryDeadlinePolicy.requireRemovalDate(record.getRental(), request.scheduledDate(), Instant.now());
         var before = toResponse(record);
+        if (record.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            && record.getRental().getInventoryRemovalPublishedAt() != null)
+            validateRemovalDate(record.getRental(), request.scheduledDate());
         record.setScheduledDate(request.scheduledDate());
-        if (!fixedDeadline) record.setRecoveryEligibleAt(noShowRecoveryEligibleAt(request.scheduledDate()));
+        record.setRecoveryEligibleAt(noShowRecoveryEligibleAt(request.scheduledDate()));
+        if (record.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            && record.getRental().getInventoryRemovalDeadlineAt() != null)
+            record.setRecoveryEligibleAt(record.getRental().getInventoryRemovalDeadlineAt());
         record.setNoShowAt(null);
         record.setRecoveryTaskCreatedAt(null);
         record.setRecoveryNotes(null);
@@ -268,6 +270,14 @@ public class ReturnSettlementService {
                 "Ngày hẹn mới của gian " + saved.getStorageUnit().getCode() + " là " + saved.getScheduledDate() + ".", saved.getId());
         }
         return toResponse(saved);
+    }
+
+    private void validateRemovalDate(Rental rental, LocalDate date) {
+        LocalDate first = InventoryTimelinePolicy.removalEffectiveAt(rental.getInventoryRemovalPublishedAt())
+            .atZone(BusinessTime.ZONE).toLocalDate();
+        LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
+        if (date == null || date.isBefore(first) || date.isAfter(last))
+            throw ApiExceptions.validation("Vui lòng chọn ngày trả kho từ " + first + " đến " + last + ".", null);
     }
 
     private void classifyScheduledReturn(ReturnCase record) {
@@ -319,7 +329,8 @@ public class ReturnSettlementService {
         lockRecoveryReturn(returnCase);
 
         Rental rental = returnCase.getRental();
-        if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
+        if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            || rental != null && rental.getSetupCompletionDeadlineAt() != null) {
             throw ApiExceptions.conflict("Hồ sơ kiểm kê sai lệch phải được nghiệm thu và gửi khách xác nhận quyết toán.");
         }
         if (rental == null || !rental.isSetupExitReviewRequired()) {
@@ -527,7 +538,9 @@ public class ReturnSettlementService {
         if (returnCase.isSetupExitRequested()) {
             if (!request.unitVacated() || request.damageClassification() == com.storagehub.domain.model.DamageClassification.abandoned_goods)
                 throw ApiExceptions.conflict("Chỉ nghiệm thu trả kho trong thời gian chuẩn bị sau khi khách đã đưa hết hàng ra và bàn giao kho trống.");
-            returnCase.setSetupReturnedAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+            returnCase.setSetupReturnedAt((returnCase.getRental().getActualReturnedAt() != null
+                ? returnCase.getRental().getActualReturnedAt() : returnCase.getReadyForInspectionAt() != null
+                    ? returnCase.getReadyForInspectionAt() : Instant.now()).truncatedTo(java.time.temporal.ChronoUnit.MICROS));
             if (request.damageFee().signum() > 0 || request.cleaningFee().signum() > 0 || request.lostItemFee().signum() > 0) {
                 if (request.staffNotes() == null || request.staffNotes().isBlank() || request.evidencePhotos() == null || request.evidencePhotos().isEmpty())
                     throw ApiExceptions.validation("Phí phát sinh trong thời gian chuẩn bị cần ghi chú và bằng chứng kiểm kê.", null);
@@ -578,6 +591,11 @@ public class ReturnSettlementService {
         boolean inventoryMismatchExit = returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && returnCase.isSetupExitRequested();
         var mismatchPricing = inventoryMismatchExit ? setupExitCalculation(returnCase) : null;
+        boolean calendarSetup = !inventoryMismatchExit && returnCase.isSetupExitRequested()
+            && returnCase.getRental().getSetupCompletionDeadlineAt() != null;
+        var calendarPricing = calendarSetup ? setupExitCalculation(returnCase) : null;
+        if (calendarSetup && calendarPricing == null)
+            throw ApiExceptions.conflict("Thiếu bảng tính ngày sử dụng của hồ sơ trả setup.");
         if (inventoryMismatchExit && mismatchPricing == null)
             throw ApiExceptions.conflict("Thiếu bảng tính thời gian sử dụng của hồ sơ kiểm kê sai lệch.");
         if (inventoryMismatchExit && mismatchPricing != null) {
@@ -587,7 +605,7 @@ public class ReturnSettlementService {
             }
             returnCase.setEarlyTerminationFee(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
         }
-        BigDecimal earlyTerminationCharge = inventoryMismatchExit && mismatchPricing != null
+        BigDecimal earlyTerminationCharge = calendarPricing != null ? calendarPricing.totalRentalCharge() : inventoryMismatchExit && mismatchPricing != null
             ? mismatchPricing.totalRentalCharge()
             : returnCase.isSetupEarlyExit()
                 ? zeroIfNull(returnCase.getEarlyTerminationFee())
@@ -658,7 +676,7 @@ public class ReturnSettlementService {
             maintenanceTaskRepository.save(noShowTask);
         }
 
-        boolean managerInventoryReview = inventoryMismatchExit;
+        boolean managerInventoryReview = inventoryMismatchExit || calendarSetup;
         returnCase.setStatus(legacyPricingReview || managerInventoryReview
             ? ReturnCaseStatus.awaiting_business_review
             : ReturnCaseStatus.awaiting_customer_confirmation);
@@ -669,6 +687,11 @@ public class ReturnSettlementService {
         if (saved.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
             rental.setInventoryPending(false);
             completeInventoryTasksAfterMismatch(saved, inspectionAt);
+            if (request.unitVacated()) {
+                saved.getStorageUnit().setStatus(StorageUnitStatus.maintenance);
+                storageUnitRepository.save(saved.getStorageUnit());
+                saved.setProposedUnitStatus(StorageUnitStatus.maintenance);
+            }
         }
         rentalRepository.save(rental);
 
@@ -734,7 +757,8 @@ public class ReturnSettlementService {
         facilityScopeService.assertCanManage(actor, returnCase.getFacility().getId());
         lockRecoveryReturn(returnCase);
         if (returnCase.getStatus() != ReturnCaseStatus.awaiting_business_review
-            || returnCase.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
+            || !(returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
+                || returnCase.isSetupExitRequested() && returnCase.getRental().getSetupCompletionDeadlineAt() != null)) {
             throw ApiExceptions.conflict("Hồ sơ kiểm kê sai lệch chưa ở trạng thái chờ Manager duyệt.");
         }
         var mismatchPricing = setupExitCalculation(returnCase);
@@ -759,7 +783,8 @@ public class ReturnSettlementService {
         returnCase.setReviewedBy(manager);
         returnCase.setReviewedAt(Instant.now());
         returnCase.setManagerResolutionNote(request.resolutionNote().trim());
-        returnCase.setEarlyTerminationFee(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+        if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH)
+            returnCase.setEarlyTerminationFee(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
         returnCase.setEarlyTerminationCharge(rentalCharge);
         returnCase.setRentalRefundAmount(rentalRefund);
         returnCase.setTotalDeductions(settlement.deductions());
@@ -903,57 +928,9 @@ public class ReturnSettlementService {
         CustomerConfirmSettlementRequest request
     ) {
         authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
-        ReturnCase returnCase = returnCaseRepository.findById(returnId)
-            .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
-        facilityScopeService.assertCanOperate(actor, returnCase.getFacility().getId());
-        lockRecoveryReturn(returnCase);
-        if (returnCase.getStatus() == ReturnCaseStatus.completed) {
-            return toResponse(returnCase);
-        }
-        if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation) {
-            throw ApiExceptions.conflict("Return is not awaiting customer confirmation");
-        }
-        requireCurrentEarlyReturnAmounts(returnCase);
-        requireFinance().requireCurrent(returnCase);
-
-        String decisionNote = request != null && request.note() != null && !request.note().isBlank()
-            ? request.note()
-            : "Xác nhận quyết toán trực tiếp tại quầy bởi nhân viên cơ sở.";
-
-        returnCase.setCustomerConfirmed(true);
-        returnCase.setCustomerConfirmedAt(Instant.now());
-        returnCase.setCustomerDecision(CustomerDecision.accepted);
-        returnCase.setCustomerDecisionNote(decisionNote);
-
-        var reconciliation = requireFinance();
-        if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
-            returnCase.setStatus(ReturnCaseStatus.payment_due);
-        } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
-            markRefundPending(returnCase);
-        } else {
-            reconciliation.settle(returnCase, actor.userId(), "STAFF_OFFSET:" + returnCase.getId(), false);
-            returnCase.setStatus(ReturnCaseStatus.completed);
-            returnCase.setCompletedAt(Instant.now());
-            finalizeRentalAndUnit(returnCase);
-        }
-
-        ReturnCase saved = returnCaseRepository.save(returnCase);
-        auditLogService.recordMutation(
-            "RETURN_SETTLEMENT_CONFIRMED_BY_STAFF",
-            "return",
-            saved.getId(),
-            saved.getFacility().getId(),
-            null,
-            toResponse(saved)
+        throw ApiExceptions.conflict(
+            "Customer phải trực tiếp xác nhận hoặc gửi khiếu nại quyết toán. Nhân viên không được bỏ qua bước này."
         );
-        notificationService.createNotification(
-            saved.getCustomer().getId(),
-            NotificationType.RETURN,
-            "Quyết toán trả kho đã được xác nhận",
-            "Nhân viên cơ sở đã hỗ trợ xác nhận quyết toán trực tiếp tại quầy cho gian " + saved.getStorageUnit().getCode(),
-            saved.getId()
-        );
-        return toResponse(saved);
     }
 
     public int autoSettleExpiredReturns(ActorPrincipal actor) {
@@ -971,23 +948,9 @@ public class ReturnSettlementService {
     }
 
     public int autoSettleExpiredReturns() {
-        Instant cutoff = Instant.now().minus(java.time.Duration.ofHours(autoSettlementSlaHours));
-        List<ReturnCase> expired = returnCaseRepository.findExpiredAwaitingConfirmation(cutoff);
-        int processed = 0;
-        for (ReturnCase rc : expired) {
-            try {
-                var applied = new org.springframework.transaction.support.TransactionTemplate(settlementTransactions).execute(status -> {
-                    var current = returnCaseRepository.findById(rc.getId()).orElseThrow();
-                    if (current.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation || current.isCustomerConfirmed()) return false;
-                    autoConfirmSettlement(current);
-                    return true;
-                });
-                if (Boolean.TRUE.equals(applied)) processed++;
-            } catch (Exception ex) {
-                // Each row rolls back independently; missing proof must never confirm another row.
-            }
-        }
-        return processed;
+        // The 72-hour deadline only escalates and reminds. It must never create
+        // customer consent, a refund, a collection, or a completed return case.
+        return 0;
     }
 
     /**
@@ -1078,52 +1041,6 @@ public class ReturnSettlementService {
             saved.getId()
         );
         return true;
-    }
-
-    private void autoConfirmSettlement(ReturnCase returnCase) {
-        lockRecoveryReturn(returnCase);
-        if (returnCase.getStatus() != ReturnCaseStatus.awaiting_customer_confirmation || returnCase.isCustomerConfirmed()) {
-            return;
-        }
-
-        requireCurrentEarlyReturnAmounts(returnCase);
-        requireFinance().requireCurrent(returnCase);
-        returnCase.setCustomerConfirmed(true);
-        returnCase.setCustomerConfirmedAt(Instant.now());
-        returnCase.setCustomerDecision(CustomerDecision.accepted);
-        returnCase.setCustomerDecisionNote("Hệ thống tự động chốt quyết toán sau " + autoSettlementSlaHours + " giờ không có khiếu nại (Auto-Settlement SLA).");
-
-        var reconciliation = requireFinance();
-        reconciliation.requireCurrent(returnCase);
-        if (returnCase.getAmountDueFromCustomer() != null && returnCase.getAmountDueFromCustomer().compareTo(BigDecimal.ZERO) > 0) {
-            returnCase.setStatus(ReturnCaseStatus.payment_due);
-        } else if (returnCase.getNetRefundAmount() != null && returnCase.getNetRefundAmount().compareTo(BigDecimal.ZERO) > 0) {
-            markRefundPending(returnCase);
-        } else {
-            reconciliation.settle(returnCase, returnCase.getCustomer().getId(), "AUTO_OFFSET:" + returnCase.getId(), false);
-            returnCase.setStatus(ReturnCaseStatus.completed);
-            returnCase.setCompletedAt(Instant.now());
-            finalizeRentalAndUnit(returnCase);
-        }
-
-        ReturnCase saved = returnCaseRepository.save(returnCase);
-
-        auditLogService.recordMutation(
-            "RETURN_AUTO_SETTLEMENT_ACCEPTED",
-            "return",
-            saved.getId(),
-            saved.getFacility().getId(),
-            null,
-            toResponse(saved)
-        );
-
-        notificationService.createNotification(
-            saved.getCustomer().getId(),
-            NotificationType.RETURN,
-            "Tự động chốt quyết toán trả kho",
-            "Hồ sơ trả kho cho gian " + saved.getStorageUnit().getCode() + " đã được hệ thống tự động xác nhận sau " + autoSettlementSlaHours + " giờ theo quy định.",
-            saved.getId()
-        );
     }
 
     @Transactional
@@ -1613,7 +1530,8 @@ public class ReturnSettlementService {
 
         StorageUnit unit = returnCase.getStorageUnit();
         if (unit != null) {
-            if (returnCase.getProposedUnitStatus() == StorageUnitStatus.maintenance) {
+            if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
+                || returnCase.getProposedUnitStatus() == StorageUnitStatus.maintenance) {
                 unit.setStatus(StorageUnitStatus.maintenance);
             } else {
                 unit.setStatus(StorageUnitStatus.available);
@@ -1818,8 +1736,15 @@ public class ReturnSettlementService {
         LocalDate setupStart = setupStartInstant.atZone(BusinessTime.ZONE).toLocalDate();
         boolean goodsMovedIn = rental.getMoveInCompletedAt() != null || rental.getInventoryVerifiedAt() != null;
         if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
-            LocalDate scheduledReturnDate = returnCase.getScheduledDate();
-            int usedDays = EarlyTerminationPolicy.calendarUsageDays(setupStart, scheduledReturnDate);
+            Instant actual = returnCase.getSetupReturnedAt() != null ? returnCase.getSetupReturnedAt()
+                : returnCase.getInspectedAt();
+            LocalDate endDate = actual == null ? returnCase.getScheduledDate()
+                : actual.atZone(BusinessTime.ZONE).toLocalDate();
+            if (rental.getInventoryRemovalDeadlineAt() != null && endDate != null) {
+                LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
+                if (endDate.isAfter(last)) endDate = last;
+            }
+            int usedDays = EarlyTerminationPolicy.calendarUsageDays(setupStart, endDate);
             if (usedDays <= 0) return null;
             return EarlyTerminationPolicy.inventoryMismatchExit(
                 snapshot.getNetRentalAmount(), snapshot.getMonthlyPrice(), usedDays, goodsMovedIn
@@ -1827,6 +1752,14 @@ public class ReturnSettlementService {
         }
         Instant setupEndInstant = returnCase.getSetupReturnedAt();
         if (setupEndInstant == null) return null;
+        if (rental.getSetupCompletionDeadlineAt() != null) {
+            int days = EarlyTerminationPolicy.calendarUsageDays(setupStart, setupEndInstant.atZone(BusinessTime.ZONE).toLocalDate());
+            BigDecimal usage = EarlyTerminationPolicy.daysCharge(snapshot.getMonthlyPrice(), days);
+            BigDecimal fee = zeroIfNull(returnCase.getEarlyTerminationFee());
+            BigDecimal charge = usage.add(fee);
+            return new EarlyTerminationPolicy.SetupExitCalculation(EarlyTerminationPolicy.SetupExitType.GOODS_MOVED_IN,
+                fee, days, usage, charge, snapshot.getNetRentalAmount().subtract(charge).max(BigDecimal.ZERO));
+        }
         long elapsedSeconds = Math.max(0, java.time.Duration.between(setupStartInstant, setupEndInstant).getSeconds());
         int usedDays = Math.max(1, (int) Math.ceil(elapsedSeconds / 86_400d));
         return EarlyTerminationPolicy.setupExit(
