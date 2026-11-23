@@ -9,7 +9,7 @@ import java.util.UUID;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 @Schema(description = "Rental detail; absent/incomplete owner sources remain UNKNOWN/null. No raw credential is exposed.")
-public record RentalDetailResponse(UUID id, RentalSummaryResponse.Customer customer,
+public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryResponse.Customer customer,
     RentalSummaryResponse.Facility facility, RentalSummaryResponse.Unit storageUnit,
     RentalSummaryResponse.UnitType unitType, RentalStatus status, LocalDate startDate,
     LocalDate contractEndDate, BigDecimal monthlyPrice, String currency,
@@ -17,6 +17,7 @@ public record RentalDetailResponse(UUID id, RentalSummaryResponse.Customer custo
     Instant actualReturnedAt, Instant completedAt, Financial financialSummary, Access access,
     RentalSummaryResponse.DateSemantics dateSemantics, RentalBookingEvidence bookingEvidence,
     boolean inventoryPending, Instant inventoryDueAt, Instant setupStartedAt, Instant setupEndsAt,
+    Instant inventoryFinalDeadlineAt,
     Instant moveInCompletedAt, Instant inventoryVerifiedAt, boolean setupExitReviewRequired,
     boolean canConfirmRentalStart) {
     @Schema(description = "COMPLETE includes verified security deposit; PARTIAL has verified balances/billing but unknown deposit; UNKNOWN has no verified financial projection.")

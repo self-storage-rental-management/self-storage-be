@@ -160,6 +160,32 @@ public class AccessCredentialService {
     }
 
     @Transactional
+    public int revokeForReservation(ActorPrincipal actor, UUID reservationId, String reason) {
+        if (actor == null || !actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER)) {
+            throw ApiExceptions.forbidden("Staff or Manager role is required");
+        }
+        authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        User operator = requireActor(actor);
+        List<AccessCredential> active = credentialRepository.findByReservation_IdAndStatus(
+            reservationId, AccessCredentialStatus.ACTIVE
+        );
+        for (AccessCredential credential : active) {
+            revokeEntity(credential, operator, reason);
+            AccessCredential saved = credentialRepository.save(credential);
+            auditLogService.recordMutation(
+                operator, "ACCESS_CREDENTIAL_REVOKED", "AccessCredential", saved.getId(),
+                reservation.getFacility().getId(),
+                Map.of("status", AccessCredentialStatus.ACTIVE),
+                toResponse(saved)
+            );
+        }
+        return active.size();
+    }
+
+    @Transactional
     public CredentialAccessEventResponse recordAccessEvent(
         ActorPrincipal actor,
         UUID credentialId,
@@ -454,11 +480,11 @@ public class AccessCredentialService {
                 ? List.of()
                 : returnCaseRepository.findByFacility_IdInAndStatusIn(allowed, List.of(
                     ReturnCaseStatus.requested, ReturnCaseStatus.scheduled, ReturnCaseStatus.inspected,
-                    ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
+                    ReturnCaseStatus.recovery_required, ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
                     ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending)))
             : returnCaseRepository.findByStatusIn(List.of(
                 ReturnCaseStatus.requested, ReturnCaseStatus.scheduled, ReturnCaseStatus.inspected,
-                ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
+                ReturnCaseStatus.recovery_required, ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
                 ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending));
         for (ReturnCase returnCase : returns) {
             if (facilityId != null && !facilityId.equals(returnCase.getFacility().getId())) continue;

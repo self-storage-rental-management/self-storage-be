@@ -40,6 +40,7 @@ public class NotificationService {
 
     private final NotificationRepository notificationRepository;
     @org.springframework.beans.factory.annotation.Autowired private BusinessRecordCodes displayCodes;
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.storagehub.service.renewal.RenewalDisplayIdentity renewalDisplayIdentity;
     private final UserRepository userRepository;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
@@ -100,18 +101,102 @@ public class NotificationService {
         String content,
         UUID relatedEntityId
     ) {
+        Notification saved = saveNotification(userId, type, title, content, relatedEntityId, null);
+        customerEmails.notification(saved);
+        return saved;
+    }
+
+    @Transactional
+    public Notification createNotification(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        RoleCode sourceRole
+    ) {
+        Notification saved = saveNotification(userId, type, title, content, relatedEntityId, sourceRole);
+        customerEmails.notification(saved);
+        return saved;
+    }
+
+    @Transactional
+    public void createNotificationOnce(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId
+    ) {
+        if (notificationRepository.existsMilestone(userId, relatedEntityId, title)) return;
+        createNotification(userId, type, title, content, relatedEntityId);
+    }
+
+    @Transactional
+    public boolean createNotificationIfNotSentSince(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        Instant since
+    ) {
+        if (notificationRepository.existsMilestoneSince(userId, relatedEntityId, type, title, since)) {
+            return false;
+        }
+        createNotification(userId, type, title, content, relatedEntityId);
+        return true;
+    }
+
+    @Transactional
+    public boolean createNotificationIfNotSentSince(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        Instant since,
+        RoleCode sourceRole
+    ) {
+        if (sourceRole == null) {
+            return createNotificationIfNotSentSince(userId, type, title, content, relatedEntityId, since);
+        }
+        if (notificationRepository.existsMilestoneSinceForSourceRole(
+            userId, relatedEntityId, type, title, sourceRole, since
+        )) {
+            return false;
+        }
+        createNotification(userId, type, title, content, relatedEntityId, sourceRole);
+        return true;
+    }
+
+    /** The payment receipt already supplies the email for this notification. */
+    @Transactional
+    public void notifyRenewalDepositReceived(UUID customerId, UUID renewalId, String amount) {
+        saveNotification(customerId, NotificationType.RENEWAL, "Đã nhận tiền cọc gia hạn qua VNPay",
+            "VNPay đã xác nhận khoản cọc gia hạn " + amount + ". Bạn có thể theo dõi các bước tiếp theo trong hồ sơ gia hạn.",
+            renewalId, null);
+    }
+
+    private Notification saveNotification(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        RoleCode sourceRole
+    ) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> ApiExceptions.notFound("User was not found"));
         Notification notification = new Notification();
         notification.setUser(user);
         notification.setType(type);
+        notification.setSourceRole(sourceRole);
         notification.setTitle(type==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(title):title);
         notification.setContent(content);
         notification.setRelatedEntityId(relatedEntityId);
         notification.setRead(false);
-        Notification saved = notificationRepository.save(notification);
-        customerEmails.notification(saved);
-        return saved;
+        return notificationRepository.save(notification);
     }
 
     @Transactional
@@ -137,6 +222,32 @@ public class NotificationService {
         UUID relatedEntityId
     ) {
         createFacilityOperationsNotificationsExcept(facilityId, type, title, content, relatedEntityId, null);
+    }
+
+    @Transactional
+    public void createFacilityOperationsNotificationsOnce(
+        UUID facilityId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId
+    ) {
+        Set<UUID> recipientIds = new LinkedHashSet<>();
+        recipientIds.addAll(userRepository.findEligibleStaff(
+            UserStatus.ACTIVE,
+            RoleCode.STAFF,
+            facilityId,
+            List.of(FacilityScopeLevel.OPERATE)
+        ).stream().map(User::getId).toList());
+        recipientIds.addAll(userRepository.findEligibleStaff(
+            UserStatus.ACTIVE,
+            RoleCode.MANAGER,
+            facilityId,
+            List.of(FacilityScopeLevel.READ, FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
+        ).stream().map(User::getId).toList());
+        recipientIds.forEach(recipientId -> createNotificationOnce(
+            recipientId, type, title, content, relatedEntityId
+        ));
     }
 
     @Transactional
@@ -207,14 +318,16 @@ public class NotificationService {
     private NotificationResponse toResponse(Notification notification) {
         String content=notification.getContent();
         UUID related=notification.getRelatedEntityId();
-        if(displayCodes!=null&&related!=null){
+        if(related!=null){
             String key=switch(notification.getType()){
-                case RENEWAL -> "GH:"+related;
+                case RENEWAL -> null;
                 case SUPPORT -> "HT:"+related;
                 case OVERDUE -> "RENTAL_TERM:"+related;
                 default -> null;
             };
-            String code=key==null?null:displayCodes.find(key);
+            String code=notification.getType()==NotificationType.RENEWAL&&renewalDisplayIdentity!=null
+                ?renewalDisplayIdentity.find(related).map(com.storagehub.service.renewal.RenewalDisplayIdentity.Identity::label).orElse(null)
+                :key==null||displayCodes==null?null:displayCodes.find(key);
             if(code!=null&&(content==null||!content.contains(code)))content=code+" · "+(content==null?"":content);
         }
         return new NotificationResponse(

@@ -1,5 +1,7 @@
 package com.storagehub.service;
 
+import com.storagehub.domain.model.SystemPermission;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -86,7 +88,9 @@ class CheckInHandoverServiceTests {
 
     private CheckInHandoverService service;
     private ActorPrincipal actor;
+    private ActorPrincipal managerActor;
     private User staff;
+    private User manager;
     private Reservation reservation;
     private StorageUnit unit;
     private UnitAssignment assignment;
@@ -106,12 +110,19 @@ class CheckInHandoverServiceTests {
         ReflectionTestUtils.setField(service,"sandboxPaymentPolicy",sandboxPaymentPolicy);
         staff = entityWithId(new User());
         staff.setFullName("Staff A");
+        manager = entityWithId(new User());
+        manager.setFullName("Manager A");
+        Facility facility = entityWithId(new Facility());
         actor = new ActorPrincipal(
             staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
-            Set.of("view_checkins", "perform_checkin"),
-            Map.of(UUID.randomUUID(), FacilityScopeLevel.OPERATE)
+            Set.of(SystemPermission.VIEW_CHECKINS.code(), SystemPermission.PERFORM_CHECKIN.code()),
+            Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
         );
-        Facility facility = entityWithId(new Facility());
+        managerActor = new ActorPrincipal(
+            manager.getId(), UUID.randomUUID(), Set.of(RoleCode.MANAGER),
+            Set.of(SystemPermission.VIEW_CHECKINS.code(), SystemPermission.MANAGE_RENTALS.code()),
+            Map.of(facility.getId(), FacilityScopeLevel.MANAGE)
+        );
         facility.setName("Facility A");
         UnitType unitType = entityWithId(new UnitType());
         unitType.setLengthM(new BigDecimal("3"));
@@ -153,6 +164,10 @@ class CheckInHandoverServiceTests {
         checkIn.setPerformedBy(staff);
         checkIn.setStatus(CheckInStatus.scheduled);
         checkIn.setScheduledAt(Instant.now().minusSeconds(60));
+        org.mockito.Mockito.lenient().when(assignmentRepository.findByReservation_IdAndStatus(
+            reservation.getId(), UnitAssignmentStatus.ACTIVE)).thenReturn(Optional.of(assignment));
+        org.mockito.Mockito.lenient().when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
+        org.mockito.Mockito.lenient().when(facilityScopeService.canAccessFacility(actor, facility.getId(), FacilityScopeLevel.OPERATE)).thenReturn(true);
         paidReservationFixture();
     }
 
@@ -188,6 +203,7 @@ class CheckInHandoverServiceTests {
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(response.intakeAction().name()).isEqualTo("START");
         assertThat(response.identityDocumentNumber()).isEqualTo("079203009988");
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
         verify(reservationRepository).saveAndFlush(reservation);
@@ -246,6 +262,43 @@ class CheckInHandoverServiceTests {
         assertThat(response.handover().inventoryLines()).isNull();
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void comparesActualCatalogPerLineAndKeepsOriginalDeclaration(boolean prohibited) throws Exception {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN); mockCompletionChecks(true);
+        var rental=checkIn.getRental(); rental.setSetupCompletionDeadlineAt(Instant.now().plusSeconds(86400));
+        rental.setInventoryArrivedAt(Instant.now()); rental.setInventoryIdentityVerifiedAt(Instant.now());
+        var original=entityWithId(new ReservationGoodsItem()); original.setQuantity(3);
+        original.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);
+        original.setCatalogCategoryId(UUID.randomUUID());original.setCatalogMaterialId(UUID.randomUUID());
+        original.setCategoryName("Đồ gia dụng");original.setMaterialName("Gỗ");
+        original.setLengthCm(new BigDecimal("100"));original.setWidthCm(new BigDecimal("100"));original.setHeightCm(new BigDecimal("100"));
+        original.setWeightKg(new BigDecimal("33.333333"));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())).thenReturn(List.of(original));
+        var actual=new com.storagehub.api.reservation.GoodsItemRequest();
+        actual.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);actual.setCatalogCategoryId(original.getCatalogCategoryId());
+        actual.setCatalogMaterialId(UUID.randomUUID());actual.setCategoryName("Nhãn chưa đối soát");actual.setMaterialName("Vật liệu thực tế");
+        actual.setStackable(false);actual.setAllowHorizontalPlacement(true);actual.setMaxStackLayers(1);
+        var catalog=org.mockito.Mockito.mock(GoodsCatalogService.class);ReflectionTestUtils.setField(service,"goodsCatalogService",catalog);
+        if(prohibited) org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.validation("Vật liệu không được nhận",null)).when(catalog).validateForUnitType(any(),any(com.storagehub.api.reservation.GoodsItemRequest.class),org.mockito.ArgumentMatchers.anyInt());
+        else {
+            org.mockito.Mockito.doAnswer(call->{var g=(com.storagehub.api.reservation.GoodsItemRequest)call.getArgument(1);g.setCategoryName("Đồ gia dụng");g.setMaterialName("Kim loại");return null;}).when(catalog).validateForUnitType(any(),any(com.storagehub.api.reservation.GoodsItemRequest.class),org.mockito.ArgumentMatchers.anyInt());
+            var packing=org.mockito.Mockito.mock(PalletInventoryService.class);ReflectionTestUtils.setField(service,"palletInventory",packing);
+            when(packing.evaluateActualFit(eq(unit),any())).thenReturn(new PalletInventoryService.Fit(org.mockito.Mockito.mock(com.storagehub.api.reservation.PalletPlan.class),1,unit,List.of(),false));
+        }
+        var base=validCompletionRequest();
+        var line=new CompleteCheckInRequest.InventoryLine(original.getId(),3,CompleteCheckInRequest.InventoryLine.Condition.INTACT,"Đã đối chiếu chất liệu",new CompleteCheckInRequest.InventoryMeasurements(new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100")),actual);
+        var measurements=new CheckInMeasurements(new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("3"),true);
+        var request=new CompleteCheckInRequest(base.checklist(),base.identityDocumentNumber(),null,measurements,"Chất liệu và điều kiện xếp thực tế khác khai báo",base.initialUnitCondition(),base.goodsCondition(),3,"Đồ gia dụng","Gỗ",base.evidenceReferences(),base.handedOverItems(),base.notes(),base.lockReference(),List.of(line));
+        var response=service.complete(actor,checkIn.getId(),request);
+        assertThat(response.inventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_CUSTOMER);
+        assertThat(response.inventoryFullFit()).isEqualTo(!prohibited);
+        assertThat(original.getMaterialName()).isEqualTo("Gỗ");
+        assertThat(checkIn.getInventoryActualJson()).contains("actualGoods",actual.getCatalogMaterialId().toString());
+        assertThat(response.handover().inventoryLines().getFirst().actualGoods().getMaterialName()).isEqualTo(prohibited?"Vật liệu thực tế":"Kim loại");
+        if(prohibited) assertThat(rental.getInventoryRemovalDeadlineAt()).isNotNull();
+    }
+
     @Test
     void persistsIdentityVerificationAsTheFirstWorkflowStep() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
@@ -261,6 +314,7 @@ class CheckInHandoverServiceTests {
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
+        assertThat(response.intakeAction().name()).isEqualTo("CONTINUE");
         assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("079203009988");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
     }
@@ -379,8 +433,30 @@ class CheckInHandoverServiceTests {
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
     }
 
-    @Test
-    void marksPastAppointmentAsNoShowAndReleasesAssignedUnit() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"MISSING", "FUTURE", "EXPIRED", "REFUNDED", "UNIT_MISMATCH", "STARTED"})
+    void ineligibleNoShowLeavesReservationAndUnitUntouched(String scenario) {
+        switch (scenario) {
+            case "MISSING" -> checkIn.setScheduledAt(null);
+            case "FUTURE" -> reservation.setAppointmentAt(Instant.now().plusSeconds(3600));
+            case "EXPIRED" -> reservation.setAppointmentAt(Instant.now().minusSeconds(8 * 86400));
+            case "REFUNDED" -> depositPayment.setRefundedAmount(BigDecimal.ONE);
+            case "UNIT_MISMATCH" -> reservation.setAssignedUnit(null);
+            case "STARTED" -> checkIn.setStatus(CheckInStatus.identity_verified);
+        }
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        assertThatThrownBy(() -> service.markNoShow(actor, checkIn.getId(), new MarkNoShowRequest("Vắng")))
+            .isInstanceOf(ApiException.class);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.UNIT_RESERVED);
+        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.reserved);
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void marksPastAppointmentAsNoShowAndReleasesAssignedUnit(boolean legacySchedule) {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         reservation.setAssignedUnit(unit);
         unit.setStatus(StorageUnitStatus.reserved);
@@ -395,11 +471,15 @@ class CheckInHandoverServiceTests {
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
 
-        var response = service.markNoShow(
-            actor, checkIn.getId(), new MarkNoShowRequest("Khách không đến")
-        );
-
-        assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.no_show);
+        Instant appointment = Instant.now();
+        reservation.setAppointmentAt(legacySchedule ? null : appointment);
+        checkIn.setScheduledAt(legacySchedule ? appointment : null);
+        try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(appointment);
+            var response = service.markNoShow(actor, checkIn.getId(), new MarkNoShowRequest("Khách không đến"));
+            assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.no_show);
+            assertThat(response.intakeAction().name()).isEqualTo("NONE");
+        }
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
         assertThat(reservation.getAssignedUnit()).isNull();
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
@@ -452,6 +532,32 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void requiresAcceptedAndExplainedGoodsMaterialDifference() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        mockCompletionChecks(false);
+        ReservationGoodsItem declaredItem = entityWithId(new ReservationGoodsItem());
+        declaredItem.setQuantity(3);
+        declaredItem.setCategoryName("Đồ gia dụng");
+        declaredItem.setMaterialName("Gỗ");
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
+            .thenReturn(List.of(declaredItem));
+        CompleteCheckInRequest base = validCompletionRequest();
+        CompleteCheckInRequest changed = new CompleteCheckInRequest(
+            base.checklist(), base.identityDocumentNumber(), base.identityVerificationNote(),
+            new CheckInMeasurements(
+                new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"),
+                new BigDecimal("100"), BigDecimal.ONE, false
+            ), base.varianceReason(), base.initialUnitCondition(), base.goodsCondition(),
+            base.packageCount(), base.goodsCategory(), "Kim loại", base.evidenceReferences(),
+            base.handedOverItems(), base.notes(), base.lockReference(), base.inventoryLines()
+        );
+
+        assertThatThrownBy(() -> service.complete(actor, checkIn.getId(), changed))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("chất liệu chính");
+    }
+
+    @Test
     void requiresAcceptedAndExplainedDeclaredDimensionDifference() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
@@ -481,6 +587,7 @@ class CheckInHandoverServiceTests {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
         checkIn.setStatus(CheckInStatus.scheduled);
+        reservation.setAppointmentAt(Instant.now().plusSeconds(3600));
         UUID evidenceId = UUID.fromString("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0");
         FileAsset evidence = entityWithId(new FileAsset());
         ReflectionTestUtils.setField(evidence, "id", evidenceId);
@@ -561,6 +668,61 @@ class CheckInHandoverServiceTests {
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2025, 1, 1));
         verify(rentalRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void releasesAssignedUnitAfterThreeDaysWithoutCustomerReceiptConfirmation() {
+        Instant handoverAt = Instant.parse("2026-10-12T03:00:00Z");
+        Instant releaseAt = handoverAt.plusSeconds(3 * 86_400L);
+        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        checkIn.setStatus(CheckInStatus.handover_pending_receipt);
+        checkIn.setCheckedInAt(handoverAt);
+        unit.setStatus(StorageUnitStatus.assigned);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(managerActor.userId())).thenReturn(Optional.of(manager));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.saveAndFlush(assignment)).thenReturn(assignment);
+        when(storageUnitRepository.saveAndFlush(unit)).thenReturn(unit);
+
+        try (var time = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            time.when(Instant::now).thenReturn(releaseAt);
+            var response = service.releaseAfterCustomerReceiptTimeout(managerActor, checkIn.getId());
+
+            assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.cancelled);
+            assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.CANCELLED);
+            assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        }
+        assertThat(reservation.getAssignedUnit()).isNull();
+        assertThat(reservation.getCancellationType())
+            .isEqualTo(com.storagehub.domain.model.ReservationCancellationType.CUSTOMER_RECEIPT_TIMEOUT);
+        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+    }
+
+    @Test
+    void staffCannotReleaseAssignedUnitAfterCustomerReceiptTimeout() {
+        assertThatThrownBy(() -> service.releaseAfterCustomerReceiptTimeout(actor, checkIn.getId()))
+            .hasMessageContaining("Chỉ Manager");
+    }
+
+    @Test
+    void rejectsHandoverFromTheEighthCalendarDayInVietnam() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        reservation.setAppointmentAt(Instant.parse("2026-11-21T08:00:00Z"));
+        checkIn.setStatus(CheckInStatus.payment_collected);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        var request = new com.storagehub.api.checkin.StartCheckInSetupRequest(
+            "TEST-LOCK", null, "Kho trống và sạch", List.of(UUID.randomUUID().toString()));
+        var cutoff = Instant.parse("2026-11-27T17:00:00Z");
+        assertThat(ReservationCheckInPolicy.handoverExpired(reservation.getAppointmentAt(), cutoff.minusNanos(1))).isFalse();
+        try (var time = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            time.when(Instant::now).thenReturn(cutoff);
+            assertThatThrownBy(() -> service.startSetup(actor, checkIn.getId(), request))
+                .hasMessageContaining("Đã hết hạn nhận kho");
+        }
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.payment_collected);
     }
 
     private void paidReservationFixture() {

@@ -21,6 +21,7 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class ReturnCase extends BaseEntity {
+    @Column private Instant readyForInspectionAt;
 
     @Column(nullable = false)
     private boolean setupExitRequested;
@@ -77,6 +78,21 @@ public class ReturnCase extends BaseEntity {
 
     @Column(nullable = false)
     private LocalDate scheduledDate;
+
+    /** The time after the scheduled return date and grace period when no-show recovery may start. */
+    @Column
+    private Instant recoveryEligibleAt;
+
+    /** Set when the customer did not arrive by recoveryEligibleAt. */
+    @Column
+    private Instant noShowAt;
+
+    /** Set once the operational recovery task has been created. */
+    @Column
+    private Instant recoveryTaskCreatedAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String recoveryNotes;
 
     @Column(columnDefinition = "TEXT")
     private String customerNotes;

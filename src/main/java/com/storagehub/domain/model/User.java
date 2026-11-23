@@ -48,6 +48,10 @@ public class User extends BaseEntity {
     @Column(length = 30)
     private String emergencyContactPhone;
 
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+    @Column(name = "profile_details", columnDefinition = "JSON")
+    private java.util.Map<String, Object> profileDetails;
+
     @Lob
     @Column(columnDefinition = "LONGTEXT")
     private String avatarUrl;

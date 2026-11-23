@@ -18,6 +18,10 @@ public class ReturnAutoSettlementScheduler {
     )
     public void scanAndAutoSettle() {
         try {
+            int noShowCount = returnSettlementService.escalateNoShowReturns();
+            if (noShowCount > 0) {
+                log.info("[Return no-show] Created recovery task for {} return case(s)", noShowCount);
+            }
             int count = returnSettlementService.autoSettleExpiredReturns();
             if (count > 0) {
                 log.info("[Auto-Settlement SLA] Successfully auto-settled {} return case(s) past 72h window", count);

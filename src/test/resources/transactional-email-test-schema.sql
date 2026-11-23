@@ -1,4 +1,6 @@
 -- H2 test profile has Flyway disabled, so JDBC tables are outside Hibernate's schema.
+CREATE TABLE IF NOT EXISTS facility_code_prefixes (code_prefix VARCHAR(32) PRIMARY KEY);
+
 CREATE TABLE IF NOT EXISTS payment_receipt_emails (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     receipt_key VARCHAR(64) NOT NULL UNIQUE,

@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class RentalQueryService {
     private final RentalRepository repository;
+    private final BusinessRecordCodes codes;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RentalReadSources.FinancialSource> financialSources;
     @org.springframework.beans.factory.annotation.Autowired
@@ -34,19 +35,20 @@ public class RentalQueryService {
     public PageResponse<RentalSummaryResponse> list(ActorPrincipal actor, RentalQuery query, boolean manager, String correlationId) {
         Set<UUID> facilities = authorize(actor, manager, query.facilityId());
         var page = repository.findAll(scoped(actor, manager, facilities).and(filters(query, manager)), query.pageable());
-        return PageResponse.from(page.map(this::summary), correlationId);
+        var displayCodes = codes.findAll(page.getContent().stream().map(r -> "TH:" + r.getId()).toList());
+        return PageResponse.from(page.map(r -> summary(r, displayCodes.get("TH:" + r.getId()))), correlationId);
     }
 
     public RentalDetailResponse detail(ActorPrincipal actor, UUID id, boolean manager) {
         Set<UUID> facilities = authorize(actor, manager, null);
         Rental r = repository.findOne(scoped(actor, manager, facilities).and((root, q, cb) -> cb.equal(root.get("id"), id)))
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
-        var s = summary(r);
-        return new RentalDetailResponse(s.id(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
+        var s = summary(r, codes.find("TH:" + r.getId()));
+        return new RentalDetailResponse(s.id(), s.displayCode(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
             financial(r), access(r), s.dateSemantics(), bookingEvidence(actor,r,manager),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart());
     }
 
@@ -131,6 +133,8 @@ public class RentalQueryService {
     }
 
     private Specification<Rental> filters(RentalQuery filter, boolean manager) {
+        String resourceKey = filter.search().matches("(?i)SH-[0-9]{6}") ? codes.resource("TH", filter.search()) : null;
+        UUID displayCodeId = resourceKey == null ? null : UUID.fromString(resourceKey.substring("TH:".length()));
         return (root, q, cb) -> {
             List<Predicate> terms = new ArrayList<>();
             if (filter.status() != null) terms.add(cb.equal(root.get("status"), filter.status()));
@@ -139,6 +143,7 @@ public class RentalQueryService {
             if (!filter.search().isEmpty()) {
                 String pattern = "%" + filter.search().toLowerCase(Locale.ROOT).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
                 List<Predicate> matches = new ArrayList<>();
+                if (displayCodeId != null) matches.add(cb.equal(root.get("id"), displayCodeId));
                 matches.add(cb.like(cb.lower(root.join("storageUnit", JoinType.LEFT).get("code")), pattern, '\\'));
                 if (manager) matches.add(cb.like(cb.lower(root.join("customer", JoinType.LEFT).get("fullName")), pattern, '\\'));
                 try { matches.add(cb.equal(root.get("id"), UUID.fromString(filter.search()))); }
@@ -149,20 +154,20 @@ public class RentalQueryService {
         };
     }
 
-    private RentalSummaryResponse summary(Rental r) {
+    private RentalSummaryResponse summary(Rental r, String displayCode) {
         integrity(r);
         var unit = r.getStorageUnit(); var type = unit.getUnitType();
         var period=verifiedDates(r);
         var warnings = period.isPresent() ? List.<RentalSummaryResponse.Warning>of() : List.of(new RentalSummaryResponse.Warning("contractEndDate",
             "Chưa đủ thông tin để xác minh ngày cuối sử dụng của hồ sơ thuê."));
-        return new RentalSummaryResponse(r.getId(), new RentalSummaryResponse.Customer(r.getCustomer().getId(), r.getCustomer().getFullName()),
+        return new RentalSummaryResponse(r.getId(), displayCode, new RentalSummaryResponse.Customer(r.getCustomer().getId(), r.getCustomer().getFullName()),
             new RentalSummaryResponse.Facility(r.getFacility().getId(), r.getFacility().getCode(), r.getFacility().getName()),
             new RentalSummaryResponse.Unit(unit.getId(), unit.getCode()),
             new RentalSummaryResponse.UnitType(type.getId(), type.getCode(), type.getName()),
             r.getStatus(), r.getStartDate(), r.getContractEndDate(), r.getMonthlyPrice(), "VND", warnings,
             period.map(p -> new RentalSummaryResponse.DateSemantics("COMPLETE",p.convention().name(),p.lastPermittedDate(),p.endExclusive()))
                 .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(),
             RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()));
     }

@@ -217,64 +217,61 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         Pageable pageable
     );
 
-    @Query("""
-        select reservation from Reservation reservation
-        where (
-            (:statusFilter = false and reservation.status in (
-                com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
-                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN,
-                com.storagehub.domain.model.ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
-                com.storagehub.domain.model.ReservationStatus.PREPARING,
-                com.storagehub.domain.model.ReservationStatus.COMPLETED
-            ))
-            or (:statusFilter = true and reservation.status in (
-                com.storagehub.domain.model.ReservationStatus.UNIT_RESERVED,
-                com.storagehub.domain.model.ReservationStatus.READY_FOR_CHECKIN,
-                com.storagehub.domain.model.ReservationStatus.AWAITING_CUSTOMER_RECEIPT,
-                com.storagehub.domain.model.ReservationStatus.PREPARING,
-                com.storagehub.domain.model.ReservationStatus.COMPLETED
-            ))
-        )
-          and reservation.assignedUnit is not null
-          and (:facilityId is null or reservation.facility.id = :facilityId)
-          and (:scoped = false or reservation.facility.id in :facilityIds)
-          and (:q is null
-               or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
-               or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
-               or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
-               or lower(reservation.assignedUnit.code) like lower(concat('%', :q, '%')))
+    interface CheckInWorkRow {
+        Reservation getReservation();
+        com.storagehub.domain.model.CheckIn getCheckIn();
+        com.storagehub.domain.model.UnitAssignment getAssignment();
+    }
+
+    String CHECK_IN_WORK_FROM = """
+        from Reservation r
+        left join CheckIn c on c.reservation = r
+        join UnitAssignment a on a.reservation = r
+        where a.id = (select latest.id from UnitAssignment latest where latest.reservation = r
+                      order by latest.assignedAt desc, latest.id desc limit 1)
           and (
-            :statusFilter = false
-            or (:unscheduled = true and not exists (
-              select checkIn.id from CheckIn checkIn
-              where checkIn.reservation.id = reservation.id
-            ))
-            or (:unscheduled = false and exists (
-              select checkIn.id from CheckIn checkIn
-              where checkIn.reservation.id = reservation.id
-                and checkIn.status = :checkInStatus
-            ))
+            (r.status in (UNIT_RESERVED, READY_FOR_CHECKIN, AWAITING_CUSTOMER_RECEIPT, PREPARING, COMPLETED)
+              and r.assignedUnit is not null and a.status in (ACTIVE, COMPLETED))
+            or (:workGroup = 'PROCESSED' and c.status in (completed, rejected, no_show, cancelled))
           )
-          and (:scheduledFrom is null or reservation.appointmentAt >= :scheduledFrom or exists (
-            select checkIn.id from CheckIn checkIn
-            where checkIn.reservation.id = reservation.id
-              and checkIn.scheduledAt >= :scheduledFrom
-          ))
-          and (:scheduledTo is null or reservation.appointmentAt < :scheduledTo or exists (
-            select checkIn.id from CheckIn checkIn
-            where checkIn.reservation.id = reservation.id
-              and checkIn.scheduledAt < :scheduledTo
-          ))
-          and exists (
-            select assignment.id from UnitAssignment assignment
-            where assignment.reservation.id = reservation.id
-              and assignment.status in (
-                com.storagehub.domain.model.UnitAssignmentStatus.ACTIVE,
-                com.storagehub.domain.model.UnitAssignmentStatus.COMPLETED
-              )
-          )
-        """)
-    Page<Reservation> findCheckInWork(
+          and (:workGroup = 'ALL' or :workGroup = case
+            when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED then 'PROCESSED'
+            else 'ONGOING' end)
+          and (:facilityId is null or r.facility.id = :facilityId)
+          and (:scoped = false or r.facility.id in :facilityIds)
+          and (:q is null
+               or lower(r.reservationCode) like lower(concat('%', :q, '%'))
+               or lower(r.customer.email) like lower(concat('%', :q, '%'))
+               or lower(r.customer.fullName) like lower(concat('%', :q, '%'))
+               or lower(a.storageUnit.code) like lower(concat('%', :q, '%')))
+          and (:statusFilter = false or (:unscheduled = true and c.id is null) or c.status = :checkInStatus)
+          and (:scheduledFrom is null or coalesce(r.appointmentAt, c.scheduledAt) >= :scheduledFrom)
+          and (:scheduledTo is null or coalesce(r.appointmentAt, c.scheduledAt) < :scheduledTo)
+        """;
+
+    @Query(value = "select r as reservation, c as checkIn, a as assignment " + CHECK_IN_WORK_FROM + """
+        order by case
+          when c.status = handover_pending_receipt
+            and c.checkedInAt <= :receiptConfirmationDueCutoff then 0
+          when c.status = handover_pending_receipt
+            and c.checkedInAt <= :receiptConfirmationReminderCutoff then 1
+          when c.status = handover_pending_receipt then 2
+          when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED then 5
+          when coalesce(r.appointmentAt, c.scheduledAt) < :firstValidAppointment
+            and (c.id is null or c.status in (scheduled, identity_verified, contract_signed, payment_collected)) then 6
+          when c.status in (identity_verified, contract_signed, payment_collected, handover_pending_receipt,
+                            setup_in_progress, setup_completed) then 3
+          when coalesce(r.appointmentAt, c.scheduledAt) <= :now then 4
+          when coalesce(r.appointmentAt, c.scheduledAt) is not null then 5
+          else 6 end,
+          coalesce(r.appointmentAt, c.scheduledAt) asc nulls last, r.reservationCode asc, r.id asc
+        """, countQuery = "select count(r.id) " + CHECK_IN_WORK_FROM)
+    Page<CheckInWorkRow> findCheckInWork(
+        @Param("workGroup") String workGroup,
+        @Param("now") Instant now,
+        @Param("firstValidAppointment") Instant firstValidAppointment,
+        @Param("receiptConfirmationDueCutoff") Instant receiptConfirmationDueCutoff,
+        @Param("receiptConfirmationReminderCutoff") Instant receiptConfirmationReminderCutoff,
         @Param("facilityId") UUID facilityId,
         @Param("q") String q,
         @Param("statusFilter") boolean statusFilter,

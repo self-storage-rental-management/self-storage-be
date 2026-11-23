@@ -2,6 +2,7 @@ package com.storagehub.service.renewal;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,7 +46,8 @@ class RenewalWorkflowIntegrationTests {
     }
     static class TestPrice implements RenewalSources.PricingSource {
         BigDecimal rate=new BigDecimal("100");
-        public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,BigDecimal.ZERO,"VND",2)));}
+        BigDecimal discountRate=BigDecimal.ZERO;
+        public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,discountRate,"VND",2)));}
     }
     static class TestPolicy implements RenewalSources.PolicySource {
         String version="v1";
@@ -87,7 +89,7 @@ class RenewalWorkflowIntegrationTests {
     @Autowired com.storagehub.domain.repo.ActivityLogRepository activityLogs;
     @Autowired RenewalPersistence persistence;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
-    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";eligibility.unknown=false;}
+    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");pricing.discountRate=BigDecimal.ZERO;policy.version="v1";eligibility.unknown=false;}
     @Test void completedVerificationUsesHistoricalEvidenceAfterRentalAndPolicyChange() throws Exception {
         var rental=fixture();var actor=customer(rental);
         var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
@@ -177,10 +179,15 @@ class RenewalWorkflowIntegrationTests {
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads))
             .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
         String path="/api/customer/rentals/"+r.getId();
+        pricing.discountRate = new BigDecimal("0.0725");
+        mvc.perform(get(path+"/renewal-options")).andExpect(status().isOk())
+            .andExpect(jsonPath("data[0].pricingPackageCode").value("TEST"))
+            .andExpect(jsonPath("data[0].discountRate").value(0.0725));
         mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\",\"amount\":1}")).andExpect(status().isBadRequest());
         mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\",\"fullPayment\":true}")).andExpect(status().isBadRequest());
         var quote=mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"))
-            .andExpect(status().isOk()).andExpect(jsonPath("data.monthlyPrice").value(100)).andReturn();
+            .andExpect(status().isOk()).andExpect(jsonPath("data.monthlyPrice").value(100))
+            .andExpect(jsonPath("data.discountRate").value(0.0725)).andReturn();
         String quoteId=new ObjectMapper().readTree(quote.getResponse().getContentAsString()).path("data").path("id").asText();
         mvc.perform(post(path+"/renewal-requests").contentType("application/json").content("{\"renewalQuoteId\":\""+quoteId+"\"}")).andExpect(status().isBadRequest());
         String body="{\"renewalQuoteId\":\""+quoteId+"\"}";
@@ -192,7 +199,7 @@ class RenewalWorkflowIntegrationTests {
     @BeforeEach void resetSources(){pricing.rate=new BigDecimal("100");eligibility.unknown=false;finance.unknown=false;finance.debt=false;finance.consistent=true;lifecycle.available=true;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;}
     @Test void optionsRemainReadableWhenEligibilityIsUnknownButQuoteStaysBlocked(){
         var r=fixture();var actor=customer(r);eligibility.unknown=true;
-        assertThat(commands.options(actor,r.getId())).containsExactly(new RenewalCommands.Option("TEST",1));
+        assertThat(commands.options(actor,r.getId())).containsExactly(new RenewalCommands.Option("TEST",1,null,BigDecimal.ZERO));
         assertThatThrownBy(()->commands.quote(actor,r.getId(),new RenewalCommands.Quote("TEST")))
             .isInstanceOf(ApiException.class).hasMessageContaining("Eligibility UNKNOWN");
         assertThat(em.createQuery("select count(q) from RenewalQuote q",Long.class).getSingleResult()).isZero();
