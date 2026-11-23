@@ -628,8 +628,6 @@ public class CustomerReservationService {
             checkIn.setInventoryDecisionAt(Instant.now());
             checkIn.setInventoryDecisionNote(note == null ? "Khách yêu cầu trả kho do kết quả kiểm kê không phù hợp." : note);
             checkInRepository.saveAndFlush(checkIn);
-            Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId)
-                .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê của thời gian chuẩn bị."));
             if (rental.getInventoryRemovalPublishedAt() == null && rental.getInventoryResultPublishedAt() != null) {
                 rental.setInventoryRemovalPublishedAt(rental.getInventoryResultPublishedAt());
                 rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(rental.getInventoryResultPublishedAt()));
@@ -1594,6 +1592,9 @@ public class CustomerReservationService {
                 response.setRentalStatus(rental.getStatus().name());
                 response.setInventoryDueAt(rental.getInventoryDueAt());
                 response.setInventoryFinalDeadlineAt(rental.getInventoryFinalDeadlineAt());
+                response.setInventoryEscalatedAt(rental.getInventoryEscalatedAt());
+                response.setInventoryResultPublishedAt(rental.getInventoryResultPublishedAt());
+                response.setInventoryRemainderDeadlineAt(rental.getInventoryRemainderDeadlineAt());
                 response.setInventoryRemovalPublishedAt(rental.getInventoryRemovalPublishedAt());
                 response.setInventoryRemovalDeadlineAt(rental.getInventoryRemovalDeadlineAt());
                 response.setSetupStartedAt(rental.getSetupStartedAt());

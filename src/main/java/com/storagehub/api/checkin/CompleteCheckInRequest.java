@@ -50,19 +50,30 @@ public record CompleteCheckInRequest(
         @NotNull Condition condition,
         @Size(max = 1000) String note,
         @Valid InventoryMeasurements measurements,
+        UUID actualCategoryId,
+        UUID actualMaterialId,
         @Valid com.storagehub.api.reservation.GoodsItemRequest actualGoods
     ) {
         public enum Condition { INTACT, DAMAGED, NOT_PRESENT }
+        public InventoryLine {
+            if (actualGoods != null) {
+                actualCategoryId = actualGoods.getCatalogCategoryId();
+                actualMaterialId = actualGoods.getCatalogMaterialId();
+            }
+        }
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note, InventoryMeasurements measurements) {
-            this(goodsItemId, actualQuantity, condition, note, measurements, null);
+            this(goodsItemId, actualQuantity, condition, note, measurements, null, null, null);
         }
 
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note) {
-            this(goodsItemId, actualQuantity, condition, note, null, null, null);
+            this(goodsItemId, actualQuantity, condition, note, null, null, null, null);
         }
+
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note,
-            InventoryMeasurements measurements) {
-            this(goodsItemId, actualQuantity, condition, note, measurements, null, null);
+            InventoryMeasurements measurements, com.storagehub.api.reservation.GoodsItemRequest actualGoods) {
+            this(goodsItemId, actualQuantity, condition, note, measurements,
+                actualGoods == null ? null : actualGoods.getCatalogCategoryId(),
+                actualGoods == null ? null : actualGoods.getCatalogMaterialId(), actualGoods);
         }
     }
 

@@ -86,11 +86,23 @@ public record CheckInResponse(
     Instant receiptConfirmationReleaseAt,
     boolean receiptReleaseEligible,
     String declaredPackagingMethod,
-    String paymentEvidenceReference
+    String paymentEvidenceReference,
+    InventoryVisit inventoryVisit,
+    Instant checkInDeadline,
+    StorageCapacity storageCapacity
 ) {
     public record InventoryVisit(
         Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
         String verifiedByName, UUID photoId
+    ) {}
+
+    public record StorageCapacity(
+        BigDecimal volumeM3,
+        BigDecimal maxLoadKg,
+        BigDecimal maxCargoLengthCm,
+        BigDecimal maxCargoWidthCm,
+        BigDecimal maxCargoHeightCm,
+        BigDecimal maxCargoWeightKg
     ) {}
 
     public record DeclaredGoodsLine(UUID id, String code, String name, String categoryName,
@@ -177,9 +189,11 @@ public record CheckInResponse(
             assignmentStatus, startDate, endDate, declaredPackageCount,
             declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm,
             declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover,
-            null, null, List.of(), IntakeAction.NONE, null, null, false, false,
-            null, null, null, null, null, null, null, null, null, false,
-            null, false, null, null
+            null, null, List.of(), IntakeAction.NONE,
+            null, null, false, false,
+            null, null, null, null, null, null, null, null,
+            null, false, null, false,
+            null, null, null, null, null
         );
     }
 

@@ -83,6 +83,15 @@ public class Rental extends BaseEntity {
     @Column
     private Instant inventoryRemovalPublishedAt;
 
+    /** Compatibility alias for older inventory-removal callers. */
+    public Instant getInventoryRemovalNotifiedAt() {
+        return inventoryRemovalPublishedAt;
+    }
+
+    public void setInventoryRemovalNotifiedAt(Instant value) {
+        inventoryRemovalPublishedAt = value;
+    }
+
     @Column
     private Instant inventoryRemovalDeadlineAt;
 
