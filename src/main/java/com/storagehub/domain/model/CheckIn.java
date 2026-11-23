@@ -143,6 +143,11 @@ public class CheckIn extends BaseEntity {
     @Column(length = 20)
     private UnitReleaseDisposition rejectionDisposition;
 
+    private Instant rejectionResolvedAt;
+
+    @Column(length = 1000)
+    private String rejectionResolutionNote;
+
     @Version
     private long version;
 }

@@ -171,9 +171,35 @@ public class RenewalOperationService {
             if(fresh)em.persist(existing);
             return finish(c,op,key,body,event,200);
         }
-        var s=signing(c,true);if(edit&&s.getAppointmentRef()==null)throw ApiExceptions.validation("Cần có lịch ký đã lưu trước khi đổi lịch.",null);
+        var s=requiredState(c.renewal());
+        if (edit && s.getPhase() == RenewalOperationState.Phase.NO_SHOW) {
+            nonterminal(c.renewal());
+            beforeOrEqual(now(), s.getEffectiveSigningDeadline());
+            beforeOrEqual(now(), s.getRecoveryCutoff());
+            var hold = c.workflow().getExtensionHoldRef();
+            if (hold != null && !safety().restoreSigningWindow(c.renewal(), terms(c), hold, s.getEffectiveSigningDeadline()))
+                throw deferred("Extension hold could not be restored");
+            s.resumeSigning();
+        }
+        signing(c,true);
+        if(edit&&s.getAppointmentRef()==null)throw ApiExceptions.validation("Cần có lịch ký đã lưu trước khi đổi lịch.",null);
         if(!edit&&s.getAppointmentRef()!=null)throw ApiExceptions.conflict("Appointment already exists; use reschedule");
         if(s.getArrivalRef()!=null)throw ApiExceptions.conflict("Arrival recorded; facility incident review is required to reschedule");
+        if (edit) {
+            var paidAt = s.getDepositPaidAt() != null ? s.getDepositPaidAt() : s.getFullRentPaidAt();
+            long changes = em.createQuery("""
+                select count(e) from RenewalOperationEvent e where e.renewal.id=:id
+                  and e.kind='APPOINTMENT' and e.occurredAt>:paidAt
+                """, Long.class).setParameter("id", id).setParameter("paidAt", paidAt).getSingleResult();
+            boolean selectedBeforePayment = em.createQuery("""
+                select count(e) from RenewalOperationEvent e where e.renewal.id=:id
+                  and e.kind='APPOINTMENT' and e.occurredAt<=:paidAt
+                """, Long.class).setParameter("id", id).setParameter("paidAt", paidAt).getSingleResult() > 0;
+            if (changes > (selectedBeforePayment ? 0 : 1))
+                throw ApiExceptions.conflict("Bạn đã sử dụng lượt đổi lịch ký gia hạn.");
+            if (Objects.equals(body.appointmentAt(), s.getAppointmentStart()))
+                throw ApiExceptions.validation("Vui lòng chọn giờ ký khác.", null);
+        }
         var slot=slot(c.renewal(),body.appointmentAt(),s.getEffectiveSigningDeadline());
         calendar().reserve(c.renewal(),slot,now());
         // Calendar reservation joins this transaction; a slow source must not commit a past slot.
@@ -264,6 +290,8 @@ public class RenewalOperationService {
         var period=periods.require(c.renewal().getRental());
         com.storagehub.service.rental.period.RenewalPeriodCompatibility.require(period,terms);
         var effective=com.storagehub.service.rental.period.RenewalEffectivePeriod.at(period,terms,completedAt);
+        var guard = operationalGuards == null ? null : operationalGuards.getIfAvailable();
+        if (guard != null) guard.requireNoBookingConflict(c.renewal().getRental(), effective.startDate(), effective.endExclusive());
         if(!effective.startDate().equals(body.expectedEffectiveStartDate()))
             throw ApiExceptions.conflict("Ngày hiệu lực đã thay đổi. Vui lòng tải lại bảng kê và xác nhận hợp đồng đã ký đúng kỳ mới.");
         // Recheck money at the same instant that fixes the period (including a midnight boundary).
@@ -388,20 +416,37 @@ public class RenewalOperationService {
         linked(c.renewal(),body.incidentId(),"INCIDENT");evidence(actor,c.renewal(),"FAULT_REVIEW",body.evidenceFileIds());
         return finish(c,"d3_fault_review",key,body,event(c,"FAULT_REVIEW",body),201);
     }
-    /** Internal per-resource reconciliation entry; no auto scheduler is enabled before sources/schema rollout. */
+    @Transactional(readOnly=true)
+    public List<UUID> expiredSigningIds() {
+        return em.createQuery("""
+            select s.renewal.id from RenewalOperationState s where s.phase in :phases
+              and s.effectiveSigningDeadline < :now
+              and s.renewal.status in :statuses
+            """, UUID.class)
+            .setParameter("phases", List.of(RenewalOperationState.Phase.SIGNING, RenewalOperationState.Phase.NO_SHOW))
+            .setParameter("statuses", List.of(RenewalStatus.appointment_scheduled, RenewalStatus.deposit_paid, RenewalStatus.full_rent_paid))
+            .setParameter("now", now()).getResultList();
+    }
+
     public boolean expire(UUID id) {
         var n=em.find(Renewal.class,id);if(n==null)return false;
         var rental=store.lockRental(n.getRental().getId());em.refresh(rental);em.refresh(n);var wf=workflow(n);em.lock(wf,LockModeType.PESSIMISTIC_WRITE);em.refresh(wf);
         var s=state(n);boolean paid=s!=null&&s.hasVerifiedPayment();
         if(Set.of(RenewalStatus.cancelled,RenewalStatus.rejected,RenewalStatus.completed,RenewalStatus.payment_expired).contains(n.getStatus()))return false;
-        if(s!=null&&!Set.of(RenewalOperationState.Phase.SIGNING,RenewalOperationState.Phase.AWAITING_PAYMENT_INTENT).contains(s.getPhase()))return false;
+        if(s!=null&&!Set.of(RenewalOperationState.Phase.SIGNING,RenewalOperationState.Phase.NO_SHOW,RenewalOperationState.Phase.AWAITING_PAYMENT_INTENT).contains(s.getPhase()))return false;
         Instant deadline=paid?s.getEffectiveSigningDeadline():wf.getPaymentDeadline();if(deadline==null||!now().isAfter(deadline))return false;
         if(!accounting().safeToExpire(n))throw deferred("Payment attempts require reconciliation before expiry");
         var safety=safety();
         if(wf.getExtensionHoldRef()!=null){safety.release(n,wf.getExtensionHoldRef());}
         else if(!simplePayment)throw deferred("Extension hold missing");
         if(s==null){s=new RenewalOperationState(n);em.persist(s);}s.expire(paid);
-        if(!paid)n.setStatus(RenewalStatus.payment_expired); // Paid signing expiry stays supplemental, not payment failure.
+        if (paid) {
+            n.setStatus(RenewalStatus.cancelled);
+            wf.cancelled("SIGNING_DEADLINE_EXPIRED");
+        } else {
+            n.setStatus(RenewalStatus.payment_expired);
+        }
+        store.releaseSlot(wf);
         calendar().release(n,now());
         var event=new RenewalOperationEvent(n,"EXPIRY",now(),null,store.canonical(Map.of("disposition","REVIEW_REQUIRED","paid",paid)));em.persist(event);
         em.lock(wf,LockModeType.PESSIMISTIC_FORCE_INCREMENT);em.flush();audit.recordMutation((User)null,"renewal_expiry","Renewal",id,rental.getFacility().getId(),null,Map.of("eventId",event.getId()));
@@ -495,7 +540,10 @@ public class RenewalOperationService {
     private SafetySource safety(){var s=safetySources.getIfAvailable();if(s==null||!s.atomic())throw deferred("Shared transactional capacity/return/recovery safety missing");return s;}
     private Instant checkSafety(Renewal renewal,RenewalQuoteResponse.Terms terms,UUID hold,Instant at){
         var guard=operationalGuards==null?null:operationalGuards.getIfAvailable();
-        if(guard!=null)guard.requireNoKnownConflict(renewal.getRental());
+        if(guard!=null) {
+            guard.requireNoKnownConflict(renewal.getRental());
+            guard.requireNoBookingConflict(renewal.getRental(), terms.extensionStartDate(), terms.extensionEndExclusive());
+        }
         // Local negative checks never replace the atomic shared-writer/hold protocol.
         return safety().check(renewal,terms,hold,at);
     }
@@ -513,7 +561,7 @@ public class RenewalOperationService {
         var specs=com.storagehub.service.ledger.FinancialContractSpecifications.accepted(workflow(n).getAcceptedRevision(),accepted);
         var total=java.math.BigDecimal.ZERO;
         var feeSource=overdueFees==null?null:overdueFees.getIfAvailable();
-        var fee=feeSource==null?null:feeSource.quote(n,account,now());
+        var fee=feeSource==null?null:feeSource.quote(n,account,now(),accepted);
         if(s.remainingRentalAmount()==null||s.overdueFee()==null||s.unpostedOverdueFee()==null
             ||s.remainingRentalAmount().signum()<0||s.overdueFee().signum()<0||s.unpostedOverdueFee().signum()<0
             ||s.remainingRentalAmount().add(s.overdueFee()).compareTo(s.amount())!=0)
