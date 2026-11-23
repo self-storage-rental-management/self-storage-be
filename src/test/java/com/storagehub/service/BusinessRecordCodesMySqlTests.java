@@ -75,7 +75,7 @@ class BusinessRecordCodesMySqlTests {
     }
 
     void migrateHistoricalRentalCodes() {
-        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V2026112204__backfill_rental_business_codes.sql")).execute(datasource);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V2026112205__backfill_rental_business_codes.sql")).execute(datasource);
     }
 
     @Test void canonicalMigrationChainAppliesAndValidatesOnEmptyMySql() {

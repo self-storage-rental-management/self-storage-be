@@ -35,6 +35,13 @@ class RenewalPaymentIntentTests {
     static <T extends BaseEntity>T id(T e){ReflectionTestUtils.setField(e,"id",UUID.randomUUID());return e;}
     @BeforeEach void setup() {
         config.setEnabled(true);config.setTmnCode("TEST");config.setHashSecret("test-only");
+        user.setPhone("0912345678");
+        user.setPermanentAddress("123 Le Loi, Quan 1, TP HCM");
+        user.setEmergencyContactName("Nguyen Van B");
+        user.setEmergencyContactPhone("0987654321");
+        user.getProfileDetails().setIdentityDocumentNumber("079204001234");
+        user.getProfileDetails().setEmergencyContactRelationship("Bo me");
+        user.getProfileDetails().setEmergencyContactConsent(true);
         var beans=new StaticListableBeanFactory();beans.addBean("settlement",mock(RenewalVnpaySettlementService.class));
         gateway=new VnpayService(config,payments,mock(PaymentComplaintRepository.class),reservations,
             snapshots,users,mock(AdminAuthorizationService.class),mock(AuditLogService.class),
