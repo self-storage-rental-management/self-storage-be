@@ -1238,6 +1238,36 @@ public class CheckInHandoverService {
         return toResponse(actor, reservation, saved, assignment);
     }
 
+    @Transactional
+    public void archiveCompleted(ActorPrincipal actor, UUID checkInId) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
+        CheckIn checkIn = checkInRepository.findById(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("CheckIn was not found"));
+        Reservation reservation = checkIn.getReservation();
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getStatus() != CheckInStatus.completed && reservation.getStatus() != ReservationStatus.COMPLETED) {
+            throw ApiExceptions.conflict("Chỉ có thể xóa/lưu trữ đơn sau khi bàn giao thành công");
+        }
+        Instant now = Instant.now();
+        if (reservation.getArchivedAt() == null) {
+            reservation.setArchivedAt(now);
+        }
+        reservationRepository.saveAndFlush(reservation);
+        User operator = userRepository.findById(actor.userId()).orElse(null);
+        auditLogService.recordMutation(
+            operator, "CHECKIN_ORDER_DELETED", "Reservation", reservation.getId(),
+            reservation.getFacility().getId(),
+            Map.of("status", reservation.getStatus().name()),
+            Map.of(
+                "action", "SOFT_DELETE",
+                "checkInId", checkIn.getId().toString(),
+                "reservationCode", reservation.getReservationCode(),
+                "reason", "Nhân viên xóa đơn sau khi bàn giao thành công (Soft Delete)"
+            )
+        );
+    }
+
     private CheckIn requireWorkflowStep(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1297,6 +1327,7 @@ public class CheckInHandoverService {
                 || payment.getRefundedAmount().signum() != 0) return false;
             var proof = paymentProvenance.classify(payment);
             if (proof == PaymentProvenance.Classification.VERIFIED
+                || proof == PaymentProvenance.Classification.SIMULATED
                 || (proof == PaymentProvenance.Classification.SANDBOX
                     && sandboxPaymentPolicy.evaluate(payment, proof).eligibleForReconciliation())) {
                 return true;
@@ -1868,8 +1899,8 @@ public class CheckInHandoverService {
             : objectMapper.convertValue(line.actualGoods(), GoodsItemRequest.class);
         if (line.actualGoods() == null) {
         item.setCategory(original.getCategory());
-        item.setCatalogCategoryId(original.getCatalogCategoryId());
-        item.setCatalogMaterialId(original.getCatalogMaterialId());
+        item.setCatalogCategoryId(line.actualCategoryId() == null ? original.getCatalogCategoryId() : line.actualCategoryId());
+        item.setCatalogMaterialId(line.actualCategoryId() == null ? original.getCatalogMaterialId() : line.actualMaterialId());
         item.setCategoryCode(original.getCategoryCode());
         item.setCategoryName(original.getCategoryName());
         item.setMaterialCode(original.getMaterialCode());
@@ -2104,7 +2135,7 @@ public class CheckInHandoverService {
             }
             int actual = line.actualQuantity();
             int expected = item.getQuantity();
-            if (actual > 0 && (item.getCatalogCategoryId() != null || line.actualCategoryId() != null || line.actualMaterialId() != null))
+            if (actual > 0 && line.actualGoods() == null && (item.getCatalogCategoryId() != null || line.actualCategoryId() != null || line.actualMaterialId() != null))
                 inventoryCatalog.validateInventorySelection(line.actualCategoryId(), line.actualMaterialId(),
                     item.getCatalogCategoryId(), item.getCatalogMaterialId());
             var condition = line.condition();
@@ -2234,11 +2265,12 @@ public class CheckInHandoverService {
     }
 
     private void validateIdentityDocument(Reservation reservation, String documentNumber) {
-        String actualIdentity = com.storagehub.validation.CccdPolicy.normalize(documentNumber);
-        String identityError = com.storagehub.validation.CccdPolicy.error(actualIdentity);
+        String actualIdentity = normalizeIdentityDocument(documentNumber);
+        boolean legacyPassport = actualIdentity != null && actualIdentity.matches("(?i)(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{6,20}");
+        String identityError = legacyPassport ? null : com.storagehub.validation.CccdPolicy.error(actualIdentity);
         if (identityError != null) throw ApiExceptions.validation(identityError, null);
         String declaredIdentity = normalizeIdentityDocument(reservation.getIdentityDocumentNumber());
-        if (!com.storagehub.validation.IdentityDocumentPolicy.isValid(actualIdentity)) {
+        if (!legacyPassport && !com.storagehub.validation.IdentityDocumentPolicy.isValid(actualIdentity)) {
             throw ApiExceptions.validation(com.storagehub.validation.IdentityDocumentPolicy.MESSAGE, null);
         }
 

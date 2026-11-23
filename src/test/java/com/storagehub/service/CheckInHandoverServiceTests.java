@@ -5,6 +5,8 @@ import com.storagehub.domain.model.SystemPermission;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -133,6 +135,12 @@ class CheckInHandoverServiceTests {
         User customer = entityWithId(new User());
         customer.setFullName("Customer A");
         customer.setEmail("customer@example.com");
+        customer.setPhone("0912345678");
+        customer.setPermanentAddress("123 Duong Le Loi, Q1, TP HCM");
+        customer.setEmergencyContactName("Nguoi Than");
+        customer.setEmergencyContactPhone("0987654321");
+        customer.getProfileDetails().setEmergencyContactRelationship("Bo me");
+        customer.getProfileDetails().setEmergencyContactConsent(true);
 
         unit = entityWithId(new StorageUnit());
         unit.setFacility(facility);
@@ -306,6 +314,7 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
@@ -327,18 +336,19 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
 
         var response = service.verifyIdentity(
-            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("07420400521", "Khách hàng đổi CCCD mới")
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("074204005212", "Khách hàng đổi CCCD mới")
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
-        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("07420400521");
-        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("07420400521");
-        assertThat(checkIn.getIdentityVerificationNote()).contains("07420400521");
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("074204005212");
+        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("074204005212");
+        assertThat(checkIn.getIdentityVerificationNote()).contains("Khách hàng đổi CCCD mới");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
     }
 
@@ -842,7 +852,7 @@ class CheckInHandoverServiceTests {
             Rental rental = checkIn.getRental();
             assertThat(rental.getInventoryRemovalNotifiedAt()).isEqualTo(exceedsCapacity ? publishedAt : null);
             assertThat(rental.getInventoryRemovalDeadlineAt())
-                .isEqualTo(exceedsCapacity ? publishedAt.plusSeconds(7 * 86_400) : null);
+                .isEqualTo(exceedsCapacity ? InventoryTimelinePolicy.removalDeadline(publishedAt) : null);
         }
     }
 
@@ -941,6 +951,33 @@ class CheckInHandoverServiceTests {
         photo.setContentType("image/png");
         ReflectionTestUtils.setField(photo, "createdAt", checkIn.getInventoryArrivedAt().plusSeconds(1));
         return photo;
+    }
+
+    @Test
+    void archivesCompletedCheckInWithAuditLog() {
+        checkIn.setStatus(CheckInStatus.completed);
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+
+        service.archiveCompleted(actor, checkIn.getId());
+
+        assertThat(reservation.getArchivedAt()).isNotNull();
+        verify(reservationRepository).saveAndFlush(reservation);
+        verify(auditLogService).recordMutation(
+            isNull(), eq("CHECKIN_ORDER_DELETED"), eq("Reservation"), eq(reservation.getId()),
+            eq(reservation.getFacility().getId()), any(), any()
+        );
+    }
+
+    @Test
+    void rejectsArchiveWhenCheckInNotCompleted() {
+        checkIn.setStatus(CheckInStatus.scheduled);
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+
+        assertThatThrownBy(() -> service.archiveCompleted(actor, checkIn.getId()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("Chỉ có thể xóa/lưu trữ đơn sau khi bàn giao thành công");
     }
 
     private CompleteCheckInRequest validCompletionRequest() {

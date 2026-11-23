@@ -55,6 +55,8 @@ public record CompleteCheckInRequest(
         UUID actualMaterialId
     ) {
         public enum Condition { INTACT, DAMAGED, NOT_PRESENT }
+        public UUID actualCategoryId() { return actualGoods == null ? actualCategoryId : actualGoods.getCatalogCategoryId(); }
+        public UUID actualMaterialId() { return actualGoods == null ? actualMaterialId : actualGoods.getCatalogMaterialId(); }
         public InventoryLine(UUID id, Integer quantity, Condition condition, String note, InventoryMeasurements measurements, com.storagehub.api.reservation.GoodsItemRequest goods) { this(id, quantity, condition, note, measurements, goods, null, null); }
         public InventoryLine(UUID id, Integer quantity, Condition condition, String note, InventoryMeasurements measurements, UUID category, UUID material) { this(id, quantity, condition, note, measurements, null, category, material); }
 

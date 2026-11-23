@@ -171,6 +171,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         select reservation from Reservation reservation
         left join reservation.assignedUnit assignedUnit
         where reservation.status in :activeStatuses
+          and reservation.archivedAt is null
           and (:facilityId is null or reservation.facility.id = :facilityId)
           and (:status is null or reservation.status = :status)
           and (:scoped = false or reservation.facility.id in :facilityIds)
@@ -229,6 +230,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         join UnitAssignment a on a.reservation = r
         where a.id = (select latest.id from UnitAssignment latest where latest.reservation = r
                       order by latest.assignedAt desc, latest.id desc limit 1)
+          and r.archivedAt is null
           and (
             (r.status in (UNIT_RESERVED, READY_FOR_CHECKIN, AWAITING_CUSTOMER_RECEIPT, PREPARING, COMPLETED)
               and r.assignedUnit is not null and a.status in (ACTIVE, COMPLETED))

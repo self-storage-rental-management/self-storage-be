@@ -407,6 +407,7 @@ public class BusinessPolicyService {
         }
     }
 
+    @Transactional
     public void deletePackagePolicy(ActorPrincipal actor, UUID policyId) {
         requirePolicyOwner(actor);
 
@@ -561,10 +562,21 @@ public class BusinessPolicyService {
             }
         }
 
+        UUID facilityId = null;
+        String facilityName = null;
+        if (p.getFacility() != null) {
+            facilityId = p.getFacility().getId();
+            try {
+                facilityName = p.getFacility().getName();
+            } catch (Exception ignored) {
+                facilityName = "Cơ sở " + facilityId;
+            }
+        }
+
         return new RentalPackagePolicyResponse(
             p.getId(),
-            p.getFacility().getId(),
-            p.getFacility().getName(),
+            facilityId,
+            facilityName,
             p.getCode(),
             p.getName(),
             p.getRentalMonths(),
