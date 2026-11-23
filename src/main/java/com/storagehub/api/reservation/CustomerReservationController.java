@@ -192,6 +192,17 @@ public class CustomerReservationController {
         );
     }
 
+    @PostMapping("/{reservationId}/inventory-resolution")
+    public ApiResponse<ReservationDetailResponse> resolveInventory(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody InventoryResolutionRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.resolveInventory(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/check-in-appointment")
     public ApiResponse<ReservationResponse> setCheckInAppointment(
         @PathVariable UUID reservationId,

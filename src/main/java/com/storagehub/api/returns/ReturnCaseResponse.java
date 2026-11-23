@@ -86,8 +86,27 @@ public record ReturnCaseResponse(
     Instant setupReturnedAt,
     String setupEarlyExitPolicyVersion,
     BigDecimal rentalRefundCredit,
-    BigDecimal earlyTerminationFee
+    BigDecimal earlyTerminationFee,
+    Instant noShowAt,
+    Instant recoveryEligibleAt,
+    Instant recoveryTaskCreatedAt,
+    UUID recoveryWitnessStaffId,
+    String recoveryWitnessStaffName,
+    Instant recoveryTaskDeadlineAt
 ) {
+    public boolean isManagerApprovalRequired() {
+        return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
+            && (returnType == ReturnType.INVENTORY_MISMATCH || returnType == ReturnType.RETURN_IN_SETUP || returnType == ReturnType.CANCELLED_IN_SETUP);
+    }
+    public Instant getManagerReviewDueAt() {
+        return status == ReturnCaseStatus.awaiting_business_review && inspectedAt != null
+            ? inspectedAt.plus(6, java.time.temporal.ChronoUnit.HOURS) : null;
+    }
+    public Instant getCustomerConfirmationDueAt() {
+        Instant published = reviewedAt != null ? reviewedAt : inspectedAt;
+        return status == ReturnCaseStatus.awaiting_customer_confirmation && published != null
+            ? published.plus(72, java.time.temporal.ChronoUnit.HOURS) : null;
+    }
     /** Existing readers can omit the new setup settlement projection fields. */
     public ReturnCaseResponse(
         UUID id,
@@ -144,7 +163,18 @@ public record ReturnCaseResponse(
         OverdueSettlement overdueSettlement,
         String settlementBlocker
     ) {
-        this(id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName, customerEmail, customerPhone, status, null, null, requestedAt, scheduledDate, customerNotes, inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount, damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount, amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision, customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote, settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus, recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker, null, null, false, false, null, false, false, null, null, null, null);
+        this(
+            id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName,
+            customerEmail, customerPhone, status, null, null, requestedAt, scheduledDate, customerNotes,
+            inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes,
+            evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount,
+            damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount,
+            amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision,
+            customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
+            settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
+            recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null
+        );
     }
 
     public record SettlementReceipt(
@@ -155,7 +185,15 @@ public record ReturnCaseResponse(
         UUID receiptFileId,
         Instant recordedAt
     ) {}
-    public record OverdueSettlement(BigDecimal accruedAmount,BigDecimal settlementAmount,Long overdueDays,Instant calculatedAt,boolean requiresReconciliation) {}
+
+    public record OverdueSettlement(
+        BigDecimal accruedAmount,
+        BigDecimal settlementAmount,
+        Long overdueDays,
+        Instant calculatedAt,
+        boolean requiresReconciliation
+    ) {}
+
     public record EarlyTerminationSummary(
         String type,
         BigDecimal earlyTerminationFee,

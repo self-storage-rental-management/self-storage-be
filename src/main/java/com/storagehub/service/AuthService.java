@@ -464,6 +464,9 @@ public class AuthService {
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
         ActorResponse before = actorResponseMapper.toResponse(user);
 
+        if (request.profileDetails() != null) {
+            user.setProfileDetails(CustomerProfileDetailsPolicy.merge(user.getProfileDetails(), request.profileDetails()));
+        }
         user.setFullName(requireText(request.fullName(), "fullName"));
         if (request.phone() != null) {
             user.setPhone(normalizeNullable(request.phone()));

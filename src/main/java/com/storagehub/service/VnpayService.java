@@ -418,9 +418,10 @@ public class VnpayService {
             PaymentStatus previousStatus = payment.getStatus();
             payment.setStatus(PaymentStatus.FAILED);
             payment.setFailureCode(responseCode);
-            payment.setFailureReason("VNPAY transaction was not successful");
-            if (previousStatus != PaymentStatus.FAILED && reservation != null) {
-                notifyPaymentFailure(payment);
+            payment.setFailureReason("thanh toán VNPAY không thành công");
+            if (previousStatus != PaymentStatus.FAILED) {
+                if (reservation != null) notifyPaymentFailure(payment);
+                else if (payment.getRenewal() != null) notifyRenewalPaymentFailure(payment);
             }
             if(reservation!=null)expireGraceReservationAfterFinalFailure(payment, reservation);
         }
@@ -1198,6 +1199,17 @@ public class VnpayService {
         );
     }
 
+    private void notifyRenewalPaymentFailure(Payment payment) {
+        var renewal = payment.getRenewal();
+        if (renewal == null || renewal.getRental() == null || renewal.getRental().getCustomer() == null) return;
+        notificationService.createNotification(
+            renewal.getRental().getCustomer().getId(), NotificationType.PAYMENT,
+            "Thanh toán gia hạn chưa thành công",
+            "Giao dịch VNPay cho yêu cầu gia hạn chưa thành công. Bạn có thể thử lại khi thời hạn thanh toán vẫn còn.",
+            renewal.getId()
+        );
+    }
+
     private void setIfPresent(String value, java.util.function.Consumer<String> setter) {
         if (value != null && !value.isBlank()) setter.accept(value);
     }
@@ -1216,14 +1228,37 @@ public class VnpayService {
     }
     /** Transaction A only: no calendar, Ledger or activation work can roll back received funds. */
     private void recordVerifiedRenewalPayment(Payment payment,Map<String,String> query,Instant paidAt) {
-        if(payment.getRenewalEvidenceRef()==null) {
+        boolean firstVerification = payment.getRenewalEvidenceRef() == null;
+        if(firstVerification) {
             var evidence=auditLogService.recordMutation((User)null,PaymentProvenance.CALLBACK_ACTION,"Payment",payment.getId(),
                 payment.getRenewal().getRental().getFacility().getId(),null,renewalCallbackProof(payment,query,paidAt));
             payment.setRenewalEvidenceRef(evidence.getId());
         }
         payment.setRenewalNextRetryAt(Instant.now());
         if(paymentEvents!=null)paymentEvents.publishEvent(new com.storagehub.service.ledger.RenewalPaymentReconciler.Verified(payment.getId()));
-        sendRenewalPaymentBillEmail(payment, paidAt);
+        if (firstVerification) {
+            boolean deposit = isRenewalDeposit(payment);
+            if (deposit) {
+                var rental = payment.getRenewal().getRental();
+                notificationService.notifyRenewalDepositReceived(rental.getCustomer().getId(),
+                    payment.getRenewal().getId(), formatVnd(payment.getAmount()));
+            }
+            sendRenewalPaymentBillEmail(payment, paidAt, deposit);
+        }
+    }
+
+    private boolean isRenewalDeposit(Payment payment) {
+        if (payment.getPurpose() != PaymentType.RENEWAL) return false;
+        var quote = payment.getRenewalRevision().getQuote();
+        if (quote == null || quote.getTermsJson() == null) return false;
+        try {
+            var terms = objectMapper.readValue(quote.getTermsJson(), com.storagehub.api.renewal.RenewalQuoteResponse.Terms.class);
+            return terms != null && terms.renewalDepositAmount() != null && terms.renewalDepositAmount().signum() > 0
+                && terms.renewalDepositAmount().compareTo(payment.getAmount()) == 0;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            log.warn("Cannot identify deposit from accepted terms for payment {}", payment.getId());
+            return false;
+        }
     }
     private com.storagehub.domain.model.ActivityLog recordRenewalGatewayEvidence(
         Payment payment,Map<String,String> query,Instant gatewayPaidAt,boolean accepted,String reason
@@ -1260,7 +1295,24 @@ public class VnpayService {
         payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
         payment.setFailureCode("PAYMENT_AFTER_DEADLINE");
         payment.setFailureReason("VNPAY recorded Renewal funds after the persisted payment deadline; manual financial reconciliation is required");
-        if (previousStatus != PaymentStatus.PAID) sendRenewalPaymentBillEmail(payment, gatewayPaidAt);
+        if (previousStatus != PaymentStatus.PAID) {
+            var renewal = payment.getRenewal();
+            var rental = renewal.getRental();
+            notificationService.createNotification(
+                rental.getCustomer().getId(), NotificationType.PAYMENT,
+                "Thanh toán gia hạn đang được đối soát",
+                "VNPay đã ghi nhận tiền sau thời hạn thanh toán. Khoản tiền được giữ nguyên và đang chờ đối soát.",
+                renewal.getId()
+            );
+            notificationService.createFacilityOperationsNotifications(
+                rental.getFacility().getId(), NotificationType.PAYMENT,
+                "Thanh toán gia hạn trễ cần đối soát",
+                "VNPay đã ghi nhận tiền gia hạn của khách hàng " + rental.getCustomer().getFullName()
+                    + " sau thời hạn. Cần đối soát tài chính thủ công trước khi tiếp tục xử lý.",
+                renewal.getId()
+            );
+            sendRenewalPaymentBillEmail(payment, gatewayPaidAt, false);
+        }
     }
     private boolean replayFieldMatches(String incoming, String recorded) {
         // Missing optional fields were previously no-ops; they must not enrich a PAID row either.
@@ -1283,8 +1335,9 @@ public class VnpayService {
         payment.setProcessedAt(Instant.now());
         payment.setFailureCode(code);
         payment.setFailureReason(reason);
-        if (previousStatus != PaymentStatus.FAILED && payment.getReservation()!=null) {
-            notifyPaymentFailure(payment);
+        if (previousStatus != PaymentStatus.FAILED) {
+            if (payment.getReservation()!=null) notifyPaymentFailure(payment);
+            else if (payment.getRenewal()!=null) notifyRenewalPaymentFailure(payment);
         }
     }
     private void markLatePaymentForReconciliation(Payment payment, Instant gatewayPaidAt) {
@@ -1399,7 +1452,6 @@ public class VnpayService {
 
             String fullName = customer != null && customer.getFullName() != null ? customer.getFullName() : "Quý khách";
 
-            String invoiceNumber = payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : reservation.getReservationCode();
             String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
             String amountFormatted = formatVnd(payment.getAmount());
             String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
@@ -1434,7 +1486,7 @@ public class VnpayService {
                 userId,
                 email,
                 fullName,
-                invoiceNumber,
+                payment.getId(),
                 transactionNo,
                 amountFormatted,
                 paidAtFormatted,
@@ -1450,7 +1502,7 @@ public class VnpayService {
         }
     }
 
-    private void sendRenewalPaymentBillEmail(Payment payment, Instant gatewayPaidAt) {
+    private void sendRenewalPaymentBillEmail(Payment payment, Instant gatewayPaidAt, boolean deposit) {
         if (transactionalEmailService == null || payment == null || payment.getRenewal() == null) return;
         try {
             var renewal = payment.getRenewal();
@@ -1461,7 +1513,6 @@ public class VnpayService {
             if (email == null || email.isBlank()) return;
 
             String fullName = customer.getFullName() != null ? customer.getFullName() : "Quý khách";
-            String invoiceNumber = payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : ("INV-" + payment.getId().toString().substring(0, 8).toUpperCase());
             String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
             String amountFormatted = formatVnd(payment.getAmount());
             String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
@@ -1470,28 +1521,23 @@ public class VnpayService {
             String facilityName = rental.getFacility() != null ? rental.getFacility().getName() : "StorageHub";
             String facilityAddress = rental.getFacility() != null && rental.getFacility().getAddress() != null
                 ? rental.getFacility().getAddress() : "";
-            java.time.LocalDate newEndDate = renewal.getNewEndDate();
-            String newEndDateFormatted = newEndDate != null
-                ? "Thời hạn hợp đồng mới: " + newEndDate.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) : "N/A";
-
-            String note = "Hợp đồng thuê của bạn đã được gia hạn tự động trên hệ thống mà không cần đến cơ sở ký lại giấy tờ. Quý khách có thể tiếp tục sử dụng kho theo thời hạn mới.";
-            if (payment.getFailureCode() != null) {
-                note = "VNPay đã ghi nhận tiền; kỳ gia hạn chưa được xác nhận và đang chờ đối soát. Vui lòng lưu biên lai để đối chiếu.";
-            }
+            String note = payment.getRenewalEvidenceRef() == null
+                ? "VNPay đã ghi nhận tiền và giao dịch đang chờ đối soát. Vui lòng lưu biên lai để đối chiếu."
+                : "VNPay đã ghi nhận khoản thanh toán. Vui lòng theo dõi trạng thái xử lý trong hồ sơ gia hạn.";
 
             transactionalEmailService.sendPaymentBillAsync(
                 customer.getId(),
                 email,
                 fullName,
-                invoiceNumber,
+                payment.getId(),
                 transactionNo,
                 amountFormatted,
                 paidAtFormatted,
                 unitCode,
                 facilityName,
                 facilityAddress,
-                newEndDateFormatted,
-                "Thanh toán gia hạn hợp đồng",
+                null,
+                deposit ? "Tiền cọc gia hạn qua VNPay" : "Thanh toán gia hạn hợp đồng",
                 note
             );
         } catch (Exception ex) {

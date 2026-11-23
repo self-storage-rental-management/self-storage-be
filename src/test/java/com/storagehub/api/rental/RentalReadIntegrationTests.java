@@ -22,12 +22,13 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.util.LinkedMultiValueMap;
 
 @DataJpaTest
-@Import(RentalQueryService.class)
+@Import({RentalQueryService.class, com.storagehub.testsupport.DisplayCodeTestConfiguration.class})
 @ActiveProfiles("test")
 class RentalReadIntegrationTests {
     @Autowired EntityManager em;
     @Autowired RentalQueryService service;
     @Autowired RentalRepository repo;
+    @Autowired com.storagehub.service.BusinessRecordCodes codes;
 
     @Test void realQueriesScopeFilterPaginateAndHideOtherOwners() {
         Rental own = fixture("A", "Unit_%", "Dương", LocalDate.of(2026,10,31));
@@ -40,8 +41,12 @@ class RentalReadIntegrationTests {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
         var manager = actor(own,true,Map.of(own.getFacility().getId(),FacilityScopeLevel.READ,other.getFacility().getId(),FacilityScopeLevel.MANAGE));
         var params = new LinkedMultiValueMap<String,String>(); params.add("size","1"); params.add("sort","contractEndDate,asc");
+        when(codes.findAll(List.of("TH:" + own.getId()))).thenReturn(Map.of("TH:" + own.getId(), "SH-123456"));
         var result = service.list(manager,RentalQuery.parse(params,true),true,"test");
         assertThat(result.pagination().totalItems()).isEqualTo(2); assertThat(result.data()).hasSize(1);
+        assertThat(result.data().getFirst().displayCode()).isEqualTo("SH-123456");
+        when(codes.find("TH:" + own.getId())).thenReturn("SH-123456");
+        assertThat(service.detail(manager, own.getId(), true).displayCode()).isEqualTo("SH-123456");
         params.add("endTo","2026-10-31");
         assertThat(service.list(manager,RentalQuery.parse(params,true),true,"test").pagination().totalItems()).isEqualTo(1);
         params.clear(); params.add("search","_%");
@@ -50,6 +55,11 @@ class RentalReadIntegrationTests {
         assertThat(service.list(manager,RentalQuery.parse(params,true),true,"test").data()).hasSize(1);
         params.clear(); params.add("search",other.getId().toString());
         assertThat(service.list(customer,RentalQuery.parse(params,false),false,"test").data()).isEmpty();
+        params.clear(); params.add("search", "sh-654321");
+        when(codes.resource("TH", "sh-654321")).thenReturn("TH:" + other.getId());
+        assertThat(service.list(manager, RentalQuery.parse(params, true), true, "test").data())
+            .extracting(RentalSummaryResponse::id).containsExactly(other.getId());
+        assertThat(service.list(customer, RentalQuery.parse(params, false), false, "test").data()).isEmpty();
         params.clear(); params.add("facilityId",UUID.randomUUID().toString());
         assertThatThrownBy(() -> service.list(manager,RentalQuery.parse(params,true),true,"test"))
             .isInstanceOfSatisfying(ApiException.class,e -> assertThat(e.getStatus().value()).isEqualTo(403));

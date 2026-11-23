@@ -91,6 +91,41 @@ class VnpayProvenanceCallbackTests {
         verify(audit, never()).recordMutation(isNull(), eq(PaymentProvenance.CALLBACK_ACTION), eq("Payment"),
             any(), any(), isNull(), any());
     }
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void verifiedRenewalCallbackSendsOneReceiptAndIdentifiesDeposits(boolean deposit) throws Exception {
+        var payment = fixture();
+        var booking = payment.getReservation();
+        var customer = booking.getCustomer();
+        customer.setEmail("customer@example.test");
+        var rental = id(new Rental());
+        rental.setFacility(booking.getFacility());
+        rental.setCustomer(customer);
+        var renewal = id(new Renewal());
+        renewal.setRental(rental);
+        var quote = mock(com.storagehub.service.renewal.persistence.RenewalQuote.class);
+        when(quote.getTermsJson()).thenReturn(deposit ? "{\"renewalDepositAmount\":100}" : "{\"renewalDepositAmount\":0}");
+        payment.setRenewalRevision(id(new com.storagehub.service.renewal.persistence.RenewalAcceptedRevision(
+            renewal, quote, 1, Instant.now(), null)));
+        payment.setPaymentDeadline(booking.getPaymentExpiresAt());
+        payment.setReservation(null);
+        payment.setRenewal(renewal);
+        payment.setPurpose(PaymentType.RENEWAL);
+        when(audit.recordMutation(isNull(), eq(PaymentProvenance.CALLBACK_ACTION), eq("Payment"), any(),
+            any(), isNull(), any())).thenReturn(id(new ActivityLog()));
+        var emails = mock(com.storagehub.service.email.TransactionalEmailService.class);
+        ReflectionTestUtils.setField(service, "transactionalEmailService", emails);
+
+        var signed = callback(Map.of());
+        service.processCallback(signed);
+        service.processCallback(signed);
+
+        verify(notifications, times(deposit ? 1 : 0)).notifyRenewalDepositReceived(customer.getId(), renewal.getId(), "100 đ");
+        verify(emails).sendPaymentBillAsync(eq(customer.getId()), eq(customer.getEmail()), anyString(), eq(payment.getId()),
+            eq("sandbox-transaction"), eq("100 đ"), anyString(), anyString(), nullable(String.class), anyString(),
+            isNull(), eq(deposit ? "Tiền cọc gia hạn qua VNPay" : "Thanh toán gia hạn hợp đồng"), anyString());
+        verifyNoMoreInteractions(emails, notifications);
+    }
     static java.util.stream.Stream<Map<String, String>> conflictingReplays() {
         return java.util.stream.Stream.of(
             Map.of("vnp_TransactionNo", "another-transaction"),

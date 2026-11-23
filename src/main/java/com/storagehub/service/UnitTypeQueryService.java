@@ -117,7 +117,7 @@ public class UnitTypeQueryService {
             unitType.getAreaM2(),
             unitType.getVolumeM3(),
             unitType.getMonthlyPrice(),
-            unitType.getSecurityDepositAmount(),
+            unitType.getEffectiveSecurityDepositAmount(),
             unitType.getImageUrl(),
             unitType.getMaxLoadKg(),
             unitType.getMaxStoredLoadKg(),

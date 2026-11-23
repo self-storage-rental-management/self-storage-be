@@ -30,13 +30,14 @@ public class CheckInController {
         @RequestParam(required = false) UUID facilityId,
         @RequestParam(required = false) String q,
         @RequestParam(required = false) String status,
+        @RequestParam(defaultValue = "ALL") CheckInHandoverService.WorkGroup group,
         @RequestParam(required = false) Instant scheduledFrom,
         @RequestParam(required = false) Instant scheduledTo,
         @RequestParam(defaultValue = "0") int page,
         @RequestParam(defaultValue = "20") int pageSize
     ) {
         return service.list(
-            actorContext.required(), facilityId, q, status, scheduledFrom, scheduledTo,
+            actorContext.required(), facilityId, q, status, group, scheduledFrom, scheduledTo,
             page, pageSize,
             CorrelationIdContext.current()
         );
@@ -108,6 +109,26 @@ public class CheckInController {
         );
     }
 
+    @PostMapping("/{checkInId}/receipt-reminder")
+    public ApiResponse<ReceiptReminderResponse> remindCustomerReceipt(
+        @PathVariable UUID checkInId
+    ) {
+        return new ApiResponse<>(
+            service.remindCustomerReceipt(actorContext.required(), checkInId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/receipt-release")
+    public ApiResponse<CheckInResponse> releaseAfterCustomerReceiptTimeout(
+        @PathVariable UUID checkInId
+    ) {
+        return new ApiResponse<>(
+            service.releaseAfterCustomerReceiptTimeout(actorContext.required(), checkInId),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{checkInId}/setup/complete")
     public ApiResponse<CheckInResponse> completeSetup(
         @PathVariable UUID checkInId,
@@ -148,6 +169,17 @@ public class CheckInController {
     ) {
         return new ApiResponse<>(
             service.reject(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/inventory-partial-removal")
+    public ApiResponse<CheckInResponse> confirmPartialInventoryRemoval(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody ConfirmInventoryPartialRemovalRequest request
+    ) {
+        return new ApiResponse<>(
+            service.confirmPartialInventoryRemoval(actorContext.required(), checkInId, request),
             CorrelationIdContext.current()
         );
     }

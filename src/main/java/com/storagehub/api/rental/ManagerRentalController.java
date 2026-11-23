@@ -37,7 +37,7 @@ public class ManagerRentalController {
         @Parameter(name="page", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, schema=@Schema(type="integer",defaultValue="0",minimum="0")),
         @Parameter(name="size", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, schema=@Schema(type="integer",defaultValue="20",minimum="1",maximum="100")),
         @Parameter(name="status", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, schema=@Schema(allowableValues={"active","return_requested","return_inspection","closing","completed"})),
-        @Parameter(name="search", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, description="Exact Rental UUID or unit code/customer full-name substring; max 200 characters"),
+        @Parameter(name="search", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, description="Exact SH display code, rental UUID or unit code/customer full-name substring; max 200 characters"),
         @Parameter(name="endFrom", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, schema=@Schema(type="string",format="date")),
         @Parameter(name="endTo", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, schema=@Schema(type="string",format="date")),
         @Parameter(name="sort", in=io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY, description="One field,direction: createdAt,contractEndDate,startDate,monthlyPrice,id / asc,desc", schema=@Schema(defaultValue="createdAt,desc"))})

@@ -26,7 +26,17 @@ public class CustomerLifecycleEmailService {
 
     public void notification(Notification notice) {
         User user = notice.getUser();
-        if (user.getRoles().stream().noneMatch(role -> role.getCode() == RoleCode.CUSTOMER)) return;
+        if (user.getRoles().stream().noneMatch(role -> role.getCode() == RoleCode.CUSTOMER)) {
+            boolean operations = user.getRoles().stream().anyMatch(role -> java.util.Set.of(RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS).contains(role.getCode()));
+            if (!operations || notice.getType() != NotificationType.CHECKIN && notice.getType() != NotificationType.RETURN) return;
+            var vars = new LinkedHashMap<String,Object>();
+            vars.put("fullName", user.getFullName()); vars.put("title", notice.getTitle());
+            vars.put("summary", safeSummary(notice.getContent())); vars.put("details", Map.of("Xử lý hồ sơ", "Đăng nhập và mở thông báo để xem công việc trong phạm vi cơ sở của bạn."));
+            vars.put("detailsUrl", properties.getFrontendBaseUrl().replaceAll("/+$", "") + "/login");
+            mail.queueTemplate(user.getId(), user.getEmail(), "StorageHub - " + notice.getTitle(), "customer-lifecycle", vars,
+                "OPERATIONS_TRANSACTIONAL_EMAIL_SENT", "notification:" + notice.getId());
+            return;
+        }
         // System messages may include promotions; those need a separate consent/unsubscribe flow.
         if (notice.getType() == NotificationType.SYSTEM) return;
         if (notice.getType() == NotificationType.PAYMENT && notice.getTitle().equals("Thanh toán thành công")) return;
@@ -111,6 +121,28 @@ public class CustomerLifecycleEmailService {
         send(reservation.getCustomer(), "hold-expiring:" + reservation.getId() + ":" + reservation.getPaymentExpiresAt(), "Đơn giữ kho sắp hết hạn thanh toán",
             "Còn tối đa 5 phút để thanh toán cọc. Nếu ngân hàng đã trừ tiền, hãy xem trạng thái và hướng dẫn đối soát trước khi thanh toán lại.",
             reservationDetails(reservation), "reservations", reservation.getId(), reservation.getPaymentExpiresAt());
+    }
+
+    public void signingReminder(com.storagehub.service.renewal.operations.RenewalOperationState appointment, boolean finalReminder) {
+        var rental = appointment.getRenewal().getRental();
+        var customer = rental.getCustomer();
+        var start = appointment.getAppointmentStart();
+        var details = new LinkedHashMap<String, String>();
+        details.put("Giờ ký (giờ Việt Nam)", TIME.format(start));
+        details.put("Cơ sở", rental.getFacility().getName());
+        details.put("Địa chỉ", rental.getFacility().getAddress());
+        String title = "Nhắc lịch ký phụ lục gia hạn kho";
+        var vars = new LinkedHashMap<String, Object>();
+        vars.put("fullName", customer.getFullName());
+        vars.put("title", title);
+        vars.put("summary", "Bạn có lịch ký phụ lục gia hạn kho. Vui lòng đến cơ sở theo giờ hẹn bên dưới.");
+        vars.put("details", details);
+        vars.put("detailsUrl", properties.getFrontendBaseUrl().replaceAll("/+$", "") + "/login?emailSection=rental-records");
+        vars.put("_appointmentRef", appointment.getAppointmentRef().toString());
+        vars.put("_expiresAt", (finalReminder ? start : start.minus(java.time.Duration.ofHours(2))).toString());
+        String key = "renewal-signing:" + appointment.getAppointmentRef() + (finalReminder ? ":2h" : ":24h");
+        mail.queueTemplate(customer.getId(), customer.getEmail(), "StorageHub - " + title, "customer-lifecycle",
+            vars, "CUSTOMER_TRANSACTIONAL_EMAIL_SENT", key);
     }
 
     public void billingReminder(Rental rental, com.storagehub.service.RentalReadSources.Financial financial, long remainingDays) {

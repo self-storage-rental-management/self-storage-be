@@ -28,8 +28,8 @@ public class BusinessRecordCodeCoordinator {
     @Transactional
     public void register() {
         Instant at=Instant.now();
-        for(String table:List.of("renewals","support_tickets")) {
-            String type=table.equals("renewals")?"GH":"HT";
+        for(String table:List.of("renewals","support_tickets","rentals")) {
+            String type=switch (table) { case "renewals" -> "GH"; case "rentals" -> "TH"; default -> "HT"; };
             jdbc.query("select lower(bin_to_uuid(t.id)) id,t.created_at from "+table+" t where not exists(select 1 from business_record_codes c where c.resource_key=concat(?,lower(bin_to_uuid(t.id)))) order by t.created_at,t.id limit 100",
                 (rs,i)->Map.entry(rs.getString(1),rs.getTimestamp(2).toInstant()),type+":")
                 .forEach(row->codes.assign(type,type+":"+row.getKey(),row.getValue()));
