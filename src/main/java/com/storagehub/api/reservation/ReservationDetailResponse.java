@@ -40,15 +40,17 @@ public class ReservationDetailResponse {
     private String rentalStatus;
     private Instant inventoryDueAt;
     private Instant inventoryFinalDeadlineAt;
+    private Instant inventoryResultPublishedAt;
+    private Instant inventoryRemainderDeadlineAt;
     private Instant inventoryRemovalPublishedAt;
-    public Instant getInventoryRemovalPublishedAt() { return inventoryRemovalPublishedAt; }
-    public void setInventoryRemovalPublishedAt(Instant value) { inventoryRemovalPublishedAt = value; }
     private Instant inventoryRemovalDeadlineAt;
     private Instant inventoryEscalatedAt;
     private Instant setupCompletedAt;
     private Instant inventoryAppointmentAt;
     private Instant inventoryArrivedAt;
     private Instant inventoryIdentityVerifiedAt;
+    public Instant getInventoryRemovalPublishedAt() { return inventoryRemovalPublishedAt; }
+    public void setInventoryRemovalPublishedAt(Instant value) { inventoryRemovalPublishedAt = value; }
     private InventoryResolutionStatus inventoryResolutionStatus;
     private boolean inventoryFullFit;
     private boolean inventoryPartialFitAvailable;
@@ -129,6 +131,10 @@ public class ReservationDetailResponse {
     public void setInventoryFinalDeadlineAt(Instant value) { inventoryFinalDeadlineAt = value; }
     public Instant getInventoryRemovalDeadlineAt() { return inventoryRemovalDeadlineAt; }
     public void setInventoryRemovalDeadlineAt(Instant value) { inventoryRemovalDeadlineAt = value; }
+    public Instant getInventoryResultPublishedAt() { return inventoryResultPublishedAt; }
+    public void setInventoryResultPublishedAt(Instant value) { inventoryResultPublishedAt = value; }
+    public Instant getInventoryRemainderDeadlineAt() { return inventoryRemainderDeadlineAt; }
+    public void setInventoryRemainderDeadlineAt(Instant value) { inventoryRemainderDeadlineAt = value; }
     public Instant getInventoryEscalatedAt() { return inventoryEscalatedAt; }
     public void setInventoryEscalatedAt(Instant value) { inventoryEscalatedAt = value; }
     public Instant getSetupCompletedAt() { return setupCompletedAt; }

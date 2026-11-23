@@ -355,7 +355,7 @@ public class WorkflowSlaScheduler {
         } else if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
             return null;
         }
-        Instant start = removal ? rental.getInventoryRemovalNotifiedAt() : rental.getMoveInCompletedAt();
+        Instant start = removal ? rental.getInventoryRemovalPublishedAt() : rental.getMoveInCompletedAt();
         Instant due = removal ? rental.getInventoryRemovalDeadlineAt() : rental.getInventoryFinalDeadlineAt();
         if (start == null || due == null) return null;
         Duration warning = !removal && rental.getInventoryDueAt() != null
