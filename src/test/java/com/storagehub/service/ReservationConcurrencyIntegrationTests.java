@@ -98,6 +98,7 @@ class ReservationConcurrencyIntegrationTests {
 
         for (int page = 0; page < 3; page++) {
             var result = reservationRepository.findCheckInWork("ONGOING", now, ReservationCheckInPolicy.firstValidAppointment(now),
+                java.time.Instant.EPOCH, java.time.Instant.EPOCH,
                 site.getId(), null, false, false, null, null, null, true, List.of(site.getId()),
                 org.springframework.data.domain.PageRequest.of(page, 2));
             assertThat(result.getTotalElements()).isEqualTo(6);
@@ -105,11 +106,13 @@ class ReservationConcurrencyIntegrationTests {
                 .containsExactlyElementsOf(List.of("STARTED", "LATE-A", "LATE-B", "NEAR", "LATER", "EXPIRED").subList(page * 2, page * 2 + 2));
         }
         var history = reservationRepository.findCheckInWork("PROCESSED", now, ReservationCheckInPolicy.firstValidAppointment(now),
+            java.time.Instant.EPOCH, java.time.Instant.EPOCH,
             site.getId(), null, false, false, null, now, now.plusSeconds(1), true, List.of(site.getId()),
             org.springframework.data.domain.PageRequest.of(0, 10));
         assertThat(history.getContent()).extracting(row -> row.getReservation().getReservationCode())
             .containsExactly("ABSENT", "CANCELLED", "DONE", "REJECTED");
         var filtered = reservationRepository.findCheckInWork("PROCESSED", now, ReservationCheckInPolicy.firstValidAppointment(now),
+            java.time.Instant.EPOCH, java.time.Instant.EPOCH,
             site.getId(), "UNIT-ABSENT", true, false, CheckInStatus.no_show, now, now.plusSeconds(1), true, List.of(site.getId()),
             org.springframework.data.domain.PageRequest.of(0, 1));
         assertThat(filtered.getContent()).singleElement().satisfies(row -> {

@@ -88,7 +88,9 @@ class CheckInHandoverServiceTests {
 
     private CheckInHandoverService service;
     private ActorPrincipal actor;
+    private ActorPrincipal managerActor;
     private User staff;
+    private User manager;
     private Reservation reservation;
     private StorageUnit unit;
     private UnitAssignment assignment;
@@ -108,11 +110,18 @@ class CheckInHandoverServiceTests {
         ReflectionTestUtils.setField(service,"sandboxPaymentPolicy",sandboxPaymentPolicy);
         staff = entityWithId(new User());
         staff.setFullName("Staff A");
+        manager = entityWithId(new User());
+        manager.setFullName("Manager A");
         Facility facility = entityWithId(new Facility());
         actor = new ActorPrincipal(
             staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
             Set.of(SystemPermission.VIEW_CHECKINS.code(), SystemPermission.PERFORM_CHECKIN.code()),
             Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
+        );
+        managerActor = new ActorPrincipal(
+            manager.getId(), UUID.randomUUID(), Set.of(RoleCode.MANAGER),
+            Set.of(SystemPermission.VIEW_CHECKINS.code(), SystemPermission.MANAGE_RENTALS.code()),
+            Map.of(facility.getId(), FacilityScopeLevel.MANAGE)
         );
         facility.setName("Facility A");
         UnitType unitType = entityWithId(new UnitType());
@@ -622,6 +631,42 @@ class CheckInHandoverServiceTests {
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2025, 1, 1));
         verify(rentalRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void releasesAssignedUnitAfterThreeDaysWithoutCustomerReceiptConfirmation() {
+        Instant handoverAt = Instant.parse("2026-10-12T03:00:00Z");
+        Instant releaseAt = handoverAt.plusSeconds(3 * 86_400L);
+        reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        checkIn.setStatus(CheckInStatus.handover_pending_receipt);
+        checkIn.setCheckedInAt(handoverAt);
+        unit.setStatus(StorageUnitStatus.assigned);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(managerActor.userId())).thenReturn(Optional.of(manager));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.saveAndFlush(assignment)).thenReturn(assignment);
+        when(storageUnitRepository.saveAndFlush(unit)).thenReturn(unit);
+
+        try (var time = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            time.when(Instant::now).thenReturn(releaseAt);
+            var response = service.releaseAfterCustomerReceiptTimeout(managerActor, checkIn.getId());
+
+            assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.cancelled);
+            assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.CANCELLED);
+            assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        }
+        assertThat(reservation.getAssignedUnit()).isNull();
+        assertThat(reservation.getCancellationType())
+            .isEqualTo(com.storagehub.domain.model.ReservationCancellationType.CUSTOMER_RECEIPT_TIMEOUT);
+        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+    }
+
+    @Test
+    void staffCannotReleaseAssignedUnitAfterCustomerReceiptTimeout() {
+        assertThatThrownBy(() -> service.releaseAfterCustomerReceiptTimeout(actor, checkIn.getId()))
+            .hasMessageContaining("Chỉ Manager");
     }
 
     @Test

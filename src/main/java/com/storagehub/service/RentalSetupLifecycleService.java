@@ -1,9 +1,15 @@
 package com.storagehub.service;
 
 import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.model.MaintenanceRecoveryType;
+import com.storagehub.domain.model.MaintenanceTask;
+import com.storagehub.domain.model.MaintenanceTaskStatus;
+import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.TaskPriority;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -13,6 +19,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
 /** Advances the paid term at the free-period deadline unless the customer has already confirmed an earlier start. */
 @Service
@@ -23,6 +31,12 @@ public class RentalSetupLifecycleService {
 
     private final RentalRepository rentalRepository;
     private final NotificationService notificationService;
+
+    @Autowired(required = false)
+    private MaintenanceTaskRepository maintenanceTaskRepository;
+
+    @Value("${storagehub.inventory.recovery-sla-hours:4}")
+    private long inventoryRecoverySlaHours = 4;
 
     static boolean customerCanStartAfterInventory(Rental rental, Instant now) {
         return rental.getStatus() == RentalStatus.setup
@@ -67,26 +81,85 @@ public class RentalSetupLifecycleService {
             rentalRepository.save(rental);
         }
 
-        for (Rental rental : rentalRepository.findByStatusAndInventoryPendingTrue(RentalStatus.active)) {
+        for (Rental rental : rentalRepository.findByInventoryPendingTrueAndStatusIn(
+            java.util.List.of(RentalStatus.setup, RentalStatus.active))) {
             if (rental.getInventoryDueAt() != null && !rental.getInventoryDueAt().isAfter(now)
+                && rental.getInventoryDeadlineReminderAt() == null) {
+                remindInventoryDeadline(rental, now);
+                rentalRepository.save(rental);
+            }
+            if (rental.getInventoryFinalDeadlineAt() != null
+                && !rental.getInventoryFinalDeadlineAt().isAfter(now)
                 && rental.getInventoryEscalatedAt() == null) {
-                escalateInventory(rental, now, "Khách chưa báo hoàn tất chuẩn bị hàng");
+                escalateInventory(rental, now, "Đã quá hạn kiểm kê hàng hóa");
                 rentalRepository.save(rental);
             }
         }
     }
 
+    private void remindInventoryDeadline(Rental rental, Instant now) {
+        notifyCustomer(rental, "Sắp đến hạn kiểm kê hàng hóa",
+            "Hồ sơ hàng hóa của đơn " + rental.getReservation().getReservationCode()
+                + " sắp đến hạn kiểm kê. Staff đã nhận nhiệm vụ và sẽ cập nhật kết quả trên hồ sơ.");
+        notificationService.createFacilityOperationsNotifications(
+            rental.getFacility().getId(), NotificationType.CHECKIN,
+            "Sắp đến hạn kiểm kê hàng hóa",
+            "Đơn " + rental.getReservation().getReservationCode()
+                + " sắp đến hạn kiểm kê. Vui lòng ưu tiên xử lý nhiệm vụ kiểm kê.",
+            rental.getReservation().getId()
+        );
+        rental.setInventoryDeadlineReminderAt(now);
+    }
+
     private void escalateInventory(Rental rental, Instant now, String title) {
+        createInventoryRecoveryTask(rental, now);
         notifyCustomer(rental, title,
             "Rental vẫn ACTIVE từ " + rental.getStartDate()
                 + ", nhưng kiểm kê đầu vào đang chờ xử lý. Vui lòng phối hợp với nhân viên cơ sở.");
         notificationService.createFacilityOperationsNotifications(
             rental.getFacility().getId(), NotificationType.CHECKIN, title,
             "Đơn " + rental.getReservation().getReservationCode()
-                + " chưa có xác nhận hoàn tất chuẩn bị hàng. Chưa tạo nhiệm vụ kiểm kê tự động.",
+                + " đã quá hạn kiểm kê hàng hóa. Vui lòng mở nhiệm vụ kiểm kê và xử lý theo quy trình, không tự động hoàn tất hồ sơ.",
             rental.getReservation().getId()
         );
         rental.setInventoryEscalatedAt(now);
+    }
+
+    private void createInventoryRecoveryTask(Rental rental, Instant now) {
+        if (maintenanceTaskRepository == null || rental.getId() == null || rental.getStorageUnit() == null) {
+            return;
+        }
+        boolean alreadyOpen = maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(
+            rental.getId(),
+            MaintenanceTaskType.maintenance,
+            java.util.List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)
+        ).stream().anyMatch(task -> task.getRecoveryType() == MaintenanceRecoveryType.INVENTORY_OVERDUE);
+        if (alreadyOpen) return;
+
+        MaintenanceTask task = new MaintenanceTask();
+        task.setFacility(rental.getFacility());
+        task.setStorageUnit(rental.getStorageUnit());
+        task.setRental(rental);
+        task.setTitle("Thu hồi hàng do quá hạn kiểm kê");
+        task.setTaskType(MaintenanceTaskType.maintenance);
+        task.setRecoveryType(MaintenanceRecoveryType.INVENTORY_OVERDUE);
+        task.setReason(
+            "Hồ sơ đã quá hạn cuối kiểm kê hàng hóa. Không tự động di chuyển hoặc loại bỏ hàng. "
+                + "Cần hai nhân viên kiểm kê, lập bằng chứng, đưa hàng ra khu vực lưu tạm và ghi nhận bàn giao."
+        );
+        task.setPriority(TaskPriority.high);
+        task.setStatus(MaintenanceTaskStatus.open);
+        task.setDueAt(now.atZone(VIETNAM_ZONE).toLocalDate());
+        task.setDeadlineAt(now.plus(Math.max(1, inventoryRecoverySlaHours), java.time.temporal.ChronoUnit.HOURS));
+        maintenanceTaskRepository.saveAndFlush(task);
+        notificationService.createFacilityOperationsNotifications(
+            rental.getFacility().getId(),
+            NotificationType.CHECKIN,
+            "Cần thu hồi hàng quá hạn kiểm kê",
+            "Đơn " + rental.getReservation().getReservationCode()
+                + " đã quá hạn cuối kiểm kê. Cần phân công hai nhân viên xử lý, ghi bằng chứng và bàn giao hàng vào khu vực lưu tạm.",
+            rental.getReservation().getId()
+        );
     }
 
     private void notifyCustomer(Rental rental, String title, String content) {

@@ -15,6 +15,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SetupEarlyExitPolicyTests {
+    @Test
+    void mismatchUsesVerifiedRentWithoutRequiringOrdinarySetupFeeTerms() {
+        record.setReturnType(com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        record.getRental().getReservation().setSourceQuote(null);
+        pricing.setSetupEarlyExitPolicyVersion(null);
+        pricing.setSetupEarlyExitFee(null);
+        SetupEarlyExitPolicy.capture(record, pricing);
+        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("0");
+        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo("6000000");
+        assertThat(record.isSetupEarlyExit()).isFalse();
+        assertThat(record.getSetupEarlyExitPolicyVersion()).isEqualTo("INVENTORY_MISMATCH_USAGE_V1");
+    }
     private ReturnCase record;
     private ReservationPricingSnapshot pricing;
     private ReservationQuote quote;

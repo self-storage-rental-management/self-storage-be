@@ -168,6 +168,13 @@ public class ReturnFinancialReconciliation {
         ledger.lockForSettlement(account.rentalId(),((Number)row.get("ledger_revision")).longValue());
         var proof=security(rc.getRental());
         if (rc.isSetupExitRequested()) {
+            if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+                && (rc.isSetupEarlyExit()
+                    || !"INVENTORY_MISMATCH_USAGE_V1".equals(rc.getSetupEarlyExitPolicyVersion())
+                    || rc.getEarlyTerminationFee() == null || rc.getEarlyTerminationFee().signum() != 0
+                    || rc.getRentalRefundCredit() == null
+                    || proof.pricing().getNetRentalAmount().compareTo(rc.getRentalRefundCredit()) != 0))
+                throw ApiExceptions.conflict("Bảng kê kiểm kê sai lệch chưa khớp tiền thuê đã đối soát.");
             if (!Objects.equals(row.get("setup_statement_json"), setupStatement(rc)))
                 throw ApiExceptions.conflict("Bảng kê trả kho trong thời gian chuẩn bị đã thay đổi; cần đối soát lại.");
             if (rc.isSetupEarlyExit() && (!SetupEarlyExitPolicy.applies(rc)

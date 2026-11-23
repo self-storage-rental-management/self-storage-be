@@ -251,20 +251,27 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 
     @Query(value = "select r as reservation, c as checkIn, a as assignment " + CHECK_IN_WORK_FROM + """
         order by case
+          when c.status = handover_pending_receipt
+            and c.checkedInAt <= :receiptConfirmationDueCutoff then 0
+          when c.status = handover_pending_receipt
+            and c.checkedInAt <= :receiptConfirmationReminderCutoff then 1
+          when c.status = handover_pending_receipt then 2
           when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED then 5
           when coalesce(r.appointmentAt, c.scheduledAt) < :firstValidAppointment
-            and (c.id is null or c.status in (scheduled, identity_verified, contract_signed, payment_collected)) then 4
+            and (c.id is null or c.status in (scheduled, identity_verified, contract_signed, payment_collected)) then 6
           when c.status in (identity_verified, contract_signed, payment_collected, handover_pending_receipt,
-                            setup_in_progress, setup_completed) then 0
-          when coalesce(r.appointmentAt, c.scheduledAt) <= :now then 1
-          when coalesce(r.appointmentAt, c.scheduledAt) is not null then 2
-          else 3 end,
+                            setup_in_progress, setup_completed) then 3
+          when coalesce(r.appointmentAt, c.scheduledAt) <= :now then 4
+          when coalesce(r.appointmentAt, c.scheduledAt) is not null then 5
+          else 6 end,
           coalesce(r.appointmentAt, c.scheduledAt) asc nulls last, r.reservationCode asc, r.id asc
         """, countQuery = "select count(r.id) " + CHECK_IN_WORK_FROM)
     Page<CheckInWorkRow> findCheckInWork(
         @Param("workGroup") String workGroup,
         @Param("now") Instant now,
         @Param("firstValidAppointment") Instant firstValidAppointment,
+        @Param("receiptConfirmationDueCutoff") Instant receiptConfirmationDueCutoff,
+        @Param("receiptConfirmationReminderCutoff") Instant receiptConfirmationReminderCutoff,
         @Param("facilityId") UUID facilityId,
         @Param("q") String q,
         @Param("statusFilter") boolean statusFilter,

@@ -17,6 +17,7 @@ public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryRes
     Instant actualReturnedAt, Instant completedAt, Financial financialSummary, Access access,
     RentalSummaryResponse.DateSemantics dateSemantics, RentalBookingEvidence bookingEvidence,
     boolean inventoryPending, Instant inventoryDueAt, Instant setupStartedAt, Instant setupEndsAt,
+    Instant inventoryFinalDeadlineAt,
     Instant moveInCompletedAt, Instant inventoryVerifiedAt, boolean setupExitReviewRequired,
     boolean canConfirmRentalStart) {
     @Schema(description = "COMPLETE includes verified security deposit; PARTIAL has verified balances/billing but unknown deposit; UNKNOWN has no verified financial projection.")
