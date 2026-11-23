@@ -61,7 +61,19 @@ public class RenewalOperationService {
     public RenewalOperationResponse detail(ActorPrincipal actor,UUID id,Audience audience) {
         return projection(visible(actor,id,audience,false,Capability.READ));
     }
-    public record CustomerIdentity(UUID renewalId, UUID customerId, String fullName, String identityDocumentNumber) {}
+    public record CustomerIdentity(
+        UUID renewalId,
+        UUID customerId,
+        String fullName,
+        String identityDocumentNumber,
+        String phone,
+        String unitCode,
+        Integer rentalMonths
+    ) {
+        public CustomerIdentity(UUID renewalId, UUID customerId, String fullName, String identityDocumentNumber) {
+            this(renewalId, customerId, fullName, identityDocumentNumber, null, null, null);
+        }
+    }
 
     @Transactional(readOnly=true)
     public CustomerIdentity customerIdentity(ActorPrincipal actor, UUID id) {
@@ -76,8 +88,27 @@ public class RenewalOperationService {
             throw ApiExceptions.conflict("Renewal customer identity binding is incomplete");
         }
         var number = reservation.getIdentityDocumentNumber();
-        return new CustomerIdentity(id, customer.getId(), customer.getFullName(),
-            number == null || number.isBlank() ? null : number.trim());
+        var phone = customer.getPhone();
+        var unitCode = rental.getStorageUnit() != null ? rental.getStorageUnit().getCode() : null;
+        Integer months = null;
+        if (rental.getContractEndDate() != null && renewal.getNewEndDate() != null) {
+            long m = java.time.temporal.ChronoUnit.MONTHS.between(rental.getContractEndDate(), renewal.getNewEndDate());
+            if (m <= 0) {
+                m = java.time.Period.between(rental.getContractEndDate(), renewal.getNewEndDate()).getMonths();
+            }
+            if (m > 0) {
+                months = (int) m;
+            }
+        }
+        return new CustomerIdentity(
+            id,
+            customer.getId(),
+            customer.getFullName(),
+            number == null || number.isBlank() ? null : number.trim(),
+            phone == null || phone.isBlank() ? null : phone.trim(),
+            unitCode,
+            months
+        );
     }
     @Transactional(readOnly=true)
     public RenewalExceptionProposalResponse exceptionProposal(ActorPrincipal actor,UUID id) {
