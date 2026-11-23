@@ -39,6 +39,12 @@ public class ReservationDetailResponse {
     private String rentalStatus;
     private Instant inventoryDueAt;
     private Instant inventoryFinalDeadlineAt;
+    private Instant inventoryRemovalDeadlineAt;
+    private Instant inventoryEscalatedAt;
+    private Instant setupCompletedAt;
+    private Instant inventoryAppointmentAt;
+    private Instant inventoryArrivedAt;
+    private Instant inventoryIdentityVerifiedAt;
     private InventoryResolutionStatus inventoryResolutionStatus;
     private boolean inventoryFullFit;
     private boolean inventoryPartialFitAvailable;
@@ -115,6 +121,18 @@ public class ReservationDetailResponse {
     public void setInventoryDueAt(Instant value) { inventoryDueAt = value; }
     public Instant getInventoryFinalDeadlineAt() { return inventoryFinalDeadlineAt; }
     public void setInventoryFinalDeadlineAt(Instant value) { inventoryFinalDeadlineAt = value; }
+    public Instant getInventoryRemovalDeadlineAt() { return inventoryRemovalDeadlineAt; }
+    public void setInventoryRemovalDeadlineAt(Instant value) { inventoryRemovalDeadlineAt = value; }
+    public Instant getInventoryEscalatedAt() { return inventoryEscalatedAt; }
+    public void setInventoryEscalatedAt(Instant value) { inventoryEscalatedAt = value; }
+    public Instant getSetupCompletedAt() { return setupCompletedAt; }
+    public void setSetupCompletedAt(Instant value) { setupCompletedAt = value; }
+    public Instant getInventoryAppointmentAt() { return inventoryAppointmentAt; }
+    public void setInventoryAppointmentAt(Instant value) { inventoryAppointmentAt = value; }
+    public Instant getInventoryArrivedAt() { return inventoryArrivedAt; }
+    public void setInventoryArrivedAt(Instant value) { inventoryArrivedAt = value; }
+    public Instant getInventoryIdentityVerifiedAt() { return inventoryIdentityVerifiedAt; }
+    public void setInventoryIdentityVerifiedAt(Instant value) { inventoryIdentityVerifiedAt = value; }
     public InventoryResolutionStatus getInventoryResolutionStatus() { return inventoryResolutionStatus; }
     public void setInventoryResolutionStatus(InventoryResolutionStatus value) { inventoryResolutionStatus = value; }
     public boolean isInventoryFullFit() { return inventoryFullFit; }

@@ -92,7 +92,8 @@ public record ReturnCaseResponse(
     Instant recoveryTaskCreatedAt,
     UUID recoveryWitnessStaffId,
     String recoveryWitnessStaffName,
-    Instant recoveryTaskDeadlineAt
+    Instant recoveryTaskDeadlineAt,
+    Instant inventoryRemovalDeadlineAt
 ) {
     /** Existing readers can omit the new setup settlement projection fields. */
     public ReturnCaseResponse(
@@ -160,7 +161,7 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 

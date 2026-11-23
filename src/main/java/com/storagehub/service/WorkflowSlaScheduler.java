@@ -93,7 +93,9 @@ public class WorkflowSlaScheduler {
             String facility = em.getReference(Facility.class, deadline.facility()).getName();
             rows.add(new WorkItem(deadline.workflow(), deadline.resource().getId(), facility, deadline.description(),
                 deadline.dueAt(), overdue ? "OVERDUE" : warning ? "WARNING" : "OPEN", deadline.owner(),
-                deadline.workflow().equals("CHECKIN_REJECTION") && canResolve(actor, deadline.facility())));
+                (deadline.workflow().equals("CHECKIN_REJECTION")
+                    || deadline.resource() instanceof Rental rental && rental.getInventoryEscalatedAt() == null)
+                    && canResolve(actor, deadline.facility())));
         });
         rows.sort(Comparator.comparing(WorkItem::dueAt).thenComparing(WorkItem::resourceId));
         return rows;
@@ -113,6 +115,67 @@ public class WorkflowSlaScheduler {
         checkIn.setRejectionResolutionNote(resolution);
         audit.recordMutation("CHECKIN_REJECTION_FOLLOWUP_RESOLVED", "CheckIn", id,
             checkIn.getReservation().getFacility().getId(), null, Map.of("note", resolution));
+    }
+
+    @Transactional
+    public void extendInventoryDeadline(
+        ActorPrincipal actor, UUID id, String workflow, Instant previousDeadline, Instant newDeadline, String note
+    ) {
+        Rental rental = em.find(Rental.class, id, LockModeType.PESSIMISTIC_WRITE);
+        if (rental == null || !canResolve(actor, rental.getFacility().getId())) {
+            throw ApiExceptions.notFound("Không tìm thấy hồ sơ trong phạm vi quản lý.");
+        }
+        Deadline deadline = inventoryDeadline(rental);
+        String reason = note == null ? "" : note.trim();
+        if (reason.isEmpty() || reason.length() > 1000) {
+            throw ApiExceptions.validation("Nhập lý do chậm do cơ sở từ 1 đến 1000 ký tự.", null);
+        }
+        if (deadline == null || rental.getInventoryEscalatedAt() != null) {
+            throw ApiExceptions.conflict("Hồ sơ đã chuyển sang thu hồi hoặc đã xử lý xong.");
+        }
+        if (!deadline.workflow().equals(workflow) || !deadline.dueAt().equals(previousDeadline)) {
+            throw ApiExceptions.conflict("Hạn xử lý đã thay đổi. Vui lòng tải lại danh sách trước khi gia hạn.");
+        }
+        if (newDeadline == null || !newDeadline.isAfter(deadline.dueAt()) || !newDeadline.isAfter(Instant.now())) {
+            throw ApiExceptions.validation("Hạn mới phải sau hạn hiện tại và thời điểm hiện tại.", null);
+        }
+        if (rental.getInventoryRemovalDeadlineAt() != null) {
+            if (rental.getStatus() == RentalStatus.return_requested) {
+                List<ReturnCase> returns = em.createQuery("""
+                    select r from ReturnCase r where r.rental.id = :id and r.returnType = :type
+                      and r.status in :statuses and r.inspectedAt is null
+                    """, ReturnCase.class).setParameter("id", id)
+                    .setParameter("type", ReturnType.INVENTORY_MISMATCH)
+                    .setParameter("statuses", List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled))
+                    .setLockMode(LockModeType.PESSIMISTIC_WRITE).getResultList();
+                if (returns.size() != 1) {
+                    throw ApiExceptions.conflict("Hồ sơ trả kho đã chuyển sang thu hồi hoặc nghiệm thu.");
+                }
+                returns.getFirst().setRecoveryEligibleAt(newDeadline);
+            }
+            rental.setInventoryRemovalDeadlineAt(newDeadline);
+        } else {
+            rental.setInventoryFinalDeadlineAt(newDeadline);
+            for (MaintenanceTask task : em.createQuery("""
+                select t from MaintenanceTask t where t.rental.id = :id
+                  and t.taskType = :type and t.status in :statuses
+                """, MaintenanceTask.class).setParameter("id", id)
+                .setParameter("type", MaintenanceTaskType.inventory_check)
+                .setParameter("statuses", List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress))
+                .setLockMode(LockModeType.PESSIMISTIC_WRITE).getResultList()) {
+                task.setDueAt(newDeadline.atZone(BusinessTime.ZONE).toLocalDate());
+                task.setDeadlineAt(newDeadline);
+            }
+        }
+        UUID facilityId = rental.getFacility().getId();
+        audit.recordMutation("INVENTORY_DEADLINE_EXTENDED", "Rental", id, facilityId,
+            Map.of("dueAt", deadline.dueAt()), Map.of("dueAt", newDeadline, "reason", reason,
+                "approvedBy", actor.userId(), "workflow", deadline.workflow()));
+        String title = "Đã gia hạn " + deadline.description();
+        String content = "Hạn mới " + LOCAL_TIME.format(newDeadline) + " (giờ Việt Nam). Lý do: " + reason;
+        UUID reservationId = rental.getReservation().getId();
+        notifications.createNotification(rental.getCustomer().getId(), NotificationType.CHECKIN, title, content, reservationId);
+        notifications.createFacilityOperationsNotifications(facilityId, NotificationType.CHECKIN, title, content, reservationId);
     }
 
     private boolean canView(ActorPrincipal actor, UUID facility) {
@@ -145,6 +208,14 @@ public class WorkflowSlaScheduler {
         process(reservations, Reservation.class, this::reservationDeadline, lock, visitor);
         process(ids("select r.id from ReturnCase r where r.status in :statuses",
             List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled)), ReturnCase.class, item -> returnDeadline(item, schedule), lock, visitor);
+        if (!lock) {
+            process(ids("""
+                select r.id from Rental r where r.status in :statuses and r.inventoryPending = true
+                  and r.inventoryEscalatedAt is null
+                  and (r.inventoryFinalDeadlineAt is not null or r.inventoryRemovalDeadlineAt is not null)
+                """, List.of(RentalStatus.setup, RentalStatus.active, RentalStatus.return_requested)),
+                Rental.class, this::inventoryDeadline, false, visitor);
+        }
         process(ids("select f.id from Facility f where f.status in :statuses", List.of(FacilityStatus.setup)),
             Facility.class, item -> facilityDeadline(item, schedule), lock, visitor);
         process(ids("""
@@ -268,6 +339,31 @@ public class WorkflowSlaScheduler {
         return new Deadline("RETURN_INSPECTION", returned, returned.getFacility().getId(), start,
             schedule.after(start, 1), FOUR_HOURS, RoleCode.STAFF, RoleCode.MANAGER, null,
             NotificationType.RETURN, "kiểm tra yêu cầu trả kho");
+    }
+
+    private Deadline inventoryDeadline(Rental rental) {
+        if (!rental.isInventoryPending() || rental.getInventoryEscalatedAt() != null) return null;
+        boolean removal = rental.getInventoryRemovalDeadlineAt() != null;
+        if (rental.getStatus() == RentalStatus.return_requested) {
+            if (!removal) return null;
+            Long open = em.createQuery("""
+                select count(r) from ReturnCase r where r.rental.id = :id and r.returnType = :type
+                  and r.status in :statuses and r.inspectedAt is null
+                """, Long.class).setParameter("id", rental.getId()).setParameter("type", ReturnType.INVENTORY_MISMATCH)
+                .setParameter("statuses", List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled)).getSingleResult();
+            if (open == 0) return null;
+        } else if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
+            return null;
+        }
+        Instant start = removal ? rental.getInventoryRemovalNotifiedAt() : rental.getMoveInCompletedAt();
+        Instant due = removal ? rental.getInventoryRemovalDeadlineAt() : rental.getInventoryFinalDeadlineAt();
+        if (start == null || due == null) return null;
+        Duration warning = !removal && rental.getInventoryDueAt() != null
+            ? Duration.between(rental.getInventoryDueAt(), due) : TWO_HOURS;
+        return new Deadline(removal ? "INVENTORY_REMOVAL" : "INVENTORY_CHECK", rental, rental.getFacility().getId(),
+            start, due, warning, removal ? RoleCode.CUSTOMER : RoleCode.STAFF, RoleCode.MANAGER,
+            rental.getCustomer().getId(), NotificationType.CHECKIN,
+            (removal ? "đưa hàng sai lệch ra khỏi kho" : "kiểm kê đầu vào") + " · " + rental.getReservation().getReservationCode());
     }
 
     private Deadline facilityDeadline(Facility facility, WorkflowBusinessCalendar.Schedule schedule) {

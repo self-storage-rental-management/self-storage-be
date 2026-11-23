@@ -318,8 +318,9 @@ class ReturnSettlementServiceTests {
         assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
     }
 
-    @Test
-    void missedReturnAppointmentCreatesRecoveryTaskWithoutMovingGoodsAutomatically() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void expiredReturnCreatesOneRecoveryTaskWithoutMovingGoodsAutomatically(boolean removal) {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
         returnCase.setRental(rental);
@@ -329,6 +330,10 @@ class ReturnSettlementServiceTests {
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setScheduledDate(LocalDate.now().minusDays(2));
         returnCase.setRecoveryEligibleAt(Instant.now().minusSeconds(60));
+        if (removal) {
+            returnCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+            rental.setInventoryRemovalDeadlineAt(returnCase.getRecoveryEligibleAt());
+        }
 
         when(returnCaseRepository.findByStatusInAndRecoveryEligibleAtLessThanEqualAndRecoveryTaskCreatedAtIsNull(
             any(), any(Instant.class))).thenReturn(List.of(returnCase));
@@ -346,15 +351,49 @@ class ReturnSettlementServiceTests {
         int processed = service.escalateNoShowReturns();
 
         assertThat(processed).isEqualTo(1);
+        assertThat(service.escalateNoShowReturns()).isZero();
         assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.recovery_required);
         assertThat(returnCase.getNoShowAt()).isNotNull();
         assertThat(returnCase.getRecoveryTaskCreatedAt()).isNotNull();
         assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.occupied);
+        if (removal) assertThat(returnCase.getRecoveryNotes()).contains("hết hạn đưa hàng sai lệch");
         verify(maintenanceTaskRepository).save(any(MaintenanceTask.class));
         verify(notificationService).createFacilityOperationsNotifications(
             eq(facility.getId()), eq(com.storagehub.domain.model.NotificationType.RETURN),
-            eq("Cần xử lý khách không đến trả kho"), any(String.class), eq(returnCase.getId())
+            eq(removal ? "Cần thu hồi hàng do quá hạn đưa hàng ra" : "Cần xử lý khách không đến trả kho"),
+            any(String.class), eq(returnCase.getId())
         );
+    }
+
+    @Test
+    void reschedulingMismatchKeepsPublishedRemovalDeadline() {
+        ReturnCase record = new ReturnCase();
+        ReflectionTestUtils.setField(record, "id", UUID.randomUUID());
+        record.setRental(rental);
+        record.setFacility(facility);
+        record.setStorageUnit(unit);
+        record.setCustomer(customer);
+        record.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        record.setSetupExitRequested(true);
+        record.setStatus(ReturnCaseStatus.scheduled);
+        LocalDate today = LocalDate.now(BusinessTime.ZONE);
+        Instant deadline = today.plusDays(7).atStartOfDay(BusinessTime.ZONE).toInstant();
+        rental.setInventoryRemovalDeadlineAt(deadline);
+        record.setRecoveryEligibleAt(deadline);
+        record.setScheduledDate(today.plusDays(1));
+        when(returnCaseRepository.findOwnedForUpdate(record.getId(), customer.getId())).thenReturn(Optional.of(record));
+        when(returnCaseRepository.saveAndFlush(record)).thenReturn(record);
+
+        var request = new CustomerCreateReturnRequest(today.plusDays(6), "Đổi lịch dọn hàng");
+        var updated = service.updateCustomerReturnRequest(customerActor, record.getId(), request);
+        assertThat(updated.scheduledDate()).isEqualTo(request.scheduledDate());
+        assertThat(updated.inventoryRemovalDeadlineAt()).isEqualTo(deadline);
+        assertThat(updated.recoveryEligibleAt()).isEqualTo(deadline);
+
+        assertThatThrownBy(() -> service.updateCustomerReturnRequest(customerActor, record.getId(),
+            new CustomerCreateReturnRequest(today.plusDays(7), "Quá hạn")))
+            .hasMessageContaining("trong thời hạn đưa hàng");
+        assertThat(record.getScheduledDate()).isEqualTo(request.scheduledDate());
     }
 
     @Test
