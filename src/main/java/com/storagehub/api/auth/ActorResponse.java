@@ -22,6 +22,7 @@ public record ActorResponse(
     Map<UUID, String> facilityNames,
     boolean mustChangePassword,
     Set<String> permissions,
-    long authzVersion
+    long authzVersion,
+    Map<String, Object> profileDetails
 ) {
 }

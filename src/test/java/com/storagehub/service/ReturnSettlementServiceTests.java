@@ -315,7 +315,7 @@ class ReturnSettlementServiceTests {
         }
         assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.completed);
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.completed);
-        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.maintenance);
     }
 
     @Test

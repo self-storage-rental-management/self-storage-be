@@ -39,6 +39,12 @@ public class ReservationDetailResponse {
     private String rentalStatus;
     private Instant inventoryDueAt;
     private Instant inventoryFinalDeadlineAt;
+    private Instant inventoryRemovalPublishedAt;
+    private Instant inventoryRemovalDeadlineAt;
+    public Instant getInventoryRemovalPublishedAt() { return inventoryRemovalPublishedAt; }
+    public void setInventoryRemovalPublishedAt(Instant value) { inventoryRemovalPublishedAt = value; }
+    public Instant getInventoryRemovalDeadlineAt() { return inventoryRemovalDeadlineAt; }
+    public void setInventoryRemovalDeadlineAt(Instant value) { inventoryRemovalDeadlineAt = value; }
     private InventoryResolutionStatus inventoryResolutionStatus;
     private boolean inventoryFullFit;
     private boolean inventoryPartialFitAvailable;

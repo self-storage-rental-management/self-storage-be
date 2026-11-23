@@ -98,6 +98,8 @@ public class CheckInHandoverService {
     @Autowired(required = false)
     private PalletInventoryService palletInventory;
     @Autowired(required = false)
+    private GoodsCatalogService goodsCatalogService;
+    @Autowired(required = false)
     private com.storagehub.domain.repo.PaymentComplaintRepository paymentComplaintRepository;
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
@@ -678,6 +680,9 @@ public class CheckInHandoverService {
         if (rental.getSetupEndsAt() == null) {
             throw ApiExceptions.conflict("Thiếu mốc thời gian chuẩn bị của hồ sơ thuê");
         }
+        if ((rental.getSetupCompletionDeadlineAt() != null || rental.getInventoryAppointmentAt() != null)
+            && (rental.getInventoryArrivedAt() == null || rental.getInventoryIdentityVerifiedAt() == null))
+            throw ApiExceptions.conflict("Vui lòng ghi nhận khách đến và xác minh chính chủ bằng ảnh trước khi kiểm kê.");
         if (rental.getStatus() == RentalStatus.setup && !rental.getSetupEndsAt().isAfter(now)) {
             rental.setStatus(RentalStatus.active);
         }
@@ -697,6 +702,10 @@ public class CheckInHandoverService {
         boolean identityCapturedAtCheckIn = validateIdentityDocument(reservation, request);
         var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId());
         boolean resolutionEnabled = request.inventoryLines() != null && !goodsItems.isEmpty();
+        boolean strictInventory = rental.getSetupCompletionDeadlineAt() != null || rental.getInventoryAppointmentAt() != null;
+        if (strictInventory && !goodsItems.isEmpty() && !resolutionEnabled)
+            throw ApiExceptions.validation("Vui lòng kiểm kê đủ từng dòng hàng thực tế.", null);
+        boolean catalogRejected = resolutionEnabled && validateActualGoods(unit, goodsItems, request, strictInventory);
         boolean weightExceedsCapacity = request.actualMeasurements().weightKg()
             .compareTo(unit.getUnitType().getMaxLoadKg()) > 0;
         boolean volumeExceedsCapacity = request.actualMeasurements().actualVolumeM3()
@@ -726,13 +735,17 @@ public class CheckInHandoverService {
         }
 
         User operator = requireActor(actor);
-        InventoryFitEvaluation fit = resolutionEnabled
-            ? evaluateInventoryFit(reservation, unit, goodsItems, request)
+        InventoryFitEvaluation fit = catalogRejected
+            ? new InventoryFitEvaluation(false, false, 0, "Loại hàng hoặc chất liệu thực tế không được tiếp nhận tại gian kho này", Map.of()) : resolutionEnabled
+            ? evaluateInventoryFit(reservation, unit, goodsItems, request, strictInventory)
             : new InventoryFitEvaluation(!aggregateCapacityMismatch, false, request.packageCount(),
                 aggregateCapacityMismatch ? "Sức chứa, kích thước hoặc khối lượng thực tế vượt giới hạn gian kho" : null,
                 Map.of());
         boolean declaredVariance = hasMeasurementVariance(reservation, request, goodsItems)
-            || hasGoodsDeclarationVariance(goodsItems, request);
+            || hasGoodsDeclarationVariance(goodsItems, request) || actualLineVariance(goodsItems, request);
+        if (declaredVariance && request.inventoryLines() != null && request.inventoryLines().stream().anyMatch(l -> l.actualGoods() != null)
+            && (request.varianceReason() == null || request.varianceReason().isBlank()))
+            throw ApiExceptions.validation("Vui lòng ghi rõ sai lệch loại hàng, chất liệu hoặc điều kiện xếp thực tế.", null);
         boolean conditionVariance = request.inventoryLines() != null
             && request.inventoryLines().stream().anyMatch(line -> line.condition()
                 == CompleteCheckInRequest.InventoryLine.Condition.DAMAGED);
@@ -754,7 +767,13 @@ public class CheckInHandoverService {
             : null);
         checkIn.setInventorySuggestedQuantitiesJson(writeSuggestedQuantities(fit.suggestedQuantities()));
         checkIn.setChecklistJson(writeHandover(request));
-        if (inventoryMismatch) {
+        if (inventoryMismatch || rental.getSetupCompletionDeadlineAt() != null || rental.getInventoryAppointmentAt() != null) {
+            rental.setInventoryResultPublishedAt(now);
+            if (!fit.fullFit() && !fit.partialFitAvailable()
+                && rental.getInventoryRemovalPublishedAt() == null) {
+                rental.setInventoryRemovalPublishedAt(now);
+                rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(now));
+            }
             checkIn.setPerformedBy(operator);
             checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_CUSTOMER);
             checkIn.setInventoryDecisionAt(null);
@@ -1423,7 +1442,9 @@ public class CheckInHandoverService {
                     item.getCustomGoodsName() == null || item.getCustomGoodsName().isBlank()
                         ? item.getCategoryName() : item.getCustomGoodsName(),
                     item.getCategoryName(), declaredGoodsMaterial(item),
-                    item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg()))
+                    item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg(),
+                    item.getCatalogCategoryId(), item.getCatalogMaterialId(), item.getCategory(), item.isFragile(), item.isStackable(),
+                    item.isAllowHorizontalPlacement(), item.getMaxStackLayers()))
                 .toList(),
             intakeAction(actor, reservation, checkIn, assignment),
             rental == null ? null : rental.getInventoryFinalDeadlineAt(),
@@ -1505,8 +1526,8 @@ public class CheckInHandoverService {
     }
 
     private void scheduleInventoryDeadlines(Rental rental, Instant readyAt) {
-        rental.setInventoryDueAt(readyAt.plus(4, java.time.temporal.ChronoUnit.DAYS));
-        rental.setInventoryFinalDeadlineAt(readyAt.plus(7, java.time.temporal.ChronoUnit.DAYS));
+        rental.setInventoryDueAt(InventoryTimelinePolicy.reminderAt(readyAt));
+        rental.setInventoryFinalDeadlineAt(InventoryTimelinePolicy.inventoryDeadline(readyAt));
         rental.setInventoryDeadlineReminderAt(null);
         rental.setInventoryEscalatedAt(null);
         rental.setInventoryPending(true);
@@ -1622,7 +1643,8 @@ public class CheckInHandoverService {
         Reservation reservation,
         StorageUnit unit,
         List<ReservationGoodsItem> declared,
-        CompleteCheckInRequest request
+        CompleteCheckInRequest request,
+        boolean requireSafePlan
     ) {
         Map<UUID, ReservationGoodsItem> declaredById = new HashMap<>();
         declared.forEach(item -> declaredById.put(item.getId(), item));
@@ -1640,6 +1662,8 @@ public class CheckInHandoverService {
             && dimensionsFit(request, unit);
         PalletInventoryService.Fit calculated = palletInventory == null
             ? null : palletInventory.evaluateActualFit(unit, actualItems);
+        if (requireSafePlan && (calculated == null || calculated.layoutMissing() || calculated.reviewRequired()))
+            throw ApiExceptions.conflict("Chưa xác định được phương án xếp an toàn. Vui lòng kiểm tra dữ liệu hàng và bố trí gian kho.");
         boolean fullFit = calculated == null || calculated.layoutMissing() || calculated.reviewRequired()
             ? aggregateFit : calculated.plan() != null;
         if (fullFit) {
@@ -1689,11 +1713,57 @@ public class CheckInHandoverService {
         return accepted;
     }
 
+    private boolean validateActualGoods(StorageUnit unit, List<ReservationGoodsItem> declared,
+        CompleteCheckInRequest request, boolean strict) {
+        var originals = new HashMap<UUID, ReservationGoodsItem>();
+        declared.forEach(item -> originals.put(item.getId(), item));
+        boolean rejected = false;
+        for (int i = 0; i < request.inventoryLines().size(); i++) {
+            var line = request.inventoryLines().get(i);
+            if (line.actualQuantity() == null || line.actualQuantity() == 0) continue;
+            var actual = line.actualGoods();
+            if (actual == null) {
+                if (strict) throw ApiExceptions.validation("Vui lòng đối chiếu loại hàng, chất liệu và điều kiện xếp cho từng dòng.", null);
+                continue;
+            }
+            if (actual.getCatalogCategoryId() == null || actual.getStackable() == null || actual.getAllowHorizontalPlacement() == null)
+                throw ApiExceptions.validation("Vui lòng chọn loại hàng trong danh mục và ghi nhận điều kiện xếp thực tế.", null);
+            if (goodsCatalogService == null) throw ApiExceptions.conflict("Chưa thể đối chiếu danh mục hàng hóa.");
+            try {
+                goodsCatalogService.validateForUnitType(unit.getUnitType(), actual, i);
+            } catch (com.storagehub.common.api.ApiException e) {
+                if (e.getStatus() != org.springframework.http.HttpStatus.BAD_REQUEST) throw e;
+                rejected = true;
+            }
+        }
+        return rejected;
+    }
+
+    private boolean actualLineVariance(List<ReservationGoodsItem> declared, CompleteCheckInRequest request) {
+        if (request.inventoryLines() == null) return false;
+        var originals = new HashMap<UUID, ReservationGoodsItem>();
+        declared.forEach(item -> originals.put(item.getId(), item));
+        for (var line : request.inventoryLines()) {
+            if (line.actualGoods() == null || line.actualQuantity() == null || line.actualQuantity() == 0) continue;
+            var original = originals.get(line.goodsItemId());
+            var actual = line.actualGoods();
+            if (original == null || !Objects.equals(original.getCatalogCategoryId(), actual.getCatalogCategoryId())
+                || !Objects.equals(original.getCatalogMaterialId(), actual.getCatalogMaterialId())
+                || original.isFragile() != actual.isFragile()
+                || original.isStackable() != Boolean.TRUE.equals(actual.getStackable())
+                || original.isAllowHorizontalPlacement() != actual.allowsHorizontalPlacement()
+                || original.getMaxStackLayers() != actual.getMaxStackLayers()) return true;
+        }
+        return false;
+    }
+
     private GoodsItemRequest actualGoodsItem(
         ReservationGoodsItem original,
         CompleteCheckInRequest.InventoryLine line
     ) {
-        GoodsItemRequest item = new GoodsItemRequest();
+        GoodsItemRequest item = line.actualGoods() == null ? new GoodsItemRequest()
+            : objectMapper.convertValue(line.actualGoods(), GoodsItemRequest.class);
+        if (line.actualGoods() == null) {
         item.setCategory(original.getCategory());
         item.setCatalogCategoryId(original.getCatalogCategoryId());
         item.setCatalogMaterialId(original.getCatalogMaterialId());
@@ -1703,6 +1773,11 @@ public class CheckInHandoverService {
         item.setMaterialName(original.getMaterialName());
         item.setCustomMaterial(original.getCustomMaterial());
         item.setCustomGoodsName(original.getCustomGoodsName());
+        item.setFragile(original.isFragile());
+        item.setStackable(original.isStackable());
+        item.setMaxStackLayers(original.getMaxStackLayers());
+        item.setAllowHorizontalPlacement(original.isAllowHorizontalPlacement());
+        }
         item.setDescription(original.getDescription() == null ? "Hàng hóa kiểm kê thực tế" : original.getDescription());
         item.setCustomerNote(original.getCustomerNote());
         item.setQuantity(line.actualQuantity());
@@ -1714,10 +1789,6 @@ public class CheckInHandoverService {
             : measurements.weightKg();
         item.setWeightPerItemKg(line.actualQuantity() == null || line.actualQuantity() <= 0
             ? totalWeight : totalWeight.divide(BigDecimal.valueOf(line.actualQuantity()), 6, java.math.RoundingMode.HALF_UP));
-        item.setFragile(original.isFragile());
-        item.setStackable(original.isStackable());
-        item.setMaxStackLayers(original.getMaxStackLayers());
-        item.setAllowHorizontalPlacement(original.isAllowHorizontalPlacement());
         return item;
     }
 
@@ -1735,7 +1806,7 @@ public class CheckInHandoverService {
             if (!labels.contains("khối lượng")) labels.add("khối lượng");
             if (!labels.contains("thể tích")) labels.add("thể tích hoặc kích thước");
         }
-        if (hasGoodsDeclarationVariance(declared, request)) labels.add("loại hàng hoặc chất liệu chính");
+        if (hasGoodsDeclarationVariance(declared, request) || actualLineVariance(declared, request)) labels.add("loại hàng, chất liệu hoặc điều kiện xếp từng dòng");
         if (request.inventoryLines() != null && request.inventoryLines().stream()
             .anyMatch(line -> line.condition() == CompleteCheckInRequest.InventoryLine.Condition.DAMAGED)) {
             labels.add("tình trạng hàng hóa");
@@ -1757,6 +1828,7 @@ public class CheckInHandoverService {
         value.put("packagingMethod", request.actualPackagingMethod());
         value.put("packagingCondition", request.packagingCondition());
         value.put("packageCount", request.packageCount());
+        value.put("lines", request.inventoryLines());
         value.put("weightKg", request.actualMeasurements().weightKg());
         value.put("volumeM3", request.actualMeasurements().actualVolumeM3());
         value.put("lengthCm", request.actualMeasurements().lengthCm());
@@ -1780,6 +1852,9 @@ public class CheckInHandoverService {
     ) {
         Map<String, Object> declaredValues = new LinkedHashMap<>();
         declaredValues.put("packageCount", declaredPackageCount(declared));
+        declaredValues.put("lines", declared.stream().map(item -> Map.of(
+            "goodsItemId", item.getId(), "category", Objects.toString(declaredGoodsCategory(item), "Chưa ghi nhận"),
+            "material", Objects.toString(declaredGoodsMaterial(item), "Chưa ghi nhận"), "quantity", item.getQuantity())).toList());
         declaredValues.put("packagingMethod", reservation.getGoodsCondition());
         declaredValues.put("weightKg", reservation.getTotalGoodsWeightKg());
         declaredValues.put("volumeM3", reservation.getTotalGoodsVolumeM3());
@@ -1788,6 +1863,7 @@ public class CheckInHandoverService {
 
         Map<String, Object> actualValues = new LinkedHashMap<>();
         actualValues.put("packageCount", request.packageCount());
+        actualValues.put("lines", request.inventoryLines());
         actualValues.put("packagingMethod", request.actualPackagingMethod());
         actualValues.put("packagingCondition", request.packagingCondition());
         actualValues.put("weightKg", request.actualMeasurements().weightKg());
@@ -1866,7 +1942,7 @@ public class CheckInHandoverService {
     }
 
     private CompleteCheckInRequest readHandover(CheckIn checkIn) {
-        if (checkIn == null || checkIn.getStatus() != CheckInStatus.completed
+        if (checkIn == null || checkIn.getStatus() != CheckInStatus.completed && checkIn.getInventoryActualJson() == null
             || checkIn.getChecklistJson() == null) {
             return null;
         }
