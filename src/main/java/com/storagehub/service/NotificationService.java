@@ -101,9 +101,73 @@ public class NotificationService {
         String content,
         UUID relatedEntityId
     ) {
-        Notification saved = saveNotification(userId, type, title, content, relatedEntityId);
+        Notification saved = saveNotification(userId, type, title, content, relatedEntityId, null);
         customerEmails.notification(saved);
         return saved;
+    }
+
+    @Transactional
+    public Notification createNotification(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        RoleCode sourceRole
+    ) {
+        Notification saved = saveNotification(userId, type, title, content, relatedEntityId, sourceRole);
+        customerEmails.notification(saved);
+        return saved;
+    }
+
+    @Transactional
+    public void createNotificationOnce(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId
+    ) {
+        if (notificationRepository.existsMilestone(userId, relatedEntityId, title)) return;
+        createNotification(userId, type, title, content, relatedEntityId);
+    }
+
+    @Transactional
+    public boolean createNotificationIfNotSentSince(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        Instant since
+    ) {
+        if (notificationRepository.existsMilestoneSince(userId, relatedEntityId, type, title, since)) {
+            return false;
+        }
+        createNotification(userId, type, title, content, relatedEntityId);
+        return true;
+    }
+
+    @Transactional
+    public boolean createNotificationIfNotSentSince(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        Instant since,
+        RoleCode sourceRole
+    ) {
+        if (sourceRole == null) {
+            return createNotificationIfNotSentSince(userId, type, title, content, relatedEntityId, since);
+        }
+        if (notificationRepository.existsMilestoneSinceForSourceRole(
+            userId, relatedEntityId, type, title, sourceRole, since
+        )) {
+            return false;
+        }
+        createNotification(userId, type, title, content, relatedEntityId, sourceRole);
+        return true;
     }
 
     /** The payment receipt already supplies the email for this notification. */
@@ -111,15 +175,23 @@ public class NotificationService {
     public void notifyRenewalDepositReceived(UUID customerId, UUID renewalId, String amount) {
         saveNotification(customerId, NotificationType.RENEWAL, "Đã nhận tiền cọc gia hạn qua VNPay",
             "VNPay đã xác nhận khoản cọc gia hạn " + amount + ". Bạn có thể theo dõi các bước tiếp theo trong hồ sơ gia hạn.",
-            renewalId);
+            renewalId, null);
     }
 
-    private Notification saveNotification(UUID userId, NotificationType type, String title, String content, UUID relatedEntityId) {
+    private Notification saveNotification(
+        UUID userId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId,
+        RoleCode sourceRole
+    ) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> ApiExceptions.notFound("User was not found"));
         Notification notification = new Notification();
         notification.setUser(user);
         notification.setType(type);
+        notification.setSourceRole(sourceRole);
         notification.setTitle(type==NotificationType.SUPPORT?com.storagehub.service.support.SupportNotificationText.title(title):title);
         notification.setContent(content);
         notification.setRelatedEntityId(relatedEntityId);
@@ -150,6 +222,32 @@ public class NotificationService {
         UUID relatedEntityId
     ) {
         createFacilityOperationsNotificationsExcept(facilityId, type, title, content, relatedEntityId, null);
+    }
+
+    @Transactional
+    public void createFacilityOperationsNotificationsOnce(
+        UUID facilityId,
+        NotificationType type,
+        String title,
+        String content,
+        UUID relatedEntityId
+    ) {
+        Set<UUID> recipientIds = new LinkedHashSet<>();
+        recipientIds.addAll(userRepository.findEligibleStaff(
+            UserStatus.ACTIVE,
+            RoleCode.STAFF,
+            facilityId,
+            List.of(FacilityScopeLevel.OPERATE)
+        ).stream().map(User::getId).toList());
+        recipientIds.addAll(userRepository.findEligibleStaff(
+            UserStatus.ACTIVE,
+            RoleCode.MANAGER,
+            facilityId,
+            List.of(FacilityScopeLevel.READ, FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)
+        ).stream().map(User::getId).toList());
+        recipientIds.forEach(recipientId -> createNotificationOnce(
+            recipientId, type, title, content, relatedEntityId
+        ));
     }
 
     @Transactional

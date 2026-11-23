@@ -382,6 +382,24 @@ class MaintenanceServiceTests {
     }
 
     @Test
+    void recoveryTaskRequiresEvidenceAndCannotOpenTheUnitFromGenericCompletion() {
+        MaintenanceTask task = new MaintenanceTask();
+        ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
+        task.setFacility(facility);
+        task.setStorageUnit(unit);
+        task.setTitle("Thu hồi hàng do quá hạn kiểm kê");
+        task.setRecoveryType(com.storagehub.domain.model.MaintenanceRecoveryType.INVENTORY_OVERDUE);
+        task.setStatus(MaintenanceTaskStatus.in_progress);
+
+        when(maintenanceTaskRepository.findById(task.getId())).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> maintenanceService.completeTask(staffActor, task.getId(),
+            new CompleteMaintenanceTaskRequest("Đã xử lý", List.of(), false)))
+            .hasMessageContaining("bằng chứng kiểm kê");
+        org.mockito.Mockito.verify(maintenanceTaskRepository, org.mockito.Mockito.never()).save(any(MaintenanceTask.class));
+    }
+
+    @Test
     void cancelTask_success() {
         MaintenanceTask task = new MaintenanceTask();
         ReflectionTestUtils.setField(task, "id", UUID.randomUUID());

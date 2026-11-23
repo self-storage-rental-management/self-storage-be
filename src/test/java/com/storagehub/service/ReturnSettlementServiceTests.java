@@ -20,10 +20,12 @@ import com.storagehub.domain.model.CustomerDecision;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.InventoryMatch;
+import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
+import com.storagehub.domain.model.ReturnType;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.StorageUnitStatus;
@@ -31,9 +33,11 @@ import com.storagehub.domain.model.SystemPermission;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
+import com.storagehub.domain.repo.MaintenanceTaskRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
+import com.storagehub.time.BusinessTime;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -54,6 +58,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 class ReturnSettlementServiceTests {
 
     @Mock ReturnCaseRepository returnCaseRepository;
+    @Mock MaintenanceTaskRepository maintenanceTaskRepository;
+    @Mock com.storagehub.domain.repo.ReservationPricingSnapshotRepository pricingSnapshotRepository;
+    @Mock com.storagehub.domain.repo.UserFacilityScopeRepository userFacilityScopeRepository;
     @Mock RentalRepository rentalRepository;
     @Mock StorageUnitRepository storageUnitRepository;
     @Mock UserRepository userRepository;
@@ -147,6 +154,9 @@ class ReturnSettlementServiceTests {
         var sources = new org.springframework.beans.factory.support.StaticListableBeanFactory();
         sources.addBean("returnFinance", returnFinance);
         ReflectionTestUtils.setField(service, "returnFinances", sources.getBeanProvider(com.storagehub.service.ledger.ReturnFinancialReconciliation.class));
+        ReflectionTestUtils.setField(service, "maintenanceTaskRepository", maintenanceTaskRepository);
+        ReflectionTestUtils.setField(service, "reservationPricingSnapshotRepository", pricingSnapshotRepository);
+        ReflectionTestUtils.setField(service, "userFacilityScopeRepository", userFacilityScopeRepository);
         ReflectionTestUtils.setField(service, "settlementEntityManager", settlementEntityManager);
         org.mockito.Mockito.lenient().when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
         org.mockito.Mockito.lenient().when(returnFinance.deposit(rental)).thenReturn(new BigDecimal("2000000.00"));
@@ -177,6 +187,326 @@ class ReturnSettlementServiceTests {
         assertThat(response.depositAmount()).isEqualByComparingTo(new BigDecimal("2000000.00"));
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
         verify(returnFinance).deposit(rental);
+    }
+
+    @Test
+    void returnNoShowRecoveryStartsAfterReturnDayAndConfiguredGracePeriod() {
+        LocalDate scheduledDate = LocalDate.now(BusinessTime.ZONE).plusDays(5);
+        CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
+            scheduledDate,
+            "Khong con nhu cau su dung"
+        );
+
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
+            ReturnCase rc = invocation.getArgument(0);
+            ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
+            return rc;
+        });
+
+        ReturnCaseResponse response = service.createCustomerReturnRequest(customerActor, rental.getId(), request);
+
+        assertThat(response.recoveryEligibleAt()).isEqualTo(
+            scheduledDate.plusDays(2).atStartOfDay(BusinessTime.ZONE).toInstant()
+        );
+    }
+
+    @Test
+    void inventoryMismatchReturnKeepsItsWorkflowMarker() {
+        rental.setStatus(RentalStatus.setup);
+        CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
+            LocalDate.now(), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
+        );
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
+            ReturnCase rc = invocation.getArgument(0);
+            ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
+            return rc;
+        });
+
+        ReturnCaseResponse response = service.createCustomerReturnRequest(customerActor, rental.getId(), request);
+
+        assertThat(response.returnType()).isEqualTo(ReturnType.INVENTORY_MISMATCH);
+        assertThat(response.recoveryEligibleAt()).isNotNull();
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void inventoryMismatchInspectionUsesActualUsageWithoutFixedEarlyTerminationFee(boolean collect) {
+        var returnCase = setupReturn(ReturnCaseStatus.requested);
+        rental.setStatus(RentalStatus.setup);
+        rental.setInventoryPending(true);
+        rental.setSetupExitReviewRequired(true);
+        LocalDate receiptDate = LocalDate.now(BusinessTime.ZONE).minusDays(1);
+        rental.setSetupStartedAt(receiptDate.atTime(10, 0).atZone(BusinessTime.ZONE).toInstant());
+        rental.setSetupEndsAt(Instant.now().plus(24, java.time.temporal.ChronoUnit.HOURS));
+        rental.setMoveInCompletedAt(rental.getSetupStartedAt().plus(1, java.time.temporal.ChronoUnit.HOURS));
+        returnCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        returnCase.setScheduledDate(LocalDate.now(BusinessTime.ZONE));
+
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setMonthlyPrice(new BigDecimal("2000000"));
+        pricing.setNetRentalAmount(new BigDecimal("6000000"));
+        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId())).thenReturn(Optional.of(pricing));
+        when(maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(any(), any(), any())).thenReturn(Collections.emptyList());
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(returnFinance.capture(returnCase)).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+                new BigDecimal("2000000"), collect ? new BigDecimal("9000000") : BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO
+            )
+        );
+
+        ReturnCaseResponse response = service.performInspection(
+            staffActor,
+            returnCase.getId(),
+            new ReturnInspectionRequest(
+                InventoryMatch.excess,
+                DamageClassification.no_damage,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                "Hàng thực tế không phù hợp, khách yêu cầu trả kho",
+                List.of(),
+                true,
+                true,
+                true,
+                StorageUnitStatus.available,
+                true
+            )
+        );
+
+        assertThat(response.returnType()).isEqualTo(ReturnType.INVENTORY_MISMATCH);
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_business_review);
+        assertThat(response.earlyTerminationFee()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(response.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("133333");
+        assertThat(response.earlyTerminationPolicy().rentalRefundAmount()).isEqualByComparingTo("5866667");
+        assertThat(response.totalDeductions()).isEqualByComparingTo(collect ? "9133333" : "133333");
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(collect ? "0" : "7866667");
+        assertThat(rental.isInventoryPending()).isFalse();
+        when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
+        var managerDecision = service.managerReviewInventoryMismatch(
+            managerActor,
+            returnCase.getId(),
+            new com.storagehub.api.returns.ManagerInventoryMismatchDecisionRequest(
+                "Manager đã đối soát bảng kê theo ngày lịch và bằng chứng kiểm kê.",
+                StorageUnitStatus.available
+            )
+        );
+        assertThat(managerDecision.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        when(returnCaseRepository.findByIdAndCustomer_Id(returnCase.getId(), customer.getId())).thenReturn(Optional.of(returnCase));
+        var accepted = service.customerConfirmSettlement(customerActor, returnCase.getId(),
+            new CustomerConfirmSettlementRequest(CustomerDecision.accepted, "Đồng ý bảng kê"));
+        assertThat(accepted.status()).isEqualTo(collect ? ReturnCaseStatus.payment_due : ReturnCaseStatus.refund_pending);
+        if (collect) {
+            service.recordSettlement(staffActor, returnCase.getId(), new com.storagehub.api.returns.StaffReturnSettlementRequest(
+                "CASH", null, UUID.randomUUID(), true, new BigDecimal("1133333")));
+        } else {
+            service.staffCompleteRefund(staffActor, returnCase.getId(), new StaffCompleteRefundRequest(
+                "REFUND-MISMATCH-TEST", "Hoàn tiền theo bảng kê", UUID.randomUUID(), "BANK_TRANSFER", true, new BigDecimal("7866667")));
+        }
+        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.completed);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.completed);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+    }
+
+    @Test
+    void missedReturnAppointmentCreatesRecoveryTaskWithoutMovingGoodsAutomatically() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.requested);
+        returnCase.setScheduledDate(LocalDate.now().minusDays(2));
+        returnCase.setRecoveryEligibleAt(Instant.now().minusSeconds(60));
+
+        when(returnCaseRepository.findByStatusInAndRecoveryEligibleAtLessThanEqualAndRecoveryTaskCreatedAtIsNull(
+            any(), any(Instant.class))).thenReturn(List.of(returnCase));
+        when(returnCaseRepository.findByIdForUpdate(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(maintenanceTaskRepository.findFirstByReturnCase_IdAndRecoveryTypeOrderByCreatedAtDesc(
+            eq(returnCase.getId()), eq(com.storagehub.domain.model.MaintenanceRecoveryType.RETURN_NO_SHOW)))
+            .thenReturn(Optional.empty());
+        when(maintenanceTaskRepository.save(any(MaintenanceTask.class))).thenAnswer(invocation -> {
+            MaintenanceTask task = invocation.getArgument(0);
+            ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
+            return task;
+        });
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        int processed = service.escalateNoShowReturns();
+
+        assertThat(processed).isEqualTo(1);
+        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.recovery_required);
+        assertThat(returnCase.getNoShowAt()).isNotNull();
+        assertThat(returnCase.getRecoveryTaskCreatedAt()).isNotNull();
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.occupied);
+        verify(maintenanceTaskRepository).save(any(MaintenanceTask.class));
+        verify(notificationService).createFacilityOperationsNotifications(
+            eq(facility.getId()), eq(com.storagehub.domain.model.NotificationType.RETURN),
+            eq("Cần xử lý khách không đến trả kho"), any(String.class), eq(returnCase.getId())
+        );
+    }
+
+    @Test
+    void noShowReturnCannotBeInspectedBeforeGoodsAreMovedWithEvidence() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.recovery_required);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setScheduledDate(LocalDate.now().minusDays(2));
+
+        MaintenanceTask recoveryTask = new MaintenanceTask();
+        recoveryTask.setStatus(com.storagehub.domain.model.MaintenanceTaskStatus.in_progress);
+        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(maintenanceTaskRepository.findFirstByReturnCase_IdAndRecoveryTypeOrderByCreatedAtDesc(
+            eq(returnCase.getId()), eq(com.storagehub.domain.model.MaintenanceRecoveryType.RETURN_NO_SHOW)))
+            .thenReturn(Optional.of(recoveryTask));
+
+        ReturnInspectionRequest request = new ReturnInspectionRequest(
+            InventoryMatch.match,
+            DamageClassification.no_damage,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            "",
+            List.of(),
+            false,
+            false,
+            false,
+            StorageUnitStatus.maintenance,
+            false
+        );
+
+        assertThatThrownBy(() -> service.performInspection(staffActor, returnCase.getId(), request))
+            .hasMessageContaining("đưa toàn bộ hàng ra khỏi gian");
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.recovery_required);
+    }
+
+    @Test
+    void noShowReturnRequiresHandoverLocationBeforeSettlementCanContinue() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.recovery_required);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setScheduledDate(LocalDate.now().minusDays(2));
+
+        MaintenanceTask recoveryTask = new MaintenanceTask();
+        recoveryTask.setStatus(com.storagehub.domain.model.MaintenanceTaskStatus.in_progress);
+        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(maintenanceTaskRepository.findFirstByReturnCase_IdAndRecoveryTypeOrderByCreatedAtDesc(
+            eq(returnCase.getId()), eq(com.storagehub.domain.model.MaintenanceRecoveryType.RETURN_NO_SHOW)))
+            .thenReturn(Optional.of(recoveryTask));
+
+        ReturnInspectionRequest request = new ReturnInspectionRequest(
+            InventoryMatch.match,
+            DamageClassification.no_damage,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            "Đã đưa hàng vào khu lưu tạm",
+            List.of(UUID.randomUUID().toString()),
+            false,
+            false,
+            true,
+            StorageUnitStatus.maintenance,
+            true,
+            "",
+            false
+        );
+
+        assertThatThrownBy(() -> service.performInspection(staffActor, returnCase.getId(), request))
+            .hasMessageContaining("khu vực lưu tạm");
+        org.mockito.Mockito.verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.recovery_required);
+    }
+
+    @Test
+    void noShowReturnStoresHandoverLocationOnlyAfterEvidenceAndEmptyUnitAreConfirmed() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.recovery_required);
+        returnCase.setDepositAmount(new BigDecimal("2000000.00"));
+        returnCase.setScheduledDate(LocalDate.now().minusDays(2));
+
+        MaintenanceTask recoveryTask = new MaintenanceTask();
+        recoveryTask.setStatus(com.storagehub.domain.model.MaintenanceTaskStatus.in_progress);
+        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(maintenanceTaskRepository.findFirstByReturnCase_IdAndRecoveryTypeOrderByCreatedAtDesc(
+            eq(returnCase.getId()), eq(com.storagehub.domain.model.MaintenanceRecoveryType.RETURN_NO_SHOW)))
+            .thenReturn(Optional.of(recoveryTask));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(maintenanceTaskRepository.save(any(MaintenanceTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        User witness = new User();
+        ReflectionTestUtils.setField(witness, "id", UUID.randomUUID());
+        witness.setFullName("Nguyen Van Witness");
+        witness.setStatus(com.storagehub.domain.model.UserStatus.ACTIVE);
+        com.storagehub.domain.model.Role witnessRole = new com.storagehub.domain.model.Role();
+        witnessRole.setCode(RoleCode.STAFF);
+        witness.setRoles(Set.of(witnessRole));
+        when(userRepository.findById(witness.getId())).thenReturn(Optional.of(witness));
+        var witnessScope = new com.storagehub.domain.model.UserFacilityScope();
+        witnessScope.setUser(witness);
+        witnessScope.setFacility(facility);
+        witnessScope.setScopeLevel(com.storagehub.domain.model.FacilityScopeLevel.OPERATE);
+        when(userFacilityScopeRepository.findByUser_IdAndFacility_Id(witness.getId(), facility.getId()))
+            .thenReturn(Optional.of(witnessScope));
+
+        ReturnInspectionRequest request = new ReturnInspectionRequest(
+            InventoryMatch.match,
+            DamageClassification.no_damage,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            "Đã kiểm kê và bàn giao hàng vào khu lưu tạm",
+            List.of(UUID.randomUUID().toString()),
+            false,
+            false,
+            true,
+            StorageUnitStatus.maintenance,
+            true,
+            "Khu lưu tạm A, kệ 02, Staff B nhận bàn giao",
+            false,
+            witness.getId()
+        );
+
+        ReturnCaseResponse response = service.performInspection(staffActor, returnCase.getId(), request);
+
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(returnCase.getRental().getStatus()).isEqualTo(RentalStatus.return_inspection);
+        assertThat(recoveryTask.getStatus()).isEqualTo(com.storagehub.domain.model.MaintenanceTaskStatus.completed);
+        assertThat(recoveryTask.getRecoveryHandoverLocation()).isEqualTo("Khu lưu tạm A, kệ 02, Staff B nhận bàn giao");
     }
 
     @Test
@@ -517,6 +847,7 @@ class ReturnSettlementServiceTests {
     void setupRefundIncludesVerifiedRentAndOneMonthFeeWithoutCountingPrepaymentAgain(
         String damage, String deductions, String refund, String due) {
         var rc = setupReturn(ReturnCaseStatus.requested);
+        rc.setRequestedAt(Instant.now().plusSeconds(7 * 86_400L));
         rental.setSetupStartedAt(Instant.now().minusSeconds(3600));
         rental.setSetupEndsAt(Instant.now().plusSeconds(86400));
         var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();

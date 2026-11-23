@@ -43,6 +43,43 @@ class EarlyTerminationPolicyTests {
     }
 
     @Test
+    void inventoryMismatchReturnWaivesEarlyTerminationFeeButKeepsUsedSetupCharge() {
+        var result = EarlyTerminationPolicy.setupExit(
+            new BigDecimal("11400000"), new BigDecimal("2280000"), new BigDecimal("1000000"),
+            12, 15, 10, true, BigDecimal.ONE, 1, true
+        );
+
+        assertThat(result.earlyTerminationFee()).isZero();
+        assertThat(result.usedGoodsCharge()).isEqualByComparingTo("333333");
+        assertThat(result.totalRentalCharge()).isEqualByComparingTo("333333");
+    }
+
+    @Test
+    void inventoryMismatchReturnUsesCalendarDaysWithoutFixedFee() {
+        var oneDay = EarlyTerminationPolicy.inventoryMismatchExit(
+            new BigDecimal("12000000"), new BigDecimal("3000000"), 1, true
+        );
+        var twoDays = EarlyTerminationPolicy.inventoryMismatchExit(
+            new BigDecimal("12000000"), new BigDecimal("3000000"), 2, true
+        );
+
+        assertThat(oneDay.earlyTerminationFee()).isZero();
+        assertThat(oneDay.usedGoodsCharge()).isEqualByComparingTo("100000");
+        assertThat(twoDays.usedGoodsCharge()).isEqualByComparingTo("200000");
+        assertThat(twoDays.rentalRefundAmount()).isEqualByComparingTo("11800000");
+    }
+
+    @Test
+    void inventoryMismatchCalendarUsageIncludesBothReceiptAndScheduledReturnDates() {
+        assertThat(EarlyTerminationPolicy.calendarUsageDays(
+            LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 12)
+        )).isEqualTo(1);
+        assertThat(EarlyTerminationPolicy.calendarUsageDays(
+            LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 14)
+        )).isEqualTo(3);
+    }
+
+    @Test
     void activeReturnBeforeThreeMonthsUsesListPriceAndEarlyTerminationFee() {
         var result = EarlyTerminationPolicy.activeReturn(
             LocalDate.of(2026, 1, 16), LocalDate.of(2026, 3, 16), LocalDate.of(2026, 1, 1),

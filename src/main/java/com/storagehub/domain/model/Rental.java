@@ -75,8 +75,17 @@ public class Rental extends BaseEntity {
     @Column
     private Instant inventoryDueAt;
 
+    /** First operational deadline after the customer reports inventory readiness. */
+    @Column
+    private Instant inventoryFinalDeadlineAt;
+
+
     @Column(nullable = false)
     private boolean inventoryPending;
+
+    /** The first inventory deadline reminder is separate from the final escalation. */
+    @Column
+    private Instant inventoryDeadlineReminderAt;
 
     /** A setup return must pass physical inspection and financial reconciliation. */
     @Column(nullable = false)

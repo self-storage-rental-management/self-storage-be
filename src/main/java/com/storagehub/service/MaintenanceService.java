@@ -13,6 +13,7 @@ import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.MaintenanceTaskType;
+import com.storagehub.domain.model.MaintenanceRecoveryType;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.StorageUnit;
@@ -289,8 +290,16 @@ public class MaintenanceService {
 
     @Transactional(readOnly = true)
     public List<MaintenanceStaffOption> listEligibleStaff(ActorPrincipal actor, UUID facilityId) {
-        authorizationService.require(actor, SystemPermission.MANAGE_STAFF_TASKS);
-        facilityScopeService.assertCanManage(actor, facilityId);
+        if (!actor.hasPermission(SystemPermission.MANAGE_STAFF_TASKS)
+            && !actor.hasPermission(SystemPermission.PERFORM_CHECKIN)
+            && !actor.hasPermission(SystemPermission.PROCESS_RETURNS)) {
+            authorizationService.require(actor, SystemPermission.MANAGE_STAFF_TASKS);
+        }
+        if (actor.hasRole(RoleCode.STAFF)) {
+            facilityScopeService.assertCanOperate(actor, facilityId);
+        } else {
+            facilityScopeService.assertCanManage(actor, facilityId);
+        }
         return userRepository.findEligibleStaff(
                 UserStatus.ACTIVE,
                 RoleCode.STAFF,
@@ -355,6 +364,26 @@ public class MaintenanceService {
         if (task.getTaskType() == MaintenanceTaskType.inventory_check) {
             throw ApiExceptions.conflict("Inventory check tasks must be completed from the check-in workflow");
         }
+        boolean noShowRecovery = task.getRecoveryType() == MaintenanceRecoveryType.RETURN_NO_SHOW
+            || task.getReturnCase() != null
+                && task.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required;
+        boolean recoveryTask = task.getRecoveryType() != null
+            && task.getRecoveryType() != MaintenanceRecoveryType.NONE;
+        if (noShowRecovery) {
+            throw ApiExceptions.conflict("Nhiệm vụ thu hồi khách không đến phải được hoàn tất trong biên bản nghiệm thu trả kho.");
+        }
+        if (recoveryTask && (request.evidencePhotos() == null || request.evidencePhotos().isEmpty())) {
+            throw ApiExceptions.validation("Cần tải bằng chứng kiểm kê và bàn giao trước khi hoàn tất thu hồi hàng.", null);
+        }
+        if (recoveryTask && !Boolean.TRUE.equals(request.unitVacated())) {
+            throw ApiExceptions.conflict("Cần xác nhận toàn bộ hàng đã được đưa khỏi gian trước khi hoàn tất thu hồi.");
+        }
+        if (recoveryTask && (request.recoveryHandoverLocation() == null || request.recoveryHandoverLocation().isBlank())) {
+            throw ApiExceptions.validation("Cần ghi nhận khu vực lưu tạm khi hoàn tất thu hồi hàng.", null);
+        }
+        User recoveryWitness = recoveryTask
+            ? requireRecoveryWitness(request.recoveryWitnessStaffId(), task.getFacility().getId(), actor.userId())
+            : null;
 
         task.setStatus(MaintenanceTaskStatus.completed);
         task.setCompletedAt(Instant.now());
@@ -366,10 +395,14 @@ public class MaintenanceService {
             } catch (Exception ignored) {
             }
         }
+        if (recoveryTask) {
+            task.setRecoveryHandoverLocation(request.recoveryHandoverLocation().trim());
+            task.setRecoveryWitness(recoveryWitness);
+        }
 
         MaintenanceTask saved = maintenanceTaskRepository.save(task);
 
-        boolean makeAvailable = request.makeUnitAvailable() == null || request.makeUnitAvailable();
+        boolean makeAvailable = !recoveryTask && (request.makeUnitAvailable() == null || request.makeUnitAvailable());
         StorageUnit unit = saved.getStorageUnit();
         boolean hasOtherOpenTasks = hasOtherActiveMaintenanceTasks(unit.getId(), saved.getId());
         unit.setStatus(makeAvailable && !hasOtherOpenTasks ? StorageUnitStatus.available : StorageUnitStatus.maintenance);
@@ -400,6 +433,12 @@ public class MaintenanceService {
         }
         if (task.getStatus() == MaintenanceTaskStatus.cancelled) {
             throw ApiExceptions.conflict("Task is already cancelled");
+        }
+
+        if ((task.getRecoveryType() != null && task.getRecoveryType() != MaintenanceRecoveryType.NONE)
+            || task.getReturnCase() != null
+                && task.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required) {
+            throw ApiExceptions.conflict("Không thể hủy nhiệm vụ thu hồi khi hàng vẫn đang chờ xử lý.");
         }
 
         task.setStatus(MaintenanceTaskStatus.cancelled);
@@ -546,7 +585,15 @@ public class MaintenanceService {
             t.getAssignedTo() != null ? t.getAssignedTo().getId() : null,
             t.getAssignedTo() != null ? t.getAssignedTo().getFullName() : null,
             t.getStatus(),
+            t.getRecoveryType() != null && t.getRecoveryType() != MaintenanceRecoveryType.NONE
+                || t.getReturnCase() != null
+                && t.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required,
+            t.getRecoveryType() == null ? MaintenanceRecoveryType.NONE : t.getRecoveryType(),
             t.getDueAt(),
+            t.getDeadlineAt(),
+            t.getRecoveryHandoverLocation(),
+            t.getRecoveryWitness() != null ? t.getRecoveryWitness().getId() : null,
+            t.getRecoveryWitness() != null ? t.getRecoveryWitness().getFullName() : null,
             t.getStartedAt(),
             t.getCompletedAt(),
             t.getResultReport(),
@@ -564,5 +611,18 @@ public class MaintenanceService {
         if (staff.getStatus() != UserStatus.ACTIVE || !isStaff || !hasFacilityScope) {
             throw ApiExceptions.forbidden("Assigned user must be an active Staff with OPERATE scope at this facility");
         }
+    }
+
+    private User requireRecoveryWitness(UUID witnessId, UUID facilityId, UUID actorId) {
+        if (witnessId == null) {
+            throw ApiExceptions.validation("Cần chọn nhân viên thứ hai cùng xác nhận việc thu hồi hàng.", null);
+        }
+        if (witnessId.equals(actorId)) {
+            throw ApiExceptions.conflict("Nhân viên xác nhận thứ hai phải khác người đang hoàn tất nhiệm vụ.");
+        }
+        User witness = userRepository.findById(witnessId)
+            .orElseThrow(() -> ApiExceptions.notFound("Nhân viên xác nhận thứ hai không tồn tại."));
+        assertEligibleStaff(witness, facilityId);
+        return witness;
     }
 }

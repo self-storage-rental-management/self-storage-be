@@ -1,10 +1,12 @@
 package com.storagehub.api.reservation;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import com.storagehub.api.payment.CustomerPaymentReceiptResponse;
 import com.storagehub.domain.model.ReservationCancellationType;
 import java.math.BigDecimal;
+import com.storagehub.domain.model.InventoryResolutionStatus;
 
 public class ReservationDetailResponse {
 
@@ -25,7 +27,27 @@ public class ReservationDetailResponse {
     private List<ReservationGoodsItemResponse> goodsItems;
     private List<CustomerPaymentReceiptResponse> payments;
     private String checkInStatus;
+    private Instant handoverCompletedAt;
+    private Instant receiptConfirmationDueAt;
+    private boolean receiptConfirmationOverdue;
+    private Instant receiptConfirmationReleaseAt;
+    private boolean receiptReleaseEligible;
+    private Instant setupStartedAt;
+    private Instant setupDueAt;
+    private Integer freeSetupDays;
+    private LocalDate paidRentalStartsOn;
     private String rentalStatus;
+    private Instant inventoryDueAt;
+    private Instant inventoryFinalDeadlineAt;
+    private InventoryResolutionStatus inventoryResolutionStatus;
+    private boolean inventoryFullFit;
+    private boolean inventoryPartialFitAvailable;
+    private Integer inventorySuggestedPackageCount;
+    private String inventoryMismatchSummary;
+    private String inventoryAcceptedQuantitiesJson;
+    private String inventoryActualJson;
+    private String inventoryMismatchJson;
+    private String inventorySuggestedQuantitiesJson;
 
     public record CurrentFacility(String name, String address, String city, String phone, String accessHours) {}
     public record CurrentUnitType(String name, BigDecimal lengthM, BigDecimal widthM, BigDecimal heightM,
@@ -69,6 +91,46 @@ public class ReservationDetailResponse {
     public void setPayments(List<CustomerPaymentReceiptResponse> payments) { this.payments = payments; }
     public String getCheckInStatus() { return checkInStatus; }
     public void setCheckInStatus(String checkInStatus) { this.checkInStatus = checkInStatus; }
+    public Instant getHandoverCompletedAt() { return handoverCompletedAt; }
+    public void setHandoverCompletedAt(Instant value) { handoverCompletedAt = value; }
+    public Instant getReceiptConfirmationDueAt() { return receiptConfirmationDueAt; }
+    public void setReceiptConfirmationDueAt(Instant value) { receiptConfirmationDueAt = value; }
+    public boolean isReceiptConfirmationOverdue() { return receiptConfirmationOverdue; }
+    public void setReceiptConfirmationOverdue(boolean value) { receiptConfirmationOverdue = value; }
+    public Instant getReceiptConfirmationReleaseAt() { return receiptConfirmationReleaseAt; }
+    public void setReceiptConfirmationReleaseAt(Instant value) { receiptConfirmationReleaseAt = value; }
+    public boolean isReceiptReleaseEligible() { return receiptReleaseEligible; }
+    public void setReceiptReleaseEligible(boolean value) { receiptReleaseEligible = value; }
+    public Instant getSetupStartedAt() { return setupStartedAt; }
+    public void setSetupStartedAt(Instant value) { setupStartedAt = value; }
+    public Instant getSetupDueAt() { return setupDueAt; }
+    public void setSetupDueAt(Instant value) { setupDueAt = value; }
+    public Integer getFreeSetupDays() { return freeSetupDays; }
+    public void setFreeSetupDays(Integer value) { freeSetupDays = value; }
+    public LocalDate getPaidRentalStartsOn() { return paidRentalStartsOn; }
+    public void setPaidRentalStartsOn(LocalDate value) { paidRentalStartsOn = value; }
     public String getRentalStatus() { return rentalStatus; }
     public void setRentalStatus(String rentalStatus) { this.rentalStatus = rentalStatus; }
+    public Instant getInventoryDueAt() { return inventoryDueAt; }
+    public void setInventoryDueAt(Instant value) { inventoryDueAt = value; }
+    public Instant getInventoryFinalDeadlineAt() { return inventoryFinalDeadlineAt; }
+    public void setInventoryFinalDeadlineAt(Instant value) { inventoryFinalDeadlineAt = value; }
+    public InventoryResolutionStatus getInventoryResolutionStatus() { return inventoryResolutionStatus; }
+    public void setInventoryResolutionStatus(InventoryResolutionStatus value) { inventoryResolutionStatus = value; }
+    public boolean isInventoryFullFit() { return inventoryFullFit; }
+    public void setInventoryFullFit(boolean value) { inventoryFullFit = value; }
+    public boolean isInventoryPartialFitAvailable() { return inventoryPartialFitAvailable; }
+    public void setInventoryPartialFitAvailable(boolean value) { inventoryPartialFitAvailable = value; }
+    public Integer getInventorySuggestedPackageCount() { return inventorySuggestedPackageCount; }
+    public void setInventorySuggestedPackageCount(Integer value) { inventorySuggestedPackageCount = value; }
+    public String getInventoryMismatchSummary() { return inventoryMismatchSummary; }
+    public void setInventoryMismatchSummary(String value) { inventoryMismatchSummary = value; }
+    public String getInventoryAcceptedQuantitiesJson() { return inventoryAcceptedQuantitiesJson; }
+    public void setInventoryAcceptedQuantitiesJson(String value) { inventoryAcceptedQuantitiesJson = value; }
+    public String getInventoryActualJson() { return inventoryActualJson; }
+    public void setInventoryActualJson(String value) { inventoryActualJson = value; }
+    public String getInventoryMismatchJson() { return inventoryMismatchJson; }
+    public void setInventoryMismatchJson(String value) { inventoryMismatchJson = value; }
+    public String getInventorySuggestedQuantitiesJson() { return inventorySuggestedQuantitiesJson; }
+    public void setInventorySuggestedQuantitiesJson(String value) { inventorySuggestedQuantitiesJson = value; }
 }

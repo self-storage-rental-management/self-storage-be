@@ -29,8 +29,21 @@ public record CompleteCheckInRequest(
     @NotEmpty @Size(max = 20) List<@NotBlank @Size(max = 200) String> handedOverItems,
     @Size(max = 2000) String notes,
     @NotBlank @Size(max = 160) String lockReference,
-    List<@NotNull @Valid InventoryLine> inventoryLines
+    List<@NotNull @Valid InventoryLine> inventoryLines,
+    @Size(max = 500) String actualPackagingMethod,
+    PackagingCondition packagingCondition
 ) {
+    public enum PackagingCondition { INTACT, MINOR_DAMAGE, MAJOR_DAMAGE, UNPACKAGED }
+
+    public CompleteCheckInRequest(CheckInChecklist checklist, String identityDocumentNumber,
+        String identityVerificationNote, CheckInMeasurements actualMeasurements, String varianceReason,
+        String initialUnitCondition, String goodsCondition, int packageCount, String goodsCategory,
+        String goodsMaterial, List<String> evidenceReferences, List<String> handedOverItems,
+        String notes, String lockReference, List<InventoryLine> inventoryLines) {
+        this(checklist, identityDocumentNumber, identityVerificationNote, actualMeasurements,
+            varianceReason, initialUnitCondition, goodsCondition, packageCount, goodsCategory,
+            goodsMaterial, evidenceReferences, handedOverItems, notes, lockReference, inventoryLines, null, null);
+    }
     public record InventoryLine(
         @NotNull UUID goodsItemId,
         @NotNull @Min(0) Integer actualQuantity,

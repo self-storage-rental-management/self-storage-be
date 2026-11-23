@@ -48,7 +48,7 @@ public class RentalQueryService {
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
             financial(r), access(r), s.dateSemantics(), bookingEvidence(actor,r,manager),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart());
     }
 
@@ -167,7 +167,7 @@ public class RentalQueryService {
             r.getStatus(), r.getStartDate(), r.getContractEndDate(), r.getMonthlyPrice(), "VND", warnings,
             period.map(p -> new RentalSummaryResponse.DateSemantics("COMPLETE",p.convention().name(),p.lastPermittedDate(),p.endExclusive()))
                 .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(),
             RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()));
     }
