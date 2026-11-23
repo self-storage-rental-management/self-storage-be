@@ -72,8 +72,17 @@ public class PaymentProvenance {
         catch(Exception invalid){return null;}
     }
     private Classification classifyManualBalance(Payment p) {
+        return classifyManualBalance(p, false);
+    }
+    /** Gross collection evidence survives a later refund; settlement eligibility remains stricter. */
+    public Classification classifyCollection(Payment p) {
+        if (p != null && p.getPurpose() == PaymentType.RENTAL_BALANCE && "MANUAL".equals(p.getGatewayProvider()))
+            return classifyManualBalance(p, true);
+        return classify(p);
+    }
+    private Classification classifyManualBalance(Payment p, boolean reportingGross) {
         if(p.getStatus()!=PaymentStatus.PAID||p.getAmount()==null||p.getAmount().signum()<=0||!"VND".equals(p.getCurrency())
-            ||p.getPaidAt()==null||p.getInitiatedBy()==null||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0
+            ||p.getPaidAt()==null||p.getInitiatedBy()==null||p.getRefundedAmount()==null||(!reportingGross && p.getRefundedAmount().signum()!=0)
             ||p.getGatewayBankCode()==null||!Set.of("CASH","BANK_TRANSFER").contains(p.getGatewayBankCode())||p.getGatewayTransactionNo()==null)
             return Classification.UNVERIFIED;
         var proof=logs.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc("Payment",p.getId(),ManualRentalPaymentService.AUDIT_ACTION);
