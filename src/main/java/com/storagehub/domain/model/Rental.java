@@ -82,6 +82,8 @@ public class Rental extends BaseEntity {
     /** New-policy removal window. Legacy records intentionally remain null. */
     @Column
     private Instant inventoryRemovalPublishedAt;
+    @Column
+    private Instant inventoryRemovalNotifiedAt;
 
     @Column
     private Instant inventoryRemovalDeadlineAt;

@@ -10,6 +10,38 @@ import org.junit.jupiter.api.Test;
 
 class GoodsCatalogIdentityTests {
     @Test
+    void inventoryUsesIdsAndOnlyAllowsArchivedValuesFromTheOriginalDeclaration() {
+        var types = mock(GoodsTypeCatalogRepository.class);
+        var materials = mock(GoodsMaterialCatalogRepository.class);
+        var service = new GoodsCatalogService(types, materials, null, null, null);
+        UUID declared = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        UUID materialId = UUID.randomUUID();
+        var category = new GoodsTypeCatalog();
+        org.springframework.test.util.ReflectionTestUtils.setField(category, "id", declared);
+        category.setDisplayName("Tên đã đổi");
+        category.setStatus(GoodsCatalogStatus.ARCHIVED);
+        var differentCategory = new GoodsTypeCatalog();
+        org.springframework.test.util.ReflectionTestUtils.setField(differentCategory, "id", other);
+        differentCategory.setDisplayName(category.getDisplayName());
+        differentCategory.setStatus(GoodsCatalogStatus.ACTIVE);
+        var material = new GoodsMaterialCatalog();
+        material.setGoodsType(category);
+        material.setStatus(GoodsCatalogStatus.ARCHIVED);
+        when(types.findById(declared)).thenReturn(Optional.of(category));
+        when(types.findById(other)).thenReturn(Optional.of(differentCategory));
+        when(materials.findById(materialId)).thenReturn(Optional.of(material));
+        assertThatCode(() -> service.validateInventorySelection(declared, materialId, declared, materialId))
+            .doesNotThrowAnyException();
+        assertThatThrownBy(() -> service.validateInventorySelection(other, materialId, declared, materialId))
+            .hasMessageContaining("không thuộc loại hàng");
+        assertThatThrownBy(() -> service.validateInventorySelection(declared, materialId, other, null))
+            .hasMessageContaining("đã ngừng sử dụng");
+        assertThatThrownBy(() -> service.validateInventorySelection(null, null, declared, materialId))
+            .hasMessageContaining("Chọn loại hàng");
+    }
+
+    @Test
     void managerDefinedCategoryUsesCatalogIdentityAndDoesNotRequireOtherGoodsReview() {
         var types = mock(GoodsTypeCatalogRepository.class);
         var materials = mock(GoodsMaterialCatalogRepository.class);

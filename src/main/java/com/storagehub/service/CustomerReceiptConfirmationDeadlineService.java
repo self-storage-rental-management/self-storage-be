@@ -72,24 +72,6 @@ public class CustomerReceiptConfirmationDeadlineService {
                     reservation.getId()
                 );
                 notified++;
-            } else if (!now.isBefore(dueAt)) {
-                notificationService.createNotificationOnce(
-                    reservation.getCustomer().getId(), NotificationType.CHECKIN,
-                    "Đã quá hạn xác nhận nhận kho",
-                    "Đơn " + reservation.getReservationCode()
-                        + " đã quá hạn xác nhận nhận kho từ " + dueText
-                        + ". Thời gian setup chưa bắt đầu. Vui lòng liên hệ cơ sở để được hỗ trợ.",
-                    reservation.getId()
-                );
-                notificationService.createFacilityOperationsNotificationsOnce(
-                    reservation.getFacility().getId(), NotificationType.CHECKIN,
-                    "Đơn chờ khách xác nhận nhận kho đã quá hạn",
-                    "Đơn " + reservation.getReservationCode()
-                        + " đã quá hạn xác nhận nhận kho từ " + dueText
-                        + ". Vui lòng liên hệ khách hàng và xử lý hồ sơ tiếp theo.",
-                    reservation.getId()
-                );
-                notified++;
             }
         }
         return notified;

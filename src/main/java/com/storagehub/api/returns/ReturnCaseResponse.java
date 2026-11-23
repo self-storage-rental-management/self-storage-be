@@ -92,7 +92,8 @@ public record ReturnCaseResponse(
     Instant recoveryTaskCreatedAt,
     UUID recoveryWitnessStaffId,
     String recoveryWitnessStaffName,
-    Instant recoveryTaskDeadlineAt
+    Instant recoveryTaskDeadlineAt,
+    Instant inventoryRemovalDeadlineAt
 ) {
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
@@ -173,7 +174,7 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 

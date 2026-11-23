@@ -163,6 +163,11 @@ public class RenewalStatusProjection {
         if(n.getStatus()==RenewalStatus.completed)return "COMPLETED";
         if(n.getStatus()==RenewalStatus.cancelled)return "CANCELLED";
         if(n.getStatus()==RenewalStatus.rejected)return "REJECTED";
+        if(n.getStatus()==RenewalStatus.payment_expired) {
+            if (transactions.stream().anyMatch(p -> "RECONCILIATION_REQUIRED".equals(p.status())))
+                return "AWAITING_RECONCILIATION";
+            return "PAYMENT_WINDOW_EXPIRED";
+        }
         if(state!=null&&state.getPhase()==RenewalOperationState.Phase.NO_SHOW)return "NO_SHOW";
         if(state!=null&&(state.getPhase()==RenewalOperationState.Phase.SIGNING_EXPIRED
             ||state.getPhase()==RenewalOperationState.Phase.SIGNING&&state.getEffectiveSigningDeadline()!=null&&now.isAfter(state.getEffectiveSigningDeadline())))return "SIGNING_EXPIRED";

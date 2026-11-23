@@ -44,8 +44,13 @@ public class RenewalLocalPaymentChecks {
             var snapshot=account.get();
             if(!Objects.equals(snapshot.customerId(),rental.getCustomer().getId())||!Objects.equals(snapshot.facilityId(),rental.getFacility().getId()))
                 throw ApiExceptions.conflict("Ledger resource binding changed");
-            if(snapshot.obligations().stream().anyMatch(o->!Objects.equals(o.renewalId(),renewalId)&&o.outstanding().signum()>0&&!o.dueAt().isAfter(now)))
-                throw ApiExceptions.conflict("Recorded due obligations block Renewal payment");
+            var due = snapshot.obligations().stream()
+                .filter(o -> (renewalId == null || !renewalId.equals(o.renewalId()))
+                    && o.outstanding().signum() > 0 && !o.dueAt().isAfter(now))
+                .map(o -> o.outstanding()).reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+            if (due.signum() > 0)
+                throw ApiExceptions.conflict("Còn " + String.format(java.util.Locale.GERMANY, "%,.0f", due)
+                    + " ₫ đến hạn. Vui lòng thanh toán khoản còn nợ trước khi gia hạn.");
         }
         if(em.createQuery("select count(p) from PaymentComplaint p where p.reservation.id=:id and p.status in :statuses",Long.class)
             .setParameter("id",rental.getReservation().getId()).setParameter("statuses",List.of(PaymentComplaintStatus.PENDING,PaymentComplaintStatus.REVIEW_OVERDUE)).getSingleResult()>0)

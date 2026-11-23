@@ -31,6 +31,15 @@ public class RenewalOverdueFeeService {
         // The signing day belongs to the new rent period; only preceding days are overdue fees.
         return quote(renewal.getRental(),snapshot,now,true);
     }
+    public Quote quote(Renewal renewal,LedgerStore.Snapshot snapshot,Instant now,
+        com.storagehub.api.renewal.RenewalQuoteResponse.Terms terms) {
+        if (!Boolean.TRUE.equals(terms.continuousPeriod())) return quote(renewal,snapshot,now);
+        var rental = renewal.getRental();
+        var boundary = periods.require(rental).endExclusive().atStartOfDay(BusinessTime.ZONE).toInstant();
+        var fee = quote(rental,snapshot,now.isBefore(boundary) ? now : boundary,true);
+        return new Quote(fee.overdueDays(), fee.accrued(), fee.outstanding(), fee.unposted(),
+            fee.dueAt(), Instant.MAX, fee.sourceRef(), fee.posted());
+    }
     public Quote quote(Rental rental,LedgerStore.Snapshot snapshot,Instant now) {
         return quote(rental,snapshot,now,false);
     }

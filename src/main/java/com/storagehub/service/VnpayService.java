@@ -1,5 +1,7 @@
 package com.storagehub.service;
 
+import com.storagehub.domain.model.RenewalStatus;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.payment.VnpayPaymentUrlResponse;
@@ -369,7 +371,7 @@ public class VnpayService {
                 return new CallbackResult("04", "Invalid payment date", payment.getId(), reservationId, renewalId, false, false);
             }
             if(renewalPayment) {
-                if(payment.getPaymentDeadline()==null||gatewayPaidAt.isAfter(payment.getPaymentDeadline())) {
+                if(renewalRequiresClosedPaymentReview(payment,gatewayPaidAt)) {
                     markRenewalLatePayment(payment,gatewayPaidAt);
                     recordRenewalGatewayEvidence(payment,query,gatewayPaidAt,false,"PAYMENT_AFTER_DEADLINE");
                     paymentRepository.saveAndFlush(payment);
@@ -481,7 +483,7 @@ public class VnpayService {
                 throw ApiExceptions.conflict("VNPAY returned an invalid payment date");
             }
             if(payment.getRenewal()!=null) {
-                if(payment.getPaymentDeadline()==null||gatewayPaidAt.isAfter(payment.getPaymentDeadline())) {
+                if(renewalRequiresClosedPaymentReview(payment,gatewayPaidAt)) {
                     markRenewalLatePayment(payment,gatewayPaidAt);
                 } else {
                     payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
@@ -556,7 +558,7 @@ public class VnpayService {
             Instant gatewayPaidAt = parseGatewayPayDate(gateway.get("vnp_PayDate"));
             if (gatewayPaidAt == null) return ReconciliationOutcome.UNKNOWN;
             if(payment.getRenewal()!=null) {
-                if(payment.getPaymentDeadline()==null||gatewayPaidAt.isAfter(payment.getPaymentDeadline()))
+                if(renewalRequiresClosedPaymentReview(payment,gatewayPaidAt))
                     markRenewalLatePayment(payment,gatewayPaidAt);
                 else {
                     payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
@@ -1291,25 +1293,34 @@ public class VnpayService {
         proof.put("merchantMatched",properties.getTmnCode().equals(query.get("vnp_TmnCode")));
         return proof;
     }
+    private boolean renewalRequiresClosedPaymentReview(Payment payment, Instant gatewayPaidAt) {
+        return payment.getRenewal().getStatus()==RenewalStatus.payment_expired
+            || payment.getPaymentDeadline()==null || gatewayPaidAt.isAfter(payment.getPaymentDeadline());
+    }
+
     private void markRenewalLatePayment(Payment payment,Instant gatewayPaidAt) {
         PaymentStatus previousStatus = payment.getStatus();
+        boolean late = payment.getPaymentDeadline()==null || gatewayPaidAt.isAfter(payment.getPaymentDeadline());
         payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
-        payment.setFailureCode("PAYMENT_AFTER_DEADLINE");
-        payment.setFailureReason("VNPAY recorded Renewal funds after the persisted payment deadline; manual financial reconciliation is required");
+        payment.setFailureCode(late ? "PAYMENT_AFTER_DEADLINE" : "RENEWAL_CLOSED_FUNDS_REVIEW");
+        payment.setFailureReason(late ? "VNPAY recorded Renewal funds after the persisted payment deadline; manual financial reconciliation is required"
+            : "VNPAY confirmed an in-time payment after the Renewal closed; manual financial reconciliation is required");
         if (previousStatus != PaymentStatus.PAID) {
             var renewal = payment.getRenewal();
             var rental = renewal.getRental();
             notificationService.createNotification(
                 rental.getCustomer().getId(), NotificationType.PAYMENT,
                 "Thanh toán gia hạn đang được đối soát",
-                "VNPay đã ghi nhận tiền sau thời hạn thanh toán. Khoản tiền được giữ nguyên và đang chờ đối soát.",
+                late ? "VNPay đã ghi nhận tiền sau thời hạn thanh toán. Khoản tiền đang chờ đối soát."
+                    : "VNPay đã xác nhận khoản trả trước sau khi hồ sơ đóng. Cơ sở sẽ liên hệ để xử lý khoản tiền.",
                 renewal.getId()
             );
             notificationService.createFacilityOperationsNotifications(
                 rental.getFacility().getId(), NotificationType.PAYMENT,
-                "Thanh toán gia hạn trễ cần đối soát",
+                "Thanh toán gia hạn cần đối soát",
                 "VNPay đã ghi nhận tiền gia hạn của khách hàng " + rental.getCustomer().getFullName()
-                    + " sau thời hạn. Cần đối soát tài chính thủ công trước khi tiếp tục xử lý.",
+                    + (late ? " sau thời hạn thanh toán." : " đúng hạn nhưng hồ sơ đã đóng.")
+                    + " Cần đối soát tài chính thủ công trước khi tiếp tục xử lý.",
                 renewal.getId()
             );
             sendRenewalPaymentBillEmail(payment, gatewayPaidAt, false);

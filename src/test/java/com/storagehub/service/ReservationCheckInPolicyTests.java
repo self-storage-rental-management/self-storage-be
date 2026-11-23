@@ -57,13 +57,13 @@ class ReservationCheckInPolicyTests {
     }
 
     @Test
-    void customerReceiptConfirmationUsesTwentyFourHoursWithTwoHourReminder() {
+    void customerReceiptConfirmationUsesThreeDaysWithTwoHourReminder() {
         Instant handoverAt = Instant.parse("2026-10-12T10:30:00Z");
 
         assertThat(ReservationCheckInPolicy.customerReceiptConfirmationDueAt(handoverAt))
-            .isEqualTo(Instant.parse("2026-10-13T10:30:00Z"));
+            .isEqualTo(Instant.parse("2026-10-15T10:30:00Z"));
         assertThat(ReservationCheckInPolicy.customerReceiptConfirmationReminderAt(handoverAt))
-            .isEqualTo(Instant.parse("2026-10-13T08:30:00Z"));
+            .isEqualTo(Instant.parse("2026-10-15T08:30:00Z"));
     }
 
     @Test
