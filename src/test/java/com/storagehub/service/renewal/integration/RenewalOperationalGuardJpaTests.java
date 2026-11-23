@@ -98,13 +98,19 @@ class RenewalOperationalGuardJpaTests {
     }
     @Test void otherAssignedBookingBlocksWithoutCancellingIt() {
         var r=fixture();var other=reservation(r,"OTHER",ReservationStatus.CONFIRMED);other.setAssignedUnit(r.getStorageUnit());em.persist(other);em.flush();
-        assertThatThrownBy(()->guard.requireNoKnownConflict(r)).hasMessageContaining("Another booking");
+        assertThatCode(()->guard.requireNoKnownConflict(r)).doesNotThrowAnyException();
+        assertThatThrownBy(()->guard.requireNoBookingConflict(r,other.getStartDate(),other.getEndDate()))
+            .hasMessageContaining("Another booking");
+        assertThatCode(()->guard.requireNoBookingConflict(r,other.getEndDate(),other.getEndDate().plusDays(1)))
+            .doesNotThrowAnyException();
         assertThat(other.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
     }
     @Test void ownAssignedBookingAndOtherCancelledBookingDoNotBlock() {
         var r=fixture();r.getReservation().setAssignedUnit(r.getStorageUnit());
         var other=reservation(r,"OTHER",ReservationStatus.CANCELLED);other.setAssignedUnit(r.getStorageUnit());em.persist(other);em.flush();
         assertThatCode(()->guard.requireNoKnownConflict(r)).doesNotThrowAnyException();
+        assertThatCode(()->guard.requireNoBookingConflict(r,other.getStartDate(),other.getEndDate()))
+            .doesNotThrowAnyException();
     }
     @Test void recordedRecoveryHandoffRequiresReceiverReconciliation() {
         var r=fixture();em.persist(new OverdueFollowUp("RENTAL_TERM:"+r.getId(),r,"RECOVERY_HANDOFF","TEST",r.getCustomer().getId(),NOW,UUID.randomUUID(),"TEST","1"));em.flush();

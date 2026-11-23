@@ -1423,7 +1423,8 @@ public class CheckInHandoverService {
                     item.getCustomGoodsName() == null || item.getCustomGoodsName().isBlank()
                         ? item.getCategoryName() : item.getCustomGoodsName(),
                     item.getCategoryName(), declaredGoodsMaterial(item),
-                    item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg()))
+                    item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg(),
+                    item.getCatalogCategoryId(), item.getCatalogMaterialId()))
                 .toList(),
             intakeAction(actor, reservation, checkIn, assignment),
             rental == null ? null : rental.getInventoryFinalDeadlineAt(),
@@ -1785,6 +1786,13 @@ public class CheckInHandoverService {
         declaredValues.put("volumeM3", reservation.getTotalGoodsVolumeM3());
         declaredValues.put("category", declared.stream().map(this::declaredGoodsCategory).filter(Objects::nonNull).distinct().toList());
         declaredValues.put("material", declared.stream().map(this::declaredGoodsMaterial).filter(Objects::nonNull).distinct().toList());
+        declaredValues.put("catalogLines", declared.stream().map(item -> {
+            Map<String, Object> ids = new LinkedHashMap<>();
+            ids.put("goodsItemId", item.getId());
+            ids.put("categoryId", item.getCatalogCategoryId());
+            ids.put("materialId", item.getCatalogMaterialId());
+            return ids;
+        }).toList());
 
         Map<String, Object> actualValues = new LinkedHashMap<>();
         actualValues.put("packageCount", request.packageCount());
@@ -1797,6 +1805,7 @@ public class CheckInHandoverService {
         actualValues.put("heightCm", request.actualMeasurements().heightCm());
         actualValues.put("category", request.goodsCategory());
         actualValues.put("material", request.goodsMaterial());
+        actualValues.put("inventoryLines", request.inventoryLines());
 
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("declared", declaredValues);
@@ -1857,9 +1866,22 @@ public class CheckInHandoverService {
         List<ReservationGoodsItem> declared,
         CompleteCheckInRequest request
     ) {
-        List<String> categories = declared.stream().map(this::declaredGoodsCategory)
+        var lines = request.inventoryLines() == null ? List.<CompleteCheckInRequest.InventoryLine>of() : request.inventoryLines();
+        var byId = new HashMap<UUID, CompleteCheckInRequest.InventoryLine>();
+        lines.forEach(line -> byId.put(line.goodsItemId(), line));
+        for (var item : declared) {
+            var line = byId.get(item.getId());
+            if (line == null || line.actualQuantity() == 0 || item.getCatalogCategoryId() == null) continue;
+            if (!Objects.equals(item.getCatalogCategoryId(), line.actualCategoryId())
+                || !Objects.equals(item.getCatalogMaterialId(), line.actualMaterialId())) return true;
+        }
+        var legacy = lines.isEmpty() ? declared : declared.stream()
+            .filter(item -> item.getCatalogCategoryId() == null)
+            .filter(item -> !byId.containsKey(item.getId()) || byId.get(item.getId()).actualQuantity() > 0)
+            .toList();
+        List<String> categories = legacy.stream().map(this::declaredGoodsCategory)
             .filter(value -> value != null).distinct().toList();
-        List<String> materials = declared.stream().map(this::declaredGoodsMaterial)
+        List<String> materials = legacy.stream().map(this::declaredGoodsMaterial)
             .filter(value -> value != null).distinct().toList();
         return !categories.isEmpty() && !matchesDeclaredLabel(request.goodsCategory(), categories)
             || !materials.isEmpty() && !matchesDeclaredLabel(request.goodsMaterial(), materials);
@@ -1878,20 +1900,19 @@ public class CheckInHandoverService {
     }
 
     private void validateInventoryLines(List<ReservationGoodsItem> declared, CompleteCheckInRequest request) {
-        // inventoryLines was added after the aggregate inventory form had already
-        // been deployed. Keep accepting requests from that form during the rolling
-        // upgrade; all aggregate measurements, capacity, variance and evidence
-        // checks above still apply. New clients send a non-null list and receive the
-        // stricter per-line validation below.
-        if (request.inventoryLines() == null) return;
+        if (request.inventoryLines() == null) {
+            if (declared.stream().anyMatch(item -> item.getCatalogCategoryId() != null))
+                throw ApiExceptions.validation("Cần đối chiếu mã loại hàng và chất liệu theo từng dòng kiểm kê.", null);
+            return;
+        }
         var lines = request.inventoryLines();
         if (declared.size() != lines.size()) {
             throw ApiExceptions.validation("Cần kiểm kê đủ từng dòng hàng đã khai báo.", null);
         }
         if (declared.isEmpty()) return;
 
-        var byId = new HashMap<UUID, Integer>();
-        declared.forEach(item -> byId.put(item.getId(), item.getQuantity()));
+        var byId = new HashMap<UUID, ReservationGoodsItem>();
+        declared.forEach(item -> byId.put(item.getId(), item));
         var seen = new HashSet<UUID>();
         long total = 0;
         boolean hasMeasurements = lines.stream().anyMatch(line -> line.measurements() != null);
@@ -1899,11 +1920,15 @@ public class CheckInHandoverService {
         BigDecimal weight = BigDecimal.ZERO;
         BigDecimal volume = BigDecimal.ZERO;
         for (var line : lines) {
-            Integer expected = byId.get(line.goodsItemId());
-            if (expected == null || !seen.add(line.goodsItemId())) {
+            var item = byId.get(line.goodsItemId());
+            if (item == null || !seen.add(line.goodsItemId())) {
                 throw ApiExceptions.validation("Dòng hàng kiểm kê bị trùng hoặc không thuộc đơn đặt kho.", null);
             }
             int actual = line.actualQuantity();
+            int expected = item.getQuantity();
+            if (actual > 0 && (item.getCatalogCategoryId() != null || line.actualCategoryId() != null || line.actualMaterialId() != null))
+                inventoryCatalog.validateInventorySelection(line.actualCategoryId(), line.actualMaterialId(),
+                    item.getCatalogCategoryId(), item.getCatalogMaterialId());
             var condition = line.condition();
             if ((actual == 0) != (condition == CompleteCheckInRequest.InventoryLine.Condition.NOT_PRESENT)) {
                 throw ApiExceptions.validation("Tình trạng hàng phải phù hợp với số kiện thực tế.", null);
@@ -1987,23 +2012,11 @@ public class CheckInHandoverService {
         }
     }
 
-    private void validateGoodsDeclaration(List<ReservationGoodsItem> declared, CompleteCheckInRequest request) {
-        List<String> declaredCategories = declared.stream()
-            .map(this::declaredGoodsCategory)
-            .filter(value -> value != null)
-            .distinct()
-            .toList();
-        List<String> declaredMaterials = declared.stream()
-            .map(this::declaredGoodsMaterial)
-            .filter(value -> value != null)
-            .distinct()
-            .toList();
+    @org.springframework.beans.factory.annotation.Autowired
+    private GoodsCatalogService inventoryCatalog;
 
-        boolean categoryVaries = !declaredCategories.isEmpty()
-            && !matchesDeclaredLabel(request.goodsCategory(), declaredCategories);
-        boolean materialVaries = !declaredMaterials.isEmpty()
-            && !matchesDeclaredLabel(request.goodsMaterial(), declaredMaterials);
-        if (!categoryVaries && !materialVaries) {
+    private void validateGoodsDeclaration(List<ReservationGoodsItem> declared, CompleteCheckInRequest request) {
+        if (!hasGoodsDeclarationVariance(declared, request)) {
             return;
         }
         if (!request.actualMeasurements().varianceAccepted()) {

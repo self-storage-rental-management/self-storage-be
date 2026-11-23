@@ -62,7 +62,7 @@ public class RenewalLedgerAccountingConfiguration {
             }
             var spec=specs.getLast();var obligation=obligation(snapshot,workflow,spec);
             if(obligation.refunded().signum()!=0)throw deferred("Refunded Renewal obligation requires reconciliation");
-            var fee=fees==null?null:fees.quote(renewal,snapshot,now);
+            var fee=fees==null?null:fees.quote(renewal,snapshot,now,terms);
             String version=workflow.getAcceptedRevision().getId()+":"+snapshot.revision()+(fee==null?"":":"+fee.sourceRef());
             UUID ref=UUID.nameUUIDFromBytes((renewal.getId()+":"+version).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var required=new ArrayList<UUID>();required.add(obligation.id());if(fee!=null)fee.posted().forEach(o->required.add(o.id()));
@@ -91,7 +91,7 @@ public class RenewalLedgerAccountingConfiguration {
             var allocations=new LinkedHashMap<UUID,java.math.BigDecimal>();
             for(var o:snapshot.obligations())if(payable.requiredObligations().contains(o.id())&&o.outstanding().signum()>0)allocations.put(o.id(),o.outstanding());
             if(payable.unpostedOverdueFee().signum()>0) {
-                var fee=fees.quote(renewal,snapshot,now);
+                var fee=fees.quote(renewal,snapshot,now,terms);
                 UUID obligationId=ledger.charge(renewal.getRental().getId(),renewal.getId(),LedgerStore.Kind.RENEWAL_REMAINDER,
                     fee.unposted(),fee.dueAt(),fee.sourceRef(),actor,fee.sourceRef(),snapshot.revision());
                 allocations.put(obligationId,fee.unposted());snapshot=account(renewal);
@@ -155,7 +155,7 @@ public class RenewalLedgerAccountingConfiguration {
                 var remainder=obligation(snapshot,workflow,specs.getLast());manualRequired.put(remainder.id(),remainder);
             }
             if(fees!=null) {
-                var fee=fees.quote(renewal,snapshot,now);
+                var fee=fees.quote(renewal,snapshot,now,terms);
                 if(fee.outstanding().signum()!=0)throw deferred("Daily overdue fee is not fully paid");
                 fee.posted().forEach(o->manualRequired.put(o.id(),o));
             }

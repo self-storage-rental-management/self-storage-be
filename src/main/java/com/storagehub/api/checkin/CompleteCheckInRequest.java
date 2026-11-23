@@ -49,12 +49,18 @@ public record CompleteCheckInRequest(
         @NotNull @Min(0) Integer actualQuantity,
         @NotNull Condition condition,
         @Size(max = 1000) String note,
-        @Valid InventoryMeasurements measurements
+        @Valid InventoryMeasurements measurements,
+        UUID actualCategoryId,
+        UUID actualMaterialId
     ) {
         public enum Condition { INTACT, DAMAGED, NOT_PRESENT }
 
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note) {
-            this(goodsItemId, actualQuantity, condition, note, null);
+            this(goodsItemId, actualQuantity, condition, note, null, null, null);
+        }
+        public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note,
+            InventoryMeasurements measurements) {
+            this(goodsItemId, actualQuantity, condition, note, measurements, null, null);
         }
     }
 
