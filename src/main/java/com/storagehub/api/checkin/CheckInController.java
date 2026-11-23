@@ -25,6 +25,11 @@ public class CheckInController {
     private final ActorContext actorContext;
     private final CheckInHandoverService service;
 
+    @PostMapping("/{checkInId}/identity-correction")
+    public ApiResponse<CheckInResponse> correctIdentity(@PathVariable UUID checkInId, @Valid @RequestBody VerifyCheckInIdentityRequest request) {
+        return new ApiResponse<>(service.correctIdentity(actorContext.required(), checkInId, request), CorrelationIdContext.current());
+    }
+
     @GetMapping
     public PageResponse<CheckInResponse> list(
         @RequestParam(required = false) UUID facilityId,

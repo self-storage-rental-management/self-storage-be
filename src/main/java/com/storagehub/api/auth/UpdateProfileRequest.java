@@ -17,10 +17,9 @@ public record UpdateProfileRequest(
     String emergencyContactName,
     @Size(max = 30) String emergencyContactPhone,
     @Size(max = 500_000) String avatarUrl,
-    @Size(max = 11) java.util.Map<String, Object> profileDetails
+    @jakarta.validation.Valid com.storagehub.domain.model.CustomerProfileDetails profileDetails
 ) {
-    public UpdateProfileRequest(String fullName, String phone, String permanentAddress,
-        String emergencyContactName, String emergencyContactPhone, String avatarUrl) {
+    public UpdateProfileRequest(String fullName, String phone, String permanentAddress, String emergencyContactName, String emergencyContactPhone, String avatarUrl) {
         this(fullName, phone, permanentAddress, emergencyContactName, emergencyContactPhone, avatarUrl, null);
     }
     @AssertTrue(message = "emergency contact name and phone must be provided together")
