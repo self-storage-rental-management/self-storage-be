@@ -829,7 +829,7 @@ public class CheckInHandoverService {
                 reservation.getCustomer().getId(), NotificationType.CHECKIN,
                 "Cần bạn xác nhận kết quả kiểm kê",
                 "Hàng hóa thực tế của đơn " + reservation.getReservationCode()
-                    + " có điểm khác với khai báo. Vui lòng chọn phương án nhận hàng phù hợp hoặc yêu cầu trả kho." + removalNotice,
+                    + " có điểm khác với khai báo. Quý khách vui lòng xem kết quả kiểm kê và chọn cách xử lý hàng hóa hoặc yêu cầu trả kho." + removalNotice,
                 reservation.getId()
             );
             notificationService.createFacilityOperationsNotifications(
@@ -1020,13 +1020,13 @@ public class CheckInHandoverService {
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.PAYMENT,
             "Đã ghi nhận thanh toán khi nhận kho",
-            "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
+            "Đơn " + reservation.getReservationCode() + " đã có biên lai thanh toán phần còn lại.",
             reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.PAYMENT,
             "Đã ghi nhận thanh toán khi nhận kho",
-            "Đơn " + reservation.getReservationCode() + " đã có biên lai phần thanh toán còn lại.",
+            "Đơn " + reservation.getReservationCode() + " đã có biên lai thanh toán phần còn lại.",
             reservation.getId()
         );
         return toPaymentResponse(saved);
@@ -1088,13 +1088,13 @@ public class CheckInHandoverService {
         notificationService.createNotification(
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Ghi nhận không đến nhận kho",
-            "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
+            "Đơn " + reservation.getReservationCode() + " được ghi nhận là khách hàng không đến nhận kho theo lịch hẹn.",
             reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.CHECKIN,
             "Khách hàng không đến nhận kho",
-            "Đơn " + reservation.getReservationCode() + " đã được ghi nhận không đến theo lịch hẹn.",
+            "Đơn " + reservation.getReservationCode() + " được ghi nhận là khách hàng không đến nhận kho theo lịch hẹn.",
             reservation.getId()
         );
         return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
