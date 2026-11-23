@@ -2,6 +2,8 @@ package com.storagehub.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.domain.model.Facility;
@@ -70,20 +72,53 @@ class RentalSetupLifecycleServiceTests {
         rental.setInventoryFinalDeadlineAt(Instant.now().minusSeconds(60));
     }
 
-    @Test
-    void createsHighPriorityRecoveryTaskAfterInventoryFinalDeadline() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void createsOneHighPriorityRecoveryTaskForTheCurrentExpiredDeadline(boolean removal) {
         when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of());
         when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
         when(maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(any(), any(), any())).thenReturn(List.of());
         when(maintenanceTaskRepository.saveAndFlush(any(MaintenanceTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        if (removal) rental.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(10));
 
+        service.advanceSetupRentals();
         service.advanceSetupRentals();
 
         assertThat(rental.getInventoryEscalatedAt()).isNotNull();
         var task = org.mockito.ArgumentCaptor.forClass(MaintenanceTask.class);
-        org.mockito.Mockito.verify(maintenanceTaskRepository).saveAndFlush(task.capture());
+        verify(maintenanceTaskRepository).saveAndFlush(task.capture());
         assertThat(task.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.INVENTORY_OVERDUE);
+        assertThat(task.getValue().getReason()).contains(removal ? "hết hạn đưa hàng sai lệch" : "quá hạn kiểm kê");
         assertThat(task.getValue().getPriority()).isEqualTo(com.storagehub.domain.model.TaskPriority.high);
         assertThat(task.getValue().getDeadlineAt()).isAfter(Instant.now());
+    }
+
+    @Test
+    void remindsOnceWhenTheFourDayMilestoneIsReachedBeforeFinalDeadline() {
+        rental.setInventoryFinalDeadlineAt(Instant.now().plus(3, ChronoUnit.DAYS));
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
+
+        service.advanceSetupRentals();
+        service.advanceSetupRentals();
+
+        assertThat(rental.getInventoryDeadlineReminderAt()).isNotNull();
+        assertThat(rental.getInventoryEscalatedAt()).isNull();
+        verify(notificationService).createNotification(
+            org.mockito.ArgumentMatchers.eq(rental.getCustomer().getId()),
+            org.mockito.ArgumentMatchers.eq(com.storagehub.domain.model.NotificationType.CHECKIN),
+            org.mockito.ArgumentMatchers.eq("Sắp đến hạn kiểm kê hàng hóa"), any(String.class),
+            org.mockito.ArgumentMatchers.eq(rental.getId()));
+        verify(maintenanceTaskRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void waitsForRemovalDeadlineEvenIfTheOriginalInventoryDeadlinePassed() {
+        rental.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(60));
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
+
+        service.advanceSetupRentals();
+
+        assertThat(rental.getInventoryEscalatedAt()).isNull();
+        verify(maintenanceTaskRepository, never()).saveAndFlush(any());
     }
 }
