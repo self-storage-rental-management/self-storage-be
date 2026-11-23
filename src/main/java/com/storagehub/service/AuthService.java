@@ -460,13 +460,10 @@ public class AuthService {
     @Transactional
     public ActorResponse updateCurrentActor(UpdateProfileRequest request) {
         ActorPrincipal actor = actorContext.required();
-        User user = userRepository.findById(actor.userId())
+        User user = userRepository.findByIdForUpdate(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
         ActorResponse before = actorResponseMapper.toResponse(user);
 
-        if (request.profileDetails() != null) {
-            user.setProfileDetails(CustomerProfileDetailsPolicy.merge(user.getProfileDetails(), request.profileDetails()));
-        }
         user.setFullName(requireText(request.fullName(), "fullName"));
         if (request.phone() != null) {
             user.setPhone(normalizeNullable(request.phone()));
@@ -484,6 +481,18 @@ public class AuthService {
             user.setAvatarUrl(normalizeNullable(request.avatarUrl()));
         }
 
+        if (request.profileDetails() != null) {
+            var previous = user.getProfileDetails();
+            var verifiedAt = previous == null ? null : previous.getIdentityVerifiedAt();
+            String oldIdentity = previous == null ? null : com.storagehub.validation.CccdPolicy.normalize(previous.getIdentityDocumentNumber());
+            String newIdentity = com.storagehub.validation.CccdPolicy.normalize(request.profileDetails().getIdentityDocumentNumber());
+            if (verifiedAt != null && !java.util.Objects.equals(oldIdentity, newIdentity))
+                throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff để chỉnh sửa.");
+            request.profileDetails().setIdentityVerifiedAt(verifiedAt);
+            user.setProfileDetails(request.profileDetails());
+            CustomerIdentityPolicy.assign(user, newIdentity, userRepository);
+        }
+        com.storagehub.service.CustomerProfilePolicy.validate(user, false);
         User saved = userRepository.saveAndFlush(user);
         ActorResponse response = actorResponseMapper.toResponse(saved);
         auditLogService.recordMutation(user, "USER_PROFILE_UPDATED", "User", user.getId(), null, before, response);

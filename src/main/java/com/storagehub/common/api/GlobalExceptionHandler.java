@@ -66,7 +66,10 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ApiErrorResponse> handleDataConflict() {
+    public ResponseEntity<ApiErrorResponse> handleDataConflict(DataIntegrityViolationException exception) {
+        String detail = exception.getMostSpecificCause().getMessage();
+        if (detail != null && detail.contains("identity_document_hash"))
+            return error(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "CCCD đã được sử dụng bởi tài khoản khác.", null);
         return error(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "The request conflicts with existing data", null);
     }
 

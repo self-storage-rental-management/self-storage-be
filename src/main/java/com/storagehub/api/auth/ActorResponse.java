@@ -23,6 +23,10 @@ public record ActorResponse(
     boolean mustChangePassword,
     Set<String> permissions,
     long authzVersion,
-    Map<String, Object> profileDetails
+    com.storagehub.domain.model.CustomerProfileDetails profileDetails
 ) {
+    public ActorResponse(UUID id, String email, String fullName, String phone, String permanentAddress, String emergencyContactName, String emergencyContactPhone, String avatarUrl, UserStatus status, Set<RoleCode> roles, Map<UUID, FacilityScopeLevel> facilityScopes, Map<UUID, String> facilityNames, boolean mustChangePassword, Set<String> permissions, long authzVersion) {
+        this(id, email, fullName, phone, permanentAddress, emergencyContactName, emergencyContactPhone, avatarUrl, status, roles, facilityScopes, facilityNames, mustChangePassword, permissions, authzVersion, null);
+    }
+
 }
