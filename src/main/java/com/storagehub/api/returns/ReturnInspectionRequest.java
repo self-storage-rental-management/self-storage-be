@@ -80,7 +80,7 @@ public record ReturnInspectionRequest(
         @JsonProperty("recoveryHandoverLocation") String recoveryHandoverLocation,
         @JsonProperty("customerPresent") Boolean customerPresent,
         @JsonProperty("recoveryWitnessStaffId") UUID recoveryWitnessStaffId,
-    List<DamageItem> damageItems
+        @JsonProperty("damageItems") List<DamageItem> damageItems
     ) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock,

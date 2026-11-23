@@ -1145,7 +1145,7 @@ public class CustomerReservationService {
                 ||!rental.getInventoryVerifiedAt().equals(checkIn.getInventoryVerifiedAt())
                 ||!rental.getStartDate().equals(paidStart)
                 ||(!rental.getSetupEndsAt().equals(paidStart.atStartOfDay(zone).toInstant())
-                    && !rental.getSetupEndsAt().equals(rental.getSetupStartedAt().plus(java.time.Duration.ofDays(setupDays))))
+                    && !rental.getSetupEndsAt().equals(rental.getSetupStartedAt().plus(java.time.Duration.ofDays(snapshot.getFreeSetupDays()))))
                 ||!rental.getContractEndDate().equals(paidStart.plusMonths(snapshot.getRentalMonths()))
                 ||checkIn.getContractSignedAt().isAfter(rental.getSetupStartedAt())
                 ||checkIn.getPaymentCollectedAt().isAfter(rental.getSetupStartedAt())
