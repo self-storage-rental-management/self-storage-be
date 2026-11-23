@@ -19,6 +19,10 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class Contract extends BaseEntity {
+    @jakarta.persistence.Lob
+    @Column(columnDefinition = "LONGTEXT")
+    private String emergencyContactsSnapshot;
+
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "rental_id", nullable = false)

@@ -868,6 +868,11 @@ public class CustomerReservationService {
         String unitCode = rental.getStorageUnit() == null ? "UNIT" : rental.getStorageUnit().getCode();
         var contract = contractRepository.findByRental_Id(rental.getId())
             .orElseGet(com.storagehub.domain.model.Contract::new);
+        if (contract.getEmergencyContactsSnapshot() == null) {
+            var signedCheckIn = checkInRepository.findByReservation_Id(reservation.getId())
+                .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ ký hợp đồng."));
+            contract.setEmergencyContactsSnapshot(signedCheckIn.getEmergencyContactsSnapshot());
+        }
         contract.setRental(rental);
         contract.setStatus(com.storagehub.domain.model.ContractStatus.SIGNED);
         if (contract.getContractNumber() == null) {
@@ -1314,6 +1319,7 @@ public class CustomerReservationService {
         }
         response.setGoodsCondition(reservation.getGoodsCondition());
         response.setNotes(reservation.getNotes());
+        response.setPaymentStartedAt(reservation.getPaymentStartedAt());
         response.setPaymentExpiresAt(reservation.getPaymentExpiresAt());
         response.setComplaintExpiresAt(reservation.getComplaintExpiresAt());
         response.setArchivedAt(reservation.getArchivedAt());

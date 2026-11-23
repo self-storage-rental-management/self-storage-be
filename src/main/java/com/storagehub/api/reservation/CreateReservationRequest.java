@@ -23,15 +23,12 @@ public class CreateReservationRequest {
     @NotNull
     private UUID quoteId;
 
-    @NotBlank
-    @Size(min = 9, max = 30)
+    @com.storagehub.validation.ValidCccd
     private String identityDocumentNumber;
 
-    @NotBlank
     @Size(max = 40)
     private String customerPhone;
 
-    @NotBlank
     @Size(max = 500)
     private String customerAddress;
 
@@ -91,11 +88,11 @@ public class CreateReservationRequest {
 
     @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
     public boolean isCustomerPhoneValid() {
-        return PhoneNumberPolicy.isValid(customerPhone);
+        return PhoneNumberPolicy.isOptionalValid(customerPhone);
     }
 
     @AssertTrue(message = IdentityDocumentPolicy.MESSAGE)
     public boolean isIdentityDocumentNumberValid() {
-        return IdentityDocumentPolicy.isValid(identityDocumentNumber);
+        return identityDocumentNumber == null || identityDocumentNumber.isBlank() || com.storagehub.validation.CccdPolicy.error(identityDocumentNumber) == null;
     }
 }

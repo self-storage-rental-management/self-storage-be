@@ -164,6 +164,7 @@ public class SimulatedPaymentService {
     }
 
     private void requirePayable(Reservation reservation) {
+        CustomerProfilePolicy.validate(reservation.getCustomer(), true);
         if (reservation.getStatus() != ReservationStatus.AWAITING_PAYMENT) {
             throw ApiExceptions.conflict("Reservation is not awaiting payment");
         }
