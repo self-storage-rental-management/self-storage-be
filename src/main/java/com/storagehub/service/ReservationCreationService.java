@@ -15,6 +15,7 @@ import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
@@ -134,6 +135,7 @@ public class ReservationCreationService {
                                        requestFingerprint.getBytes(StandardCharsets.US_ASCII))) {
                 throw ApiExceptions.conflict("Idempotency-Key is already used for a different request");
             }
+            syncBookingProfile(existing.getCustomer(), request);
             ReservationPricingSnapshot existingSnapshot = snapshotRepository
                 .findByReservation_Id(existing.getId())
                 .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
@@ -201,13 +203,15 @@ public class ReservationCreationService {
             throw ApiExceptions.conflict(String.join(" ", compatibility.getIssues()));
         }
         validateQuoteStillCurrent(quote);
+        syncBookingProfile(quote.getCustomer(), request);
         boolean reviewRequired = compatibility.getResult() == CompatibilityResult.REVIEW_REQUIRED;
         Reservation reservation = new Reservation();
         reservation.setReservationCode(uniqueReservationCode(reservationRepository,
             ReservationCreationService::generateReservationCode));
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
-        // Capture a per-booking copy. Creating a reservation never edits the account profile or older reservations.
+        // Capture a per-booking copy while also keeping the account profile in sync
+        // with contact/identity data supplied during booking.
         var profile = quote.getCustomer().getProfileDetails();
         String profileIdentity = profile == null ? null : com.storagehub.validation.CccdPolicy.normalize(profile.getIdentityDocumentNumber());
         String bookingIdentity = clean(request.getIdentityDocumentNumber()) == null ? profileIdentity
@@ -276,6 +280,44 @@ public class ReservationCreationService {
             customerEmails.reservationCreated(saved);
         }
         return response;
+    }
+
+    /**
+     * Booking is also a profile-completion point for customers who entered
+     * their phone, address, or identity document for the first time.
+     * Reservation fields remain immutable snapshots; this only updates the
+     * customer's current profile when a non-empty value was supplied.
+     */
+    private void syncBookingProfile(User customer, CreateReservationRequest request) {
+        if (customer == null || request == null) return;
+        String phone = clean(request.getCustomerPhone());
+        String address = clean(request.getCustomerAddress());
+        String identity = clean(request.getIdentityDocumentNumber());
+        if (phone == null && address == null && identity == null) return;
+
+        if (phone != null) customer.setPhone(phone);
+        if (address != null) customer.setPermanentAddress(address);
+        if (identity != null) {
+            String normalizedIdentity = com.storagehub.validation.CccdPolicy.normalize(identity);
+            var profile = customer.getProfileDetails();
+            String currentIdentity = profile == null
+                ? null
+                : com.storagehub.validation.CccdPolicy.normalize(profile.getIdentityDocumentNumber());
+            if (profile != null && profile.getIdentityVerifiedAt() != null
+                && !java.util.Objects.equals(currentIdentity, normalizedIdentity)) {
+                throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+            }
+            if (bookingUsers != null) {
+                CustomerIdentityPolicy.assign(customer, normalizedIdentity, bookingUsers);
+            } else {
+                if (profile == null) {
+                    profile = new com.storagehub.domain.model.CustomerProfileDetails();
+                    customer.setProfileDetails(profile);
+                }
+                profile.setIdentityDocumentNumber(normalizedIdentity);
+            }
+        }
+        if (bookingUsers != null) bookingUsers.saveAndFlush(customer);
     }
 
     private void validateQuoteStillCurrent(ReservationQuote quote) {
@@ -558,7 +600,7 @@ public class ReservationCreationService {
 
     private String termsSnapshot(ReservationQuote quote) {
         Map<String, Object> terms = new LinkedHashMap<>();
-        terms.put("termsVersion", "RESERVATION_TERMS_V3_20261109");
+        terms.put("termsVersion", "RESERVATION_TERMS_V4_20261123");
         terms.put("emailVerification", "Xác minh một lần khi kích hoạt tài khoản; không yêu cầu OTP ở mỗi đơn giữ kho.");
         terms.put("paymentWindowMinutes", paymentWindowMinutes);
         terms.put("complaintHoldWindowMinutes", complaintWindowMinutes);
@@ -566,8 +608,10 @@ public class ReservationCreationService {
         terms.put("refundProcessingDays", refundProcessingDays);
         terms.put("depositNotice", "Cọc giữ chỗ là khoản trả trước theo báo giá, khấu trừ tổng nghĩa vụ. Cọc đảm bảo thuê được ghi riêng và quyết toán khi trả kho.");
         terms.put("cancellationNotice", "Không hoàn cọc do khách tự hủy/không nhận kho theo điều khoản đã chấp nhận. Lỗi dịch vụ, thu trùng hoặc kết quả chưa rõ phải đối soát riêng; không tự động coi là mất cọc.");
-        terms.put("setupNotice", "Thời gian chuẩn bị bắt đầu sau xác nhận nhận kho của khách. Phí trả sớm chỉ áp dụng theo báo giá đã chấp nhận, không cộng chồng khoản phí cùng bản chất.");
-        terms.put("paidStartNotice", "Sau khi nhân viên kiểm kê xong, khách có thể xem mốc mới và xác nhận bắt đầu kỳ thuê ngay. Khi xác nhận, thời gian miễn phí kết thúc và kỳ thuê tính từ ngày xác nhận theo thời lượng và chi phí đã chốt. Nếu khách chưa xác nhận sớm, kỳ thuê tự động bắt đầu theo lịch hết miễn phí.");
+        terms.put("setupNotice", "Thời gian chuẩn bị miễn phí được tính theo lịch đã chốt trong báo giá. Khách có thể hoàn tất chuẩn bị sớm nhưng mốc bắt đầu tính tiền không thay đổi.");
+        terms.put("paidStartNotice", "Kỳ thuê tính tiền tự động bắt đầu sau khi hết thời gian chuẩn bị miễn phí theo lịch đã chốt. Việc khách hoàn tất chuẩn bị hoặc kiểm kê sớm không làm dời mốc bắt đầu này.");
+        terms.put("setupReturnSettlement", "Nếu trả trong thời gian chuẩn bị: giữ lại 20% tiền thuê sau ưu đãi, hoàn 80% tiền thuê; tiền cọc đảm bảo quyết toán riêng. Hư hỏng trừ vào cọc một tháng, phần vượt cọc mới yêu cầu khách thanh toán thêm.");
+        terms.put("activeReturnSettlement", "Nếu trả sau khi kỳ thuê bắt đầu: tháng đã bắt đầu tính trọn tháng; hoàn tiền thuê của các tháng chưa bắt đầu. Hư hỏng trừ vào cọc trước, phần vượt cọc trừ tiếp vào tiền thuê chưa sử dụng.");
         terms.put("complaintRights", "Hết hạn giữ suất không làm mất quyền yêu cầu đối soát qua Hỗ trợ hoặc khiếu nại theo quy định áp dụng.");
         terms.put("versionNotice", "Giá và điều khoản mới không tự thay đổi nghĩa vụ của kỳ thuê đã chốt.");
         terms.put("pricingPackageCode", quote.getPricingPackageCode());

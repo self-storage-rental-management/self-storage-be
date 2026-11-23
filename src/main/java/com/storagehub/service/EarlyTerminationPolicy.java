@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -55,17 +54,16 @@ public final class EarlyTerminationPolicy {
         int feeCapMonths
     ) {
         BigDecimal total = money(totalAfterDiscount);
-        BigDecimal fee = fee(reservationDepositAmount, total, rentalMonths, feeCoefficient, feeCapMonths);
-        int billableDays = goodsMovedIn ? Math.max(0, Math.min(usedSetupDays, freeSetupDays)) : 0;
-        BigDecimal usedGoodsCharge = goodsMovedIn
-            ? daysCharge(listMonthlyPrice, billableDays)
-            : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
-        BigDecimal totalCharge = fee.add(usedGoodsCharge).min(total).setScale(2, RoundingMode.HALF_UP);
+        // A return during setup keeps 20% of the rental amount and refunds 80%.
+        // The security deposit is settled separately after inspection.
+        BigDecimal totalCharge = SetupEarlyExitPolicy.retainedRental(total)
+            .min(total)
+            .setScale(2, RoundingMode.HALF_UP);
         return new SetupExitCalculation(
             goodsMovedIn ? SetupExitType.GOODS_MOVED_IN : SetupExitType.NO_GOODS_MOVED_IN,
-            fee,
-            billableDays,
-            usedGoodsCharge,
+            totalCharge,
+            0,
+            BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
             totalCharge,
             total.subtract(totalCharge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)
         );
@@ -101,55 +99,30 @@ public final class EarlyTerminationPolicy {
             return ActiveReturnCalculation.notRequired();
         }
 
-        int completedMonths = (int) Math.max(0,
-            ChronoUnit.MONTHS.between(paidRentalStart, returnDate.plusDays(1)));
-        int setupDaysUsed = setupStart == null
-            ? Math.max(0, originalFreeSetupDays)
-            : (int) Math.max(0, ChronoUnit.DAYS.between(setupStart, paidRentalStart));
+        int completedMonths = (int) Math.max(0, ChronoUnit.MONTHS.between(paidRentalStart, returnDate));
         int rentalDaysUsed = (int) Math.max(0,
             ChronoUnit.DAYS.between(paidRentalStart, returnDate.plusDays(1)));
-        int requestedNoticeShortfallDays = (int) Math.max(0, noticeDays - Math.max(0, noticeGivenDays));
-        int remainingTermDays = (int) Math.max(0, ChronoUnit.DAYS.between(returnDate, fullTermEnd));
-        // Notice compensation cannot extend beyond the remaining contract term.
-        int noticeShortfallDays = Math.min(requestedNoticeShortfallDays, remainingTermDays);
 
-        PricingTier tier = pricingTiers == null ? null : pricingTiers.stream()
-            .filter(value -> value != null && value.rentalMonths() >= 3
-                && value.rentalMonths() <= completedMonths)
-            .max(Comparator.comparingInt(PricingTier::rentalMonths))
-            .orElse(null);
-        boolean underThreeMonths = completedMonths < 3;
-        BigDecimal monthlyPrice = underThreeMonths
-            ? money(listMonthlyPrice)
-            : tier == null ? money(listMonthlyPrice) : money(tier.monthlyPrice());
-        int freeSetupDays = underThreeMonths
-            ? 0
-            : tier == null ? 0 : Math.max(0, tier.freeSetupDays());
-        int chargeableSetupDays = Math.max(0, setupDaysUsed - freeSetupDays);
-        int chargeableRentalDays = rentalDaysUsed + noticeShortfallDays;
-        BigDecimal dailyPrice = monthlyPrice.divide(BigDecimal.valueOf(DAYS_PER_MONTH), 0, RoundingMode.HALF_UP);
-        BigDecimal usageCharge = daysCharge(monthlyPrice, chargeableSetupDays + chargeableRentalDays);
-        BigDecimal earlyTerminationFee = underThreeMonths
-            ? fee(reservationDepositAmount, total, originalRentalMonths, feeCoefficient, feeCapMonths)
-            : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
-        BigDecimal noticeCharge = daysCharge(monthlyPrice, noticeShortfallDays);
-        BigDecimal totalCharge = usageCharge.add(earlyTerminationFee)
+        // A started calendar month is charged in full. This means a return on
+        // the contract start day charges month 1 and refunds all later months;
+        // returning on day 10 of a 3-month term still refunds months 2 and 3.
+        int chargedMonths = Math.min(originalRentalMonths, Math.max(1, completedMonths + 1));
+        BigDecimal monthlyEquivalent = total.divide(BigDecimal.valueOf(originalRentalMonths), 0, RoundingMode.HALF_UP);
+        BigDecimal dailyPrice = monthlyEquivalent.divide(BigDecimal.valueOf(DAYS_PER_MONTH), 0, RoundingMode.HALF_UP);
+        BigDecimal totalCharge = monthlyEquivalent.multiply(BigDecimal.valueOf(chargedMonths))
             .min(total)
             .setScale(2, RoundingMode.HALF_UP);
-        Integer pricingTierMonths = underThreeMonths
-            ? Integer.valueOf(0)
-            : tier == null ? null : Integer.valueOf(tier.rentalMonths());
         return new ActiveReturnCalculation(
             true,
             completedMonths,
-            pricingTierMonths,
-            setupDaysUsed,
-            chargeableSetupDays,
+            null,
+            0,
+            0,
             rentalDaysUsed,
-            noticeShortfallDays,
+            0,
             dailyPrice,
-            earlyTerminationFee,
-            noticeCharge,
+            BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
+            BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
             totalCharge,
             total.subtract(totalCharge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)
         );

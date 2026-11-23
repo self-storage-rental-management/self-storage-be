@@ -7,8 +7,20 @@ import java.math.BigDecimal;
 
 /** Terms are captured in the accepted initial quote, never looked up from the current catalog. */
 public final class SetupEarlyExitPolicy {
-    public static final String VERSION = "SETUP_EARLY_EXIT_ONE_MONTH_V1";
+    public static final String VERSION = "SETUP_EARLY_EXIT_EIGHTY_PERCENT_V2";
     private SetupEarlyExitPolicy() {}
+
+    public static BigDecimal retainedRental(BigDecimal netRentalAmount) {
+        if (netRentalAmount == null) return BigDecimal.ZERO;
+        return netRentalAmount.multiply(BigDecimal.valueOf(20))
+            .divide(BigDecimal.valueOf(100), 0, java.math.RoundingMode.HALF_UP)
+            .max(BigDecimal.ZERO);
+    }
+
+    public static BigDecimal refundableRental(BigDecimal netRentalAmount) {
+        if (netRentalAmount == null) return BigDecimal.ZERO;
+        return netRentalAmount.subtract(retainedRental(netRentalAmount)).max(BigDecimal.ZERO);
+    }
 
     public static boolean applies(ReturnCase rc) {
         var rental = rc.getRental();
@@ -29,17 +41,18 @@ public final class SetupEarlyExitPolicy {
         rc.setSetupEarlyExitPolicyVersion(null);
         if (!applies) return;
         var quote = rc.getRental().getReservation().getSourceQuote();
+        BigDecimal retainedRental = retainedRental(pricing.getNetRentalAmount());
         if (quote == null || !VERSION.equals(pricing.getSetupEarlyExitPolicyVersion())
             || !VERSION.equals(quote.getSetupEarlyExitPolicyVersion())
             || pricing.getSetupEarlyExitFee() == null || pricing.getMonthlyPrice() == null
             || quote.getSetupEarlyExitFee() == null || pricing.getNetRentalAmount() == null
             || pricing.getSetupEarlyExitFee().signum() < 0
-            || pricing.getSetupEarlyExitFee().compareTo(pricing.getMonthlyPrice()) != 0
+            || pricing.getSetupEarlyExitFee().compareTo(retainedRental) != 0
             || pricing.getSetupEarlyExitFee().compareTo(quote.getSetupEarlyExitFee()) != 0) {
             throw ApiExceptions.conflict("Đơn chưa có điều khoản trả kho trong thời gian chuẩn bị đã chấp nhận. Cần đối soát thủ công, không tự áp phí mới.");
         }
         rc.setSetupEarlyExitPolicyVersion(pricing.getSetupEarlyExitPolicyVersion());
-        rc.setRentalRefundCredit(pricing.getNetRentalAmount());
-        rc.setEarlyTerminationFee(pricing.getSetupEarlyExitFee());
+        rc.setRentalRefundCredit(refundableRental(pricing.getNetRentalAmount()));
+        rc.setEarlyTerminationFee(retainedRental);
     }
 }
