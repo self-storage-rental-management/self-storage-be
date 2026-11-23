@@ -22,7 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
-/** Advances the paid term at the free-period deadline unless the customer has already confirmed an earlier start. */
+/** Advances the paid term at the captured free-period deadline. */
 @Service
 @RequiredArgsConstructor
 public class RentalSetupLifecycleService {
@@ -32,21 +32,9 @@ public class RentalSetupLifecycleService {
     private final RentalRepository rentalRepository;
     private final NotificationService notificationService;
 
-    @Autowired(required = false)
-    private MaintenanceTaskRepository maintenanceTaskRepository;
-
-    @Value("${storagehub.inventory.recovery-sla-hours:24}")
-    private long inventoryRecoverySlaHours = 24;
-
+    /** Kept for response compatibility; customers cannot move the paid start earlier. */
     static boolean customerCanStartAfterInventory(Rental rental, Instant now) {
-        return rental.getSetupCompletionDeadlineAt() == null && rental.getStatus() == RentalStatus.setup
-            && rental.getReservation() != null
-            && rental.getReservation().getStatus() == ReservationStatus.COMPLETED
-            && rental.getSetupEndsAt() != null && now.isBefore(rental.getSetupEndsAt())
-            && rental.getActualReturnedAt() == null && rental.getCompletedAt() == null
-            && rental.getMoveInCompletedAt() != null && rental.getInventoryVerifiedAt() != null
-            && !rental.isInventoryPending()
-            && !rental.getMoveInCompletedAt().isAfter(rental.getInventoryVerifiedAt());
+        return false;
     }
 
     @Scheduled(
@@ -66,13 +54,13 @@ public class RentalSetupLifecycleService {
                     daysUntilPaidStart == 2 ? "Còn 2 ngày chuẩn bị miễn phí" : "Nhắc thời gian chuẩn bị sắp kết thúc",
                     timeline(rental) + (rental.getInventoryVerifiedAt() == null
                         ? " Vui lòng hoàn tất chuyển hàng và chuẩn bị kiểm kê."
-                        : " Kiểm kê đã hoàn tất. Bạn có thể xác nhận bắt đầu kỳ thuê sớm trong Hồ sơ thuê."));
+                        : " Kiểm kê đã hoàn tất. Kỳ thuê vẫn bắt đầu theo mốc sau thời gian chuẩn bị miễn phí đã chốt."));
                 rental.setSetupReminderTwoDaysAt(now);
             }
             if (daysUntilPaidStart <= 1 && daysUntilPaidStart > 0
                 && rental.getSetupReminderLastDayAt() == null) {
                 notifyCustomer(rental, "Hôm nay là ngày chuẩn bị miễn phí cuối cùng",
-                    timeline(rental) + " Kỳ thuê tự động bắt đầu theo lịch nếu bạn chưa xác nhận bắt đầu sớm.");
+                    timeline(rental) + " Kỳ thuê sẽ tự động bắt đầu theo lịch đã chốt.");
                 rental.setSetupReminderLastDayAt(now);
             }
             if (!rental.getSetupEndsAt().isAfter(now)) {
@@ -153,7 +141,8 @@ public class RentalSetupLifecycleService {
 
     private void notifyCustomer(Rental rental, String title, String content) {
         notificationService.createNotification(
-            rental.getCustomer().getId(), NotificationType.CHECKIN, title, content, rental.getId()
+            rental.getCustomer().getId(), NotificationType.CHECKIN, title, content,
+            rental.getReservation() == null ? rental.getId() : rental.getReservation().getId()
         );
     }
 
