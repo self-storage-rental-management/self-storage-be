@@ -10,6 +10,16 @@ import org.junit.jupiter.api.Test;
 class EarlyTerminationPolicyTests {
 
     @Test
+    void receiptUsageDoesNotDependOnMoveInFlagOrPrepaidCap() {
+        var result = EarlyTerminationPolicy.inventoryMismatchExit(
+            new BigDecimal("100000"), new BigDecimal("2000000"), 3, false);
+        assertThat(result.billableSetupDays()).isEqualTo(3);
+        assertThat(result.totalRentalCharge()).isEqualByComparingTo("200000");
+        assertThat(result.earlyTerminationFee()).isEqualByComparingTo("0");
+        assertThat(result.rentalRefundAmount()).isEqualByComparingTo("0");
+    }
+
+    @Test
     void feeIsCappedByTheReservationDepositAndOneMonthlyEquivalent() {
         assertThat(EarlyTerminationPolicy.fee(
             new BigDecimal("2280000"), new BigDecimal("11400000"), 12,

@@ -95,6 +95,19 @@ public record ReturnCaseResponse(
     Instant recoveryTaskDeadlineAt,
     Instant inventoryRemovalDeadlineAt
 ) {
+    public boolean isManagerApprovalRequired() {
+        return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
+            && (returnType == ReturnType.INVENTORY_MISMATCH || returnType == ReturnType.RETURN_IN_SETUP || returnType == ReturnType.CANCELLED_IN_SETUP);
+    }
+    public Instant getManagerReviewDueAt() {
+        return status == ReturnCaseStatus.awaiting_business_review && inspectedAt != null
+            ? inspectedAt.plus(6, java.time.temporal.ChronoUnit.HOURS) : null;
+    }
+    public Instant getCustomerConfirmationDueAt() {
+        Instant published = reviewedAt != null ? reviewedAt : inspectedAt;
+        return status == ReturnCaseStatus.awaiting_customer_confirmation && published != null
+            ? published.plus(72, java.time.temporal.ChronoUnit.HOURS) : null;
+    }
     /** Existing readers can omit the new setup settlement projection fields. */
     public ReturnCaseResponse(
         UUID id,

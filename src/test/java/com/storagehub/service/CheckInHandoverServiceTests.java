@@ -5,6 +5,8 @@ import com.storagehub.domain.model.SystemPermission;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -29,6 +31,7 @@ import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationGoodsItem;
 import com.storagehub.domain.model.ReservationStatus;
+import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.RoleCode;
 import com.storagehub.domain.model.Role;
 import com.storagehub.domain.model.UserStatus;
@@ -133,6 +136,12 @@ class CheckInHandoverServiceTests {
         User customer = entityWithId(new User());
         customer.setFullName("Customer A");
         customer.setEmail("customer@example.com");
+        customer.setPhone("0912345678");
+        customer.setPermanentAddress("123 Duong Le Loi, Q1, TP HCM");
+        customer.setEmergencyContactName("Nguoi Than");
+        customer.setEmergencyContactPhone("0987654321");
+        customer.getProfileDetails().setEmergencyContactRelationship("Bo me");
+        customer.getProfileDetails().setEmergencyContactConsent(true);
 
         unit = entityWithId(new StorageUnit());
         unit.setFacility(facility);
@@ -263,12 +272,50 @@ class CheckInHandoverServiceTests {
         assertThat(response.handover().inventoryLines()).isNull();
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void comparesActualCatalogPerLineAndKeepsOriginalDeclaration(boolean prohibited) throws Exception {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN); mockCompletionChecks(true);
+        var rental=checkIn.getRental(); rental.setSetupCompletionDeadlineAt(Instant.now().plusSeconds(86400));
+        rental.setInventoryArrivedAt(Instant.now()); rental.setInventoryIdentityVerifiedAt(Instant.now());
+        var original=entityWithId(new ReservationGoodsItem()); original.setQuantity(3);
+        original.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);
+        original.setCatalogCategoryId(UUID.randomUUID());original.setCatalogMaterialId(UUID.randomUUID());
+        original.setCategoryName("Đồ gia dụng");original.setMaterialName("Gỗ");
+        original.setLengthCm(new BigDecimal("100"));original.setWidthCm(new BigDecimal("100"));original.setHeightCm(new BigDecimal("100"));
+        original.setWeightKg(new BigDecimal("33.333333"));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())).thenReturn(List.of(original));
+        var actual=new com.storagehub.api.reservation.GoodsItemRequest();
+        actual.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);actual.setCatalogCategoryId(original.getCatalogCategoryId());
+        actual.setCatalogMaterialId(UUID.randomUUID());actual.setCategoryName("Nhãn chưa đối soát");actual.setMaterialName("Vật liệu thực tế");
+        actual.setStackable(false);actual.setAllowHorizontalPlacement(true);actual.setMaxStackLayers(1);
+        var catalog=org.mockito.Mockito.mock(GoodsCatalogService.class);ReflectionTestUtils.setField(service,"goodsCatalogService",catalog);
+        if(prohibited) org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.validation("Vật liệu không được nhận",null)).when(catalog).validateForUnitType(any(),any(com.storagehub.api.reservation.GoodsItemRequest.class),org.mockito.ArgumentMatchers.anyInt());
+        else {
+            org.mockito.Mockito.doAnswer(call->{var g=(com.storagehub.api.reservation.GoodsItemRequest)call.getArgument(1);g.setCategoryName("Đồ gia dụng");g.setMaterialName("Kim loại");return null;}).when(catalog).validateForUnitType(any(),any(com.storagehub.api.reservation.GoodsItemRequest.class),org.mockito.ArgumentMatchers.anyInt());
+            var packing=org.mockito.Mockito.mock(PalletInventoryService.class);ReflectionTestUtils.setField(service,"palletInventory",packing);
+            when(packing.evaluateActualFit(eq(unit),any())).thenReturn(new PalletInventoryService.Fit(org.mockito.Mockito.mock(com.storagehub.api.reservation.PalletPlan.class),1,unit,List.of(),false));
+        }
+        var base=validCompletionRequest();
+        var line=new CompleteCheckInRequest.InventoryLine(original.getId(),3,CompleteCheckInRequest.InventoryLine.Condition.INTACT,"Đã đối chiếu chất liệu",new CompleteCheckInRequest.InventoryMeasurements(new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100")),actual);
+        var measurements=new CheckInMeasurements(new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("100"),new BigDecimal("3"),true);
+        var request=new CompleteCheckInRequest(base.checklist(),base.identityDocumentNumber(),null,measurements,"Chất liệu và điều kiện xếp thực tế khác khai báo",base.initialUnitCondition(),base.goodsCondition(),3,"Đồ gia dụng","Gỗ",base.evidenceReferences(),base.handedOverItems(),base.notes(),base.lockReference(),List.of(line));
+        var response=service.complete(actor,checkIn.getId(),request);
+        assertThat(response.inventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_CUSTOMER);
+        assertThat(response.inventoryFullFit()).isEqualTo(!prohibited);
+        assertThat(original.getMaterialName()).isEqualTo("Gỗ");
+        assertThat(checkIn.getInventoryActualJson()).contains("actualGoods",actual.getCatalogMaterialId().toString());
+        assertThat(response.handover().inventoryLines().getFirst().actualGoods().getMaterialName()).isEqualTo(prohibited?"Vật liệu thực tế":"Kim loại");
+        if(prohibited) assertThat(rental.getInventoryRemovalDeadlineAt()).isNotNull();
+    }
+
     @Test
     void persistsIdentityVerificationAsTheFirstWorkflowStep() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
@@ -290,18 +337,19 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
         when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
 
         var response = service.verifyIdentity(
-            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("07420400521", "Khách hàng đổi CCCD mới")
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("074204005212", "Khách hàng đổi CCCD mới")
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
-        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("07420400521");
-        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("07420400521");
-        assertThat(checkIn.getIdentityVerificationNote()).contains("07420400521");
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("074204005212");
+        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("074204005212");
+        assertThat(checkIn.getIdentityVerificationNote()).contains("Khách hàng đổi CCCD mới");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
     }
 
@@ -448,6 +496,28 @@ class CheckInHandoverServiceTests {
         assertThat(reservation.getAssignedUnit()).isNull();
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
         assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        verify(notificationService).createNotification(
+            any(), eq(NotificationType.CHECKIN), eq("Ghi nhận không đến nhận kho"), any(), eq(reservation.getId())
+        );
+    }
+
+    @Test
+    void doesNotAllowNoShowBeforeAppointmentStarts() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        checkIn.setScheduledAt(Instant.now().plusSeconds(3600));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> service.markNoShow(
+            actor, checkIn.getId(), new MarkNoShowRequest("Khách chưa đến trong thời gian hẹn")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("giờ hẹn nhận kho");
+
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
+        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -576,6 +646,9 @@ class CheckInHandoverServiceTests {
         assertThat(response.storageUnitStatus()).isEqualTo(StorageUnitStatus.maintenance);
         assertThat(reservation.getAssignedUnit()).isNull();
         verify(rentalRepository, never()).save(any());
+        verify(notificationService).createNotification(
+            any(), eq(NotificationType.CHECKIN), eq("Từ chối nhận kho"), any(), eq(reservation.getId())
+        );
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -805,7 +878,7 @@ class CheckInHandoverServiceTests {
             Rental rental = checkIn.getRental();
             assertThat(rental.getInventoryRemovalNotifiedAt()).isEqualTo(exceedsCapacity ? publishedAt : null);
             assertThat(rental.getInventoryRemovalDeadlineAt())
-                .isEqualTo(exceedsCapacity ? publishedAt.plusSeconds(7 * 86_400) : null);
+                .isEqualTo(exceedsCapacity ? InventoryTimelinePolicy.removalDeadline(publishedAt) : null);
         }
     }
 
@@ -894,6 +967,97 @@ class CheckInHandoverServiceTests {
             when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
             org.mockito.Mockito.lenient().when(assignmentRepository.saveAndFlush(assignment)).thenReturn(assignment);
         }
+    }
+
+    @Test
+    void archivesCompletedCheckInWithAuditLog() {
+        checkIn.setStatus(CheckInStatus.completed);
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+
+        service.archiveCompleted(actor, checkIn.getId());
+
+        assertThat(reservation.getArchivedAt()).isNotNull();
+        verify(reservationRepository).saveAndFlush(reservation);
+        verify(auditLogService).recordMutation(
+            isNull(), eq("CHECKIN_ORDER_DELETED"), eq("Reservation"), eq(reservation.getId()),
+            eq(reservation.getFacility().getId()), any(), any()
+        );
+    }
+
+    @Test
+    void rejectsArchiveWhenCheckInNotCompleted() {
+        checkIn.setStatus(CheckInStatus.scheduled);
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+
+        assertThatThrownBy(() -> service.archiveCompleted(actor, checkIn.getId()))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("Chỉ có thể xóa/lưu trữ đơn sau khi bàn giao thành công");
+    }
+
+    @Test
+    void derivesCatalogIdsFromActualGoodsWhenDeserializingInventoryLine() throws Exception {
+        UUID categoryId = UUID.randomUUID();
+        UUID materialId = UUID.randomUUID();
+        String json = "{\"goodsItemId\":\"" + UUID.randomUUID()
+            + "\",\"actualQuantity\":1,\"condition\":\"INTACT\",\"actualGoods\":{\"catalogCategoryId\":\""
+            + categoryId + "\",\"catalogMaterialId\":\"" + materialId + "\"}}";
+        var line = new ObjectMapper().readValue(json, CompleteCheckInRequest.InventoryLine.class);
+        assertThat(line.actualCategoryId()).isEqualTo(categoryId);
+        assertThat(line.actualMaterialId()).isEqualTo(materialId);
+    }
+
+    @Test
+    void requiresPublishedInventoryBeforeSuggestingAlternativeUnits() {
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        assertThatThrownBy(() -> service.inventoryAlternatives(actor, checkIn.getId()))
+            .isInstanceOf(ApiException.class);
+        verify(storageUnitRepository, never()).findByFacility_Id(any());
+    }
+
+    @Test
+    void checksFacilityAccessBeforeReadingInventoryAlternatives() {
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.forbidden("Outside facility scope"))
+            .when(facilityScopeService).assertCanRead(actor, reservation.getFacility().getId());
+        assertThatThrownBy(() -> service.inventoryAlternatives(actor, checkIn.getId()))
+            .hasMessageContaining("Outside facility scope");
+        verify(storageUnitRepository, never()).findByFacility_Id(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void suggestsOnlyUnitsWithACompletePackingPlan(boolean fits) throws Exception {
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setInventoryActualJson("{}");
+        var original = entityWithId(new ReservationGoodsItem());
+        original.setQuantity(3);
+        var base = validCompletionRequest();
+        var line = new CompleteCheckInRequest.InventoryLine(original.getId(), 3,
+            CompleteCheckInRequest.InventoryLine.Condition.INTACT, null,
+            new CompleteCheckInRequest.InventoryMeasurements(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN));
+        var report = new CompleteCheckInRequest(base.checklist(), base.identityDocumentNumber(), null,
+            base.actualMeasurements(), null, base.initialUnitCondition(), base.goodsCondition(), 3,
+            base.goodsCategory(), base.goodsMaterial(), base.evidenceReferences(), base.handedOverItems(),
+            null, base.lockReference(), List.of(line));
+        checkIn.setChecklistJson(new ObjectMapper().writeValueAsString(report));
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())).thenReturn(List.of(original));
+        var candidate = entityWithId(new StorageUnit());
+        candidate.setCode("ALTERNATIVE-01"); candidate.setUnitType(unit.getUnitType());
+        candidate.getUnitType().setStatus(com.storagehub.domain.model.UnitTypeStatus.active);
+        candidate.setStatus(StorageUnitStatus.available);
+        when(storageUnitRepository.findByFacility_Id(reservation.getFacility().getId())).thenReturn(List.of(candidate));
+        var catalog = org.mockito.Mockito.mock(GoodsCatalogService.class);
+        var packing = org.mockito.Mockito.mock(PalletInventoryService.class);
+        ReflectionTestUtils.setField(service, "goodsCatalogService", catalog);
+        ReflectionTestUtils.setField(service, "palletInventory", packing);
+        var plan = fits ? org.mockito.Mockito.mock(com.storagehub.api.reservation.PalletPlan.class) : null;
+        when(packing.evaluateActualFit(eq(candidate), any())).thenReturn(new PalletInventoryService.Fit(plan, 1, candidate, List.of(), false));
+        var suggestions = service.inventoryAlternatives(actor, checkIn.getId());
+        assertThat(suggestions).hasSize(fits ? 1 : 0);
+        if (fits) assertThat(suggestions.getFirst().storageUnitId()).isEqualTo(candidate.getId());
     }
 
     private FileAsset inventoryPhoto() {

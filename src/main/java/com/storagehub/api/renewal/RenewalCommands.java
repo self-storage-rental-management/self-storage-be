@@ -29,5 +29,24 @@ public final class RenewalCommands {
         public int signingWindowDays(){return com.storagehub.service.renewal.RenewalSigningDeadline.daysForMonths(rentalMonths);}
         @com.fasterxml.jackson.annotation.JsonProperty("paymentPlans")
         public java.util.List<RenewalPaymentPlan> paymentPlans(){return java.util.List.of(RenewalPaymentPlan.FULL_TERM);}
+        public Option(String pricingPackageCode,int rentalMonths) {
+            this(pricingPackageCode,rentalMonths,null,null);
+        }
+        public Option(String pricingPackageCode,int rentalMonths,String pricingPackageName) {
+            this(pricingPackageCode,rentalMonths,pricingPackageName,null);
+        }
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Option other)) return false;
+            return rentalMonths == other.rentalMonths
+                && java.util.Objects.equals(pricingPackageCode, other.pricingPackageCode)
+                && java.util.Objects.equals(pricingPackageName, other.pricingPackageName)
+                && (discountRate == null || other.discountRate == null || discountRate.compareTo(other.discountRate) == 0);
+        }
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(pricingPackageCode, rentalMonths, pricingPackageName);
+        }
     }
 }

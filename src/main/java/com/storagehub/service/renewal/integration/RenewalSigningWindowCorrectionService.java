@@ -22,7 +22,8 @@ import org.springframework.transaction.annotation.*;
 
 /** Opt-in local correction preserves accepted prices and authenticated funds. */
 @Service @RequiredArgsConstructor @Profile("shared-payment-schema")
-@ConditionalOnProperty(name="storagehub.integration.renewal-signing-window-correction.enabled",havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.renewal-signing-window-correction.enabled",
+    "storagehub.integration.renewal-simple-payment.enabled"},havingValue="true")
 public class RenewalSigningWindowCorrectionService {
     private final EntityManager em;
     private final ObjectMapper mapper;

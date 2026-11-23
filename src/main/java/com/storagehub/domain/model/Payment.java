@@ -114,6 +114,10 @@ public class Payment extends BaseEntity {
     @Column
     private Instant paidAt;
 
+    /** Uploaded receipt/evidence asset for a manual rental-balance payment. */
+    @Column(name = "receipt_file_id")
+    private java.util.UUID receiptFileId;
+
     @Column(length = 100)
     private String failureCode;
 

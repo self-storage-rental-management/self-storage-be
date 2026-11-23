@@ -75,12 +75,36 @@ public class AuditLogService {
         return activityLogRepository.saveAndFlush(log);
     }
 
+    private void redactIdentity(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node.isObject()) {
+            var object = (com.fasterxml.jackson.databind.node.ObjectNode) node;
+            var names = new java.util.ArrayList<String>();
+            object.fieldNames().forEachRemaining(names::add);
+            for (String name : names) {
+                String key = name.toLowerCase(java.util.Locale.ROOT);
+                var value = object.get(name);
+                if (key.contains("identitydocument") || key.contains("identityhash") || key.equals("cccd")) object.put(name, "[REDACTED]");
+                else if (value.isTextual()) object.put(name, value.asText().replaceAll("(?<![0-9])(?:[0-9][\\s.\\-]*){11}[0-9](?![0-9])", "[CCCD đã ẩn]"));
+                else redactIdentity(value);
+            }
+        } else if (node.isArray()) {
+            var array = (com.fasterxml.jackson.databind.node.ArrayNode) node;
+            for (int i = 0; i < array.size(); i++) {
+                var value = array.get(i);
+                if (value.isTextual()) array.set(i, com.fasterxml.jackson.databind.node.TextNode.valueOf(value.asText().replaceAll("(?<![0-9])(?:[0-9][\\s.\\-]*){11}[0-9](?![0-9])", "[CCCD đã ẩn]")));
+                else redactIdentity(value);
+            }
+        }
+    }
+
     private String toJson(Object state) {
         if (state == null) {
             return null;
         }
         try {
-            return objectMapper.writeValueAsString(state);
+            var tree = objectMapper.valueToTree(state);
+            redactIdentity(tree);
+            return objectMapper.writeValueAsString(tree);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Could not serialize audit state", exception);
         }
