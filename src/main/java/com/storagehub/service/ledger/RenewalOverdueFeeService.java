@@ -61,16 +61,34 @@ public class RenewalOverdueFeeService {
         // The fixed overdue timeline uses the business timezone independently of an optional renewal publication.
         ZoneId zone=BusinessTime.ZONE;LocalDate today=now.atZone(zone).toLocalDate();
         long days=Math.max(0,ChronoUnit.DAYS.between(period.lastPermittedDate(),today)-(signing?1:0));
-        var settings=em.createQuery("select s from SystemSetting s where s.settingKey=:key",SystemSetting.class)
-            .setParameter("key","lateFeeAmount").getResultList();
         BigDecimal rate=BigDecimal.ZERO;
-        if(settings.size()==1)try {rate=new BigDecimal(settings.getFirst().getValue()).setScale(0,RoundingMode.UNNECESSARY);}
-        catch(Exception invalid){throw ApiExceptions.conflict("DEFERRED_SOURCE: Daily overdue fee setting is invalid");}
-        else if(days>0)throw ApiExceptions.conflict("DEFERRED_SOURCE: Daily overdue fee setting missing or ambiguous");
+        BigDecimal monthlyPrice=resolveMonthlyPrice(rental);
+        if(monthlyPrice!=null&&monthlyPrice.signum()>0) {
+            // Tiền thuê theo ngày (monthlyPrice / 30), mỗi ngày quá hạn nhân thêm 1.5
+            rate=monthlyPrice.multiply(new BigDecimal("1.5")).divide(BigDecimal.valueOf(30),0,RoundingMode.HALF_UP);
+        } else {
+            var settings=em.createQuery("select s from SystemSetting s where s.settingKey=:key",SystemSetting.class)
+                .setParameter("key","lateFeeAmount").getResultList();
+            if(settings.size()==1)try {rate=new BigDecimal(settings.getFirst().getValue()).setScale(0,RoundingMode.UNNECESSARY);}
+            catch(Exception invalid){throw ApiExceptions.conflict("DEFERRED_SOURCE: Daily overdue fee setting is invalid");}
+            else if(days>0)throw ApiExceptions.conflict("DEFERRED_SOURCE: Daily overdue fee setting missing or ambiguous");
+        }
         if(rate.signum()<0||rate.precision()>12)throw ApiExceptions.conflict("Daily overdue fee amount is unsupported");
         BigDecimal accrued=rate.multiply(BigDecimal.valueOf(days));
         if(accrued.precision()>12)throw ApiExceptions.conflict("Accrued overdue fee amount is unsupported");
         String version=period.lastPermittedDate()+":"+rate.toPlainString()+":"+zone.getId();
         return new Daily(days,accrued,today.atStartOfDay(zone).toInstant(),today.plusDays(1).atStartOfDay(zone).toInstant(),version,period.lastPermittedDate());
+    }
+
+    private BigDecimal resolveMonthlyPrice(Rental rental) {
+        if(rental.getMonthlyPrice()!=null&&rental.getMonthlyPrice().signum()>0) {
+            return rental.getMonthlyPrice();
+        }
+        if(rental.getStorageUnit()!=null&&rental.getStorageUnit().getUnitType()!=null
+                &&rental.getStorageUnit().getUnitType().getMonthlyPrice()!=null
+                &&rental.getStorageUnit().getUnitType().getMonthlyPrice().signum()>0) {
+            return rental.getStorageUnit().getUnitType().getMonthlyPrice();
+        }
+        return null;
     }
 }
