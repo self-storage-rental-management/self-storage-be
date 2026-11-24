@@ -55,10 +55,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 @Slf4j
 public class LocalDemoDataInitializer {
     private static final Set<String> PALLET_DEMO_FACILITIES = Set.of(
-        "BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01", "FPT-TV-F01",
-        "HCM-Q7-F02", "HCM-TD-F02", "HCM-TB-F02"
+        "BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01", "FPT-TV-F01"
     );
-    private static final Set<String> FIVE_UNIT_FACILITIES = Set.of("HCM-Q7-F02", "HCM-TD-F02", "HCM-TB-F02");
+    private static final Set<String> FIVE_UNIT_FACILITIES = Set.of();
     // v6 demo pallet: it is supported by both beams and may overhang each side
     // by at most five centimetres.
     private static final RackLayout.Pallet DEMO_PALLET = new RackLayout.Pallet(
@@ -97,7 +96,6 @@ public class LocalDemoDataInitializer {
     }
 
     private void seed() {
-        seedConfiguredFacilities();
         Map<String, Facility> facilities = seedFacilities();
         Map<String, UnitType> unitTypes = seedUnitTypes(facilities);
         int unitCount = seedStorageUnits(facilities, unitTypes);
@@ -179,50 +177,6 @@ public class LocalDemoDataInitializer {
             .filter(facility -> facility.getStatus() == FacilityStatus.active)
             .forEach(facility -> result.put(facility.getCode(), facility));
         return result;
-    }
-
-    /**
-     * Adds the three configured demo facilities requested by the warehouse
-     * configuration sheet. Existing rows are left untouched so the seed stays
-     * safe to run repeatedly and never overwrites operational changes.
-     */
-    private void seedConfiguredFacilities() {
-        List<FacilityDefinition> definitions = List.of(
-            new FacilityDefinition(
-                "HCM-Q7-F02", "Kho Việt - Cơ sở Quận 7 mở rộng",
-                "105 Nguyễn Lương Bằng, Phường Tân Phú, Quận 7, TP. Hồ Chí Minh",
-                "TP. Hồ Chí Minh", "+84 28 3999 7202", "24/7", "/images/facilities/binh-duong.jpg", false,
-                "Camera, khóa điện tử và bảo vệ tại cổng"
-            ),
-            new FacilityDefinition(
-                "HCM-TD-F02", "Kho Việt - Cơ sở Thủ Đức mở rộng",
-                "Số 1 Võ Văn Ngân, Phường Linh Chiểu, TP. Thủ Đức",
-                "TP. Hồ Chí Minh", "+84 28 3999 7203", "24/7", "/images/facilities/binh-duong.jpg", false,
-                "Camera, khóa điện tử và bảo vệ tại cổng"
-            ),
-            new FacilityDefinition(
-                "HCM-TB-F02", "Kho Việt - Cơ sở Tân Bình mở rộng",
-                "45 Bạch Đằng, Phường 2, Quận Tân Bình, TP. Hồ Chí Minh",
-                "TP. Hồ Chí Minh", "+84 28 3999 7204", "24/7", "/images/facilities/binh-duong.jpg", false,
-                "Camera, khóa điện tử và bảo vệ tại cổng"
-            )
-        );
-
-        for (FacilityDefinition definition : definitions) {
-            if (facilityRepository.findByCodeIgnoreCase(definition.code()).isPresent()) continue;
-            Facility facility = new Facility();
-            facility.setCode(definition.code());
-            facility.setName(definition.name());
-            facility.setAddress(definition.address());
-            facility.setCity(definition.city());
-            facility.setPhone(definition.phone());
-            facility.setAccessHours(definition.accessHours());
-            facility.setImageUrl(definition.imageUrl());
-            facility.setClimateControlled(definition.climateControlled());
-            facility.setSecurityDescription(definition.securityDescription());
-            facility.setStatus(FacilityStatus.active);
-            facilityRepository.saveAndFlush(facility);
-        }
     }
 
     private Map<String, UnitType> seedUnitTypes(Map<String, Facility> facilities) {
@@ -601,10 +555,6 @@ public class LocalDemoDataInitializer {
     private static BigDecimal decimal(double value) {
         return BigDecimal.valueOf(value);
     }
-
-    private record FacilityDefinition(String code, String name, String address, String city, String phone,
-                                      String accessHours, String imageUrl, boolean climateControlled,
-                                      String securityDescription) {}
 
     private record RentalPackageDefinition(
         String code,

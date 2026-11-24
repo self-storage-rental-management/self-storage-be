@@ -103,8 +103,11 @@ public record CheckInResponse(
     Integer inventoryReturnWindowDays,
     Instant inventoryRemovalPublishedAt,
     Instant inventoryRemovalDeadlineAt,
-    Instant inventoryReturnLastReminderAt
+    Instant inventoryReturnLastReminderAt,
+    Equipment equipment
 ) {
+    public record Equipment(int rackCount, int frameCount, Integer palletCount) {}
+
     public record InventoryVisit(
         Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
         String verifiedByName, UUID photoId
@@ -208,7 +211,7 @@ public record CheckInResponse(
             null, null, null, null, null, null, null, null,
             null, 0L, null, null, null, false,
             null, false, null, false,
-            null, null, null, null, null, null, null, null, null, null, null, null, null
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 

@@ -1935,7 +1935,8 @@ public class CheckInHandoverService {
             resolveInventoryReturnWindowDays(reservation, rental),
             rental == null ? null : rental.getInventoryRemovalPublishedAt(),
             rental == null ? null : rental.getInventoryRemovalDeadlineAt(),
-            rental == null ? null : rental.getInventoryReturnLastReminderAt()
+            rental == null ? null : rental.getInventoryReturnLastReminderAt(),
+            palletInventory == null ? null : palletInventory.equipment(unit)
         );
     }
 
