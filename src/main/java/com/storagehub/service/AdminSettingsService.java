@@ -84,6 +84,10 @@ public class AdminSettingsService {
                 if ("select".equals(setting.getSettingType()) && !readOptions(setting).contains(value.textValue())) {
                     throw ApiExceptions.validation("Setting value is not one of the supported options", setting.getSettingKey());
                 }
+                if (WorkflowBusinessCalendar.KEY.equals(setting.getSettingKey())) {
+                    if (value.toString().length() > 2000) throw ApiExceptions.validation("Lịch SLA vượt quá độ dài cho phép.", setting.getSettingKey());
+                    WorkflowBusinessCalendar.parse(value.textValue());
+                }
             }
             default -> throw ApiExceptions.conflict("Setting type is not supported: " + setting.getSettingType());
         }

@@ -26,7 +26,17 @@ public class CustomerLifecycleEmailService {
 
     public void notification(Notification notice) {
         User user = notice.getUser();
-        if (user.getRoles().stream().noneMatch(role -> role.getCode() == RoleCode.CUSTOMER)) return;
+        if (user.getRoles().stream().noneMatch(role -> role.getCode() == RoleCode.CUSTOMER)) {
+            boolean operations = user.getRoles().stream().anyMatch(role -> java.util.Set.of(RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS).contains(role.getCode()));
+            if (!operations || notice.getType() != NotificationType.CHECKIN && notice.getType() != NotificationType.RETURN) return;
+            var vars = new LinkedHashMap<String,Object>();
+            vars.put("fullName", user.getFullName()); vars.put("title", notice.getTitle());
+            vars.put("summary", safeSummary(notice.getContent())); vars.put("details", Map.of("Xử lý hồ sơ", "Đăng nhập và mở thông báo để xem công việc trong phạm vi cơ sở của bạn."));
+            vars.put("detailsUrl", properties.getFrontendBaseUrl().replaceAll("/+$", "") + "/login");
+            mail.queueTemplate(user.getId(), user.getEmail(), "StorageHub - " + notice.getTitle(), "customer-lifecycle", vars,
+                "OPERATIONS_TRANSACTIONAL_EMAIL_SENT", "notification:" + notice.getId());
+            return;
+        }
         // System messages may include promotions; those need a separate consent/unsubscribe flow.
         if (notice.getType() == NotificationType.SYSTEM) return;
         if (notice.getType() == NotificationType.PAYMENT && notice.getTitle().equals("Thanh toán thành công")) return;

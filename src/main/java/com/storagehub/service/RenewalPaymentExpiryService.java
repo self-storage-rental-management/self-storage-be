@@ -25,6 +25,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service @RequiredArgsConstructor
 @ConditionalOnProperty(name="storagehub.integration.renewal-payment-lifecycle.enabled",havingValue="true")
 public class RenewalPaymentExpiryService {
+    public static final String MANUAL_REVIEW = "PAYMENT_RECONCILIATION_PENDING";
+    private static final String LATE_PAYMENT = "PAYMENT_AFTER_DEADLINE";
     private static final List<PaymentStatus> UNRESOLVED=List.of(PaymentStatus.PENDING,PaymentStatus.PROCESSING,PaymentStatus.NOT_RECEIVED);
     private final PaymentRepository payments;
     private final VnpayService vnpay;
@@ -36,6 +38,8 @@ public class RenewalPaymentExpiryService {
     private final ObjectProvider<RenewalOperationSources.SafetySource> safetySources;
     @org.springframework.beans.factory.annotation.Value("${storagehub.integration.renewal-simple-payment.enabled:false}")
     private boolean simplePayment;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.renewal.payment-reconciliation-minutes:30}")
+    private long reconciliationMinutes = 30;
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<RenewalOperationSources.CalendarSource> signingCalendars;
     @org.springframework.beans.factory.annotation.Autowired
@@ -48,6 +52,7 @@ public class RenewalPaymentExpiryService {
         for(PaymentStatus status:UNRESOLVED)candidates.addAll(payments.findByStatus(status));
         candidates.addAll(payments.findByStatus(PaymentStatus.FAILED));
         candidates.addAll(payments.findByStatus(PaymentStatus.CANCELLED));
+        candidates.addAll(payments.findByPurposeAndFailureCode(PaymentType.RENEWAL, LATE_PAYMENT));
         int completed=0;
         for(Payment candidate:candidates) {
             if(candidate.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(candidate.getPurpose())
@@ -56,33 +61,56 @@ public class RenewalPaymentExpiryService {
             if(payment==null||payment.getRenewal()==null||!List.of(PaymentType.RENEWAL,PaymentType.RENEWAL_INSTALLMENT).contains(payment.getPurpose())
                 ||payment.getPaymentDeadline()==null||payment.getPaymentDeadline().isAfter(now))continue;
             if(UNRESOLVED.contains(payment.getStatus())) {
+                if (payment.getPurpose()==PaymentType.RENEWAL && payment.getRenewal().getStatus()==RenewalStatus.payment_expired) continue;
                 VnpayService.ReconciliationOutcome outcome=vnpay.reconcileAtPaymentDeadline(payment);
                 payments.saveAndFlush(payment);
-                if(outcome!=VnpayService.ReconciliationOutcome.FINAL_FAILURE)continue;
+                if(outcome!=VnpayService.ReconciliationOutcome.FINAL_FAILURE) {
+                    if (payment.getPurpose()==PaymentType.RENEWAL && (LATE_PAYMENT.equals(payment.getFailureCode())
+                        || UNRESOLVED.contains(payment.getStatus()) && !now.isBefore(manualReviewAt(payment.getPaymentDeadline(), reconciliationMinutes)))
+                        && expireIfSafe(payment.getRenewal(),payment,true)) completed++;
+                    continue;
+                }
+            } else if (payment.getStatus()==PaymentStatus.PAID && LATE_PAYMENT.equals(payment.getFailureCode())) {
+                if (expireIfSafe(payment.getRenewal(),payment,true)) completed++;
+                continue;
             } else if(payment.getStatus()!=PaymentStatus.FAILED&&payment.getStatus()!=PaymentStatus.CANCELLED)continue;
             if(payment.getPurpose()==PaymentType.RENEWAL_INSTALLMENT)continue; // A failed later period never expires the signed Renewal.
-            if(expireIfSafe(payment.getRenewal(),payment))completed++;
+            if(expireIfSafe(payment.getRenewal(),payment,false))completed++;
         }
         return completed;
     }
 
-    private boolean expireIfSafe(Renewal paymentRenewal,Payment payment) {
+    public static Instant manualReviewAt(Instant deadline, long minutes) {
+        return deadline.plus(java.time.Duration.ofMinutes(Math.max(1, minutes)));
+    }
+
+    private boolean expireIfSafe(Renewal paymentRenewal,Payment payment,boolean manualReview) {
         Renewal renewal=em.find(Renewal.class,paymentRenewal.getId(),LockModeType.PESSIMISTIC_WRITE);
-        if(renewal==null||renewal.getStatus()!=RenewalStatus.accepted)return false;
-        if(payments.existsByRenewal_IdAndStatusIn(renewal.getId(),UNRESOLVED))return false;
-        if(payments.findAllByRenewal_IdAndStatusIn(renewal.getId(),List.of(PaymentStatus.PAID)).size()>0)return false;
+        if(renewal==null||!List.of(RenewalStatus.accepted,RenewalStatus.payment_expired).contains(renewal.getStatus()))return false;
         var workflow=em.find(RenewalWorkflow.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         if(workflow==null||workflow.getPaymentDeadline()==null||workflow.getPaymentDeadline().isAfter(Instant.now()))return false;
+        var paid=payments.findAllByRenewal_IdAndStatusIn(renewal.getId(),List.of(PaymentStatus.PAID));
+        if (manualReview) {
+            if (renewal.getStatus()!=RenewalStatus.accepted || paid.stream().anyMatch(p -> !LATE_PAYMENT.equals(p.getFailureCode()))) return false;
+        } else if (payments.existsByRenewal_IdAndStatusIn(renewal.getId(),UNRESOLVED) || !paid.isEmpty()) return false;
+        if (renewal.getStatus()==RenewalStatus.payment_expired) {
+            if (!MANUAL_REVIEW.equals(workflow.getCancellationReason())) return false;
+            cancelUnpaid(workflow);
+            workflow.cancelled("PAYMENT_RECONCILIATION_FAILED");
+            em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
+            audit.recordMutation((User)null,"RENEWAL_PAYMENT_REVIEW_CLOSED","Renewal",renewal.getId(),
+                renewal.getRental().getFacility().getId(),null,Map.of("paymentId",payment.getId()));
+            notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
+                "Đã kết thúc đối soát thanh toán gia hạn","Giao dịch không thành công. Bạn có thể gửi yêu cầu gia hạn mới nếu còn đủ điều kiện.",renewal.getId());
+            return true;
+        }
         boolean holdReleased=false;
         if(workflow.getExtensionHoldRef()!=null) {
             var safety=safetySources.getIfAvailable();if(safety==null||!safety.atomic())return false;
             safety.release(renewal,workflow.getExtensionHoldRef());holdReleased=true;
         }else if(!simplePayment)return false;
-        if(simplePayment) {
-            var writer=depositWriters.getIfAvailable();
-            if(writer==null)throw com.storagehub.common.api.ApiExceptions.conflict("Cancellation accounting source unavailable");
-            writer.cancelUnpaid(workflow);
-        }
+        if (!manualReview) cancelUnpaid(workflow);
+        if (manualReview) workflow.cancelled(MANUAL_REVIEW);
         renewal.setStatus(RenewalStatus.payment_expired);
         var state=em.find(RenewalOperationState.class,renewal.getId(),LockModeType.PESSIMISTIC_WRITE);
         boolean newState=state==null;
@@ -97,17 +125,25 @@ public class RenewalPaymentExpiryService {
         renewals.releaseSlot(workflow);
         em.lock(workflow,LockModeType.PESSIMISTIC_FORCE_INCREMENT);
         var payload=Map.of("paymentId",payment.getId(),"responseCode",Objects.toString(payment.getGatewayResponseCode(),"UNKNOWN"),
-            "expiredAt",Instant.now().toString(),"holdReleased",holdReleased);
+            "expiredAt",Instant.now().toString(),"holdReleased",holdReleased,"manualReview",manualReview);
         try { em.persist(new RenewalOperationEvent(renewal,"EXPIRY",Instant.now(),null,mapper.writeValueAsString(payload))); }
         catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw new IllegalStateException("Could not persist Renewal payment expiry event",invalid);}
         audit.recordMutation((User)null,"RENEWAL_PAYMENT_EXPIRED","Renewal",renewal.getId(),renewal.getRental().getFacility().getId(),
             Map.of("status",RenewalStatus.accepted),Map.of("status",RenewalStatus.payment_expired,"paymentId",payment.getId()));
         notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
             "Yêu cầu thanh toán gia hạn đã hết hạn",
-            "Yêu cầu thanh toán gia hạn đã hết hạn và được đóng.",renewal.getId());
+            manualReview ? "Yêu cầu đã đóng và lịch ký đã được giải phóng. Giao dịch cũ đang chờ đối soát; chưa thể thanh toán lượt mới."
+                : "Yêu cầu thanh toán gia hạn đã hết hạn và được đóng.",renewal.getId());
         notifications.createFacilityOperationsNotifications(renewal.getRental().getFacility().getId(),NotificationType.RENEWAL,
-            "Yêu cầu gia hạn đã hết hạn thanh toán",
+            manualReview ? "Cần đối soát giao dịch gia hạn đã đóng" : "Yêu cầu gia hạn đã hết hạn thanh toán",
             "Yêu cầu gia hạn của khách hàng "+renewal.getRental().getCustomer().getFullName()+" đã hết hạn thanh toán; giữ chỗ gia hạn và lịch ký liên quan đã được giải phóng.",renewal.getId());
         return true;
+    }
+
+    private void cancelUnpaid(RenewalWorkflow workflow) {
+        if (!simplePayment) return;
+        var writer=depositWriters.getIfAvailable();
+        if(writer==null)throw com.storagehub.common.api.ApiExceptions.conflict("Cancellation accounting source unavailable");
+        writer.cancelUnpaid(workflow);
     }
 }

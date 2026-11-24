@@ -44,11 +44,9 @@ public class RenewalLocalPaymentChecks {
             var snapshot=account.get();
             if(!Objects.equals(snapshot.customerId(),rental.getCustomer().getId())||!Objects.equals(snapshot.facilityId(),rental.getFacility().getId()))
                 throw ApiExceptions.conflict("Ledger resource binding changed");
-            if(snapshot.obligations().stream().anyMatch(o->!Objects.equals(o.renewalId(),renewalId)&&o.outstanding().signum()>0&&!o.dueAt().isAfter(now)))
-                throw ApiExceptions.conflict("Recorded due obligations block Renewal payment");
         }
-        if(em.createQuery("select count(p) from PaymentComplaint p where p.reservation.id=:id and p.status in :statuses",Long.class)
-            .setParameter("id",rental.getReservation().getId()).setParameter("statuses",List.of(PaymentComplaintStatus.PENDING,PaymentComplaintStatus.REVIEW_OVERDUE)).getSingleResult()>0)
-            throw ApiExceptions.conflict("Unresolved payment complaint blocks Renewal payment");
+        if(renewalId!=null&&em.createQuery("select count(p) from PaymentComplaint p where p.payment.renewal.id=:id and p.status in :statuses",Long.class)
+            .setParameter("id",renewalId).setParameter("statuses",List.of(PaymentComplaintStatus.PENDING,PaymentComplaintStatus.REVIEW_OVERDUE)).getSingleResult()>0)
+            throw ApiExceptions.conflict("Hồ sơ gia hạn đang có khiếu nại thanh toán chưa được xử lý.");
     }
 }

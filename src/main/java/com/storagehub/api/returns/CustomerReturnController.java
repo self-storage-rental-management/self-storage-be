@@ -29,6 +29,9 @@ public class CustomerReturnController {
         @PathVariable UUID rentalId,
         @Valid @RequestBody CustomerCreateReturnRequest request
     ) {
+        if (request.returnType() != null) {
+            throw com.storagehub.common.api.ApiExceptions.validation("Loại trả kho do hệ thống xác định.", null);
+        }
         return new ApiResponse<>(
             returnSettlementService.createCustomerReturnRequest(actorContext.required(), rentalId, request),
             CorrelationIdContext.current()

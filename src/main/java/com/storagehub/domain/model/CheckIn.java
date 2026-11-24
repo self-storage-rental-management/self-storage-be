@@ -85,8 +85,62 @@ public class CheckIn extends BaseEntity {
     @Column
     private Instant setupCompletedAt;
 
+    private Instant inventoryAppointmentAt;
+    private Instant inventoryArrivedAt;
+    private Instant inventoryIdentityVerifiedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "inventory_identity_verified_by")
+    private User inventoryIdentityVerifiedBy;
+
+    @Column(name = "inventory_identity_photo_id")
+    private java.util.UUID inventoryIdentityPhotoId;
+
     @Column
     private Instant inventoryVerifiedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "inventory_resolution_status", nullable = false, length = 32)
+    private InventoryResolutionStatus inventoryResolutionStatus = InventoryResolutionStatus.NOT_STARTED;
+
+    @Column(name = "inventory_actual_json", columnDefinition = "LONGTEXT")
+    private String inventoryActualJson;
+
+    @Column(name = "inventory_mismatch_json", columnDefinition = "LONGTEXT")
+    private String inventoryMismatchJson;
+
+    @Column(name = "inventory_suggested_quantities_json", columnDefinition = "LONGTEXT")
+    private String inventorySuggestedQuantitiesJson;
+
+    @Column(name = "inventory_accepted_quantities_json", columnDefinition = "LONGTEXT")
+    private String inventoryAcceptedQuantitiesJson;
+
+    @Column(name = "inventory_decision_at")
+    private Instant inventoryDecisionAt;
+
+    @Column(name = "inventory_decision_note", length = 2000)
+    private String inventoryDecisionNote;
+
+    @Column(name = "inventory_full_fit", nullable = false)
+    private boolean inventoryFullFit;
+
+    @Column(name = "inventory_partial_fit_available", nullable = false)
+    private boolean inventoryPartialFitAvailable;
+
+    @Column(name = "inventory_suggested_package_count")
+    private Integer inventorySuggestedPackageCount;
+
+    @Column(name = "inventory_mismatch_summary", length = 2000)
+    private String inventoryMismatchSummary;
+
+    @Column(name = "inventory_remainder_removed_at")
+    private Instant inventoryRemainderRemovedAt;
+
+    @Column(name = "inventory_remainder_removal_note", columnDefinition = "TEXT")
+    private String inventoryRemainderRemovalNote;
+
+    @Column(name = "inventory_remainder_evidence_json", columnDefinition = "LONGTEXT")
+    private String inventoryRemainderEvidenceJson;
 
     @Column(length = 160)
     private String lockReference;
@@ -103,6 +157,11 @@ public class CheckIn extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(length = 20)
     private UnitReleaseDisposition rejectionDisposition;
+
+    private Instant rejectionResolvedAt;
+
+    @Column(length = 1000)
+    private String rejectionResolutionNote;
 
     @Version
     private long version;

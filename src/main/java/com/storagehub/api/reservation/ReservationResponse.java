@@ -14,6 +14,7 @@ public class ReservationResponse {
     private BigDecimal setupEarlyExitFee;
     private UUID setupReturnRentalId;
     private UUID setupReturnCaseId;
+    private LocalDate setupReturnScheduledDate;
     public String getSetupEarlyExitPolicyVersion() { return setupEarlyExitPolicyVersion; }
     public void setSetupEarlyExitPolicyVersion(String value) { setupEarlyExitPolicyVersion = value; }
     public BigDecimal getSetupEarlyExitFee() { return setupEarlyExitFee; }
@@ -22,6 +23,8 @@ public class ReservationResponse {
     public void setSetupReturnRentalId(UUID value) { setupReturnRentalId = value; }
     public UUID getSetupReturnCaseId() { return setupReturnCaseId; }
     public void setSetupReturnCaseId(UUID value) { setupReturnCaseId = value; }
+    public LocalDate getSetupReturnScheduledDate() { return setupReturnScheduledDate; }
+    public void setSetupReturnScheduledDate(LocalDate value) { setupReturnScheduledDate = value; }
 
     private boolean rentalPeriodConfirmed;
     public boolean isRentalPeriodConfirmed() { return rentalPeriodConfirmed; }

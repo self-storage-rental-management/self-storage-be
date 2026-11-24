@@ -26,6 +26,11 @@ public class CheckInController {
     private final ActorContext actorContext;
     private final CheckInHandoverService service;
 
+    @GetMapping("/{checkInId}/inventory-alternatives")
+    public ApiResponse<java.util.List<CheckInHandoverService.InventoryAlternative>> inventoryAlternatives(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.inventoryAlternatives(actorContext.required(), checkInId), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{checkInId}/identity-correction")
     public ApiResponse<CheckInResponse> correctIdentity(@PathVariable UUID checkInId, @Valid @RequestBody VerifyCheckInIdentityRequest request) {
         return new ApiResponse<>(service.correctIdentity(actorContext.required(), checkInId, request), CorrelationIdContext.current());
@@ -69,6 +74,20 @@ public class CheckInController {
             service.complete(actorContext.required(), checkInId, request),
             CorrelationIdContext.current()
         );
+    }
+
+    @PostMapping("/{checkInId}/inventory-arrival")
+    public ApiResponse<CheckInResponse> recordInventoryArrival(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.recordInventoryArrival(actorContext.required(), checkInId),
+            CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/inventory-identity")
+    public ApiResponse<CheckInResponse> verifyInventoryIdentity(
+        @PathVariable UUID checkInId, @Valid @RequestBody VerifyInventoryIdentityRequest request
+    ) {
+        return new ApiResponse<>(service.verifyInventoryIdentity(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current());
     }
 
     @PostMapping("/{checkInId}/identity-verification")
@@ -115,6 +134,26 @@ public class CheckInController {
         );
     }
 
+    @PostMapping("/{checkInId}/receipt-reminder")
+    public ApiResponse<ReceiptReminderResponse> remindCustomerReceipt(
+        @PathVariable UUID checkInId
+    ) {
+        return new ApiResponse<>(
+            service.remindCustomerReceipt(actorContext.required(), checkInId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/receipt-release")
+    public ApiResponse<CheckInResponse> releaseAfterCustomerReceiptTimeout(
+        @PathVariable UUID checkInId
+    ) {
+        return new ApiResponse<>(
+            service.releaseAfterCustomerReceiptTimeout(actorContext.required(), checkInId),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{checkInId}/setup/complete")
     public ApiResponse<CheckInResponse> completeSetup(
         @PathVariable UUID checkInId,
@@ -155,6 +194,17 @@ public class CheckInController {
     ) {
         return new ApiResponse<>(
             service.reject(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/inventory-partial-removal")
+    public ApiResponse<CheckInResponse> confirmPartialInventoryRemoval(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody ConfirmInventoryPartialRemovalRequest request
+    ) {
+        return new ApiResponse<>(
+            service.confirmPartialInventoryRemoval(actorContext.required(), checkInId, request),
             CorrelationIdContext.current()
         );
     }

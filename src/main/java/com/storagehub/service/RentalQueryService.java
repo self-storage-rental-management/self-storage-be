@@ -47,8 +47,8 @@ public class RentalQueryService {
         return new RentalDetailResponse(s.id(), s.displayCode(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
-            financial(r), access(r), s.dateSemantics(), bookingEvidence(actor,r,manager),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            financial(r), access(actor, r), s.dateSemantics(), bookingEvidence(actor,r,manager),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart());
     }
 
@@ -80,15 +80,18 @@ public class RentalQueryService {
         return new RentalDetailResponse.Financial("UNKNOWN", "VND", null, null, null,
             "Nguồn tài chính chưa được kết nối hoặc chưa đủ dữ liệu xác thực", null, null);
     }
-    private RentalDetailResponse.Access access(Rental r) {
+    private RentalDetailResponse.Access access(ActorPrincipal actor, Rental r) {
         var source = accessSources == null ? null : accessSources.getIfAvailable();
         var value = source == null ? Optional.<RentalReadSources.Access>empty() : source.read(r);
         if (value.isPresent()) {
             var a = value.get();
             if (Objects.equals(r.getId(), a.rentalId()) && validTime(a.checkedAt()) && a.status() != null)
-                return new RentalDetailResponse.Access("COMPLETE", a.status().name(), null);
+                return new RentalDetailResponse.Access("COMPLETE", a.status().name(),
+                    actor != null && actor.hasRole(RoleCode.CUSTOMER) && a.status() == RentalReadSources.AccessStatus.ACTIVE
+                        ? a.reference() : null,
+                    null);
         }
-        return new RentalDetailResponse.Access("UNKNOWN", null, "Nguồn trạng thái truy cập chưa được xác thực");
+        return new RentalDetailResponse.Access("UNKNOWN", null, null, "Nguồn trạng thái truy cập chưa được xác thực");
     }
     private boolean validTime(java.time.Instant time) { return time != null && !time.isAfter(now()); }
     private boolean nonnegative(java.math.BigDecimal value) { return value != null && value.signum() >= 0; }
@@ -167,7 +170,7 @@ public class RentalQueryService {
             r.getStatus(), r.getStartDate(), r.getContractEndDate(), r.getMonthlyPrice(), "VND", warnings,
             period.map(p -> new RentalSummaryResponse.DateSemantics("COMPLETE",p.convention().name(),p.lastPermittedDate(),p.endExclusive()))
                 .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(),
             RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()));
     }

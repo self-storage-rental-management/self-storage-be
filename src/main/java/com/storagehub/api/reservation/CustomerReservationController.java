@@ -181,6 +181,14 @@ public class CustomerReservationController {
         );
     }
 
+    @PostMapping("/{reservationId}/inventory-appointment")
+    public ApiResponse<ReservationDetailResponse> setInventoryAppointment(
+        @PathVariable UUID reservationId, @Valid @RequestBody InventoryAppointmentRequest request
+    ) {
+        return new ApiResponse<>(customerReservationService.setInventoryAppointment(actorContext.required(), reservationId,
+            request.appointmentAt(), request.reason()), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{reservationId}/preparation-complete")
     public ApiResponse<ReservationDetailResponse> markPreparationComplete(
         @PathVariable UUID reservationId,
@@ -188,6 +196,17 @@ public class CustomerReservationController {
     ) {
         return new ApiResponse<>(
             customerReservationService.markPreparationComplete(actorContext.required(), reservationId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{reservationId}/inventory-resolution")
+    public ApiResponse<ReservationDetailResponse> resolveInventory(
+        @PathVariable UUID reservationId,
+        @Valid @RequestBody InventoryResolutionRequest request
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.resolveInventory(actorContext.required(), reservationId, request),
             CorrelationIdContext.current()
         );
     }

@@ -61,6 +61,7 @@ class SimulatedPaymentServiceTests {
             paymentRepository, reservationRepository, snapshotRepository, userRepository,
             properties, auditLogService, notificationService
         );
+        ReflectionTestUtils.setField(service, "receiptCodes", org.mockito.Mockito.mock(MoneyReceiptCodes.class));
         customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
         customer.setPhone("0912345678");
