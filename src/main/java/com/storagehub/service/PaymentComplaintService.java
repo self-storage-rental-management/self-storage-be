@@ -23,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class PaymentComplaintService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
     private static final String FILE_ENTITY_TYPE = "PAYMENT_COMPLAINT";
     private static final List<PaymentComplaintStatus> ACTIVE_STATUSES = List.of(
         PaymentComplaintStatus.REVIEW_OVERDUE, PaymentComplaintStatus.PENDING
@@ -232,6 +234,9 @@ public class PaymentComplaintService {
         if (request.decision() == PaymentComplaintDecisionRequest.Decision.APPROVE) {
             complaint.setStatus(PaymentComplaintStatus.APPROVED);
             payment.setStatus(PaymentStatus.PAID);
+            if (payment.getReceiptCode() == null) {
+                payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+            }
             payment.setPaidAt(now);
             payment.setProcessedAt(now);
             ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())

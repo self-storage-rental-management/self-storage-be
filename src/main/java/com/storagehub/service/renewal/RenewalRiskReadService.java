@@ -84,7 +84,7 @@ public class RenewalRiskReadService {
         BigDecimal fee=null;var feeSource=overdueFees==null?null:overdueFees.getIfAvailable();
         if(continuousPeriod && renewal.getStatus()!=RenewalStatus.cancelled && renewal.getStatus()!=RenewalStatus.payment_expired)
             fee=BigDecimal.ZERO;
-        else if(feeSource!=null)try{fee=feeSource.estimateAtSigning(rental,now);}catch(com.storagehub.common.api.ApiException unavailable){/* Keep the deadline warning visible when fee policy is unavailable. */}
+        else if(feeSource!=null)try{fee=renewal==null ? feeSource.estimate(rental,now) : feeSource.estimateAtSigning(rental,now);}catch(com.storagehub.common.api.ApiException unavailable){/* Keep the deadline warning visible when fee policy is unavailable. */}
         return new View(rental.getId(),id,now,"COMPLETE",days,RenewalOverdueTimeline.severity(days,now,term.recoveryCutoff()),
             signing,term.recoveryCutoff(),term.recoveryStart(),allowed,remainder,fee,"VND",recoveryStatus,startedAt,taskId);
     }

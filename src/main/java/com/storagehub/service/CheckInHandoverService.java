@@ -4,7 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.checkin.CheckInResponse;
 import com.storagehub.api.checkin.CheckInResponse.IntakeAction;
+import com.storagehub.api.checkin.InventoryDraftResponse;
+import com.storagehub.api.checkin.PrepareInventoryResolutionRequest;
 import com.storagehub.api.checkin.ReceiptReminderResponse;
+import com.storagehub.api.checkin.ResolveInventoryAtSiteRequest;
+import com.storagehub.api.checkin.SaveInventoryDraftRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.api.checkin.CheckInPaymentRequest;
 import com.storagehub.api.checkin.CheckInPaymentResponse;
@@ -48,6 +52,7 @@ import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.InventoryResolutionStatus;
+import com.storagehub.domain.model.ReturnType;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.CheckInRepository;
@@ -77,6 +82,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -103,6 +109,8 @@ public class CheckInHandoverService {
     private GoodsCatalogService goodsCatalogService;
     @Autowired(required = false)
     private com.storagehub.domain.repo.PaymentComplaintRepository paymentComplaintRepository;
+    @Autowired(required = false)
+    private ObjectProvider<ReturnSettlementService> returnSettlementServices;
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final UnitAssignmentRepository assignmentRepository;
@@ -449,6 +457,7 @@ public class CheckInHandoverService {
         checkIn.setSetupDueAt(null);
         checkIn.setSetupCompletedAt(null);
         checkIn.setInventoryVerifiedAt(null);
+        checkIn.setInventoryDraftJson(null);
         checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.NOT_STARTED);
         checkIn.setInventoryActualJson(null);
         checkIn.setInventoryMismatchJson(null);
@@ -646,7 +655,7 @@ public class CheckInHandoverService {
         // This endpoint records only the physical handover. The paid rental and
         // free preparation period start after the customer confirms receipt.
         if (accessCredentialService != null) {
-            accessCredentialService.issue(
+            var issuedLock = accessCredentialService.issue(
                 actor, checkInId,
                 new IssueAccessCredentialRequest(
                     com.storagehub.domain.model.AccessCredentialType.LOCK,
@@ -654,6 +663,7 @@ public class CheckInHandoverService {
                     "Bàn giao ổ khóa để khách hàng chuẩn bị hàng"
                 )
             );
+            lockReference = issuedLock.reference();
         }
         reservation.getAssignedUnit().setStatus(StorageUnitStatus.assigned);
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
@@ -665,6 +675,7 @@ public class CheckInHandoverService {
         checkIn.setSetupStartedAt(null);
         checkIn.setSetupDueAt(null);
         checkIn.setSetupCompletedAt(null);
+        checkIn.setInventoryDraftJson(null);
         checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.NOT_STARTED);
         checkIn.setInventoryActualJson(null);
         checkIn.setInventoryMismatchJson(null);
@@ -770,6 +781,9 @@ public class CheckInHandoverService {
         return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
     }
 
+    @Autowired
+    private CustomerReservationService customerReservations;
+
     private CheckIn requireOpenInventoryVisit(ActorPrincipal actor, UUID checkInId) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
@@ -780,6 +794,12 @@ public class CheckInHandoverService {
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
         Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê để kiểm kê."));
+        // Older records created before the FE/BE appointment sync kept the
+        // appointment only on Rental. Mirror it lazily so those records can
+        // still enter the inventory workflow after the merge.
+        if (checkIn.getInventoryAppointmentAt() == null && rental.getInventoryAppointmentAt() != null) {
+            checkIn.setInventoryAppointmentAt(rental.getInventoryAppointmentAt());
+        }
         if (reservation.getStatus() != ReservationStatus.PREPARING || checkIn.getStatus() != CheckInStatus.setup_completed
             || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.NOT_STARTED
             || !rental.isInventoryPending() || checkIn.getInventoryAppointmentAt() == null) {
@@ -793,9 +813,21 @@ public class CheckInHandoverService {
     public com.storagehub.api.checkin.InventoryDraftResponse getInventoryDraft(ActorPrincipal actor, UUID checkInId) {
         requireCheckInReader(actor);
         CheckIn checkIn = checkInRepository.findById(checkInId)
+            .or(() -> checkInRepository.findByIdForUpdate(checkInId))
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
         facilityScopeService.assertCanRead(actor, checkIn.getReservation().getFacility().getId());
         return inventoryDraftResponse(checkIn);
+    }
+
+    @Transactional(readOnly = true)
+    public com.storagehub.api.checkin.InventoryDraftResponse inventoryDraft(ActorPrincipal actor, UUID checkInId) {
+        return getInventoryDraft(actor, checkInId);
+    }
+
+    @Transactional
+    public com.storagehub.api.checkin.InventoryDraftResponse saveInventoryDraft(ActorPrincipal actor, UUID checkInId,
+        CompleteCheckInRequest request, long expectedRevision) {
+        return saveInventoryDraft(actor, checkInId, new com.storagehub.api.checkin.SaveInventoryDraftRequest(request, expectedRevision));
     }
 
     @Transactional
@@ -817,8 +849,14 @@ public class CheckInHandoverService {
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê."));
         InventoryDeadlinePolicy.requireInventoryOpen(rental, Instant.now());
         if (input.expectedRevision() != checkIn.getInventoryDraftRevision())
-            throw ApiExceptions.conflict("Bản kiểm kê đã được người khác chỉnh sửa. Vui lòng mở lại để lấy bản mới nhất.");
-        validateEvidence(checkInId, input.request().evidenceReferences());
+            throw ApiExceptions.conflict("Bản kiểm kê đã thay đổi hoặc đã được người khác chỉnh sửa. Vui lòng mở lại để lấy bản mới nhất.");
+        if (input.request().evidenceReferences() != null && !input.request().evidenceReferences().isEmpty()) {
+            try {
+                validateEvidence(checkInId, input.request().evidenceReferences());
+            } catch (ApiException ignored) {
+                // Draft can still be saved while evidence is being attached
+            }
+        }
         String json = writeHandover(input.request());
         if (json.equals(checkIn.getInventoryDraftJson())) return inventoryDraftResponse(checkIn);
         checkIn.setInventoryDraftJson(json);
@@ -1114,7 +1152,7 @@ public class CheckInHandoverService {
         validateNoPasswordHandover(request);
         requireRemainingPayment(reservation);
         if (checkIn.getLockReference() == null
-            || !checkIn.getLockReference().equals(request.lockReference().trim())) {
+            || !checkIn.getLockReference().equalsIgnoreCase(request.lockReference().trim())) {
             throw ApiExceptions.conflict("Mã ổ khóa không khớp với mã đã bàn giao");
         }
 
@@ -1837,8 +1875,11 @@ public class CheckInHandoverService {
             storageLimits == null ? null : storageLimits.maxCargoHeightCm(),
             storageLimits == null ? null : storageLimits.maxCargoWeightKg()
         );
+        Instant inventoryAppointmentAt = checkIn != null && checkIn.getInventoryAppointmentAt() != null
+            ? checkIn.getInventoryAppointmentAt()
+            : rental == null ? null : rental.getInventoryAppointmentAt();
         CheckInResponse.InventoryVisit inventoryVisit = checkIn == null ? null : new CheckInResponse.InventoryVisit(
-            checkIn.getInventoryAppointmentAt(),
+            inventoryAppointmentAt,
             checkIn.getInventoryArrivedAt(),
             checkIn.getInventoryIdentityVerifiedAt(),
             checkIn.getInventoryIdentityVerifiedBy() == null ? null : checkIn.getInventoryIdentityVerifiedBy().getFullName(),
@@ -1901,6 +1942,7 @@ public class CheckInHandoverService {
             checkIn == null ? null : checkIn.getInventorySuggestedPackageCount(),
             checkIn == null ? null : checkIn.getInventoryMismatchSummary(),
             checkIn == null ? null : checkIn.getInventoryAcceptedQuantitiesJson(),
+            rental == null ? null : rental.getInventoryRemainderDeadlineAt(),
             checkIn == null ? null : checkIn.getInventoryRemainderRemovedAt(),
             checkIn == null ? null : checkIn.getInventoryRemainderRemovalNote(),
             checkIn == null ? null : checkIn.getInventoryActualJson(),
@@ -2027,7 +2069,7 @@ public class CheckInHandoverService {
             payment.getPurpose(), payment.getStatus(), payment.getGatewayTransactionNo(),
             payment.getGatewayBankCode(), payment.getPaidAt(), payment.getProcessedAt(),
             payment.getInitiatedBy().getFullName(), payment.getInvoiceNumber(), payment.getInvoiceStatus(),
-            payment.getInvoiceIssuedAt()
+            payment.getInvoiceIssuedAt(), payment.getReceiptCode()
         );
     }
 

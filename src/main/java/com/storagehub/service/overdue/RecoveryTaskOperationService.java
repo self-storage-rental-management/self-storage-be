@@ -82,7 +82,8 @@ public class RecoveryTaskOperationService {
         var inspection=new ReturnInspectionRequest(input.inventoryMatch(),input.damageClassification(),input.damageFee(),input.cleaningFee(),
             input.lostItemFee(),input.overdueFee(),input.outstandingFee(),input.staffNotes(),
             body.evidenceFileIds().stream().map(file->"/api/files/"+file).toList(),
-            input.returnedKey(),input.returnedCard(),input.returnedLock(),input.proposedUnitStatus());
+            input.returnedKey(),input.returnedCard(),input.returnedLock(),input.proposedUnitStatus(),
+            false,null,true,null,null,input.lockInspectionResult());
         returns.performInspection(actor,rc.getId(),inspection);em.flush();
         return finish(c,key,"INSPECTION",body);
     }

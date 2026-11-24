@@ -70,7 +70,7 @@ class SetupEarlyExitPolicyTests {
     }
 
     @Test
-    void creditsTheWholeVerifiedRentalOnceAndChargesOneSnapshotMonth() {
+    void repeatedCaptureCreditsEightyPercentAndRetainsTwentyPercent() {
         SetupEarlyExitPolicy.capture(record, pricing);
         assertThat(record.isSetupEarlyExit()).isTrue();
         assertThat(record.getRentalRefundCredit()).isEqualByComparingTo("4800000");

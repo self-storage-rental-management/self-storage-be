@@ -41,6 +41,7 @@ import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.UnitAssignment;
@@ -121,6 +122,8 @@ public class CustomerReservationService {
     private RefundRequestRepository refundRequestRepository;
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
+    @Autowired
+    private com.storagehub.service.support.SupportService inventorySupport;
     @Autowired(required = false)
     private PaymentComplaintRepository paymentComplaintRepository;
     @Autowired(required = false)
@@ -536,6 +539,8 @@ public class CustomerReservationService {
         if (appointmentAt.equals(previous)) return toDetailResponse(reservation);
         checkIn.setInventoryAppointmentAt(appointmentAt);
         checkInRepository.saveAndFlush(checkIn);
+        rental.setInventoryAppointmentAt(appointmentAt);
+        rentalRepository.saveAndFlush(rental);
         String changeReason = clean(reason);
         auditLogService.recordMutation(reservation.getCustomer(), "INVENTORY_APPOINTMENT_SAVED", "CheckIn", checkIn.getId(),
             reservation.getFacility().getId(), previous == null ? null : Map.of("appointmentAt", previous),
@@ -609,6 +614,13 @@ public class CustomerReservationService {
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Hồ sơ kiểm kê chưa được tạo."));
+        applyInventoryDecision(actor, reservation, checkIn, request, null);
+        return toDetailResponse(reservation);
+    }
+
+    void applyInventoryDecision(ActorPrincipal actor, Reservation reservation, CheckIn checkIn,
+        InventoryResolutionRequest request, User staff) {
+        UUID reservationId = reservation.getId();
         if (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
             || checkIn.getStatus() != CheckInStatus.setup_completed) {
             throw ApiExceptions.conflict("Hồ sơ kiểm kê không còn chờ khách hàng quyết định.");
@@ -622,8 +634,21 @@ public class CustomerReservationService {
             InventoryDeadlinePolicy.requireInventoryOpen(rental, now);
         }
         String note = clean(request.note());
+        if (request.decision() == InventoryResolutionRequest.Decision.REQUEST_TRANSFER) {
+            if (staff == null || checkIn.isInventoryFullFit())
+                throw ApiExceptions.conflict("Chỉ nhân viên tại cơ sở được yêu cầu chuyển hàng khi hàng không vừa kho.");
+            var ticket = inventorySupport.createInventoryTransferRequest(actor, rental, note);
+            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.TRANSFER_REQUESTED);
+            checkIn.setInventoryDecisionAt(now);
+            checkIn.setInventoryDecisionNote("Yêu cầu hỗ trợ " + ticket.getId());
+            checkInRepository.saveAndFlush(checkIn);
+            return;
+        }
         if (request.decision() == InventoryResolutionRequest.Decision.CANCEL_AND_RETURN) {
-            if (checkIn.isInventoryFullFit())
+            boolean otherGoods = staff != null && goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId)
+                .stream().anyMatch(line -> line.getCategory() == com.storagehub.domain.model.GoodsCategory.OTHER);
+            if (otherGoods && note == null) throw ApiExceptions.validation("Cần ghi lý do từ chối tiếp nhận.", null);
+            if (checkIn.isInventoryFullFit() && !otherGoods)
                 throw ApiExceptions.conflict("Hàng hóa được tiếp nhận đầy đủ. Nếu muốn trả kho, vui lòng gửi yêu cầu trả kho thông thường.");
             if (request.scheduledDate() == null) {
                 throw ApiExceptions.validation("Vui lòng chọn ngày trả kho dự kiến.", null);
@@ -645,10 +670,11 @@ public class CustomerReservationService {
             var service = returnSettlementServices == null ? null : returnSettlementServices.getIfAvailable();
             if (service == null && returnSettlements != null) service = returnSettlements.getIfAvailable();
             if (service == null) throw ApiExceptions.conflict("Chưa có luồng trả kho để tiếp nhận yêu cầu này.");
-            service.createCustomerReturnRequest(actor, rental.getId(), new CustomerCreateReturnRequest(
-                request.scheduledDate(), checkIn.getInventoryDecisionNote(), ReturnType.INVENTORY_MISMATCH
-            ));
-            return toDetailResponse(reservation);
+            var returnRequest = new CustomerCreateReturnRequest(request.scheduledDate(), checkIn.getInventoryDecisionNote(),
+                ReturnType.INVENTORY_MISMATCH);
+            if (staff == null) service.createCustomerReturnRequest(actor, rental.getId(), returnRequest);
+            else service.createInventoryReturn(rental, returnRequest, staff);
+            return;
         }
 
         if (request.decision() == InventoryResolutionRequest.Decision.ACCEPT_FULL
@@ -656,7 +682,7 @@ public class CustomerReservationService {
             throw ApiExceptions.conflict("Số hàng thực tế chưa có phương án xếp đủ trong gian kho.");
         }
         if (request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL
-            && !checkIn.isInventoryPartialFitAvailable()) {
+            && (!checkIn.isInventoryPartialFitAvailable() && staff == null || checkIn.isInventoryFullFit())) {
             throw ApiExceptions.conflict("Chưa có phương án xếp một phần hàng hóa trong gian kho này.");
         }
 
@@ -665,7 +691,15 @@ public class CustomerReservationService {
             checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.PARTIAL_ACCEPTED);
             Rental partialRental = rentalRepository.findByReservationIdForUpdate(reservationId)
                 .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê."));
-            partialRental.setInventoryRemainderDeadlineAt(InventoryTimelinePolicy.dayStart(Instant.now(), 4));
+            Instant deadline = InventoryTimelinePolicy.dayStart(now, 4);
+            if (staff != null || request.scheduledDate() != null) {
+                var today = now.atZone(InventoryTimelinePolicy.ZONE).toLocalDate();
+                var date = request.scheduledDate();
+                if (date == null || date.isBefore(today) || date.isAfter(today.plusDays(3)))
+                    throw ApiExceptions.validation("Chọn ngày đưa hàng dư ra từ hôm nay đến hết 3 ngày tới.", null);
+                deadline = date.plusDays(1).atStartOfDay(InventoryTimelinePolicy.ZONE).toInstant();
+            }
+            partialRental.setInventoryRemainderDeadlineAt(deadline);
             rentalRepository.saveAndFlush(partialRental);
             checkIn.setInventoryDecisionAt(Instant.now());
             checkIn.setInventoryDecisionNote(note == null
@@ -687,12 +721,12 @@ public class CustomerReservationService {
                 reservation.getId()
             );
             auditLogService.recordMutation(
-                savedCheckIn.getPerformedBy(), "CUSTOMER_INVENTORY_PARTIAL_ACCEPTED", "CheckIn", savedCheckIn.getId(),
+                staff == null ? savedCheckIn.getPerformedBy() : staff, staff == null ? "CUSTOMER_INVENTORY_PARTIAL_ACCEPTED" : "STAFF_INVENTORY_PARTIAL_ACCEPTED", "CheckIn", savedCheckIn.getId(),
                 reservation.getFacility().getId(),
                 Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PENDING_CUSTOMER),
                 Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PARTIAL_ACCEPTED)
             );
-            return toDetailResponse(reservation);
+            return;
         }
 
         UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
@@ -751,7 +785,7 @@ public class CustomerReservationService {
             savedReservation.getId()
         );
         auditLogService.recordMutation(
-            savedReservation.getCustomer(), "CUSTOMER_INVENTORY_RESOLUTION", "CheckIn", savedCheckIn.getId(),
+            staff == null ? savedReservation.getCustomer() : staff, staff == null ? "CUSTOMER_INVENTORY_RESOLUTION" : "STAFF_INVENTORY_RESOLUTION", "CheckIn", savedCheckIn.getId(),
             savedReservation.getFacility().getId(),
             Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PENDING_CUSTOMER,
                 "storageUnitStatus", previousUnitStatus),
@@ -759,7 +793,6 @@ public class CustomerReservationService {
                 "storageUnitStatus", StorageUnitStatus.occupied,
                 "reservationStatus", ReservationStatus.COMPLETED)
         );
-        return toDetailResponse(savedReservation);
     }
 
     private boolean sameGoodsIdentity(ReservationGoodsItem stored, com.storagehub.api.reservation.GoodsItemRequest input) {
@@ -1667,7 +1700,7 @@ public class CustomerReservationService {
             ReservationSnapshotView.facilityName(payment.getReservation(), snapshot),
             ReservationSnapshotView.facilityAddress(payment.getReservation(), snapshot),
             ReservationSnapshotView.unitTypeName(payment.getReservation(), snapshot),
-            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot)
+            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode()
         );
     }
 

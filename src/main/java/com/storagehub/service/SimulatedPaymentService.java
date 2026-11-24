@@ -28,6 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class SimulatedPaymentService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
 
     private final PaymentRepository paymentRepository;
     private final ReservationRepository reservationRepository;
@@ -146,6 +148,10 @@ public class SimulatedPaymentService {
         }
 
         Payment saved = paymentRepository.saveAndFlush(payment);
+        if (saved.getStatus() == PaymentStatus.PAID && saved.getReceiptCode() == null) {
+            saved.setReceiptCode(receiptCodes.issue("PAYMENT", saved.getId(), false));
+            paymentRepository.saveAndFlush(saved);
+        }
         if (outcome == PaymentSimulationOutcome.SUCCESS) {
             sendSimulatedReservationPaymentBillEmail(saved, reservation, snapshot, now);
         }

@@ -128,6 +128,10 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false)
     private boolean returnedLock = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lock_inspection_result", length = 32)
+    private LockInspectionResult lockInspectionResult;
+
     /** Whether this return was requested after the rental had become ACTIVE. */
     @Column(nullable = false)
     private boolean activeReturnRepricingRequired = false;

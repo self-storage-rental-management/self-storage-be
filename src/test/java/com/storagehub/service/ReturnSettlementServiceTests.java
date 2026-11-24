@@ -170,7 +170,6 @@ class ReturnSettlementServiceTests {
         var request = new CustomerCreateReturnRequest(LocalDate.now(BusinessTime.ZONE).plusDays(1), "Khách chọn trả kho tại cơ sở", com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
         when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
         when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
-        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
         when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
         when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
             ReturnCase rc = invocation.getArgument(0); ReflectionTestUtils.setField(rc, "id", UUID.randomUUID()); return rc;
@@ -920,7 +919,7 @@ class ReturnSettlementServiceTests {
         assertThat(response.activeReturnPolicy().rentalRefundAmount()).isEqualByComparingTo("8800000.00");
         assertThat(returnCase.getRentalRefundAmount()).isEqualByComparingTo("8800000.00");
         assertThat(response.netRefundAmount()).isEqualByComparingTo("14200000.00");
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
     }
 
     @Test
@@ -1064,7 +1063,7 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
-    void setupDisputeReviewDeductsEarlyExitFeeFromCombinedVerifiedFunds() {
+    void setupDisputeReviewDoesNotDeductRetainedRentTwice() {
         var rc = setupReturn(ReturnCaseStatus.disputed);
         rc.setSetupEarlyExit(true);
         rc.setDamageFee(new BigDecimal("500000"));

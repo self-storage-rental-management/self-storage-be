@@ -76,6 +76,7 @@ public record CheckInResponse(
     Integer inventorySuggestedPackageCount,
     String inventoryMismatchSummary,
     String inventoryAcceptedQuantitiesJson,
+    Instant inventoryRemainderDeadlineAt,
     Instant inventoryRemainderRemovedAt,
     String inventoryRemainderRemovalNote,
     String inventoryActualJson,
@@ -197,7 +198,7 @@ public record CheckInResponse(
             null, null, List.of(), IntakeAction.NONE,
             null, null, false, false,
             null, null, null, null, null, null, null, null,
-            0L, null, null, null, false,
+            null, 0L, null, null, null, false,
             null, false, null, false,
             null, null, null, null, null
         );
