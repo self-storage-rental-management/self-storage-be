@@ -50,30 +50,23 @@ public record CompleteCheckInRequest(
         @NotNull Condition condition,
         @Size(max = 1000) String note,
         @Valid InventoryMeasurements measurements,
+        @Valid @jakarta.validation.groups.ConvertGroup(to = com.storagehub.api.reservation.GoodsItemRequest.InventoryChecks.class) com.storagehub.api.reservation.GoodsItemRequest actualGoods,
         UUID actualCategoryId,
-        UUID actualMaterialId,
-        @Valid com.storagehub.api.reservation.GoodsItemRequest actualGoods
+        UUID actualMaterialId
     ) {
         public enum Condition { INTACT, DAMAGED, NOT_PRESENT }
-        public InventoryLine {
-            if (actualGoods != null) {
-                actualCategoryId = actualGoods.getCatalogCategoryId();
-                actualMaterialId = actualGoods.getCatalogMaterialId();
-            }
-        }
-        public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note, InventoryMeasurements measurements) {
-            this(goodsItemId, actualQuantity, condition, note, measurements, null, null, null);
-        }
+        public UUID actualCategoryId() { return actualGoods == null ? actualCategoryId : actualGoods.getCatalogCategoryId(); }
+        public UUID actualMaterialId() { return actualGoods == null ? actualMaterialId : actualGoods.getCatalogMaterialId(); }
+        public InventoryLine(UUID id, Integer quantity, Condition condition, String note, InventoryMeasurements measurements, com.storagehub.api.reservation.GoodsItemRequest goods) { this(id, quantity, condition, note, measurements, goods, null, null); }
+        public InventoryLine(UUID id, Integer quantity, Condition condition, String note, InventoryMeasurements measurements, UUID category, UUID material) { this(id, quantity, condition, note, measurements, null, category, material); }
 
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note) {
             this(goodsItemId, actualQuantity, condition, note, null, null, null, null);
         }
 
         public InventoryLine(UUID goodsItemId, Integer actualQuantity, Condition condition, String note,
-            InventoryMeasurements measurements, com.storagehub.api.reservation.GoodsItemRequest actualGoods) {
-            this(goodsItemId, actualQuantity, condition, note, measurements,
-                actualGoods == null ? null : actualGoods.getCatalogCategoryId(),
-                actualGoods == null ? null : actualGoods.getCatalogMaterialId(), actualGoods);
+            InventoryMeasurements measurements) {
+            this(goodsItemId, actualQuantity, condition, note, measurements, null, null, null);
         }
     }
 

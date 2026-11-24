@@ -58,6 +58,12 @@ public class CheckIn extends BaseEntity {
     @Column
     private Instant checkedInAt;
 
+    @Column(name = "handover_record_json", columnDefinition = "LONGTEXT")
+    private String handoverRecordJson;
+
+    @Column(name = "customer_receipt_confirmed_at")
+    private Instant customerReceiptConfirmedAt;
+
     @Column
     private Instant identityVerifiedAt;
 
@@ -106,6 +112,14 @@ public class CheckIn extends BaseEntity {
     @Column(name = "inventory_actual_json", columnDefinition = "LONGTEXT")
     private String inventoryActualJson;
 
+    @Column(name = "inventory_draft_json", columnDefinition = "LONGTEXT")
+    private String inventoryDraftJson;
+    @Column(name = "inventory_draft_saved_at")
+    private Instant inventoryDraftSavedAt;
+    @Column(name = "inventory_draft_revision", nullable = false)
+    private long inventoryDraftRevision;
+
+
     @Column(name = "inventory_mismatch_json", columnDefinition = "LONGTEXT")
     private String inventoryMismatchJson;
 
@@ -114,6 +128,9 @@ public class CheckIn extends BaseEntity {
 
     @Column(name = "inventory_accepted_quantities_json", columnDefinition = "LONGTEXT")
     private String inventoryAcceptedQuantitiesJson;
+
+    @Column(name = "inventory_decision_json", columnDefinition = "LONGTEXT")
+    private String inventoryDecisionJson;
 
     @Column(name = "inventory_decision_at")
     private Instant inventoryDecisionAt;
@@ -141,6 +158,17 @@ public class CheckIn extends BaseEntity {
 
     @Column(name = "inventory_remainder_evidence_json", columnDefinition = "LONGTEXT")
     private String inventoryRemainderEvidenceJson;
+
+    /**
+     * At-site confirmation: the verified customer is physically present, Staff presented the
+     * result, and the agreed arrangement was recorded together with the evidence. The version
+     * ties the confirmation to the exact inspection record it approves.
+     * <p>
+     * Stored in a side table because {@code check_ins} is already at MySQL's row-size limit.
+     */
+    @jakarta.persistence.OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "id", referencedColumnName = "check_in_id", insertable = false, updatable = false)
+    private CheckInInventoryConfirmation inventoryConfirmation;
 
     @Column(length = 160)
     private String lockReference;

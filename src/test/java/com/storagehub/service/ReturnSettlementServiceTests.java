@@ -165,6 +165,25 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void onsiteInventoryReturnKeepsCustomerOwnerAndRecordsActualStaffRequester() {
+        rental.setStatus(RentalStatus.setup); rental.setInventoryPending(true);
+        var request = new CustomerCreateReturnRequest(LocalDate.now(BusinessTime.ZONE).plusDays(1), "Khách chọn trả kho tại cơ sở", com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
+            ReturnCase rc = invocation.getArgument(0); ReflectionTestUtils.setField(rc, "id", UUID.randomUUID()); return rc;
+        });
+        service.createInventoryReturnAtSite(staffActor, rental.getId(), request);
+        var captured = org.mockito.ArgumentCaptor.forClass(ReturnCase.class);
+        verify(returnCaseRepository).save(captured.capture());
+        assertThat(captured.getValue().getCustomer()).isEqualTo(customer);
+        assertThat(captured.getValue().getRequestedBy()).isEqualTo(staff);
+        assertThat(captured.getValue().getReturnType()).isEqualTo(com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        verify(facilityScopeService).assertCanOperate(staffActor, facility.getId());
+    }
+
+    @Test
     void createCustomerReturnRequest_success() {
         CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
             LocalDate.now().plusDays(5),
@@ -245,6 +264,7 @@ class ReturnSettlementServiceTests {
         LocalDate receiptDate = LocalDate.now(BusinessTime.ZONE).minusDays(1);
         rental.setSetupStartedAt(receiptDate.atTime(10, 0).atZone(BusinessTime.ZONE).toInstant());
         rental.setSetupEndsAt(Instant.now().plus(24, java.time.temporal.ChronoUnit.HOURS));
+        rental.setSetupCompletionDeadlineAt(Instant.now().plus(72, java.time.temporal.ChronoUnit.HOURS));
         rental.setMoveInCompletedAt(rental.getSetupStartedAt().plus(1, java.time.temporal.ChronoUnit.HOURS));
         returnCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
         returnCase.setScheduledDate(LocalDate.now(BusinessTime.ZONE));
@@ -289,8 +309,14 @@ class ReturnSettlementServiceTests {
         assertThat(response.earlyTerminationFee()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(response.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("133333");
         assertThat(response.earlyTerminationPolicy().rentalRefundAmount()).isEqualByComparingTo("5866667");
-        assertThat(response.totalDeductions()).isEqualByComparingTo(collect ? "9000000" : "0");
-        assertThat(response.netRefundAmount()).isEqualByComparingTo(collect ? "0" : "7866667");
+        // An inventory-mismatch return charges the verified usage (133,333) and refunds the
+        // rest of the prepaid rent plus the unused deposit: netRefundAmount = 7,866,667
+        // for both the refund and the extra-collection scenarios.
+        assertThat(response.totalDeductions()).isEqualByComparingTo(collect ? "9133333" : "133333");
+        // collect=false refunds the deposit plus the usage-adjusted rent; collect=true has an
+        // extra 3,000,000 already-collected rent in the fixture, so its refundable remainder is lower.
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(collect ? "5866667" : "7866667");
+        assertThat(response.amountDueFromCustomer()).isEqualByComparingTo(collect ? "7000000" : "0");
         assertThat(rental.isInventoryPending()).isFalse();
         when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
         var managerDecision = service.managerReviewInventoryMismatch(
@@ -308,7 +334,7 @@ class ReturnSettlementServiceTests {
         assertThat(accepted.status()).isEqualTo(collect ? ReturnCaseStatus.payment_due : ReturnCaseStatus.refund_pending);
         if (collect) {
             service.recordSettlement(staffActor, returnCase.getId(), new com.storagehub.api.returns.StaffReturnSettlementRequest(
-                "CASH", null, UUID.randomUUID(), true, new BigDecimal("1133333")));
+                "CASH", null, UUID.randomUUID(), true, new BigDecimal("7000000")));
         } else {
             service.staffCompleteRefund(staffActor, returnCase.getId(), new StaffCompleteRefundRequest(
                 "REFUND-MISMATCH-TEST", "Hoàn tiền theo bảng kê", UUID.randomUUID(), "BANK_TRANSFER", true, new BigDecimal("7866667")));
@@ -790,6 +816,8 @@ class ReturnSettlementServiceTests {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
+    // The non-setup branch of calculateSettlement() refunds deposit + rental credit - fees, so the
+    // 4,000,000 rental credit adds to the 2,000,000 deposit before the 100,000 fee is deducted.
     @org.junit.jupiter.params.provider.CsvSource({"0,0,1900000", "8000000,4000000,5900000"})
     void managerReviewDispute_recalculatesAndResolves(String rentalCharge, String rentalRefund, String expectedRefund) {
         ReturnCase returnCase = new ReturnCase();
@@ -826,7 +854,11 @@ class ReturnSettlementServiceTests {
         assertThat(response.totalDeductions()).isEqualByComparingTo(new BigDecimal("100000.00"));
         assertThat(response.netRefundAmount()).isEqualByComparingTo(expectedRefund);
         assertThat(response.amountDueFromCustomer()).isZero();
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        // The dispute review changed the approved amounts, so the previous customer
+        // confirmation no longer applies: the case must return to the customer before any
+        // refund is released, never jump straight to refund_pending.
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(response.customerConfirmed()).isFalse();
         assertThat(response.reviewedByName()).isEqualTo("Le Van Manager");
     }
 
@@ -887,7 +919,7 @@ class ReturnSettlementServiceTests {
         assertThat(response.activeReturnPolicy().rentalRefundAmount()).isEqualByComparingTo("8800000.00");
         assertThat(returnCase.getRentalRefundAmount()).isEqualByComparingTo("8800000.00");
         assertThat(response.netRefundAmount()).isEqualByComparingTo("14200000.00");
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
     }
 
     @Test
@@ -990,8 +1022,11 @@ class ReturnSettlementServiceTests {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({"300000,300000,6500000,0", "8000000,8000000,0,1200000"})
-    void setupRefundCreditsEightyPercentWithoutCountingPrepaymentAgain(
+    // V2 setup-exit policy retains 20% of the accepted net rental (1,200,000) and refunds 80%
+    // (4,800,000). The security deposit only absorbs the verified inspection fees: any fee excess
+    // becomes an amount due instead of silently eating into the 80% rental refund.
+    @org.junit.jupiter.params.provider.CsvSource({"300000,300000,6500000,0", "8000000,8000000,4800000,6000000"})
+    void setupRefundIncludesVerifiedRentAndOneMonthFeeWithoutCountingPrepaymentAgain(
         String damage, String deductions, String refund, String due) {
         var rc = setupReturn(ReturnCaseStatus.requested);
         rc.setRequestedAt(Instant.now().plusSeconds(7 * 86_400L));
@@ -1042,10 +1077,16 @@ class ReturnSettlementServiceTests {
         var response = service.managerReviewDispute(managerActor, rc.getId(),
             new ManagerReviewDisputeRequest("Giảm phí theo bằng chứng kiểm kê", new BigDecimal("300000"),
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, StorageUnitStatus.available));
+        // V2: the 1,200,000 retained rental (20%) already lives inside earlyTerminationCharge and
+        // rentalRefundCredit is the 80% refund, so the statement only deducts the verified fees;
+        // the refund is 4,800,000 rental credit + the 1,700,000 deposit left after the 300,000 fee.
         assertThat(response.totalDeductions()).isEqualByComparingTo("300000");
         assertThat(response.netRefundAmount()).isEqualByComparingTo("6500000");
         assertThat(response.amountDueFromCustomer()).isZero();
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        // Amounts changed during the dispute review, so the customer must confirm the new
+        // statement again instead of the refund being released straight away.
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(response.customerConfirmed()).isFalse();
     }
 
     @Test
@@ -1156,5 +1197,145 @@ class ReturnSettlementServiceTests {
         return new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.no_damage,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             "Đã kiểm tra kho trống", List.of(), true, true, true, StorageUnitStatus.available, vacated);
+    }
+
+    @Test
+    void validatesSizeSpecificReturnWindowDatesAndPreservesSnapshotOnConfigChange() {
+        var unitType = new com.storagehub.domain.model.UnitType();
+        unitType.setCode("XL");
+        unit.setUnitType(unitType);
+        rental.setInventoryPending(true);
+        LocalDate today = LocalDate.now(BusinessTime.ZONE);
+        Instant publishedAt = today.atTime(9, 0).atZone(BusinessTime.ZONE).toInstant();
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
+        assertThat(rental.getInventoryReturnWindowDays()).isEqualTo(10);
+
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
+            ReturnCase rc = invocation.getArgument(0);
+            ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
+            return rc;
+        });
+
+        // D and D+11 are rejected; D+10 succeeds for XL.
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(today, "Trước ngày hiệu lực", ReturnType.INVENTORY_MISMATCH)))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(today.plusDays(11), "Quá hạn 10 ngày", ReturnType.INVENTORY_MISMATCH)))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+
+        // Mutate unitType after publication: active rental snapshot must stay 10 days.
+        unitType.setCode("S");
+        ReturnCaseResponse created = service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(today.plusDays(10), "Đúng ngày cuối XL", ReturnType.INVENTORY_MISMATCH));
+        assertThat(created.returnWindowDays()).isEqualTo(10);
+        assertThat(created.scheduledDate()).isEqualTo(today.plusDays(10));
+    }
+
+    @Test
+    void inventoryMismatchBillingUsesActualDateWhenEarlyAndCapsAtSizeDeadlineWhenOverdue() {
+        LocalDate receiptDate = LocalDate.now(BusinessTime.ZONE).minusDays(15);
+        LocalDate noticeDate = receiptDate.plusDays(1); // D
+        Instant publishedAt = noticeDate.atTime(10, 0).atZone(BusinessTime.ZONE).toInstant();
+
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setMonthlyPrice(new BigDecimal("3000000")); // 100,000 / day
+        pricing.setNetRentalAmount(new BigDecimal("9000000"));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId())).thenReturn(Optional.of(pricing));
+        when(maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(any(), any(), any())).thenReturn(Collections.emptyList());
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // 1) Size XL (10 days), overdue & recovered on D+12 -> usage capped at D+10 (receiptDate..noticeDate+10 = 12 days = 1,200,000).
+        var xlType = new com.storagehub.domain.model.UnitType();
+        xlType.setCode("XL");
+        unit.setUnitType(xlType);
+        rental.setStatus(RentalStatus.setup);
+        rental.setInventoryPending(true);
+        rental.setSetupExitReviewRequired(true);
+        rental.setSetupStartedAt(receiptDate.atTime(9, 0).atZone(BusinessTime.ZONE).toInstant());
+        rental.setMoveInCompletedAt(rental.getSetupStartedAt().plus(1, java.time.temporal.ChronoUnit.HOURS));
+        rental.setInventoryRemovalNotifiedAt(null);
+        rental.setInventoryRemovalDeadlineAt(null);
+        rental.setInventoryReturnWindowDays(null);
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
+
+        var xlCase = setupReturn(ReturnCaseStatus.recovery_required);
+        xlCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        xlCase.setReturnWindowDays(10);
+        xlCase.setScheduledDate(noticeDate.plusDays(1));
+        var completedRecoveryTask = new MaintenanceTask();
+        completedRecoveryTask.setStatus(com.storagehub.domain.model.MaintenanceTaskStatus.completed);
+        completedRecoveryTask.setCompletedAt(publishedAt.plus(12, java.time.temporal.ChronoUnit.DAYS));
+        when(maintenanceTaskRepository.findFirstByReturnCase_IdAndRecoveryTypeOrderByCreatedAtDesc(
+            any(), eq(com.storagehub.domain.model.MaintenanceRecoveryType.RETURN_NO_SHOW)))
+            .thenReturn(Optional.of(completedRecoveryTask));
+        var witness = new User();
+        ReflectionTestUtils.setField(witness, "id", UUID.randomUUID());
+        witness.setFullName("Nhân chứng A");
+        witness.setStatus(com.storagehub.domain.model.UserStatus.ACTIVE);
+        var staffRole = new com.storagehub.domain.model.Role();
+        staffRole.setCode(com.storagehub.domain.model.RoleCode.STAFF);
+        witness.setRoles(java.util.Set.of(staffRole));
+        when(userRepository.findById(witness.getId())).thenReturn(Optional.of(witness));
+        var witnessScope = new com.storagehub.domain.model.UserFacilityScope();
+        witnessScope.setScopeLevel(com.storagehub.domain.model.FacilityScopeLevel.OPERATE);
+        when(userFacilityScopeRepository.findByUser_IdAndFacility_Id(witness.getId(), facility.getId()))
+            .thenReturn(Optional.of(witnessScope));
+        var recoveryInspection = new ReturnInspectionRequest(
+            InventoryMatch.excess, DamageClassification.no_damage,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            "Thu hồi hàng quá hạn", List.of("evidence-1"), true, true, true, StorageUnitStatus.available, true,
+            "Khu vực lưu tạm A", false, witness.getId(), null, null
+        );
+        when(returnCaseRepository.findById(xlCase.getId())).thenReturn(Optional.of(xlCase));
+        when(returnFinance.capture(xlCase)).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+                new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+
+        ReturnCaseResponse xlResponse = service.performInspection(staffActor, xlCase.getId(), recoveryInspection);
+        // receiptDate to noticeDate+10 inclusive = 12 calendar days * 100,000 = 1,200,000 (not 900,000 for 7d, not 1,400,000 for 12d).
+        assertThat(xlResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("1200000");
+
+        // 2) Size S (3 days), overdue & recovered on D+5 -> usage capped at D+3 (receiptDate..noticeDate+3 = 5 days = 500,000).
+        var smallType = new com.storagehub.domain.model.UnitType();
+        smallType.setCode("S");
+        unit.setUnitType(smallType);
+        rental.setInventoryPending(true);
+        rental.setInventoryRemovalNotifiedAt(null);
+        rental.setInventoryRemovalDeadlineAt(null);
+        rental.setInventoryReturnWindowDays(null);
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
+
+        var smallOverdueCase = setupReturn(ReturnCaseStatus.recovery_required);
+        smallOverdueCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        smallOverdueCase.setReturnWindowDays(3);
+        smallOverdueCase.setScheduledDate(noticeDate.plusDays(1));
+        when(returnCaseRepository.findById(smallOverdueCase.getId())).thenReturn(Optional.of(smallOverdueCase));
+        when(returnFinance.capture(smallOverdueCase)).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+                new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+
+        ReturnCaseResponse smallOverdueResponse = service.performInspection(staffActor, smallOverdueCase.getId(), recoveryInspection);
+        assertThat(smallOverdueResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("500000");
+
+        // 3) Size S (3 days), returned early on day 1 (D+1) -> usage ends on D+1 (3 days inclusive = 300,000, not 500,000).
+        Instant day1Vacate = noticeDate.plusDays(1).atTime(14, 0).atZone(BusinessTime.ZONE).toInstant();
+        var smallEarlyCase = setupReturn(ReturnCaseStatus.scheduled);
+        smallEarlyCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        smallEarlyCase.setReturnWindowDays(3);
+        smallEarlyCase.setScheduledDate(noticeDate.plusDays(1));
+        when(returnCaseRepository.findById(smallEarlyCase.getId())).thenReturn(Optional.of(smallEarlyCase));
+        when(returnFinance.capture(smallEarlyCase)).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+                new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+        try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(day1Vacate);
+            ReturnCaseResponse smallEarlyResponse = service.performInspection(staffActor, smallEarlyCase.getId(), setupInspection(true));
+            assertThat(smallEarlyResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("300000");
+        }
     }
 }

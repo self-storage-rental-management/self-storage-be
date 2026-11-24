@@ -157,7 +157,7 @@ public class RenewalStatusProjection {
         String status=RenewalTransactionStatus.resolve(p,reconciled,refunded,now);
         return new RenewalStatusSummary.Transaction(p.getId(),p.getGatewayIntentId(),p.getPurpose().name(),status,p.getAmount(),refunded,
             p.getCurrency(),p.getPaymentDeadline(),p.getPaymentDeadline()!=null&&!now.isBefore(p.getPaymentDeadline()),
-            reconciled&&Set.of("SUCCEEDED","PARTIALLY_REFUNDED","REFUNDED").contains(status),p.getPaidAt());
+            reconciled&&Set.of("SUCCEEDED","PARTIALLY_REFUNDED","REFUNDED").contains(status),p.getPaidAt(),p.getReceiptCode());
     }
     static String workflow(Renewal n,RenewalOperationState state,RenewalWorkflow workflow,List<RenewalStatusSummary.Transaction> transactions,Instant now) {
         if(n.getStatus()==RenewalStatus.completed)return "COMPLETED";

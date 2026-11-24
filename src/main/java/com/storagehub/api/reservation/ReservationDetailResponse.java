@@ -10,6 +10,10 @@ import com.storagehub.domain.model.InventoryResolutionStatus;
 
 public class ReservationDetailResponse {
 
+    private com.storagehub.api.checkin.InventoryDecisionResponse inventoryDecision;
+    public com.storagehub.api.checkin.InventoryDecisionResponse getInventoryDecision() { return inventoryDecision; }
+    public void setInventoryDecision(com.storagehub.api.checkin.InventoryDecisionResponse value) { inventoryDecision = value; }
+
     private ReservationResponse reservation;
     private CurrentFacility currentFacility;
     private CurrentUnitType currentUnitType;
@@ -45,6 +49,11 @@ public class ReservationDetailResponse {
     private Instant inventoryRemainderDeadlineAt;
     private Instant inventoryRemovalPublishedAt;
     private Instant inventoryRemovalDeadlineAt;
+    private Integer inventoryReturnWindowDays;
+    private Integer inventoryReturnExtensionDays;
+    private Integer inventoryReturnExtensionCount;
+    private boolean inventoryReturnCanExtend;
+    private String inventoryReturnPolicyVersion;
     private Instant inventoryEscalatedAt;
     private Instant setupCompletedAt;
     private Instant inventoryAppointmentAt;
@@ -61,6 +70,9 @@ public class ReservationDetailResponse {
     private String inventoryActualJson;
     private String inventoryMismatchJson;
     private String inventorySuggestedQuantitiesJson;
+    private long inventoryResultVersion;
+    private String inventoryAtSiteConfirmedByName;
+    private java.time.Instant inventoryDecisionAt;
 
     public record CurrentFacility(String name, String address, String city, String phone, String accessHours) {}
     public record CurrentUnitType(String name, BigDecimal lengthM, BigDecimal widthM, BigDecimal heightM,
@@ -134,6 +146,16 @@ public class ReservationDetailResponse {
     public void setInventoryFinalDeadlineAt(Instant value) { inventoryFinalDeadlineAt = value; }
     public Instant getInventoryRemovalDeadlineAt() { return inventoryRemovalDeadlineAt; }
     public void setInventoryRemovalDeadlineAt(Instant value) { inventoryRemovalDeadlineAt = value; }
+    public Integer getInventoryReturnWindowDays() { return inventoryReturnWindowDays; }
+    public void setInventoryReturnWindowDays(Integer value) { inventoryReturnWindowDays = value; }
+    public Integer getInventoryReturnExtensionDays() { return inventoryReturnExtensionDays; }
+    public void setInventoryReturnExtensionDays(Integer value) { inventoryReturnExtensionDays = value; }
+    public Integer getInventoryReturnExtensionCount() { return inventoryReturnExtensionCount; }
+    public void setInventoryReturnExtensionCount(Integer value) { inventoryReturnExtensionCount = value; }
+    public boolean isInventoryReturnCanExtend() { return inventoryReturnCanExtend; }
+    public void setInventoryReturnCanExtend(boolean value) { inventoryReturnCanExtend = value; }
+    public String getInventoryReturnPolicyVersion() { return inventoryReturnPolicyVersion; }
+    public void setInventoryReturnPolicyVersion(String value) { inventoryReturnPolicyVersion = value; }
     public Instant getInventoryResultPublishedAt() { return inventoryResultPublishedAt; }
     public void setInventoryResultPublishedAt(Instant value) { inventoryResultPublishedAt = value; }
     public Instant getInventoryRemainderDeadlineAt() { return inventoryRemainderDeadlineAt; }
@@ -166,4 +188,10 @@ public class ReservationDetailResponse {
     public void setInventoryMismatchJson(String value) { inventoryMismatchJson = value; }
     public String getInventorySuggestedQuantitiesJson() { return inventorySuggestedQuantitiesJson; }
     public void setInventorySuggestedQuantitiesJson(String value) { inventorySuggestedQuantitiesJson = value; }
+    public long getInventoryResultVersion() { return inventoryResultVersion; }
+    public void setInventoryResultVersion(long value) { inventoryResultVersion = value; }
+    public String getInventoryAtSiteConfirmedByName() { return inventoryAtSiteConfirmedByName; }
+    public void setInventoryAtSiteConfirmedByName(String value) { inventoryAtSiteConfirmedByName = value; }
+    public java.time.Instant getInventoryDecisionAt() { return inventoryDecisionAt; }
+    public void setInventoryDecisionAt(java.time.Instant value) { inventoryDecisionAt = value; }
 }

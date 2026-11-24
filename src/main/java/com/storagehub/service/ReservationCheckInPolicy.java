@@ -14,7 +14,7 @@ final class ReservationCheckInPolicy {
     static final long MANAGER_ASSIGNMENT_HOURS = 6;
     static final long CHECK_IN_WINDOW_DAYS = 7;
     static final long CUSTOMER_RECEIPT_REMINDER_HOURS = 2;
-    static final long CUSTOMER_RECEIPT_RELEASE_AFTER_DAYS = 3;
+    static final long CUSTOMER_RECEIPT_RELEASE_AFTER_DAYS = 1;
     static final long CUSTOMER_RECEIPT_CONFIRMATION_HOURS = 24 * CUSTOMER_RECEIPT_RELEASE_AFTER_DAYS;
 
     private ReservationCheckInPolicy() {

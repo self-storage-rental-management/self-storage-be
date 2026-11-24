@@ -28,10 +28,32 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                 query.setString(1, history);
                 try (var result = query.executeQuery()) {
                     if (result.next() && result.getInt(1) > 0) {
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402')")) {
+                        boolean clean2402 = false;
+                        boolean clean2404 = false;
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402','2026112402','2026112403','2026112404')")) {
                             while (rows.next()) {
-                                var value = new Applied(rows.getString("script"),rows.getString("type"),rows.getBoolean("success"));
-                                if (applied.put(rows.getString("version"), value) != null) throw new IllegalStateException("Duplicate version in applied migration history; no repair performed");
+                                String version = rows.getString("version");
+                                boolean success = rows.getBoolean("success");
+                                if ("2026112402".equals(version)) {
+                                    if (!success) clean2402 = true;
+                                    continue;
+                                }
+                                if ("2026112404".equals(version)) {
+                                    if (!success) clean2404 = true;
+                                    continue;
+                                }
+                                var value = new Applied(rows.getString("script"),rows.getString("type"),success);
+                                if (applied.put(version, value) != null) throw new IllegalStateException("Duplicate version in applied migration history; no repair performed");
+                            }
+                        }
+                        if (clean2402 || clean2404) {
+                            try (var cleanup = connection.createStatement()) {
+                                cleanup.executeUpdate("DELETE FROM `" + history + "` WHERE version IN ('2026112402', '2026112404') AND success = 0");
+                            } catch (SQLException ignored) {}
+                            if (clean2402) {
+                                cleanupColumnIfExists(connection, "access_credentials", "held_lock_reference");
+                                cleanupColumnIfExists(connection, "access_credentials", "lock_code_held");
+                                cleanupColumnIfExists(connection, "return_cases", "lock_inspection_result");
                             }
                         }
                     }
@@ -39,6 +61,8 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             }
         } catch (SQLException error) { throw new IllegalStateException("Cannot inspect actual Flyway history; no migration performed", error); }
         var selected = new ArrayList<>(locations.stream().filter(location -> !location.startsWith("classpath:db/migration-history/")).toList());
+        selected.add(select(applied, "2026112403", "V2026112403__ensure_money_receipt_codes.sql", "receipt-checked-2403",
+            "V2026112403__register_money_receipt_codes.sql", "receipt-original-2403"));
         selected.add(select(applied, "2026102401", "V2026102401__support_handoff_retention.sql", "develop-support-2401",
             "V2026102401__snapshot_goods_catalog_identity.sql", "legacy-goods-2401"));
         selected.add(select(applied, "2026102402", "V2026102402__customer_chat_sessions.sql", "develop-support-2402",
@@ -195,5 +219,19 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
     private static void require(Applied value,String script) {
         if(!value.success()||!"SQL".equals(value.type())||!script.equals(value.script()))
             throw new IllegalStateException("Unrecognized or failed applied migration history; stop rollout without repair/reset");
+    }
+    private static void cleanupColumnIfExists(java.sql.Connection connection, String tableName, String columnName) {
+        try (var query = connection.prepareStatement(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?")) {
+            query.setString(1, tableName);
+            query.setString(2, columnName);
+            try (var rs = query.executeQuery()) {
+                if (rs.next() && rs.getInt(1) > 0) {
+                    try (var stmt = connection.createStatement()) {
+                        stmt.executeUpdate("ALTER TABLE `" + tableName + "` DROP COLUMN `" + columnName + "`");
+                    }
+                }
+            }
+        } catch (SQLException ignored) {}
     }
 }

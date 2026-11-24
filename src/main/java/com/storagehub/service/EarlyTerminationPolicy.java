@@ -70,8 +70,8 @@ public final class EarlyTerminationPolicy {
         boolean waiveEarlyTerminationFee
     ) {
         BigDecimal total = money(totalAfterDiscount);
-        // A return during setup keeps 20% of the rental amount and refunds 80%.
-        // The security deposit is settled separately after inspection.
+        // A return during setup keeps 20% of the rental amount and refunds 80%. This is the
+        // accepted policy version stored on the case; the security deposit settles separately.
         BigDecimal totalCharge = SetupEarlyExitPolicy.retainedRental(total)
             .min(total)
             .setScale(2, RoundingMode.HALF_UP);
@@ -109,8 +109,8 @@ public final class EarlyTerminationPolicy {
     }
 
     /**
-     * Inventory-mismatch returns use calendar dates agreed in the return request.
-     * Both the receipt date and the scheduled return date count as used days;
+     * Inventory-mismatch returns use calendar dates recorded in the workflow.
+     * Both the customer's move-in confirmation date and the return date count as used days;
      * the same calendar date therefore counts as one day.
      */
     public static int calendarUsageDays(LocalDate startDate, LocalDate endDate) {

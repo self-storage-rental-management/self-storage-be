@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -73,13 +74,37 @@ class RentalSetupLifecycleServiceTests {
     }
 
     @Test
-    void leavesExpiredInventoryRecoveryToTheDeadlineScheduler() {
+    void escalatesExpiredInventoryRecoveryOnce() {
+        // The merged lifecycle service keeps its own inventory escalation branch: once the
+        // rental's final inventory deadline has passed it creates the recovery task and
+        // stamps inventoryEscalatedAt so no other pass can escalate the case again.
+        // NOTE: IntakeDeadlineScheduler implements the same escalation, so which component
+        // wins is a race; the dedupe flag keeps it to a single task.
         when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of());
         when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
 
         service.advanceSetupRentals();
 
-        assertThat(rental.getInventoryEscalatedAt()).isNull();
+        assertThat(rental.getInventoryEscalatedAt()).isNotNull();
+        var task = org.mockito.ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(maintenanceTaskRepository).saveAndFlush(task.capture());
+        assertThat(task.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.INVENTORY_OVERDUE);
+        assertThat(task.getValue().getPriority()).isEqualTo(com.storagehub.domain.model.TaskPriority.high);
+        assertThat(task.getValue().getDeadlineAt()).isAfter(Instant.now());
+
+        service.advanceSetupRentals();
+
+        verify(maintenanceTaskRepository, times(1)).saveAndFlush(any());
+    }
+
+    @Test
+    void leavesAnAlreadyEscalatedCaseToTheDeadlineScheduler() {
+        rental.setInventoryEscalatedAt(Instant.now().minusSeconds(30));
+        when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of());
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
+
+        service.advanceSetupRentals();
+
         verify(maintenanceTaskRepository, never()).saveAndFlush(any());
     }
 
@@ -142,5 +167,67 @@ class RentalSetupLifecycleServiceTests {
 
         assertThat(rental.getInventoryEscalatedAt()).isNull();
         verify(maintenanceTaskRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void enforcesSizeSpecificRecoveryMilestonesForSmallAndExtraLargeUnits() {
+        var zone = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
+        Instant noticeDay = LocalDate.of(2026, 11, 20).atTime(14, 0).atZone(zone).toInstant();
+
+        // Size S (3 days): effective 21/11..23/11, recovery starts at 24/11 00:00.
+        com.storagehub.domain.model.UnitType smallType = new com.storagehub.domain.model.UnitType();
+        smallType.setCode("S");
+        rental.getStorageUnit().setUnitType(smallType);
+        rental.setInventoryFinalDeadlineAt(noticeDay.plus(1, ChronoUnit.DAYS));
+        rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(noticeDay, 3));
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
+
+        Instant day3End = LocalDate.of(2026, 11, 23).atTime(23, 59, 59).atZone(zone).toInstant();
+        Instant day4Start = LocalDate.of(2026, 11, 24).atTime(0, 0).atZone(zone).toInstant();
+        try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(day3End);
+            service.advanceSetupRentals();
+            assertThat(rental.getInventoryEscalatedAt()).isNull();
+            verify(maintenanceTaskRepository, never()).saveAndFlush(any());
+
+            clock.when(Instant::now).thenReturn(day4Start);
+            service.advanceSetupRentals();
+            service.advanceSetupRentals(); // idempotent on repeated cron runs
+            assertThat(rental.getInventoryEscalatedAt()).isEqualTo(day4Start);
+            verify(maintenanceTaskRepository, times(1)).saveAndFlush(any());
+        }
+
+        // Size XL (10 days): NOT escalated on day 8 (legacy 7-day mark), escalated on day 11.
+        Rental xlRental = new Rental();
+        ReflectionTestUtils.setField(xlRental, "id", UUID.randomUUID());
+        xlRental.setFacility(rental.getFacility());
+        StorageUnit xlUnit = new StorageUnit();
+        ReflectionTestUtils.setField(xlUnit, "id", UUID.randomUUID());
+        xlUnit.setCode("XL-01");
+        xlUnit.setFacility(rental.getFacility());
+        com.storagehub.domain.model.UnitType xlType = new com.storagehub.domain.model.UnitType();
+        xlType.setCode("XL");
+        xlUnit.setUnitType(xlType);
+        xlRental.setStorageUnit(xlUnit);
+        xlRental.setReservation(rental.getReservation());
+        xlRental.setCustomer(rental.getCustomer());
+        xlRental.setStatus(RentalStatus.active);
+        xlRental.setInventoryPending(true);
+        xlRental.setInventoryFinalDeadlineAt(noticeDay.plus(7, ChronoUnit.DAYS));
+        xlRental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(noticeDay, 10));
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(xlRental));
+
+        Instant day8 = LocalDate.of(2026, 11, 28).atTime(10, 0).atZone(zone).toInstant();
+        Instant day11 = LocalDate.of(2026, 12, 1).atTime(0, 0).atZone(zone).toInstant();
+        try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(day8);
+            service.advanceSetupRentals();
+            assertThat(xlRental.getInventoryEscalatedAt()).isNull();
+
+            clock.when(Instant::now).thenReturn(day11);
+            service.advanceSetupRentals();
+            assertThat(xlRental.getInventoryEscalatedAt()).isEqualTo(day11);
+            verify(maintenanceTaskRepository, times(2)).saveAndFlush(any());
+        }
     }
 }

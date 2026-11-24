@@ -476,7 +476,7 @@ public class CentralizedBusinessPolicyService {
 
     private void addDiff(List<PolicyDiffItem> diffs, String category, String key, String label, String oldVal, String newVal) {
         boolean changed = !Objects.equals(oldVal, newVal);
-        diffs.add(new PolicyDiffItem(category, key, label, oldVal != null ? oldVal : "—", newVal != null ? newVal : "—", changed));
+        diffs.add(new PolicyDiffItem(category, key, label, oldVal != null ? oldVal : "-", newVal != null ? newVal : "-", changed));
     }
 
     private String formatVndProse(BigDecimal amount) {
