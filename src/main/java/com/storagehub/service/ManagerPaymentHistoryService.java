@@ -34,6 +34,8 @@ public class ManagerPaymentHistoryService {
     private PaymentProvenance paymentProvenance;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.renewal.RenewalTransactionReader> renewalTransactions;
+    @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
 
     @Transactional(readOnly = true)
     public PageResponse<ManagerPaymentHistoryResponse> list(
@@ -52,8 +54,11 @@ public class ManagerPaymentHistoryService {
             : "%" + query.search().toLowerCase(Locale.ROOT) + "%";
         PageRequest fetch = PageRequest.of(0, fetchSize);
         Page<Payment> payments = paymentRepository.searchFacilityPaymentHistory(query.facilityId(), pattern, fetch);
+        var receiptIds = new ArrayList<java.util.UUID>();
+        if (pattern != null && receiptCodes != null) receiptIds.addAll(receiptCodes.findSourcesMatching("RETURN", pattern));
+        if (receiptIds.isEmpty()) receiptIds.add(new java.util.UUID(0, 0));
         Page<ReturnCase> settlements = returnCaseRepository.searchFacilityPaymentSettlements(
-            query.facilityId(), pattern, fetch
+            query.facilityId(), pattern, receiptIds, fetch
         );
 
         List<ManagerPaymentHistoryResponse> all = new ArrayList<>(
@@ -82,7 +87,7 @@ public class ManagerPaymentHistoryService {
             ? payment.getReservation().getCustomer().getFullName()
             : payment.getRenewal().getRental().getCustomer().getFullName();
         String reference = firstNonBlank(
-            payment.getGatewayTransactionNo(), payment.getGatewayIntentId(), payment.getId().toString()
+            payment.getGatewayIntentId(), payment.getGatewayTransactionNo(), payment.getId().toString()
         );
         String method = "MANUAL".equalsIgnoreCase(payment.getGatewayProvider())
             ? payment.getGatewayBankCode()
@@ -103,7 +108,7 @@ public class ManagerPaymentHistoryService {
             paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null,
             payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
             transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable(),
-            reservationCode, payment.getGatewayTransactionNo()
+            reservationCode, payment.getGatewayTransactionNo(), payment.getReceiptCode()
         );
     }
 
@@ -126,7 +131,8 @@ public class ManagerPaymentHistoryService {
             null,
             returnCase.getSettlementPaidAt(),
             null, null, null, null, null, null, null,
-            reservationCode, returnCase.getSettlementPaymentId()
+            reservationCode, returnCase.getSettlementPaymentId(),
+            receiptCodes == null ? null : receiptCodes.find("RETURN", returnCase.getId())
         );
     }
 

@@ -23,6 +23,13 @@ public class MoneyReceiptCodes {
         return codes.isEmpty() ? null : codes.get(0);
     }
 
+    public java.util.List<UUID> findSourcesMatching(String source, String pattern) {
+        return jdbc.queryForList("""
+            SELECT BIN_TO_UUID(source_id) FROM money_receipt_codes
+            WHERE source_type = ? AND LOWER(receipt_code) LIKE ?
+            """, String.class, source, pattern).stream().map(UUID::fromString).toList();
+    }
+
     @Transactional(propagation = Propagation.MANDATORY)
     public String issue(String source, UUID id, boolean refund) {
         for (int attempt = 0; attempt < 8; attempt++) {
