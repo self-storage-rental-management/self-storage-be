@@ -693,7 +693,8 @@ public class CheckInHandoverService {
             reservation.getCustomer().getId(), NotificationType.CHECKIN,
             "Đã bàn giao kho, chờ bạn xác nhận",
             "Gian kho " + reservation.getAssignedUnit().getCode()
-                + " đã được bàn giao. Vui lòng xác nhận đã nhận kho trên tài khoản khách hàng để bắt đầu thời gian chuẩn bị.",
+                + " đã được bàn giao. Mã ổ khóa đã bàn giao: " + lockReference
+                + ". Vui lòng kiểm tra mã và xác nhận đã nhận kho trên tài khoản khách hàng để bắt đầu thời gian chuẩn bị.",
             reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
