@@ -3,6 +3,7 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -73,13 +74,37 @@ class RentalSetupLifecycleServiceTests {
     }
 
     @Test
-    void leavesExpiredInventoryRecoveryToTheDeadlineScheduler() {
+    void escalatesExpiredInventoryRecoveryOnce() {
+        // The merged lifecycle service keeps its own inventory escalation branch: once the
+        // rental's final inventory deadline has passed it creates the recovery task and
+        // stamps inventoryEscalatedAt so no other pass can escalate the case again.
+        // NOTE: IntakeDeadlineScheduler implements the same escalation, so which component
+        // wins is a race; the dedupe flag keeps it to a single task.
         when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of());
         when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
 
         service.advanceSetupRentals();
 
-        assertThat(rental.getInventoryEscalatedAt()).isNull();
+        assertThat(rental.getInventoryEscalatedAt()).isNotNull();
+        var task = org.mockito.ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(maintenanceTaskRepository).saveAndFlush(task.capture());
+        assertThat(task.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.INVENTORY_OVERDUE);
+        assertThat(task.getValue().getPriority()).isEqualTo(com.storagehub.domain.model.TaskPriority.high);
+        assertThat(task.getValue().getDeadlineAt()).isAfter(Instant.now());
+
+        service.advanceSetupRentals();
+
+        verify(maintenanceTaskRepository, times(1)).saveAndFlush(any());
+    }
+
+    @Test
+    void leavesAnAlreadyEscalatedCaseToTheDeadlineScheduler() {
+        rental.setInventoryEscalatedAt(Instant.now().minusSeconds(30));
+        when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of());
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
+
+        service.advanceSetupRentals();
+
         verify(maintenanceTaskRepository, never()).saveAndFlush(any());
     }
 
