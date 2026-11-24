@@ -1198,4 +1198,144 @@ class ReturnSettlementServiceTests {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             "Đã kiểm tra kho trống", List.of(), true, true, true, StorageUnitStatus.available, vacated);
     }
+
+    @Test
+    void validatesSizeSpecificReturnWindowDatesAndPreservesSnapshotOnConfigChange() {
+        var unitType = new com.storagehub.domain.model.UnitType();
+        unitType.setCode("XL");
+        unit.setUnitType(unitType);
+        rental.setInventoryPending(true);
+        LocalDate today = LocalDate.now(BusinessTime.ZONE);
+        Instant publishedAt = today.atTime(9, 0).atZone(BusinessTime.ZONE).toInstant();
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
+        assertThat(rental.getInventoryReturnWindowDays()).isEqualTo(10);
+
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
+            ReturnCase rc = invocation.getArgument(0);
+            ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
+            return rc;
+        });
+
+        // D and D+11 are rejected; D+10 succeeds for XL.
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(today, "Trước ngày hiệu lực", ReturnType.INVENTORY_MISMATCH)))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(today.plusDays(11), "Quá hạn 10 ngày", ReturnType.INVENTORY_MISMATCH)))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+
+        // Mutate unitType after publication: active rental snapshot must stay 10 days.
+        unitType.setCode("S");
+        ReturnCaseResponse created = service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(today.plusDays(10), "Đúng ngày cuối XL", ReturnType.INVENTORY_MISMATCH));
+        assertThat(created.returnWindowDays()).isEqualTo(10);
+        assertThat(created.scheduledDate()).isEqualTo(today.plusDays(10));
+    }
+
+    @Test
+    void inventoryMismatchBillingUsesActualDateWhenEarlyAndCapsAtSizeDeadlineWhenOverdue() {
+        LocalDate receiptDate = LocalDate.now(BusinessTime.ZONE).minusDays(15);
+        LocalDate noticeDate = receiptDate.plusDays(1); // D
+        Instant publishedAt = noticeDate.atTime(10, 0).atZone(BusinessTime.ZONE).toInstant();
+
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setMonthlyPrice(new BigDecimal("3000000")); // 100,000 / day
+        pricing.setNetRentalAmount(new BigDecimal("9000000"));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId())).thenReturn(Optional.of(pricing));
+        when(maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(any(), any(), any())).thenReturn(Collections.emptyList());
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // 1) Size XL (10 days), overdue & recovered on D+12 -> usage capped at D+10 (receiptDate..noticeDate+10 = 12 days = 1,200,000).
+        var xlType = new com.storagehub.domain.model.UnitType();
+        xlType.setCode("XL");
+        unit.setUnitType(xlType);
+        rental.setStatus(RentalStatus.setup);
+        rental.setInventoryPending(true);
+        rental.setSetupExitReviewRequired(true);
+        rental.setSetupStartedAt(receiptDate.atTime(9, 0).atZone(BusinessTime.ZONE).toInstant());
+        rental.setMoveInCompletedAt(rental.getSetupStartedAt().plus(1, java.time.temporal.ChronoUnit.HOURS));
+        rental.setInventoryRemovalNotifiedAt(null);
+        rental.setInventoryRemovalDeadlineAt(null);
+        rental.setInventoryReturnWindowDays(null);
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
+
+        var xlCase = setupReturn(ReturnCaseStatus.recovery_required);
+        xlCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        xlCase.setReturnWindowDays(10);
+        xlCase.setScheduledDate(noticeDate.plusDays(1));
+        var completedRecoveryTask = new MaintenanceTask();
+        completedRecoveryTask.setStatus(com.storagehub.domain.model.MaintenanceTaskStatus.completed);
+        completedRecoveryTask.setCompletedAt(publishedAt.plus(12, java.time.temporal.ChronoUnit.DAYS));
+        when(maintenanceTaskRepository.findFirstByReturnCase_IdAndRecoveryTypeOrderByCreatedAtDesc(
+            any(), eq(com.storagehub.domain.model.MaintenanceRecoveryType.RETURN_NO_SHOW)))
+            .thenReturn(Optional.of(completedRecoveryTask));
+        var witness = new User();
+        ReflectionTestUtils.setField(witness, "id", UUID.randomUUID());
+        witness.setFullName("Nhân chứng A");
+        witness.setStatus(com.storagehub.domain.model.UserStatus.ACTIVE);
+        var staffRole = new com.storagehub.domain.model.Role();
+        staffRole.setCode(com.storagehub.domain.model.RoleCode.STAFF);
+        witness.setRoles(java.util.Set.of(staffRole));
+        when(userRepository.findById(witness.getId())).thenReturn(Optional.of(witness));
+        var witnessScope = new com.storagehub.domain.model.UserFacilityScope();
+        witnessScope.setScopeLevel(com.storagehub.domain.model.FacilityScopeLevel.OPERATE);
+        when(userFacilityScopeRepository.findByUser_IdAndFacility_Id(witness.getId(), facility.getId()))
+            .thenReturn(Optional.of(witnessScope));
+        var recoveryInspection = new ReturnInspectionRequest(
+            InventoryMatch.excess, DamageClassification.no_damage,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            "Thu hồi hàng quá hạn", List.of("evidence-1"), true, true, true, StorageUnitStatus.available, true,
+            "Khu vực lưu tạm A", false, witness.getId(), null, null
+        );
+        when(returnCaseRepository.findById(xlCase.getId())).thenReturn(Optional.of(xlCase));
+        when(returnFinance.capture(xlCase)).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+                new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+
+        ReturnCaseResponse xlResponse = service.performInspection(staffActor, xlCase.getId(), recoveryInspection);
+        // receiptDate to noticeDate+10 inclusive = 12 calendar days * 100,000 = 1,200,000 (not 900,000 for 7d, not 1,400,000 for 12d).
+        assertThat(xlResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("1200000");
+
+        // 2) Size S (3 days), overdue & recovered on D+5 -> usage capped at D+3 (receiptDate..noticeDate+3 = 5 days = 500,000).
+        var smallType = new com.storagehub.domain.model.UnitType();
+        smallType.setCode("S");
+        unit.setUnitType(smallType);
+        rental.setInventoryPending(true);
+        rental.setInventoryRemovalNotifiedAt(null);
+        rental.setInventoryRemovalDeadlineAt(null);
+        rental.setInventoryReturnWindowDays(null);
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
+
+        var smallOverdueCase = setupReturn(ReturnCaseStatus.recovery_required);
+        smallOverdueCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        smallOverdueCase.setReturnWindowDays(3);
+        smallOverdueCase.setScheduledDate(noticeDate.plusDays(1));
+        when(returnCaseRepository.findById(smallOverdueCase.getId())).thenReturn(Optional.of(smallOverdueCase));
+        when(returnFinance.capture(smallOverdueCase)).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+                new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+
+        ReturnCaseResponse smallOverdueResponse = service.performInspection(staffActor, smallOverdueCase.getId(), recoveryInspection);
+        assertThat(smallOverdueResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("500000");
+
+        // 3) Size S (3 days), returned early on day 1 (D+1) -> usage ends on D+1 (3 days inclusive = 300,000, not 500,000).
+        Instant day1Vacate = noticeDate.plusDays(1).atTime(14, 0).atZone(BusinessTime.ZONE).toInstant();
+        var smallEarlyCase = setupReturn(ReturnCaseStatus.scheduled);
+        smallEarlyCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        smallEarlyCase.setReturnWindowDays(3);
+        smallEarlyCase.setScheduledDate(noticeDate.plusDays(1));
+        when(returnCaseRepository.findById(smallEarlyCase.getId())).thenReturn(Optional.of(smallEarlyCase));
+        when(returnFinance.capture(smallEarlyCase)).thenReturn(
+            new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+                new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+        try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(day1Vacate);
+            ReturnCaseResponse smallEarlyResponse = service.performInspection(staffActor, smallEarlyCase.getId(), setupInspection(true));
+            assertThat(smallEarlyResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("300000");
+        }
+    }
 }

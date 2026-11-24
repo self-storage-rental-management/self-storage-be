@@ -88,6 +88,18 @@ public class Rental extends BaseEntity {
     @Column
     private Instant inventoryRemovalDeadlineAt;
 
+    @Column
+    private Integer inventoryReturnWindowDays;
+
+    @Column
+    private Integer inventoryReturnExtensionDays;
+
+    @Column(nullable = false)
+    private int inventoryReturnExtensionCount = 0;
+
+    @Column(length = 64)
+    private String inventoryReturnPolicyVersion;
+
     @Column private Instant setupCompletionDeadlineAt;
     @Column private Integer setupExtensionDays;
     @Column private Integer setupExtensionCount;

@@ -110,7 +110,7 @@ class CheckInHandoverServiceTests {
             checkInRepository, fileAssetRepository, rentalRepository, paymentRepository,
             maintenanceTaskRepository,
             goodsItemRepository, pricingSnapshotRepository, userRepository, authorizationService,
-            facilityScopeService, auditLogService, notificationService, new ObjectMapper()
+            facilityScopeService, auditLogService, notificationService, new ObjectMapper().findAndRegisterModules()
         );
         ReflectionTestUtils.setField(service,"paymentProvenance",paymentProvenance);
         ReflectionTestUtils.setField(service,"sandboxPaymentPolicy",sandboxPaymentPolicy);
@@ -132,6 +132,7 @@ class CheckInHandoverServiceTests {
         );
         facility.setName("Facility A");
         UnitType unitType = entityWithId(new UnitType());
+        unitType.setCode("L");
         unitType.setLengthM(new BigDecimal("3"));
         unitType.setWidthM(new BigDecimal("3"));
         unitType.setHeightM(new BigDecimal("3"));

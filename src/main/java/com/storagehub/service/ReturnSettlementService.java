@@ -213,6 +213,12 @@ public class ReturnSettlementService {
             returnCase.setReturnType(inventoryMismatchReturn
                 ? ReturnType.INVENTORY_MISMATCH : ReturnType.RETURN_IN_SETUP);
             returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+            if (inventoryMismatchReturn) {
+                returnCase.setReturnWindowDays(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null));
+                returnCase.setReturnExtensionDays(rental.getInventoryReturnExtensionDays());
+                returnCase.setReturnExtensionCount(rental.getInventoryReturnExtensionCount());
+                returnCase.setReturnPolicyVersion(rental.getInventoryReturnPolicyVersion());
+            }
         } else {
             classifyScheduledReturn(returnCase);
         }
@@ -324,6 +330,10 @@ public class ReturnSettlementService {
         returnCase.setSetupExitRequested(true);
         returnCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
         returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+        returnCase.setReturnWindowDays(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null));
+        returnCase.setReturnExtensionDays(rental.getInventoryReturnExtensionDays());
+        returnCase.setReturnExtensionCount(rental.getInventoryReturnExtensionCount());
+        returnCase.setReturnPolicyVersion(rental.getInventoryReturnPolicyVersion());
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
         rental.setSetupExitReviewRequired(true);
@@ -1914,7 +1924,11 @@ public class ReturnSettlementService {
             noShowTask == null || noShowTask.getRecoveryWitness() == null ? null : noShowTask.getRecoveryWitness().getFullName(),
             noShowTask == null ? null : noShowTask.getDeadlineAt(),
             rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? rc.getRental().getInventoryRemovalDeadlineAt() : null,
-            rc.getLockInspectionResult()
+            rc.getLockInspectionResult(),
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? InventoryTimelinePolicy.resolveReturnWindowDays(rc.getRental(), rc) : null,
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+                ? (rc.getReturnPolicyVersion() != null ? rc.getReturnPolicyVersion() : rc.getRental().getInventoryReturnPolicyVersion())
+                : null
         );
     }
 

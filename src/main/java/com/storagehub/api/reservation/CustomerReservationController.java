@@ -211,6 +211,16 @@ public class CustomerReservationController {
         );
     }
 
+    @PostMapping("/{reservationId}/inventory-return-extension")
+    public ApiResponse<ReservationDetailResponse> extendInventoryReturnWindow(
+        @PathVariable UUID reservationId
+    ) {
+        return new ApiResponse<>(
+            customerReservationService.extendInventoryReturnWindow(actorContext.required(), reservationId),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{reservationId}/check-in-appointment")
     public ApiResponse<ReservationResponse> setCheckInAppointment(
         @PathVariable UUID reservationId,

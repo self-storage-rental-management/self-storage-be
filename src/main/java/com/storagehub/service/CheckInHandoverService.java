@@ -709,7 +709,7 @@ public class CheckInHandoverService {
         var handoverRecord = new com.storagehub.api.checkin.HandoverRecord(
             reservation.getFacility().getName(), reservation.getFacility().getAddress(), operator.getId(),
             operator.getFullName(), now, handedOverItems.stream().filter(item -> item.quantity() > 0).toList(),
-            signedRecordReference, request.note());
+            signedRecordReference, request.note(), request.rackCount(), request.palletCount());
         try {
             checkIn.setHandoverRecordJson(objectMapper.writeValueAsString(handoverRecord));
         } catch (JsonProcessingException ex) { throw new IllegalStateException("Could not store handover record", ex); }
@@ -962,9 +962,9 @@ public class CheckInHandoverService {
         if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.CANCEL_AND_RETURN) {
             if (checkIn.isInventoryFullFit()) throw ApiExceptions.conflict("Hàng vẫn vừa kho. Trả kho theo luồng trả kho thông thường.");
             if (request.scheduledDate() == null) throw ApiExceptions.validation("Chọn ngày hẹn trả kho.", null);
-            if (rental.getInventoryRemovalPublishedAt() == null) {
-                rental.setInventoryRemovalPublishedAt(rental.getInventoryResultPublishedAt() == null ? now : rental.getInventoryResultPublishedAt());
-                rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(rental.getInventoryRemovalPublishedAt()));
+            if (rental.getInventoryRemovalDeadlineAt() == null) {
+                Instant publishedAt = rental.getInventoryResultPublishedAt() == null ? now : rental.getInventoryResultPublishedAt();
+                InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
             }
             rentalRepository.saveAndFlush(rental);
             var returns = inventoryReturnServices == null ? null : inventoryReturnServices.getIfAvailable();
@@ -1222,14 +1222,15 @@ public class CheckInHandoverService {
             String removalNotice = "";
             if (!fit.fullFit() && !fit.partialFitAvailable()
                 && rental.getInventoryRemovalPublishedAt() == null) {
-                rental.setInventoryRemovalPublishedAt(now);
+                InventoryTimelinePolicy.initializeRemovalWindow(rental, now);
                 rental.setInventoryRemovalNotifiedAt(now);
-                rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(now));
             }
             if (rental.getInventoryRemovalDeadlineAt() != null) {
-                removalNotice = " Hạn đưa hàng ra khi chọn trả kho: "
+                Integer windowDays = InventoryTimelinePolicy.resolveReturnWindowDays(rental, null);
+                removalNotice = (windowDays != null ? " Hạn trả kho theo cỡ kho là " + windowDays + " ngày (hạn cuối: " : " Hạn đưa hàng ra khi chọn trả kho: ")
                     + rental.getInventoryRemovalDeadlineAt().atZone(VIETNAM_ZONE)
-                        .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")) + ".";
+                        .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy"))
+                    + (windowDays != null ? ")." : ".");
             }
             checkIn.setPerformedBy(operator);
             checkIn.setInventoryResolutionStatus(atSite ? InventoryResolutionStatus.PENDING_STAFF_RESOLUTION : InventoryResolutionStatus.PENDING_CUSTOMER);
@@ -1923,9 +1924,25 @@ public class CheckInHandoverService {
             storageCapacity,
             inventoryDecisions == null ? null : inventoryDecisions.read(checkIn),
             readHandoverRecord(checkIn),
-            checkIn == null ? null : checkIn.getCustomerReceiptConfirmedAt(),
-            reservation.getFacility().getAddress()
+            checkIn == null ? null : (checkIn.getCustomerReceiptConfirmedAt() != null
+                ? checkIn.getCustomerReceiptConfirmedAt()
+                : checkIn.getSetupStartedAt()),
+            reservation.getFacility().getAddress(),
+            resolveInventoryReturnWindowDays(reservation, rental)
         );
+    }
+
+    private Integer resolveInventoryReturnWindowDays(Reservation reservation, Rental rental) {
+        Integer snapshot = InventoryTimelinePolicy.resolveReturnWindowDays(rental, null);
+        if (snapshot != null) return snapshot;
+        if (reservation.getUnitType() != null && reservation.getUnitType().getCode() != null) {
+            try {
+                return InventoryTimelinePolicy.returnWindowDaysForUnitType(reservation.getUnitType());
+            } catch (RuntimeException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private String atSiteConfirmerName(CheckIn checkIn) {
