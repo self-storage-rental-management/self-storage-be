@@ -1089,7 +1089,24 @@ public class CustomerReservationService {
     }
 
     private RentalStartConfirmation rentalStartOffer(Reservation reservation, Rental rental, Instant now) {
-        throw ApiExceptions.conflict("Kỳ thuê bắt đầu theo lịch sau thời gian chuẩn bị miễn phí; không hỗ trợ bắt đầu sớm.");
+        requireReceiptRentalStatus(rental);
+        if (rental.getStatus() == RentalStatus.active) {
+            throw ApiExceptions.conflict("Kỳ thuê của hồ sơ này đã bắt đầu.");
+        }
+        if (!RentalSetupLifecycleService.customerCanStartAfterInventory(rental, now)) {
+            throw ApiExceptions.conflict("Chỉ xác nhận bắt đầu sớm sau khi khách báo chuẩn bị xong và nhân viên hoàn tất kiểm kê, trong thời gian miễn phí.");
+        }
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId())
+            .filter(item -> item.getStatus() == CheckInStatus.completed)
+            .orElseThrow(() -> ApiExceptions.conflict("Chưa có biên bản kiểm kê hoàn tất."));
+        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu báo giá đã chấp nhận của hồ sơ thuê."));
+        requireReceiptTimeline(reservation, checkIn, rental, snapshot);
+        // The paid start date is never moved earlier than the date already agreed on the
+        // reservation. Confirming here only records that billing has effectively begun.
+        var start = now.atZone(BusinessTime.ZONE).toLocalDate();
+        return new RentalStartConfirmation(rental.getStartDate(), start,
+            start.plusMonths(snapshot.getRentalMonths()).minusDays(1), snapshot.getRentalMonths());
     }
 
     private void ensureSignedContract(Reservation reservation, Rental rental) {
