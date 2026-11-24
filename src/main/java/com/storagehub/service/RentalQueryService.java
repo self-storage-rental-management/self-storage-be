@@ -21,11 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class RentalQueryService {
     private final RentalRepository repository;
     private final BusinessRecordCodes codes;
-    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.storagehub.domain.repo.CheckInRepository checkIns;
-    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
-    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private InventoryDecisionService inventoryDecisions;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RentalReadSources.FinancialSource> financialSources;

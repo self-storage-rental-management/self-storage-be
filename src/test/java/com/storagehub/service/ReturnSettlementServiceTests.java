@@ -236,7 +236,7 @@ class ReturnSettlementServiceTests {
     void inventoryMismatchReturnKeepsItsWorkflowMarker() {
         rental.setStatus(RentalStatus.setup);
         CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
-            LocalDate.now(), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
+            LocalDate.now(BusinessTime.ZONE), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
         );
         when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
         when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
