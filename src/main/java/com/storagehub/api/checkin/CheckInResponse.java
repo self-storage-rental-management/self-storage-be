@@ -91,7 +91,11 @@ public record CheckInResponse(
     InventoryVisit inventoryVisit,
     Instant checkInDeadline,
     StorageCapacity storageCapacity,
-    Long inventoryResultVersion
+    Long inventoryResultVersion,
+    InventoryDecisionResponse inventoryDecision,
+    HandoverRecord handoverRecord,
+    Instant customerReceiptConfirmedAt,
+    String facilityAddress
 ) {
     public record InventoryVisit(
         Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
@@ -195,7 +199,7 @@ public record CheckInResponse(
             null, null, false, false,
             null, null, null, null, null, null, null, null, null,
             null, false, null, false,
-            null, null, null, null, null, null
+            null, null, null, null, null, null, null, null, null, null
         );
     }
 

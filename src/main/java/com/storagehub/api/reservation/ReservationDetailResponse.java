@@ -10,6 +10,10 @@ import com.storagehub.domain.model.InventoryResolutionStatus;
 
 public class ReservationDetailResponse {
 
+    private com.storagehub.api.checkin.InventoryDecisionResponse inventoryDecision;
+    public com.storagehub.api.checkin.InventoryDecisionResponse getInventoryDecision() { return inventoryDecision; }
+    public void setInventoryDecision(com.storagehub.api.checkin.InventoryDecisionResponse value) { inventoryDecision = value; }
+
     private ReservationResponse reservation;
     private CurrentFacility currentFacility;
     private CurrentUnitType currentUnitType;

@@ -8,4 +8,4 @@ import java.util.UUID;
 
 public record InventoryAtSiteRequest(@NotNull InventoryResolutionRequest.Decision decision,
     @NotNull @AssertTrue Boolean customerPresent, @Size(max = 1500) String note, LocalDate scheduledDate,
-    @NotEmpty @Size(max = 10) List<@NotNull UUID> evidenceReferences, @NotNull @PositiveOrZero Long resultVersion) {}
+    @NotEmpty @Size(min = 1, max = 1, message = "Chỉ được đính kèm 1 ảnh biên bản có chữ ký khách.") List<@NotNull UUID> evidenceReferences, @NotNull @PositiveOrZero Long resultVersion) {}
