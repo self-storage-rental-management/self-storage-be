@@ -57,8 +57,6 @@ public record ReturnInspectionRequest(
     boolean customerPresent,
 
     UUID recoveryWitnessStaffId,
-
-    /** Hạng mục hư hỏng lấy từ bảng giá chuẩn; damageFee không còn là nguồn nhập tự do. */
     List<DamageItem> damageItems
 ) {
     public record DamageItem(String code, BigDecimal quantity) {}
@@ -99,7 +97,6 @@ public record ReturnInspectionRequest(
             false, null, true, null, null);
     }
 
-    /** Backward-compatible constructor used by existing tests and recovery flows. */
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
         BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
         BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,

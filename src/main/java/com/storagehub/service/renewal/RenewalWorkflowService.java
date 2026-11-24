@@ -323,8 +323,9 @@ public class RenewalWorkflowService {
         if(notifications!=null){
             String title=switch(operation){case "submit"->"Yêu cầu gia hạn mới";case "edit"->"Yêu cầu gia hạn đã được cập nhật";case "cancel"->"Yêu cầu gia hạn đã bị hủy";default->"Hồ sơ gia hạn có cập nhật mới";};
             var rental=n.getRental();
+            String action=switch(operation){case "submit"->"đã gửi";case "edit"->"đã cập nhật";case "cancel"->"đã hủy";default->"đã cập nhật";};
             notifications.createFacilityOperationsNotifications(rental.getFacility().getId(),NotificationType.RENEWAL,title,
-                "Yêu cầu gia hạn của khách hàng "+rental.getCustomer().getFullName()+" đã được cập nhật.",n.getId());
+                "Khách hàng "+rental.getCustomer().getFullName()+" "+action+" yêu cầu gia hạn.",n.getId());
         }
         return result;
     }

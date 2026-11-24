@@ -26,8 +26,10 @@ class CreateReservationRequestValidationTests {
     }
 
     @Test
-    void rejectsBlankPhone() {
-        assertThat(phoneViolations(" ")).isPositive();
+    void acceptsBlankOrNullPhone() {
+        assertThat(phoneViolations(" ")).isZero();
+        assertThat(phoneViolations("")).isZero();
+        assertThat(phoneViolations(null)).isZero();
     }
 
     private long phoneViolations(String phone) {
