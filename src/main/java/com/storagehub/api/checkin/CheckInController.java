@@ -26,47 +26,38 @@ public class CheckInController {
     private final ActorContext actorContext;
     private final CheckInHandoverService service;
 
-    @GetMapping("/{checkInId}/inventory-alternatives")
-    public ApiResponse<java.util.List<CheckInHandoverService.InventoryAlternative>> inventoryAlternatives(@PathVariable UUID checkInId) {
-        return new ApiResponse<>(service.inventoryAlternatives(actorContext.required(), checkInId), CorrelationIdContext.current());
-    }
+    public record DraftRequest(@jakarta.validation.constraints.NotNull @Valid CompleteCheckInRequest request,
+        @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedRevision) {}
+    public record DraftRevision(@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedRevision) {}
 
     @GetMapping("/{checkInId}/inventory-draft")
-    public ApiResponse<InventoryDraftResponse> inventoryDraft(@PathVariable UUID checkInId) {
-        return new ApiResponse<>(service.getInventoryDraft(actorContext.required(), checkInId), CorrelationIdContext.current());
+    public ApiResponse<CheckInHandoverService.InventoryDraft> inventoryDraft(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.inventoryDraft(actorContext.required(), checkInId), CorrelationIdContext.current());
     }
 
     @PostMapping("/{checkInId}/inventory-draft")
-    public ApiResponse<InventoryDraftResponse> saveInventoryDraft(
-        @PathVariable UUID checkInId,
-        @Valid @RequestBody SaveInventoryDraftRequest request
-    ) {
-        return new ApiResponse<>(
-            service.saveInventoryDraft(actorContext.required(), checkInId, request),
-            CorrelationIdContext.current()
-        );
+    public ApiResponse<CheckInHandoverService.InventoryDraft> saveInventoryDraft(@PathVariable UUID checkInId,
+        @Valid @RequestBody DraftRequest body) {
+        return new ApiResponse<>(service.saveInventoryDraft(actorContext.required(), checkInId, body.request(),
+            body.expectedRevision()), CorrelationIdContext.current());
     }
 
     @PostMapping("/{checkInId}/inventory-draft/resolve")
-    public ApiResponse<CheckInResponse> prepareInventoryResolution(
-        @PathVariable UUID checkInId,
-        @Valid @RequestBody PrepareInventoryResolutionRequest request
-    ) {
-        return new ApiResponse<>(
-            service.prepareInventoryResolution(actorContext.required(), checkInId, request),
-            CorrelationIdContext.current()
-        );
+    public ApiResponse<CheckInResponse> publishInventoryDraft(@PathVariable UUID checkInId, @Valid @RequestBody DraftRevision body) {
+        return new ApiResponse<>(service.publishInventoryDraft(actorContext.required(), checkInId, body.expectedRevision()),
+            CorrelationIdContext.current());
     }
 
     @PostMapping("/{checkInId}/inventory-resolution-at-site")
-    public ApiResponse<CheckInResponse> resolveInventoryAtSite(
-        @PathVariable UUID checkInId,
-        @Valid @RequestBody ResolveInventoryAtSiteRequest request
-    ) {
-        return new ApiResponse<>(
-            service.resolveInventoryAtSite(actorContext.required(), checkInId, request),
-            CorrelationIdContext.current()
-        );
+    public ApiResponse<CheckInResponse> resolveInventoryAtSite(@PathVariable UUID checkInId,
+        @Valid @RequestBody InventoryAtSiteRequest request) {
+        return new ApiResponse<>(service.resolveInventoryAtSite(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current());
+    }
+
+    @GetMapping("/{checkInId}/inventory-alternatives")
+    public ApiResponse<java.util.List<CheckInHandoverService.InventoryAlternative>> inventoryAlternatives(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.inventoryAlternatives(actorContext.required(), checkInId), CorrelationIdContext.current());
     }
 
     @PostMapping("/{checkInId}/identity-correction")

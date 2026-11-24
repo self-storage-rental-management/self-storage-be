@@ -11,5 +11,6 @@ public enum InventoryResolutionStatus {
     ACCEPTED,
     PARTIAL_ACCEPTED,
     RETURN_REQUESTED,
+    TRANSFER_REQUESTED,
     RECOVERY_REQUIRED
 }

@@ -22,6 +22,8 @@ public class RentalQueryService {
     private final RentalRepository repository;
     private final BusinessRecordCodes codes;
     @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.CheckInRepository checkIns;
+    @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RentalReadSources.FinancialSource> financialSources;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RentalReadSources.AccessSource> accessSources;
@@ -49,7 +51,17 @@ public class RentalQueryService {
             r.getActualReturnedAt(), r.getCompletedAt(),
             financial(r), access(actor, r), s.dateSemantics(), bookingEvidence(actor,r,manager),
             r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
-            r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart());
+            r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart(), inventory(r));
+    }
+
+    private RentalDetailResponse.Inventory inventory(Rental rental) {
+        if (checkIns == null) return null;
+        return checkIns.findByReservation_Id(rental.getReservation().getId())
+            .filter(c -> c.getInventoryActualJson() != null)
+            .map(c -> new RentalDetailResponse.Inventory(c.getInventoryActualJson(), c.getInventoryMismatchJson() != null,
+                c.isInventoryFullFit(), rental.getReservation().getGoodsCondition(),
+                Objects.toString(c.getInventoryResolutionStatus(), ""), c.getInventoryAcceptedQuantitiesJson(), rental.getInventoryRemainderDeadlineAt(),
+                c.getInventoryRemainderRemovedAt())).orElse(null);
     }
 
     private RentalBookingEvidence bookingEvidence(ActorPrincipal actor,Rental rental,boolean manager) {

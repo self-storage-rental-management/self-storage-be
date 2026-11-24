@@ -103,6 +103,9 @@ public class CheckIn extends BaseEntity {
     @Column(name = "inventory_resolution_status", nullable = false, length = 32)
     private InventoryResolutionStatus inventoryResolutionStatus = InventoryResolutionStatus.NOT_STARTED;
 
+    @Column(name = "inventory_draft_json", columnDefinition = "LONGTEXT")
+    private String inventoryDraftJson;
+
     @Column(name = "inventory_actual_json", columnDefinition = "LONGTEXT")
     private String inventoryActualJson;
 

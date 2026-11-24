@@ -215,6 +215,27 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
         return page(items,q,count.getSingleResult(),correlation);
     }
 
+    public SupportTicket createInventoryTransferRequest(ActorPrincipal actor, Rental rental, String note) {
+        var reservation = rental.getReservation();
+        var ticket = new SupportTicket();
+        ticket.setCustomer(reservation.getCustomer());
+        ticket.setFacility(rental.getFacility());
+        ticket.setSubject("Thu xếp chuyển hàng · " + reservation.getReservationCode());
+        ticket.setDescription("Hàng kiểm kê không vừa gian " + rental.getStorageUnit().getCode()
+            + ". Cần liên hệ khách và thu xếp chuyển hàng." + (note == null ? "" : "\n" + note));
+        em.persist(ticket);
+        em.flush();
+        displayCodes.assign("HT", "HT:" + ticket.getId(), now());
+        var state = new SupportState(ticket, LinkType.RENTAL.name(), rental.getId(), null, now());
+        em.persist(state);
+        append(actor, ticket, state, "STAFF", Visibility.PUBLIC, ticket.getDescription(), List.of());
+        event(actor, ticket, state, "CREATED", ticket.getSubject());
+        notifySupportStaff(ticket, "Yêu cầu chuyển hàng mới", ticket.getSubject());
+        notifyManagers(ticket, "Yêu cầu chuyển hàng mới", ticket.getSubject());
+        notify(ticket.getCustomer().getId(), ticket, "Đã ghi nhận yêu cầu chuyển hàng", ticket.getSubject());
+        return ticket;
+    }
+
     public SupportResponse create(ActorPrincipal actor,Create body,String key){return create(actor,body,key,null);}
     private SupportResponse create(ActorPrincipal actor,Create body,String key,UUID parent) {
         authorize(actor,Audience.CUSTOMER,true);lockActor(actor);

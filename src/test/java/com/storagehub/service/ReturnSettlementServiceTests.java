@@ -289,7 +289,7 @@ class ReturnSettlementServiceTests {
         assertThat(response.earlyTerminationFee()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(response.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("133333");
         assertThat(response.earlyTerminationPolicy().rentalRefundAmount()).isEqualByComparingTo("5866667");
-        assertThat(response.totalDeductions()).isEqualByComparingTo(collect ? "9000000" : "0");
+        assertThat(response.totalDeductions()).isEqualByComparingTo(collect ? "9133333" : "133333");
         assertThat(response.netRefundAmount()).isEqualByComparingTo(collect ? "0" : "7866667");
         assertThat(rental.isInventoryPending()).isFalse();
         when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));

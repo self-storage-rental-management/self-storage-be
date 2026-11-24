@@ -89,6 +89,34 @@ class BusinessRecordCodesMySqlTests {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM business_record_codes",Integer.class)).isZero();
     }
 
+    @Test void receiptMigrationPreservesExistingCodesAndConcurrentIssuanceIsIdempotent() throws Exception {
+        jdbc.execute("CREATE TABLE payments(id INT PRIMARY KEY, receipt_code VARCHAR(17) NULL)");
+        jdbc.update("INSERT INTO payments VALUES (1, 'legacy')");
+        var flyway = Flyway.configure().dataSource(datasource)
+            .locations("classpath:db/migration-history/receipt-checked-2403").baselineOnMigrate(true).load();
+        flyway.migrate();
+        flyway.validate();
+        var receipts = new MoneyReceiptCodes(jdbc);
+        var source = UUID.randomUUID();
+        var start = new CyclicBarrier(2);
+        Callable<String> issue = () -> tx.execute(status -> {
+            try {
+                start.await(10, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            return receipts.issue("PAYMENT", source, false);
+        });
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(issue);
+            var second = pool.submit(issue);
+            assertThat(first.get(15, TimeUnit.SECONDS)).isEqualTo(second.get(15, TimeUnit.SECONDS));
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM money_receipt_codes", Integer.class)).isOne();
+        assertThat(receipts.find("PAYMENT", source)).startsWith("PT-");
+        assertThat(jdbc.queryForObject("SELECT receipt_code FROM payments WHERE id=1", String.class)).isEqualTo("legacy");
+    }
+
     @Test void backfillsHistoricalCodesAndContinuesTheCorrectVietnamMonth() {
         sourceTables();
         String id=UUID.randomUUID().toString();
