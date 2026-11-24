@@ -50,7 +50,7 @@ public record CompleteCheckInRequest(
         @NotNull Condition condition,
         @Size(max = 1000) String note,
         @Valid InventoryMeasurements measurements,
-        @Valid com.storagehub.api.reservation.GoodsItemRequest actualGoods,
+        @Valid @jakarta.validation.groups.ConvertGroup(to = com.storagehub.api.reservation.GoodsItemRequest.InventoryChecks.class) com.storagehub.api.reservation.GoodsItemRequest actualGoods,
         UUID actualCategoryId,
         UUID actualMaterialId
     ) {
