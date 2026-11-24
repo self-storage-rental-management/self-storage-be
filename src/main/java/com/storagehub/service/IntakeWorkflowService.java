@@ -79,9 +79,16 @@ public class IntakeWorkflowService {
                     || r.getInventoryFinalDeadlineAt() == null || command.at() == null
                     || command.at().isBefore(now) || !command.at().isBefore(r.getInventoryFinalDeadlineAt()))
                     throw ApiExceptions.conflict("Vui lòng chọn lịch kiểm kê còn trong thời hạn.");
-                before = r.getInventoryAppointmentAt();
+                CheckIn checkIn = checkIns.findByReservation_Id(reservationId).orElse(null);
+                before = r.getInventoryAppointmentAt() != null
+                    ? r.getInventoryAppointmentAt()
+                    : checkIn == null ? null : checkIn.getInventoryAppointmentAt();
                 if (Objects.equals(before, command.at())) return view(r);
                 r.setInventoryAppointmentAt(command.at());
+                if (checkIn != null) {
+                    checkIn.setInventoryAppointmentAt(command.at());
+                    checkIns.saveAndFlush(checkIn);
+                }
             }
             case "ARRIVAL" -> {
                 staff(actor, r);
@@ -155,10 +162,18 @@ public class IntakeWorkflowService {
         }
         append(r, actor, command.action(), before, command.at(), command.reason(), now);
         rentals.saveAndFlush(r);
-        notifications.createNotification(r.getCustomer().getId(), NotificationType.CHECKIN,
-            "Hồ sơ nhận kho đã cập nhật", "Lịch hẹn hoặc tiến trình xử lý đã được cập nhật. Vui lòng xem chi tiết hồ sơ.", reservationId);
+        String title = "APPOINTMENT".equals(command.action())
+            ? (before == null ? "Đã đặt lịch kiểm kê" : "Đã đổi lịch kiểm kê")
+            : "Hồ sơ nhận kho đã cập nhật";
+        String content = "APPOINTMENT".equals(command.action())
+            ? "Đơn " + r.getReservation().getReservationCode() + " có lịch kiểm kê lúc "
+                + java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+                    .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(command.at())
+                + " (giờ Việt Nam)."
+            : "Lịch hẹn hoặc tiến trình xử lý đã được cập nhật. Vui lòng xem chi tiết hồ sơ.";
+        notifications.createNotification(r.getCustomer().getId(), NotificationType.CHECKIN, title, content, reservationId);
         notifications.createFacilityOperationsNotifications(r.getFacility().getId(), NotificationType.CHECKIN,
-            "Hồ sơ nhận kho đã cập nhật", "Lịch hẹn hoặc tiến trình kiểm kê đã thay đổi. Vui lòng xem chi tiết hồ sơ.", reservationId);
+            title, content, reservationId);
         return view(r);
     }
 
@@ -193,10 +208,13 @@ public class IntakeWorkflowService {
         Map<String,Object> v = new LinkedHashMap<>();
         v.put("setupDeadlineAt", r.getSetupCompletionDeadlineAt()); v.put("setupExtensionDays", r.getSetupExtensionDays());
         v.put("setupExtensionCount", r.getSetupExtensionCount()); v.put("readyAt", r.getMoveInCompletedAt());
-        v.put("appointmentAt", r.getInventoryAppointmentAt()); v.put("arrivedAt", r.getInventoryArrivedAt());
+        var checkIn = checkIns.findByReservation_Id(r.getReservation().getId()).orElse(null);
+        Instant appointmentAt = r.getInventoryAppointmentAt() != null
+            ? r.getInventoryAppointmentAt()
+            : checkIn == null ? null : checkIn.getInventoryAppointmentAt();
+        v.put("appointmentAt", appointmentAt); v.put("arrivedAt", r.getInventoryArrivedAt());
         v.put("identityVerifiedAt", r.getInventoryIdentityVerifiedAt()); v.put("inventoryDeadlineAt", r.getInventoryFinalDeadlineAt());
         v.put("resultPublishedAt", r.getInventoryResultPublishedAt()); v.put("remainderDeadlineAt", r.getInventoryRemainderDeadlineAt());
-        var checkIn = checkIns.findByReservation_Id(r.getReservation().getId()).orElse(null);
         v.put("resultConfirmationDueAt", checkIn != null && checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_CUSTOMER
             && r.getInventoryResultPublishedAt() != null ? r.getInventoryResultPublishedAt().plus(48, ChronoUnit.HOURS) : null);
         v.put("history", history(r));
