@@ -37,6 +37,8 @@ public class ReservationEmailVerificationService {
     private final JwtService jwtService;
     private final AuthEmailService emailService;
     private final AuditLogService auditLogService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
     private final SecureRandom secureRandom = new SecureRandom();
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.domain.repo.UnitTypeRepository capacityMutex;
@@ -120,11 +122,13 @@ public class ReservationEmailVerificationService {
         verification.setVerifiedAt(now);
         reservation.setStatus(nextStatus);
         if (nextStatus == ReservationStatus.AWAITING_REVIEW) {
+            reservation.setPaymentStartedAt(null);
             Instant reviewDueAt = ReservationCheckInPolicy.staffReviewDueAt(now);
             reservation.setGoodsReviewSubmittedAt(now);
             reservation.setGoodsReviewDueAt(reviewDueAt);
             reservation.setHoldExpiresAt(reviewDueAt);
         } else {
+            reservation.setPaymentStartedAt(now);
             Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
             reservation.setPaymentExpiresAt(paymentDueAt);
             reservation.setHoldExpiresAt(paymentDueAt);
@@ -138,6 +142,9 @@ public class ReservationEmailVerificationService {
             Map.of("status", ReservationStatus.AWAITING_EMAIL),
             Map.of("status", nextStatus)
         );
+        if (nextStatus == ReservationStatus.AWAITING_PAYMENT && customerEmails != null) {
+            customerEmails.paymentWindowOpened(reservation, "email đã được xác minh");
+        }
         return toResponse(verification, null);
     }
 

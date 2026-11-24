@@ -14,6 +14,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
+    boolean existsByIdentityDocumentHashAndIdNot(String hash, UUID id);
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @Query("select account from User account where account.id=:id")
     Optional<User> findByIdForUpdate(@Param("id") UUID id);

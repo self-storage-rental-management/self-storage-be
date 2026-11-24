@@ -74,7 +74,7 @@ public class ManualRentalPaymentService {
         p.setAmount(amount);p.setCurrency("VND");p.setPurpose(PaymentType.RENTAL_BALANCE);p.setStatus(PaymentStatus.PAID);
         p.setIdempotencyKey(key);p.setGatewayIntentId("MANUAL-RENTAL-"+UUID.randomUUID());p.setGatewayProvider("MANUAL");
         p.setGatewayTransactionNo(reference);p.setGatewayBankCode(method);p.setGatewayResponseCode("00");p.setGatewayTransactionStatus("PAID");
-        p.setPaidAt(now);p.setProcessedAt(now);payments.saveAndFlush(p);
+        p.setPaidAt(now);p.setProcessedAt(now);p.setReceiptFileId(file);payments.saveAndFlush(p);
         var proof=new LinkedHashMap<String,Object>();proof.put("paymentId",p.getId());proof.put("reservationId",reservation==null?null:reservation.getId());
         proof.put("renewalId",renewal==null?null:renewal.getId());proof.put("acceptedRevisionId",revision==null?null:revision.getId());
         proof.put("amount",amount);proof.put("currency","VND");proof.put("paymentMethod",method);proof.put("transactionReference",reference);
