@@ -85,6 +85,7 @@ class CheckInHandoverServiceTests {
     @Mock private MaintenanceTaskRepository maintenanceTaskRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private ReservationPricingSnapshotRepository pricingSnapshotRepository;
+    @Mock private com.storagehub.domain.repo.ReturnCaseRepository returnCaseRepository;
     @Mock private UserRepository userRepository;
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private FacilityScopeService facilityScopeService;
@@ -113,6 +114,7 @@ class CheckInHandoverServiceTests {
         );
         ReflectionTestUtils.setField(service,"paymentProvenance",paymentProvenance);
         ReflectionTestUtils.setField(service,"sandboxPaymentPolicy",sandboxPaymentPolicy);
+        ReflectionTestUtils.setField(service,"inventoryReturnCases",returnCaseRepository);
         staff = entityWithId(new User());
         staff.setFullName("Staff A");
         manager = entityWithId(new User());
@@ -1274,6 +1276,44 @@ class CheckInHandoverServiceTests {
         assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
         assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PARTIAL_ACCEPTED);
         assertThat(checkIn.getInventoryRemainderRemovedAt()).isNull();
+    }
+
+    /**
+    /**
+     * A customer who asked to return during setup leaves the rental in return_requested.
+     * The inventory inspection the return case depends on must remain recordable there.
+     */
+    @Test
+    void returnsDuringSetupAreRecognisedAsAwaitingInspection() {
+        var rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.return_requested);
+        var returnCase = new com.storagehub.domain.model.ReturnCase();
+        returnCase.setStatus(com.storagehub.domain.model.ReturnCaseStatus.requested);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(java.util.List.of(returnCase));
+
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(service, "setupReturnAwaitingInspection", rental))
+            .isEqualTo(Boolean.TRUE);
+    }
+
+    /** A return_requested rental with no open return case is still not ready for inspection. */
+    @Test
+    void returnRequestedWithoutAnOpenCaseIsNotAwaitingInspection() {
+        var rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.return_requested);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(java.util.List.of());
+
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(service, "setupReturnAwaitingInspection", rental))
+            .isEqualTo(Boolean.FALSE);
+    }
+
+    /** A rental still in setup with no return case is never treated as awaiting inspection. */
+    @Test
+    void setupRentalIsNotAwaitingInspection() {
+        var rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.setup);
+
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(service, "setupReturnAwaitingInspection", rental))
+            .isEqualTo(Boolean.FALSE);
     }
 
     @Test
