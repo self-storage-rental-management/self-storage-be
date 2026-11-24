@@ -25,6 +25,8 @@ import static com.storagehub.service.renewal.operations.RenewalOperationSources.
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class RenewalOperationService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.MoneyReceiptCodes receiptCodes;
     @org.springframework.beans.factory.annotation.Autowired private com.storagehub.service.BusinessRecordCodes displayCodes;
     @org.springframework.beans.factory.annotation.Autowired private com.storagehub.service.renewal.RenewalDisplayIdentity displayIdentity;
     public enum Audience { CUSTOMER, MANAGER, STAFF }
@@ -299,6 +301,7 @@ public class RenewalOperationService {
         if(receipt==null||receipt.reference()==null||!id.equals(receipt.renewalId())||!statement.reference().equals(receipt.statementRef())||receipt.amount()==null||receipt.amount().compareTo(statement.amount())!=0||!statement.currency().equals(receipt.currency())||receipt.receivedAt()==null||receipt.receivedAt().isAfter(now()))throw deferred("Shared CASH receipt is incomplete or inconsistent");
         var eventData=new LinkedHashMap<String,Object>(mapper.convertValue(receipt,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
         eventData.put("transactionReference",receiptReference);
+        if (receipt.paymentId() != null) eventData.put("receiptCode", receiptCodes.find("PAYMENT", receipt.paymentId()));
         eventData.put("receiptFileId",body.receiptFileId());
         return finish(c,"d3_cash",key,body,event(c,"CASH",eventData),201);
     }
@@ -436,6 +439,7 @@ public class RenewalOperationService {
             ||!"VND".equals(execution.currency())||execution.executedAt()==null||execution.executedAt().isAfter(now()))throw deferred("Refund execution receipt invalid");
         var data=new LinkedHashMap<String,Object>(mapper.convertValue(execution,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
         data.put("receiptFileId",body.receiptFileId());data.put("transactionReference",body.transactionReference());
+        data.put("receiptCode", receiptCodes.issue("RENEWAL_REFUND", body.refundId(), true));
         return finish(c,"d3_refund_execute",key,body,event(c,"REFUND_EXECUTION",data),201);
     }
     public Result assignStaff(ActorPrincipal actor,UUID id,StaffAssignment body,String key) {

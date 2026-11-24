@@ -645,7 +645,7 @@ public class CheckInHandoverService {
         // This endpoint records only the physical handover. The paid rental and
         // free preparation period start after the customer confirms receipt.
         if (accessCredentialService != null) {
-            accessCredentialService.issue(
+            var issuedLock = accessCredentialService.issue(
                 actor, checkInId,
                 new IssueAccessCredentialRequest(
                     com.storagehub.domain.model.AccessCredentialType.LOCK,
@@ -653,6 +653,7 @@ public class CheckInHandoverService {
                     "Bàn giao ổ khóa để khách hàng chuẩn bị hàng"
                 )
             );
+            lockReference = issuedLock.reference();
         }
         reservation.getAssignedUnit().setStatus(StorageUnitStatus.assigned);
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
@@ -879,7 +880,7 @@ public class CheckInHandoverService {
         validateNoPasswordHandover(request);
         requireRemainingPayment(reservation);
         if (checkIn.getLockReference() == null
-            || !checkIn.getLockReference().equals(request.lockReference().trim())) {
+            || !checkIn.getLockReference().equalsIgnoreCase(request.lockReference().trim())) {
             throw ApiExceptions.conflict("Mã ổ khóa không khớp với mã đã bàn giao");
         }
 
@@ -1779,7 +1780,7 @@ public class CheckInHandoverService {
             payment.getPurpose(), payment.getStatus(), payment.getGatewayTransactionNo(),
             payment.getGatewayBankCode(), payment.getPaidAt(), payment.getProcessedAt(),
             payment.getInitiatedBy().getFullName(), payment.getInvoiceNumber(), payment.getInvoiceStatus(),
-            payment.getInvoiceIssuedAt()
+            payment.getInvoiceIssuedAt(), payment.getReceiptCode()
         );
     }
 

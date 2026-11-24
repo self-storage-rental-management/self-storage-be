@@ -15,6 +15,7 @@ import com.storagehub.api.returns.StaffCompleteRefundRequest;
 import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.CustomerDecision;
+import com.storagehub.domain.model.LockInspectionResult;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
@@ -518,6 +519,12 @@ public class ReturnSettlementService {
             && returnCase.getStatus() != ReturnCaseStatus.scheduled
             && returnCase.getStatus() != ReturnCaseStatus.recovery_required)
             throw ApiExceptions.conflict("Return is not in a state awaiting inspection");
+        var lockResult = request.lockInspectionResult() == null
+            ? LockInspectionResult.UNVERIFIED : request.lockInspectionResult();
+        if (lockResult == LockInspectionResult.RETURNED_USABLE
+            && (!request.returnedLock() || !request.returnedKey())) {
+            throw ApiExceptions.validation("Cần xác nhận đã nhận lại ổ khóa và đủ chìa khóa để cấp lại mã ổ khóa.", null);
+        }
         boolean noShowRecovery = returnCase.getStatus() == ReturnCaseStatus.recovery_required;
         if (!noShowRecovery && returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && returnCase.getRental().getInventoryRemovalDeadlineAt() != null
@@ -649,6 +656,7 @@ public class ReturnSettlementService {
         returnCase.setReturnedKey(request.returnedKey());
         returnCase.setReturnedCard(request.returnedCard());
         returnCase.setReturnedLock(request.returnedLock());
+        returnCase.setLockInspectionResult(lockResult);
         returnCase.setProposedUnitStatus(request.proposedUnitStatus() != null ? request.proposedUnitStatus() : StorageUnitStatus.available);
 
         returnCase.setDamageFee(safeDamage);
@@ -667,10 +675,11 @@ public class ReturnSettlementService {
         }
 
         if (accessCredentialService != null) {
-            accessCredentialService.revokeForRental(
+            accessCredentialService.revokeForReturnInspection(
                 actor,
                 returnCase.getRental(),
-                "Thu hồi credential trong nghiệm thu trả kho"
+                "Thu hồi quyền truy cập trong nghiệm thu trả kho",
+                lockResult
             );
         }
 
@@ -1507,7 +1516,7 @@ public class ReturnSettlementService {
     }
     private BigDecimal settlementOverdueFee(ReturnCase rc,BigDecimal requested,com.storagehub.service.ledger.ReturnFinancialReconciliation.View view) {
         try {
-            return isRecovery(rc)?view.unpostedOverdueFee():requested.subtract(view.postedOverdueFee()).max(BigDecimal.ZERO);
+            return view.unpostedOverdueFee();
         } catch (Exception e) {
             return requested != null ? requested : BigDecimal.ZERO;
         }
@@ -1727,7 +1736,8 @@ public class ReturnSettlementService {
             noShowTask == null || noShowTask.getRecoveryWitness() == null ? null : noShowTask.getRecoveryWitness().getId(),
             noShowTask == null || noShowTask.getRecoveryWitness() == null ? null : noShowTask.getRecoveryWitness().getFullName(),
             noShowTask == null ? null : noShowTask.getDeadlineAt(),
-            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? rc.getRental().getInventoryRemovalDeadlineAt() : null
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? rc.getRental().getInventoryRemovalDeadlineAt() : null,
+            rc.getLockInspectionResult()
         );
     }
 

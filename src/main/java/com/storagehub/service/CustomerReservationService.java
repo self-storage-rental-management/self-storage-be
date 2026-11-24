@@ -1629,7 +1629,7 @@ public class CustomerReservationService {
             ReservationSnapshotView.facilityName(payment.getReservation(), snapshot),
             ReservationSnapshotView.facilityAddress(payment.getReservation(), snapshot),
             ReservationSnapshotView.unitTypeName(payment.getReservation(), snapshot),
-            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot)
+            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode()
         );
     }
 

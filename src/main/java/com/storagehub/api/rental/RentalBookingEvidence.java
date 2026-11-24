@@ -17,7 +17,8 @@ public record RentalBookingEvidence(UUID rentalId,UUID reservationId,String curr
     public record CustomerSnapshot(String fullName,String email,String phone,String address,String identityDocumentNumber) {}
     public record GoodsItem(UUID id,String goodsCode,String categoryName,String materialName,String customGoodsName,
         String description,int quantity,BigDecimal lengthCm,BigDecimal widthCm,BigDecimal heightCm,
-        BigDecimal weightPerItemKg,boolean fragile,String customerNote,List<FileAssetResponse> images) {}
+        BigDecimal weightPerItemKg,boolean fragile,String customerNote,List<FileAssetResponse> images,
+        String customMaterial,boolean stackable,int maxStackLayers,boolean allowHorizontalPlacement) {}
     public record Amounts(BigDecimal netRentalAmount,BigDecimal reservationDepositAmount,BigDecimal securityDepositAmount,
         BigDecimal remainingRentalAmount,BigDecimal dueAtCheckIn,BigDecimal totalInitialObligation) {}
     public record PaymentRecord(UUID id,String purpose,String status,BigDecimal amount,Instant processedAt,String verification,

@@ -70,16 +70,17 @@ public class RenewalOverdueFeeService {
         // The fixed overdue timeline uses the business timezone independently of an optional renewal publication.
         ZoneId zone=BusinessTime.ZONE;LocalDate today=now.atZone(zone).toLocalDate();
         long days=Math.max(0,ChronoUnit.DAYS.between(period.lastPermittedDate(),today)-(signing?1:0));
-        var settings=em.createQuery("select s from SystemSetting s where s.settingKey=:key",SystemSetting.class)
-            .setParameter("key","lateFeeAmount").getResultList();
-        BigDecimal rate=BigDecimal.ZERO;
-        if(settings.size()==1)try {rate=new BigDecimal(settings.getFirst().getValue()).setScale(0,RoundingMode.UNNECESSARY);}
-        catch(Exception invalid){throw ApiExceptions.conflict("DEFERRED_SOURCE: Daily overdue fee setting is invalid");}
-        else if(days>0)throw ApiExceptions.conflict("DEFERRED_SOURCE: Daily overdue fee setting missing or ambiguous");
-        if(rate.signum()<0||rate.precision()>12)throw ApiExceptions.conflict("Daily overdue fee amount is unsupported");
-        BigDecimal accrued=rate.multiply(BigDecimal.valueOf(days));
+        BigDecimal monthlyRent=rental.getMonthlyPrice();
+        if(monthlyRent==null||monthlyRent.signum()<=0) {
+            if(days>0)throw ApiExceptions.conflict("DEFERRED_SOURCE: Monthly rental price is missing or invalid");
+            monthlyRent=BigDecimal.ZERO;
+        }
+        BigDecimal dailyRent=monthlyRent.divide(BigDecimal.valueOf(30),2,RoundingMode.HALF_UP);
+        if(dailyRent.signum()<0||dailyRent.precision()>12)throw ApiExceptions.conflict("Daily overdue fee amount is unsupported");
+        BigDecimal overdueDailyRate=dailyRent.multiply(new BigDecimal("1.5")).setScale(2,RoundingMode.HALF_UP);
+        BigDecimal accrued=overdueDailyRate.multiply(BigDecimal.valueOf(days)).setScale(2,RoundingMode.HALF_UP);
         if(accrued.precision()>12)throw ApiExceptions.conflict("Accrued overdue fee amount is unsupported");
-        String version=period.lastPermittedDate()+":"+rate.toPlainString()+":"+zone.getId();
+        String version=period.lastPermittedDate()+":"+overdueDailyRate.toPlainString()+":MONTHLY_RENT_DIV_30_X_1_5:"+zone.getId();
         return new Daily(days,accrued,today.atStartOfDay(zone).toInstant(),today.plusDays(1).atStartOfDay(zone).toInstant(),version,period.lastPermittedDate());
     }
 }

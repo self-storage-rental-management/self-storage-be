@@ -54,7 +54,7 @@ public class BusinessPolicyService {
     public BusinessConfigResponse getBusinessConfig(ActorPrincipal actor) {
         authorizationService.require(actor, SystemPermission.VIEW_POLICIES);
 
-        int gracePeriodDays = getIntSetting("gracePeriod", 3);
+        int gracePeriodDays = 0;
         BigDecimal lateFeeAmount = getBigDecimalSetting("lateFeeAmount", new BigDecimal("650000"));
         BigDecimal defaultDepositRatio = getBigDecimalSetting("defaultDepositRatio", new BigDecimal("0.20"));
         double holdExpiryHours = getDoubleSetting("holdExpiryHours", 2.0);
@@ -86,7 +86,7 @@ public class BusinessPolicyService {
         BusinessConfigResponse before = getBusinessConfig(actor);
 
         if (request.gracePeriodDays() != null) {
-            saveSetting("gracePeriod", String.valueOf(request.gracePeriodDays()));
+            saveSetting("gracePeriod", "0");
         }
         if (request.lateFeeAmount() != null) {
             saveSetting("lateFeeAmount", request.lateFeeAmount().toPlainString());

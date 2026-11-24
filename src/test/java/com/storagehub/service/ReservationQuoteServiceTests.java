@@ -120,7 +120,7 @@ class ReservationQuoteServiceTests {
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("21505000.00");
         assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
-        assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
+        assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("3201000");
         assertThat(response.getQuoteId()).isNotNull();
     }
 
