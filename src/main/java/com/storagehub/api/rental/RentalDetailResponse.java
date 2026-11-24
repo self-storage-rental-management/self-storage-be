@@ -21,7 +21,15 @@ public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryRes
     Instant moveInCompletedAt, Instant inventoryVerifiedAt, boolean setupExitReviewRequired,
     boolean canConfirmRentalStart, Inventory inventory) {
     public record Inventory(String actualJson, boolean mismatch, boolean fullFit, String declaredPackaging,
-        String decision, String acceptedQuantitiesJson, Instant removalDeadline, Instant removedAt) {}
+        String decision, String acceptedQuantitiesJson, Instant removalDeadline, Instant removedAt,
+        com.storagehub.api.checkin.CompleteCheckInRequest report, String mismatchSummary, String mismatchJson,
+        com.storagehub.api.checkin.InventoryDecisionResponse intakeDecision) {
+        public Inventory(String actualJson, boolean mismatch, boolean fullFit, String declaredPackaging,
+            String decision, String acceptedQuantitiesJson, Instant removalDeadline, Instant removedAt) {
+            this(actualJson, mismatch, fullFit, declaredPackaging, decision, acceptedQuantitiesJson,
+                removalDeadline, removedAt, null, null, null, null);
+        }
+    }
     @Schema(description = "COMPLETE includes verified security deposit; PARTIAL has verified balances/billing but unknown deposit; UNKNOWN has no verified financial projection.")
     public record Financial(@Schema(allowableValues = {"COMPLETE", "PARTIAL", "UNKNOWN"}) String completeness, String currency, BigDecimal outstandingAmount,
         BigDecimal overdueAmount, LocalDate nextDueDate, String reason,

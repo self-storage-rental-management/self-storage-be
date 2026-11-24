@@ -21,7 +21,7 @@ public record ResolveInventoryAtSiteRequest(
     @Size(max = 2000) String note,
     @JsonFormat(pattern = "yyyy-MM-dd") LocalDate scheduledDate,
     @NotEmpty(message = "Cần tải ít nhất một ảnh biên bản có chữ ký khách.")
-    @Size(max = 20) List<@NotBlank @Size(max = 500) String> evidenceReferences,
+    @Size(min = 1, max = 1, message = "Chỉ được đính kèm 1 ảnh biên bản có chữ ký khách.") List<@NotBlank @Size(max = 500) String> evidenceReferences,
     Long resultVersion
 ) {
     public ResolveInventoryAtSiteRequest(InventoryResolutionRequest.Decision decision,
