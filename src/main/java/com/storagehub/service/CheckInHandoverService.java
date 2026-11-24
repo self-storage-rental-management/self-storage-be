@@ -4,7 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.checkin.CheckInResponse;
 import com.storagehub.api.checkin.CheckInResponse.IntakeAction;
+import com.storagehub.api.checkin.InventoryDraftResponse;
+import com.storagehub.api.checkin.PrepareInventoryResolutionRequest;
 import com.storagehub.api.checkin.ReceiptReminderResponse;
+import com.storagehub.api.checkin.ResolveInventoryAtSiteRequest;
+import com.storagehub.api.checkin.SaveInventoryDraftRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.api.checkin.CheckInPaymentRequest;
 import com.storagehub.api.checkin.CheckInPaymentResponse;
@@ -47,6 +51,7 @@ import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.InventoryResolutionStatus;
+import com.storagehub.domain.model.ReturnType;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.CheckInRepository;
@@ -76,6 +81,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -102,6 +108,8 @@ public class CheckInHandoverService {
     private GoodsCatalogService goodsCatalogService;
     @Autowired(required = false)
     private com.storagehub.domain.repo.PaymentComplaintRepository paymentComplaintRepository;
+    @Autowired(required = false)
+    private ObjectProvider<ReturnSettlementService> returnSettlementServices;
     private final ReservationRepository reservationRepository;
     private final StorageUnitRepository storageUnitRepository;
     private final UnitAssignmentRepository assignmentRepository;
@@ -770,6 +778,215 @@ public class CheckInHandoverService {
         return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
     }
 
+    @Transactional(readOnly = true)
+    public InventoryDraftResponse getInventoryDraft(ActorPrincipal actor, UUID checkInId) {
+        requireCheckInReader(actor);
+        authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
+        CheckIn checkIn = checkInRepository.findById(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
+        Reservation reservation = checkIn.getReservation();
+        facilityScopeService.assertCanRead(actor, reservation.getFacility().getId());
+        CompleteCheckInRequest request = readDraft(checkIn);
+        return new InventoryDraftResponse(
+            request,
+            checkIn.getVersion(),
+            request == null ? null : checkIn.getUpdatedAt()
+        );
+    }
+
+    @Transactional
+    public InventoryDraftResponse saveInventoryDraft(
+        ActorPrincipal actor,
+        UUID checkInId,
+        SaveInventoryDraftRequest command
+    ) {
+        CheckIn checkIn = requireOpenInventoryVisit(actor, checkInId);
+        if (command == null || command.request() == null) {
+            throw ApiExceptions.validation("Vui lòng nhập đầy đủ thông tin kiểm kê.", null);
+        }
+        requireExpectedRevision(checkIn, command.expectedRevision());
+        try {
+            checkIn.setChecklistJson(objectMapper.writeValueAsString(command.request()));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Could not serialize inventory draft", exception);
+        }
+        CheckIn saved = checkInRepository.saveAndFlush(checkIn);
+        return new InventoryDraftResponse(savedDraft(saved), saved.getVersion(), saved.getUpdatedAt());
+    }
+
+    @Transactional
+    public CheckInResponse prepareInventoryResolution(
+        ActorPrincipal actor,
+        UUID checkInId,
+        PrepareInventoryResolutionRequest command
+    ) {
+        CheckIn checkIn = requireOpenInventoryVisit(actor, checkInId);
+        requireExpectedRevision(checkIn, command == null ? 0 : command.expectedRevision());
+        CompleteCheckInRequest request = readDraft(checkIn);
+        if (request == null) {
+            throw ApiExceptions.conflict("Vui lòng lưu kết quả kiểm kê trước khi kiểm tra sức chứa.");
+        }
+        // Keep one authoritative validation/calculation path. The old /complete
+        // endpoint already evaluates fit, mismatch and the three outcomes.
+        return complete(actor, checkInId, request);
+    }
+
+    @Transactional
+    public CheckInResponse resolveInventoryAtSite(
+        ActorPrincipal actor,
+        UUID checkInId,
+        ResolveInventoryAtSiteRequest command
+    ) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        if (command == null || command.decision() == null) {
+            throw ApiExceptions.validation("Vui lòng chọn phương án xử lý kết quả kiểm kê.", null);
+        }
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy đơn đặt kho."));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getStatus() != CheckInStatus.setup_completed
+            || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER) {
+            throw ApiExceptions.conflict("Hồ sơ kiểm kê chưa ở bước chờ ghi nhận phương án tại cơ sở.");
+        }
+        if (!command.customerPresent()) {
+            throw ApiExceptions.conflict("Cần xác nhận khách hàng đang có mặt tại cơ sở.");
+        }
+        validateEvidence(checkInId, command.evidenceReferences());
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê của thời gian chuẩn bị."));
+        InventoryDeadlinePolicy.requireInventoryOpen(rental, Instant.now());
+        UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
+            reservation.getId(), UnitAssignmentStatus.ACTIVE
+        ).orElseThrow(() -> ApiExceptions.conflict("Hồ sơ phân gian kho không còn hiệu lực."));
+        StorageUnit unit = storageUnitRepository.findByIdForUpdate(assignment.getStorageUnit().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
+        User operator = requireActor(actor);
+        Instant now = Instant.now();
+        String note = clean(command.note());
+        String evidenceNote = "Bằng chứng biên bản: " + String.join(", ", command.evidenceReferences());
+
+        if (command.decision() == ResolveInventoryAtSiteRequest.Decision.CANCEL_AND_RETURN) {
+            if (checkIn.isInventoryFullFit()) {
+                throw ApiExceptions.conflict("Hàng hóa đã vừa đủ trong gian kho, không thể trả theo luồng sai lệch.");
+            }
+            if (command.scheduledDate() == null) {
+                throw ApiExceptions.validation("Vui lòng chọn ngày trả kho dự kiến.", null);
+            }
+            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.RETURN_REQUESTED);
+            checkIn.setInventoryDecisionAt(now);
+            checkIn.setInventoryDecisionNote(joinNotes(note, evidenceNote));
+            CheckIn saved = checkInRepository.saveAndFlush(checkIn);
+            ReturnSettlementService returnService = returnSettlementServices == null
+                ? null : returnSettlementServices.getIfAvailable();
+            if (returnService == null) {
+                throw ApiExceptions.conflict("Chưa có luồng trả kho để tiếp nhận yêu cầu này.");
+            }
+            returnService.createStaffInventoryMismatchReturnRequest(
+                actor,
+                rental.getId(),
+                new com.storagehub.api.returns.CustomerCreateReturnRequest(
+                    command.scheduledDate(),
+                    joinNotes(note, evidenceNote),
+                    ReturnType.INVENTORY_MISMATCH
+                )
+            );
+            notifyAtSiteDecision(reservation, "Đã ghi nhận yêu cầu trả kho do kiểm kê không phù hợp",
+                "Nhân viên đã ghi nhận phương án trả kho tại cơ sở cho đơn " + reservation.getReservationCode() + ".");
+            auditLogService.recordMutation(operator, "STAFF_INVENTORY_RETURN_REQUESTED", "CheckIn", saved.getId(),
+                reservation.getFacility().getId(), Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PENDING_CUSTOMER),
+                Map.of("inventoryResolutionStatus", InventoryResolutionStatus.RETURN_REQUESTED));
+            return toResponse(actor, reservation, saved, assignment);
+        }
+
+        if (command.decision() == ResolveInventoryAtSiteRequest.Decision.ACCEPT_PARTIAL
+            && !checkIn.isInventoryPartialFitAvailable()) {
+            throw ApiExceptions.conflict("Chưa có phương án nhận một phần hàng hóa trong gian kho này.");
+        }
+        if (command.decision() == ResolveInventoryAtSiteRequest.Decision.ACCEPT_FULL
+            && !checkIn.isInventoryFullFit()) {
+            throw ApiExceptions.conflict("Số hàng thực tế chưa vừa đủ trong gian kho.");
+        }
+
+        if (command.decision() == ResolveInventoryAtSiteRequest.Decision.ACCEPT_PARTIAL) {
+            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.PARTIAL_ACCEPTED);
+            checkIn.setInventoryDecisionAt(now);
+            checkIn.setInventoryDecisionNote(joinNotes(note, evidenceNote));
+            checkIn.setInventoryAcceptedQuantitiesJson(checkIn.getInventorySuggestedQuantitiesJson());
+            rental.setInventoryRemovalDeadlineAt(null);
+            rental.setInventoryRemainderDeadlineAt(InventoryTimelinePolicy.dayStart(now, 4));
+            rentalRepository.saveAndFlush(rental);
+            CheckIn saved = checkInRepository.saveAndFlush(checkIn);
+            notifyAtSiteDecision(reservation, "Đã ghi nhận nhận một phần hàng hóa",
+                "Đơn " + reservation.getReservationCode() + " đang chờ đưa phần hàng dư ra khỏi gian kho.");
+            auditLogService.recordMutation(operator, "STAFF_INVENTORY_PARTIAL_ACCEPTED", "CheckIn", saved.getId(),
+                reservation.getFacility().getId(), Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PENDING_CUSTOMER),
+                Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PARTIAL_ACCEPTED));
+            return toResponse(actor, reservation, saved, assignment);
+        }
+
+        checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.ACCEPTED);
+        checkIn.setInventoryDecisionAt(now);
+        checkIn.setInventoryDecisionNote(joinNotes(note, evidenceNote));
+        checkIn.setInventoryAcceptedQuantitiesJson(checkIn.getInventoryActualJson());
+        checkIn.setStatus(CheckInStatus.completed);
+        checkIn.setInventoryVerifiedAt(now);
+        rental.setInventoryVerifiedAt(now);
+        rental.setInventoryPending(false);
+        completeInventoryTask(rental, now, checkIn.getInventoryDecisionNote());
+        assignment.setStatus(UnitAssignmentStatus.COMPLETED);
+        reservation.setStatus(ReservationStatus.COMPLETED);
+        unit.setStatus(StorageUnitStatus.occupied);
+        rentalRepository.saveAndFlush(rental);
+        storageUnitRepository.saveAndFlush(unit);
+        assignmentRepository.saveAndFlush(assignment);
+        reservationRepository.saveAndFlush(reservation);
+        CheckIn saved = checkInRepository.saveAndFlush(checkIn);
+        notifyAtSiteDecision(reservation, "Đã xác nhận kết quả kiểm kê",
+            "Nhân viên đã xác nhận khách nhận toàn bộ hàng hóa thực tế. Hồ sơ thuê đã hoàn tất.");
+        auditLogService.recordMutation(operator, "STAFF_INVENTORY_ACCEPTED", "CheckIn", saved.getId(),
+            reservation.getFacility().getId(), Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PENDING_CUSTOMER),
+            Map.of("inventoryResolutionStatus", InventoryResolutionStatus.ACCEPTED,
+                "reservationStatus", ReservationStatus.COMPLETED, "storageUnitStatus", StorageUnitStatus.occupied));
+        return toResponse(actor, reservation, saved, assignment);
+    }
+
+    private void requireExpectedRevision(CheckIn checkIn, long expectedRevision) {
+        if (checkIn.getVersion() != expectedRevision) {
+            throw ApiExceptions.conflict("Bản kiểm kê đã được cập nhật. Vui lòng tải lại hồ sơ trước khi lưu tiếp.");
+        }
+    }
+
+    private CompleteCheckInRequest savedDraft(CheckIn checkIn) {
+        CompleteCheckInRequest draft = readDraft(checkIn);
+        if (draft == null) {
+            throw ApiExceptions.conflict("Không thể đọc bản kiểm kê vừa lưu.");
+        }
+        return draft;
+    }
+
+    private CompleteCheckInRequest readDraft(CheckIn checkIn) {
+        if (checkIn == null || checkIn.getChecklistJson() == null || checkIn.getChecklistJson().isBlank()) return null;
+        try {
+            return objectMapper.readValue(checkIn.getChecklistJson(), CompleteCheckInRequest.class);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Could not read inventory draft", exception);
+        }
+    }
+
+    private String joinNotes(String note, String evidenceNote) {
+        return note == null ? evidenceNote : note + "\n" + evidenceNote;
+    }
+
+    private void notifyAtSiteDecision(Reservation reservation, String title, String content) {
+        notificationService.createNotification(reservation.getCustomer().getId(), NotificationType.CHECKIN,
+            title, content, reservation.getId());
+        notificationService.createFacilityOperationsNotifications(reservation.getFacility().getId(), NotificationType.CHECKIN,
+            title, content, reservation.getId());
+    }
+
     private CheckIn requireOpenInventoryVisit(ActorPrincipal actor, UUID checkInId) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
@@ -780,6 +997,12 @@ public class CheckInHandoverService {
         facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
         Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê để kiểm kê."));
+        // Older records created before the FE/BE appointment sync kept the
+        // appointment only on Rental. Mirror it lazily so those records can
+        // still enter the inventory workflow after the merge.
+        if (checkIn.getInventoryAppointmentAt() == null && rental.getInventoryAppointmentAt() != null) {
+            checkIn.setInventoryAppointmentAt(rental.getInventoryAppointmentAt());
+        }
         if (reservation.getStatus() != ReservationStatus.PREPARING || checkIn.getStatus() != CheckInStatus.setup_completed
             || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.NOT_STARTED
             || !rental.isInventoryPending() || checkIn.getInventoryAppointmentAt() == null) {
@@ -1600,8 +1823,11 @@ public class CheckInHandoverService {
             storageLimits == null ? null : storageLimits.maxCargoHeightCm(),
             storageLimits == null ? null : storageLimits.maxCargoWeightKg()
         );
+        Instant inventoryAppointmentAt = checkIn != null && checkIn.getInventoryAppointmentAt() != null
+            ? checkIn.getInventoryAppointmentAt()
+            : rental == null ? null : rental.getInventoryAppointmentAt();
         CheckInResponse.InventoryVisit inventoryVisit = checkIn == null ? null : new CheckInResponse.InventoryVisit(
-            checkIn.getInventoryAppointmentAt(),
+            inventoryAppointmentAt,
             checkIn.getInventoryArrivedAt(),
             checkIn.getInventoryIdentityVerifiedAt(),
             checkIn.getInventoryIdentityVerifiedBy() == null ? null : checkIn.getInventoryIdentityVerifiedBy().getFullName(),

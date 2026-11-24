@@ -532,6 +532,8 @@ public class CustomerReservationService {
         if (appointmentAt.equals(previous)) return toDetailResponse(reservation);
         checkIn.setInventoryAppointmentAt(appointmentAt);
         checkInRepository.saveAndFlush(checkIn);
+        rental.setInventoryAppointmentAt(appointmentAt);
+        rentalRepository.saveAndFlush(rental);
         String changeReason = clean(reason);
         auditLogService.recordMutation(reservation.getCustomer(), "INVENTORY_APPOINTMENT_SAVED", "CheckIn", checkIn.getId(),
             reservation.getFacility().getId(), previous == null ? null : Map.of("appointmentAt", previous),
