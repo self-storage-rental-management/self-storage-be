@@ -168,6 +168,21 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     );
 
     @Query("""
+        select r from Reservation r
+        where r.goodsReviewStatus <> com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED
+          and (r.goodsReviewStatus <> com.storagehub.domain.model.GoodsReviewStatus.PENDING
+            or r.status <> com.storagehub.domain.model.ReservationStatus.AWAITING_REVIEW)
+          and (:facilityId is null or r.facility.id = :facilityId)
+          and (:scoped = false or r.facility.id in :facilityIds)
+        """)
+    Page<Reservation> findCompletedGoodsReviews(
+        @Param("facilityId") UUID facilityId,
+        @Param("scoped") boolean scoped,
+        @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    );
+
+    @Query("""
         select reservation from Reservation reservation
         left join reservation.assignedUnit assignedUnit
         where reservation.status in :activeStatuses
@@ -234,10 +249,12 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and (
             (r.status in (UNIT_RESERVED, READY_FOR_CHECKIN, AWAITING_CUSTOMER_RECEIPT, PREPARING, COMPLETED)
               and r.assignedUnit is not null and a.status in (ACTIVE, COMPLETED))
+            or c.inventoryDecisionJson is not null
             or (:workGroup = 'PROCESSED' and c.status in (completed, rejected, no_show, cancelled))
           )
           and (:workGroup = 'ALL' or :workGroup = case
-            when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED then 'PROCESSED'
+            when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED
+              or (c.inventoryDecisionJson is not null and c.inventoryResolutionStatus in (RETURN_REQUESTED, TRANSFER_REQUESTED, ACCEPTED)) then 'PROCESSED'
             else 'ONGOING' end)
           and (:facilityId is null or r.facility.id = :facilityId)
           and (:scoped = false or r.facility.id in :facilityIds)

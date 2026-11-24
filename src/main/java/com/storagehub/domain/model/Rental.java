@@ -82,18 +82,23 @@ public class Rental extends BaseEntity {
     /** New-policy removal window. Legacy records intentionally remain null. */
     @Column
     private Instant inventoryRemovalPublishedAt;
-
-    /** Compatibility alias for older inventory-removal callers. */
-    public Instant getInventoryRemovalNotifiedAt() {
-        return inventoryRemovalPublishedAt;
-    }
-
-    public void setInventoryRemovalNotifiedAt(Instant value) {
-        inventoryRemovalPublishedAt = value;
-    }
+    @Column
+    private Instant inventoryRemovalNotifiedAt;
 
     @Column
     private Instant inventoryRemovalDeadlineAt;
+
+    @Column
+    private Integer inventoryReturnWindowDays;
+
+    @Column
+    private Integer inventoryReturnExtensionDays;
+
+    @Column(nullable = false)
+    private int inventoryReturnExtensionCount = 0;
+
+    @Column(length = 64)
+    private String inventoryReturnPolicyVersion;
 
     @Column private Instant setupCompletionDeadlineAt;
     @Column private Integer setupExtensionDays;

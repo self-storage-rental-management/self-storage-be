@@ -38,9 +38,20 @@ public class RentalSetupLifecycleService {
     @Value("${storagehub.inventory.recovery-sla-hours:24}")
     private long inventoryRecoverySlaHours = 24;
 
-    /** Kept for response compatibility; customers cannot move the paid start earlier. */
+    /**
+     * Customers may confirm the paid period has effectively started early once setup and
+     * inventory are genuinely finished. The paid start date itself is never moved earlier;
+     * this only records the confirmed start of billing that was already agreed.
+     */
     static boolean customerCanStartAfterInventory(Rental rental, Instant now) {
-        return false;
+        return rental.getSetupCompletionDeadlineAt() == null && rental.getStatus() == RentalStatus.setup
+            && rental.getReservation() != null
+            && rental.getReservation().getStatus() == ReservationStatus.COMPLETED
+            && rental.getSetupEndsAt() != null && now.isBefore(rental.getSetupEndsAt())
+            && rental.getActualReturnedAt() == null && rental.getCompletedAt() == null
+            && rental.getMoveInCompletedAt() != null && rental.getInventoryVerifiedAt() != null
+            && !rental.isInventoryPending()
+            && !rental.getMoveInCompletedAt().isAfter(rental.getInventoryVerifiedAt());
     }
 
     @Scheduled(
@@ -80,6 +91,21 @@ public class RentalSetupLifecycleService {
             // A published removal window replaces the inventory attendance clock.
             if (rental.getInventoryRemovalPublishedAt() != null) continue;
             if (rental.getInventoryArrivedAt() != null || rental.getInventoryResultPublishedAt() != null) continue;
+            if (rental.getInventoryEscalatedAt() != null) continue;
+            Instant removalDeadline = rental.getInventoryRemovalDeadlineAt();
+            if (removalDeadline != null) {
+                if (!now.isBefore(removalDeadline)) {
+                    escalateInventory(rental, now, true);
+                    rentalRepository.save(rental);
+                }
+                continue;
+            }
+            if (rental.getInventoryFinalDeadlineAt() != null
+                && !now.isBefore(rental.getInventoryFinalDeadlineAt())) {
+                escalateInventory(rental, now, false);
+                rentalRepository.save(rental);
+                continue;
+            }
             if (rental.getInventoryDueAt() != null && !rental.getInventoryDueAt().isAfter(now)
                 && rental.getInventoryDeadlineReminderAt() == null) {
                 remindInventoryDeadline(rental, now);
@@ -100,6 +126,30 @@ public class RentalSetupLifecycleService {
             rental.getReservation().getId()
         );
         rental.setInventoryDeadlineReminderAt(now);
+    }
+
+    /**
+     * Closes the "customer did not arrive for inventory" recovery task once the case has
+     * moved to the mismatch-return branch. The two clocks must not run at the same time:
+     * the return window owns the case from this point on.
+     */
+    @Transactional
+    public int supersedeInventoryAttendanceTasks(Rental rental, String reason) {
+        if (maintenanceTaskRepository == null || rental == null || rental.getId() == null) return 0;
+        int closed = 0;
+        for (MaintenanceTask task : maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(
+            rental.getId(),
+            MaintenanceTaskType.maintenance,
+            java.util.List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress))) {
+            if (task.getRecoveryType() != MaintenanceRecoveryType.INVENTORY_OVERDUE) continue;
+            task.setStatus(MaintenanceTaskStatus.cancelled);
+            task.setResultReport((task.getResultReport() == null ? "" : task.getResultReport() + " | ")
+                + "Đã dừng theo dõi quá hạn kiểm kê: " + reason);
+            maintenanceTaskRepository.save(task);
+            closed++;
+        }
+        if (closed > 0) maintenanceTaskRepository.flush();
+        return closed;
     }
 
     private void escalateInventory(Rental rental, Instant now, boolean removalOverdue) {

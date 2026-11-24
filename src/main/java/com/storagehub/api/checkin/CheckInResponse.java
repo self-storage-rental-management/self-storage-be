@@ -76,11 +76,17 @@ public record CheckInResponse(
     Integer inventorySuggestedPackageCount,
     String inventoryMismatchSummary,
     String inventoryAcceptedQuantitiesJson,
+    Instant inventoryRemainderDeadlineAt,
     Instant inventoryRemainderRemovedAt,
     String inventoryRemainderRemovalNote,
     String inventoryActualJson,
     String inventoryMismatchJson,
     String inventorySuggestedQuantitiesJson,
+    long inventoryResultVersion,
+    java.util.UUID inventoryAtSiteConfirmedBy,
+    String inventoryAtSiteConfirmedByName,
+    Instant inventoryDecisionAt,
+    boolean inventoryAwaitingOnlineConfirmation,
     Instant receiptConfirmationDueAt,
     boolean receiptConfirmationOverdue,
     Instant receiptConfirmationReleaseAt,
@@ -89,7 +95,12 @@ public record CheckInResponse(
     String paymentEvidenceReference,
     InventoryVisit inventoryVisit,
     Instant checkInDeadline,
-    StorageCapacity storageCapacity
+    StorageCapacity storageCapacity,
+    InventoryDecisionResponse inventoryDecision,
+    HandoverRecord handoverRecord,
+    Instant customerReceiptConfirmedAt,
+    String facilityAddress,
+    Integer inventoryReturnWindowDays
 ) {
     public record InventoryVisit(
         Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
@@ -192,8 +203,9 @@ public record CheckInResponse(
             null, null, List.of(), IntakeAction.NONE,
             null, null, false, false,
             null, null, null, null, null, null, null, null,
+            null, 0L, null, null, null, false,
             null, false, null, false,
-            null, null, null, null, null
+            null, null, null, null, null, null, null, null, null, null
         );
     }
 

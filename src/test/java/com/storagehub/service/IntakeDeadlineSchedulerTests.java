@@ -62,14 +62,53 @@ class IntakeDeadlineSchedulerTests {
         assertThat(task.getDeadlineAt()).isAfter(Instant.now().plusSeconds(86300));
         assertThat(r.getActualReturnedAt()).isNull();assertThat(r.getCompletedAt()).isNull();
     }
-    @Test void excessTaskDoesNotEndRentalOrRequireWholeUnitEmpty() {
+    @Test void retiredPartialIntakeDoesNotCreateExcessRemovalTasks() {
         var r=rental();r.setMoveInCompletedAt(Instant.now().minusSeconds(400000));r.setInventoryResultPublishedAt(Instant.now().minusSeconds(300000));
         r.setInventoryRemainderDeadlineAt(Instant.now().minusSeconds(1));
         var c=new CheckIn();c.setInventoryResolutionStatus(InventoryResolutionStatus.PARTIAL_ACCEPTED);
         when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
-        scheduler.process();var capture=ArgumentCaptor.forClass(MaintenanceTask.class);verify(tasks).saveAndFlush(capture.capture());
-        assertThat(capture.getValue().getTaskType()).isEqualTo(MaintenanceTaskType.inventory_check);
-        assertThat(capture.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.EXCESS_ITEMS);
+        scheduler.process();
+        verify(tasks, never()).saveAndFlush(any());
+        org.mockito.Mockito.verifyNoInteractions(notifications);
         assertThat(r.getInventoryEscalatedAt()).isNull();assertThat(r.getStatus()).isEqualTo(RentalStatus.active);
+    }
+    @Test void alreadyEmptyUnitNeverGetsAnotherGoodsMovementTask() {
+        // The unit was handed back empty but finance is still open. "Unit empty" and
+        // "settlement finished" are separate states, so no new recovery task may be created.
+        var r=rental();
+        r.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(1));
+        r.setActualReturnedAt(Instant.now().minusSeconds(86400));
+        r.setStatus(RentalStatus.return_requested);
+        scheduler.process();
+        verify(tasks,never()).saveAndFlush(any());
+    }
+    @Test void emptyUnitBeforeRemovalDeadlineAlsoCreatesNoTask() {
+        var r=rental();
+        r.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(3600));
+        r.setActualReturnedAt(Instant.now());
+        r.setStatus(RentalStatus.return_requested);
+        scheduler.process();
+        verify(tasks,never()).saveAndFlush(any());
+    }
+    @Test void atSiteResolutionDoesNotStartTheFourtyEightHourClock() {
+        // The verified customer is present and the arrangement was recorded at the facility.
+        // No online confirmation and therefore no 48-hour reminder may be started.
+        var r=rental();
+        r.setInventoryResultPublishedAt(Instant.now().minusSeconds(5*86400));
+        var c=new CheckIn();
+        c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
+        scheduler.process();
+        verify(notifications,never()).createNotificationOnce(any(),any(),eq("Đã quá hạn xác nhận kiểm kê"),any(),any());
+        verify(notifications,never()).createNotificationOnce(any(),any(),eq("Nhắc xác nhận kết quả kiểm kê"),any(),any());
+    }
+    @Test void onlineConfirmationStillGetsTheFourtyEightHourEscalation() {
+        var r=rental();
+        r.setInventoryResultPublishedAt(Instant.now().minusSeconds(5*86400));
+        var c=new CheckIn();
+        c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_CUSTOMER);
+        when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
+        scheduler.process();
+        verify(notifications).createNotificationOnce(any(),any(),eq("Đã quá hạn xác nhận kiểm kê"),any(),any());
     }
 }

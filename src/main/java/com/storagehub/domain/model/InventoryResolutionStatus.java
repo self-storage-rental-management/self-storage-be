@@ -8,8 +8,10 @@ package com.storagehub.domain.model;
 public enum InventoryResolutionStatus {
     NOT_STARTED,
     PENDING_CUSTOMER,
+    PENDING_STAFF_RESOLUTION,
     ACCEPTED,
     PARTIAL_ACCEPTED,
     RETURN_REQUESTED,
+    TRANSFER_REQUESTED,
     RECOVERY_REQUIRED
 }

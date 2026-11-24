@@ -38,6 +38,7 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
           and (returnCase.netRefundAmount > 0 or returnCase.amountDueFromCustomer > 0)
           and (:pattern is null
             or lower(coalesce(returnCase.settlementPaymentId, '')) like :pattern
+            or returnCase.id in :receiptIds
             or lower(coalesce(customer.fullName, '')) like :pattern
             or lower(coalesce(storageUnit.code, '')) like :pattern)
         order by returnCase.settlementPaidAt desc, returnCase.id desc
@@ -51,12 +52,14 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
           and (returnCase.netRefundAmount > 0 or returnCase.amountDueFromCustomer > 0)
           and (:pattern is null
             or lower(coalesce(returnCase.settlementPaymentId, '')) like :pattern
+            or returnCase.id in :receiptIds
             or lower(coalesce(customer.fullName, '')) like :pattern
             or lower(coalesce(storageUnit.code, '')) like :pattern)
         """)
     Page<ReturnCase> searchFacilityPaymentSettlements(
         @Param("facilityId") UUID facilityId,
         @Param("pattern") String pattern,
+        @Param("receiptIds") java.util.Collection<UUID> receiptIds,
         Pageable pageable
     );
 

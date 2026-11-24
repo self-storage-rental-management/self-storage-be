@@ -28,7 +28,7 @@ public class RenewalTransactionReader {
         String status=RenewalTransactionStatus.resolve(p,bound,refunded,now);
         return new RenewalStatusSummary.Transaction(p.getId(),p.getGatewayIntentId(),p.getPurpose().name(),status,p.getAmount(),refunded,p.getCurrency(),
             p.getPaymentDeadline(),p.getPaymentDeadline()!=null&&!now.isBefore(p.getPaymentDeadline()),
-            bound&&Set.of("SUCCEEDED","PARTIALLY_REFUNDED","REFUNDED").contains(status),p.getPaidAt());
+            bound&&Set.of("SUCCEEDED","PARTIALLY_REFUNDED","REFUNDED").contains(status),p.getPaidAt(),p.getReceiptCode());
     }
     public boolean verifiedAllocation(Payment p,Optional<LedgerStore.Snapshot> account) {
         var receipt=account.stream().flatMap(s->s.receipts().stream()).filter(r->r.id().equals(p.getRenewalLedgerReceiptRef())).findFirst().orElse(null);

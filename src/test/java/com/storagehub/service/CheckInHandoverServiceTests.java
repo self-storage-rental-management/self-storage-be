@@ -26,6 +26,7 @@ import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.model.FileAsset;
+import com.storagehub.domain.model.FileAssetStatus;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
@@ -84,6 +85,7 @@ class CheckInHandoverServiceTests {
     @Mock private MaintenanceTaskRepository maintenanceTaskRepository;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private ReservationPricingSnapshotRepository pricingSnapshotRepository;
+    @Mock private com.storagehub.domain.repo.ReturnCaseRepository returnCaseRepository;
     @Mock private UserRepository userRepository;
     @Mock private AdminAuthorizationService authorizationService;
     @Mock private FacilityScopeService facilityScopeService;
@@ -108,10 +110,11 @@ class CheckInHandoverServiceTests {
             checkInRepository, fileAssetRepository, rentalRepository, paymentRepository,
             maintenanceTaskRepository,
             goodsItemRepository, pricingSnapshotRepository, userRepository, authorizationService,
-            facilityScopeService, auditLogService, notificationService, new ObjectMapper()
+            facilityScopeService, auditLogService, notificationService, new ObjectMapper().findAndRegisterModules()
         );
         ReflectionTestUtils.setField(service,"paymentProvenance",paymentProvenance);
         ReflectionTestUtils.setField(service,"sandboxPaymentPolicy",sandboxPaymentPolicy);
+        ReflectionTestUtils.setField(service,"inventoryReturnCases",returnCaseRepository);
         staff = entityWithId(new User());
         staff.setFullName("Staff A");
         manager = entityWithId(new User());
@@ -129,6 +132,7 @@ class CheckInHandoverServiceTests {
         );
         facility.setName("Facility A");
         UnitType unitType = entityWithId(new UnitType());
+        unitType.setCode("L");
         unitType.setLengthM(new BigDecimal("3"));
         unitType.setWidthM(new BigDecimal("3"));
         unitType.setHeightM(new BigDecimal("3"));
@@ -220,6 +224,20 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void inventoryDraftOpensEmptyAndRejectsStaleSavesAndPublication() {
+        mockCompletionChecks(false);
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        reservation.setStatus(ReservationStatus.PREPARING);
+        UUID id = checkIn.getId();
+        assertThat(service.inventoryDraft(actor, id).revision()).isZero();
+        var request = validCompletionRequest();
+        var saved = service.saveInventoryDraft(actor, id, request, 0);
+        assertThat(service.inventoryDraft(actor, id)).isEqualTo(saved);
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, id, request, 0)).hasMessageContaining("đã thay đổi");
+        assertThatThrownBy(() -> service.publishInventoryDraft(actor, id, 0)).hasMessageContaining("đã thay đổi");
+    }
+
+    @Test
     void completesInventoryAndOccupiesAssignedUnit() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(true);
@@ -307,6 +325,67 @@ class CheckInHandoverServiceTests {
         assertThat(checkIn.getInventoryActualJson()).contains("actualGoods",actual.getCatalogMaterialId().toString());
         assertThat(response.handover().inventoryLines().getFirst().actualGoods().getMaterialName()).isEqualTo(prohibited?"Vật liệu thực tế":"Kim loại");
         if(prohibited) assertThat(rental.getInventoryRemovalDeadlineAt()).isNotNull();
+    }
+
+    /**
+     * A fit must be decided from the real sizes. When the operator records the actual size on
+     * actualGoods but leaves the per-line measurements empty, the calculator must NOT fall back
+     * to the customer's declared size.
+     */
+    @Test
+    void actualGoodsSizeWinsOverDeclaredSizeWhenMeasurementsAreAbsent() throws Exception {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN); mockCompletionChecks(true);
+        var rental=checkIn.getRental(); rental.setSetupCompletionDeadlineAt(Instant.now().plusSeconds(86400));
+        rental.setInventoryArrivedAt(Instant.now()); rental.setInventoryIdentityVerifiedAt(Instant.now());
+        var original=entityWithId(new ReservationGoodsItem()); original.setQuantity(2);
+        original.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);
+        original.setCatalogCategoryId(UUID.randomUUID()); original.setCatalogMaterialId(UUID.randomUUID());
+        original.setCategoryName("Đồ gia dụng"); original.setMaterialName("Gỗ");
+        // Declared size is small, the real size is much larger.
+        original.setLengthCm(new BigDecimal("10")); original.setWidthCm(new BigDecimal("10"));
+        original.setHeightCm(new BigDecimal("10")); original.setWeightKg(new BigDecimal("5"));
+        when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId())).thenReturn(List.of(original));
+
+        var actual=new com.storagehub.api.reservation.GoodsItemRequest();
+        actual.setCategory(com.storagehub.domain.model.GoodsCategory.KITCHENWARE);
+        actual.setCatalogCategoryId(original.getCatalogCategoryId());
+        actual.setCatalogMaterialId(original.getCatalogMaterialId());
+        actual.setCategoryName("Đồ gia dụng"); actual.setMaterialName("Gỗ");
+        actual.setStackable(true); actual.setAllowHorizontalPlacement(true); actual.setMaxStackLayers(2);
+        actual.setDescription("Hàng hóa kiểm kê thực tế ghi nhận kích thước lớn hơn khai báo");
+        actual.setQuantity(2);
+        actual.setLengthCm(new BigDecimal("150")); actual.setWidthCm(new BigDecimal("120"));
+        actual.setHeightCm(new BigDecimal("140")); actual.setWeightPerItemKg(new BigDecimal("80"));
+        var catalog=org.mockito.Mockito.mock(GoodsCatalogService.class);
+        ReflectionTestUtils.setField(service,"goodsCatalogService",catalog);
+        var packing=org.mockito.Mockito.mock(PalletInventoryService.class);
+        ReflectionTestUtils.setField(service,"palletInventory",packing);
+        when(packing.evaluateActualFit(eq(unit),any())).thenReturn(
+            new PalletInventoryService.Fit(null,0,unit,List.of(),false));
+
+        // No per-line measurements: the actual size must come from actualGoods.
+        var line=new CompleteCheckInRequest.InventoryLine(original.getId(),2,
+            CompleteCheckInRequest.InventoryLine.Condition.INTACT,"Kích thước thực tế lớn hơn khai báo",
+            null,actual);
+        var base=validCompletionRequest();
+        var measurements=new CheckInMeasurements(new BigDecimal("150"),new BigDecimal("120"),
+            new BigDecimal("140"),new BigDecimal("160"),new BigDecimal("3"),true);
+        var request=new CompleteCheckInRequest(base.checklist(),base.identityDocumentNumber(),null,measurements,
+            "Kích thước thực tế lớn hơn khai báo rõ rệt",base.initialUnitCondition(),base.goodsCondition(),2,
+            "Đồ gia dụng","Gỗ",base.evidenceReferences(),base.handedOverItems(),base.notes(),base.lockReference(),
+            List.of(line));
+
+        service.complete(actor,checkIn.getId(),request);
+
+        org.mockito.ArgumentCaptor<List<com.storagehub.api.reservation.GoodsItemRequest>> captor =
+            org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(packing, org.mockito.Mockito.atLeastOnce()).evaluateActualFit(eq(unit),captor.capture());
+        var used=captor.getAllValues().getFirst().getFirst();
+        // The real size must be used, not the declared 10x10x10.
+        assertThat(used.getLengthCm()).isEqualByComparingTo("150");
+        assertThat(used.getWidthCm()).isEqualByComparingTo("120");
+        assertThat(used.getHeightCm()).isEqualByComparingTo("140");
+        assertThat(used.getWeightPerItemKg()).isEqualByComparingTo("80");
     }
 
     @Test
@@ -1058,6 +1137,235 @@ class CheckInHandoverServiceTests {
         var suggestions = service.inventoryAlternatives(actor, checkIn.getId());
         assertThat(suggestions).hasSize(fits ? 1 : 0);
         if (fits) assertThat(suggestions.getFirst().storageUnitId()).isEqualTo(candidate.getId());
+    }
+
+
+    private void prepareDraft() {
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setInventoryArrivedAt(Instant.now());
+        checkIn.setInventoryIdentityVerifiedAt(Instant.now());
+        Rental rental = entityWithId(new Rental());
+        rental.setInventoryFinalDeadlineAt(Instant.now().plusSeconds(86400));
+        when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+    }
+
+    @Test
+    void savesAndReadsDraftWithoutPublishingOrChangingOriginalHandover() {
+        prepareDraft();
+        var request = validCompletionRequest();
+        UUID fileId = UUID.fromString(request.evidenceReferences().getFirst());
+        FileAsset evidence = entityWithId(new FileAsset());
+        ReflectionTestUtils.setField(evidence, "id", fileId);
+        evidence.setEntityType("CHECK_IN"); evidence.setEntityId(checkIn.getId());
+        when(fileAssetRepository.findAllById(List.of(fileId))).thenReturn(List.of(evidence));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        String original = checkIn.getChecklistJson();
+        var saved = service.saveInventoryDraft(actor, checkIn.getId(), new com.storagehub.api.checkin.SaveInventoryDraftRequest(request, 0));
+        assertThat(saved.revision()).isEqualTo(1);
+        assertThat(saved.savedAt()).isNotNull();
+        assertThat(checkIn.getChecklistJson()).isEqualTo(original);
+        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.NOT_STARTED);
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any());
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        assertThat(service.getInventoryDraft(actor, checkIn.getId()).request()).isEqualTo(request);
+    }
+
+    @Test
+    void rejectsDraftOverwriteWithStaleRevision() {
+        prepareDraft(); checkIn.setInventoryDraftRevision(2);
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, checkIn.getId(), new com.storagehub.api.checkin.SaveInventoryDraftRequest(validCompletionRequest(), 1)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("người khác");
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void rejectsDraftSaveAfterResultWasSentToCustomer() {
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_CUSTOMER);
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, checkIn.getId(), new com.storagehub.api.checkin.SaveInventoryDraftRequest(validCompletionRequest(), 0)))
+            .isInstanceOf(ApiException.class);
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void rejectsPublishingAnUnsavedOrReplacedDraft() {
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        assertThatThrownBy(() -> service.publishInventoryDraft(actor, checkIn.getId(), 0)).isInstanceOf(ApiException.class);
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void deniesDraftReadOutsideTheFacility() {
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.forbidden("Outside facility scope"))
+            .when(facilityScopeService).assertCanRead(actor, reservation.getFacility().getId());
+        assertThatThrownBy(() -> service.getInventoryDraft(actor, checkIn.getId())).isInstanceOf(ApiException.class);
+    }
+
+
+    @Test
+    void onsiteResolutionRequiresPhysicalCustomerAcknowledgement() {
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        assertThatThrownBy(() -> service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL, false, null, null)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("chính chủ");
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void onsiteResolutionCannotAcceptAllGoodsWhenTheyDoNotFit() {
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryFullFit(false);
+        assertThatThrownBy(() -> service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL, true, null, null)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("Không có phương án xếp toàn bộ");
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void onsiteResolutionRejectsPartialIntakeWithoutPackingPlan() {
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryPartialFitAvailable(false);
+        assertThatThrownBy(() -> service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL, true, null, null)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("Không có phương án nhận một phần");
+    }
+
+    @Test
+    void managerCannotRecordAnOnsiteInventoryDecision() {
+        assertThatThrownBy(() -> service.resolveInventoryAtSite(managerActor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL, true, null, null)))
+            .isInstanceOf(ApiException.class);
+        verify(checkInRepository, never()).findByIdForUpdate(any());
+    }
+
+
+    /** A signed paper record photographed at the facility is the consent evidence. */
+    private String onsiteConsentEvidence() {
+        UUID evidenceId = UUID.fromString("0d29e3dd-67a8-4c8c-bccd-d54e374f50b0");
+        FileAsset evidence = entityWithId(new FileAsset());
+        ReflectionTestUtils.setField(evidence, "id", evidenceId);
+        evidence.setEntityType("CHECK_IN");
+        evidence.setEntityId(checkIn.getId());
+        evidence.setStatus(FileAssetStatus.ACTIVE);
+        when(fileAssetRepository.findAllById(List.of(evidenceId))).thenReturn(List.of(evidence));
+        return evidenceId.toString();
+    }
+
+    @Test
+    void onsiteFullAcceptanceCompletesIntakeWithoutWaitingForCustomerAccount() {
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryFullFit(true);
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        String consent = onsiteConsentEvidence();
+        service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL, true, "Đã trao đổi tại chỗ", null,
+            List.of(consent)));
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.completed);
+        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.ACCEPTED);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.COMPLETED);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.occupied);
+        assertThat(checkIn.getPerformedBy()).isEqualTo(staff);
+    }
+
+    @Test
+    void onsitePartialAcceptanceKeepsRemovalEvidenceStepOpen() {
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryPartialFitAvailable(true);
+        checkIn.setInventorySuggestedQuantitiesJson("{}");
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        String consent = onsiteConsentEvidence();
+        service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL, true, null, null,
+            List.of(consent)));
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
+        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PARTIAL_ACCEPTED);
+        assertThat(checkIn.getInventoryRemainderRemovedAt()).isNull();
+    }
+
+    /**
+    /**
+     * A customer who asked to return during setup leaves the rental in return_requested.
+     * The inventory inspection the return case depends on must remain recordable there.
+     */
+    @Test
+    void returnsDuringSetupAreRecognisedAsAwaitingInspection() {
+        var rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.return_requested);
+        var returnCase = new com.storagehub.domain.model.ReturnCase();
+        returnCase.setStatus(com.storagehub.domain.model.ReturnCaseStatus.requested);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(java.util.List.of(returnCase));
+
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(service, "setupReturnAwaitingInspection", rental))
+            .isEqualTo(Boolean.TRUE);
+    }
+
+    /** A return_requested rental with no open return case is still not ready for inspection. */
+    @Test
+    void returnRequestedWithoutAnOpenCaseIsNotAwaitingInspection() {
+        var rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.return_requested);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(java.util.List.of());
+
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(service, "setupReturnAwaitingInspection", rental))
+            .isEqualTo(Boolean.FALSE);
+    }
+
+    /** A rental still in setup with no return case is never treated as awaiting inspection. */
+    @Test
+    void setupRentalIsNotAwaitingInspection() {
+        var rental = entityWithId(new Rental());
+        rental.setStatus(RentalStatus.setup);
+
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(service, "setupReturnAwaitingInspection", rental))
+            .isEqualTo(Boolean.FALSE);
+    }
+
+    @Test
+    void onsiteAcceptanceIsBlockedWithoutConsentEvidence() {
+        // A verified identity photo only proves the customer was present. Without the signed
+        // record there is no proof of agreement, so the acceptance must not be recorded.
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryFullFit(true);
+        assertThatThrownBy(() -> service.resolveInventoryAtSite(actor, checkIn.getId(),
+            new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+                com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL, true, "Không kèm bằng chứng", null)))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("biên bản giấy");
+        assertThat(checkIn.getInventoryResolutionStatus())
+            .isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        assertThat(checkIn.getStatus()).isNotEqualTo(CheckInStatus.completed);
+    }
+
+    @Test
+    void onsiteAcceptanceRejectsConsentEvidenceFromAnotherCheckIn() {
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryFullFit(true);
+        UUID foreignId = UUID.fromString("11111111-2222-3333-4444-555555555555");
+        FileAsset foreign = entityWithId(new FileAsset());
+        ReflectionTestUtils.setField(foreign, "id", foreignId);
+        foreign.setEntityType("CHECK_IN");
+        foreign.setEntityId(UUID.randomUUID());
+        foreign.setStatus(FileAssetStatus.ACTIVE);
+        when(fileAssetRepository.findAllById(List.of(foreignId))).thenReturn(List.of(foreign));
+        assertThatThrownBy(() -> service.resolveInventoryAtSite(actor, checkIn.getId(),
+            new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+                com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL, true, null, null,
+                List.of(foreignId.toString()))))
+            .isInstanceOf(ApiException.class);
+        assertThat(checkIn.getStatus()).isNotEqualTo(CheckInStatus.completed);
     }
 
     private FileAsset inventoryPhoto() {

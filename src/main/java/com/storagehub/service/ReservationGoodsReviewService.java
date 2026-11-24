@@ -60,6 +60,13 @@ public class ReservationGoodsReviewService {
         int size,
         String correlationId
     ) {
+        return listReviews(actor, facilityId, page, size, correlationId, false);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<ReservationReviewResponse> listReviews(
+        ActorPrincipal actor, UUID facilityId, int page, int size, String correlationId, boolean completed
+    ) {
         requireStaffActor(actor);
         authorizationService.require(actor, SystemPermission.VIEW_RESERVATIONS);
         if (facilityId != null) {
@@ -69,9 +76,10 @@ public class ReservationGoodsReviewService {
         List<UUID> facilityIds = actor.facilityScopes().isEmpty()
             ? List.of(new UUID(0, 0))
             : actor.facilityScopes().keySet().stream().toList();
-        Page<ReservationReviewResponse> result = reservationRepository.findPendingGoodsReviews(
-            facilityId, scoped, facilityIds, pageRequest(page, size)
-        ).map(this::toResponse);
+        Page<ReservationReviewResponse> result = (completed
+            ? reservationRepository.findCompletedGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size))
+            : reservationRepository.findPendingGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size)))
+            .map(this::toResponse);
         return PageResponse.from(result, correlationId);
     }
 

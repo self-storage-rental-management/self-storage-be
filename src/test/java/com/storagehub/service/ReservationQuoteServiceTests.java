@@ -120,7 +120,11 @@ class ReservationQuoteServiceTests {
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("21505000.00");
         assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
+        // V2 setup-return policy: the quote stores 20% of the accepted net rental,
+        // not a one-month (list price) early-termination fee.
         assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("3201000");
+        assertThat(response.getSetupEarlyExitFee())
+            .isEqualByComparingTo(response.getTotalAfterDiscount().multiply(new BigDecimal("0.20")));
         assertThat(response.getQuoteId()).isNotNull();
     }
 

@@ -88,6 +88,16 @@ class CustomerReservationServiceTests {
     private Reservation reservation;
     private ReservationPricingSnapshot snapshot;
 
+    @Test
+    void rejectsRetiredPartialIntakeWithoutChangingTheReservation() {
+        var request = new com.storagehub.api.reservation.InventoryResolutionRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL, null);
+        assertThatThrownBy(() -> service.applyInventoryDecision(null, new Reservation(), new CheckIn(), request, null))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ngừng áp dụng");
+        org.mockito.Mockito.verifyNoInteractions(rentalRepository, reservationRepository, checkInRepository);
+    }
+
     @BeforeEach
     void setUp() {
         service = new CustomerReservationService(

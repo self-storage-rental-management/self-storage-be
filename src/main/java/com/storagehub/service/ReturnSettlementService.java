@@ -126,17 +126,46 @@ public class ReturnSettlementService {
         UUID rentalId,
         CustomerCreateReturnRequest request
     ) {
+        return createReturnRequest(actor, rentalId, request, false);
+    }
+
+    @Transactional
+    public ReturnCaseResponse createInventoryReturnAtSite(ActorPrincipal actor, UUID rentalId, CustomerCreateReturnRequest request) {
+        if (!actor.hasRole(RoleCode.STAFF)) throw ApiExceptions.forbidden("Chỉ Staff được ghi nhận yêu cầu trả kho tại cơ sở.");
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        if (request.returnType() != ReturnType.INVENTORY_MISMATCH) throw ApiExceptions.conflict("Chỉ áp dụng cho trả kho do kiểm kê sai lệch.");
+        return createReturnRequest(actor, rentalId, request, true);
+    }
+
+    private ReturnCaseResponse createReturnRequest(ActorPrincipal actor, UUID rentalId, CustomerCreateReturnRequest request, boolean atSite) {
+
         Rental rental = rentalRepository.findByIdForUpdate(rentalId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found for this customer"));
-        if (!rental.getCustomer().getId().equals(actor.userId()))
+        if (atSite) facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
+        if (!atSite && !rental.getCustomer().getId().equals(actor.userId()))
             throw ApiExceptions.notFound("Rental was not found for this customer");
 
-        var existingReturns = returnCaseRepository.findByRental_Id(rentalId);
+        User staff = atSite ? userRepository.findById(actor.userId()).orElse(null) : null;
+        return createReturnRequest(rental, request, staff);
+    }
+
+    ReturnCaseResponse createInventoryReturn(Rental rental, CustomerCreateReturnRequest request, User staff) {
+        return createReturnRequest(rental, request, staff);
+    }
+
+    private ReturnCaseResponse createReturnRequest(Rental rental, CustomerCreateReturnRequest request, User staff) {
+        var existingReturns = returnCaseRepository.findByRental_Id(rental.getId());
         var activeReturn = existingReturns.stream().filter(r -> r.getStatus() != ReturnCaseStatus.completed).findFirst();
         if (activeReturn.isPresent()) return toResponse(activeReturn.get());
         boolean inventoryMismatchReturn = request.returnType() == ReturnType.INVENTORY_MISMATCH;
         if (inventoryMismatchReturn && rental.getInventoryRemovalPublishedAt() != null)
             validateRemovalDate(rental, request.scheduledDate());
+        if (rental.isInventoryPending() && rental.getInventoryEscalatedAt() != null) {
+            throw ApiExceptions.conflict("Hồ sơ đã chuyển sang chờ thu hồi. Vui lòng liên hệ cơ sở.");
+        }
+        if (!inventoryMismatchReturn && rental.isInventoryPending() && rental.getInventoryRemovalDeadlineAt() != null) {
+            throw ApiExceptions.conflict("Vui lòng đặt lịch trả kho từ kết quả kiểm kê hàng hóa.");
+        }
         if (inventoryMismatchReturn
             && rental.getStatus() != RentalStatus.setup
             && !rental.isInventoryPending()) {
@@ -153,8 +182,8 @@ public class ReturnSettlementService {
             recoveryGuard.requireNoActiveRecovery(rental);
         }
 
-        User customer = userRepository.findById(actor.userId())
-            .orElseThrow(() -> ApiExceptions.notFound("Customer user not found"));
+        User customer = staff == null ? userRepository.findById(rental.getCustomer().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Customer user not found")) : rental.getCustomer();
 
         // Only verified check-in funds establish the available security deposit.
         BigDecimal depositAmount = securityDeposit(rental);
@@ -171,13 +200,12 @@ public class ReturnSettlementService {
         returnCase.setFacility(rental.getFacility());
         returnCase.setStorageUnit(rental.getStorageUnit());
         returnCase.setCustomer(customer);
-        returnCase.setRequestedBy(customer);
+        returnCase.setRequestedBy(staff == null ? customer : staff);
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setRequestedAt(now);
         returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : today);
-        returnCase.setRecoveryEligibleAt(noShowRecoveryEligibleAt(returnCase.getScheduledDate()));
-        if (inventoryMismatchReturn && rental.getInventoryRemovalDeadlineAt() != null)
-            returnCase.setRecoveryEligibleAt(rental.getInventoryRemovalDeadlineAt());
+        returnCase.setRecoveryEligibleAt(inventoryMismatchReturn && rental.getInventoryRemovalDeadlineAt() != null
+            ? rental.getInventoryRemovalDeadlineAt() : noShowRecoveryEligibleAt(returnCase.getScheduledDate()));
         returnCase.setCustomerNotes(request.notes());
         returnCase.setDepositAmount(depositAmount);
         returnCase.setSetupExitRequested(setupExit);
@@ -185,6 +213,12 @@ public class ReturnSettlementService {
             returnCase.setReturnType(inventoryMismatchReturn
                 ? ReturnType.INVENTORY_MISMATCH : ReturnType.RETURN_IN_SETUP);
             returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+            if (inventoryMismatchReturn) {
+                returnCase.setReturnWindowDays(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null));
+                returnCase.setReturnExtensionDays(rental.getInventoryReturnExtensionDays());
+                returnCase.setReturnExtensionCount(rental.getInventoryReturnExtensionCount());
+                returnCase.setReturnPolicyVersion(rental.getInventoryReturnPolicyVersion());
+            }
         } else {
             classifyScheduledReturn(returnCase);
         }
@@ -205,7 +239,7 @@ public class ReturnSettlementService {
         rentalRepository.save(rental);
 
         auditLogService.recordMutation(
-            "CUSTOMER_RETURN_REQUESTED",
+            staff == null ? "CUSTOMER_RETURN_REQUESTED" : "STAFF_INVENTORY_RETURN_REQUESTED",
             "return",
             saved.getId(),
             saved.getFacility().getId(),
@@ -216,8 +250,10 @@ public class ReturnSettlementService {
         notificationService.createNotification(
             customer.getId(),
             NotificationType.RETURN,
-            "Yêu cầu trả kho đã được ghi nhận",
-            "Yêu cầu trả kho cho gian " + rental.getStorageUnit().getCode() + " đã được tiếp nhận.",
+            staff != null && inventoryMismatchReturn ? "Cơ sở đã tạo hồ sơ trả kho sau kiểm kê" : "Yêu cầu trả kho đã được ghi nhận",
+            staff != null && inventoryMismatchReturn
+                ? "Cơ sở đã ghi nhận phương án trả kho sau kiểm kê cho gian " + rental.getStorageUnit().getCode() + ". Vui lòng theo dõi lịch nghiệm thu và quyết toán."
+                : "Yêu cầu trả kho cho gian " + rental.getStorageUnit().getCode() + " đã được tiếp nhận.",
             saved.getId()
         );
 
@@ -225,8 +261,8 @@ public class ReturnSettlementService {
             rental.getFacility().getId(),
             NotificationType.RETURN,
             "Yêu cầu trả kho mới",
-            "Khách hàng " + customer.getFullName() + " đã gửi yêu cầu trả kho cho gian "
-                + rental.getStorageUnit().getCode() + ". Vui lòng kiểm tra và nghiệm thu kho.",
+            (staff != null && inventoryMismatchReturn ? "Nhân viên đã ghi nhận tại cơ sở phương án trả kho của " : "Khách hàng ")
+                + customer.getFullName() + " cho gian " + rental.getStorageUnit().getCode() + ". Vui lòng kiểm tra và nghiệm thu kho.",
             saved.getId()
         );
 
@@ -294,6 +330,10 @@ public class ReturnSettlementService {
         returnCase.setSetupExitRequested(true);
         returnCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
         returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+        returnCase.setReturnWindowDays(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null));
+        returnCase.setReturnExtensionDays(rental.getInventoryReturnExtensionDays());
+        returnCase.setReturnExtensionCount(rental.getInventoryReturnExtensionCount());
+        returnCase.setReturnPolicyVersion(rental.getInventoryReturnPolicyVersion());
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
         rental.setSetupExitReviewRequired(true);
@@ -482,21 +522,20 @@ public class ReturnSettlementService {
         BigDecimal amountDue = securityDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
         returnCase.setAmountDueFromCustomer(amountDue);
         boolean refundPending = approvedRefund.signum() > 0 || approvedRentalRefund.signum() > 0;
-        if (amountDue.signum() > 0) returnCase.setStatus(ReturnCaseStatus.payment_due);
-        else if (refundPending) markRefundPending(returnCase); else returnCase.setStatus(ReturnCaseStatus.completed);
+        // The decision fixes the statement amounts. The customer must always see and confirm
+        // this statement before any money moves, so the case can never jump straight to a
+        // refund, a collection or completion from this path.
+        if (returnCase.isCustomerConfirmed()) {
+            throw ApiExceptions.conflict("Bảng kê đã được khách xác nhận. Không thể thay đổi số tiền đã chốt.");
+        }
+        returnCase.setCustomerConfirmed(false);
+        returnCase.setCustomerConfirmedAt(null);
+        returnCase.setCustomerDecision(null);
+        returnCase.setCustomerDecisionNote(null);
+        returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
 
         rental.setSetupExitReviewRequired(false);
-        if (!refundPending && amountDue.signum() == 0) {
-            var reconciliation = finance();
-            if (reconciliation != null) {
-                reconciliation.requireCurrent(returnCase);
-                reconciliation.settle(returnCase, actor.userId(), "SETUP_EXIT_OFFSET:" + returnCase.getId(), false);
-            }
-            returnCase.setCompletedAt(Instant.now());
-            finalizeRentalAndUnit(returnCase);
-        } else {
-            rentalRepository.save(rental);
-        }
+        rentalRepository.save(rental);
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
         auditLogService.recordMutation(
@@ -511,13 +550,10 @@ public class ReturnSettlementService {
             saved.getCustomer().getId(),
             NotificationType.RETURN,
             "Business đã quyết định xử lý yêu cầu trả kho trong thời gian chuẩn bị",
-            refundPending
-                ? (amountDue.signum() > 0
-                    ? "Phí hư hỏng vượt tiền cọc. Khách cần thanh toán khoản còn thiếu trước khi hoàn phần tiền được duyệt."
-                    : "Khoản hoàn tiền thuê và/hoặc cọc đã được duyệt. Staff sẽ đối chiếu chứng từ thực tế trước khi hoàn tiền.")
-                : (amountDue.signum() > 0
-                    ? "Phí hư hỏng vượt tiền cọc. Khách cần thanh toán khoản còn thiếu để hoàn tất trả kho."
-                    : "Yêu cầu đã được chốt không hoàn tiền và hệ thống đã giải phóng hồ sơ trả kho."),
+            "Bảng kê quyết toán cho gian " + saved.getStorageUnit().getCode()
+                + " đã được lập (dự kiến hoàn " + approvedRefund.add(approvedRentalRefund)
+                    .setScale(2, RoundingMode.HALF_UP).toPlainString()
+                + " đ). Vui lòng kiểm tra và xác nhận bảng kê. Hệ thống không tự đồng ý thay bạn.",
             saved.getId()
         );
         return toResponse(saved);
@@ -1225,6 +1261,10 @@ public class ReturnSettlementService {
             // early return. A previously persisted amount may have been saved
             // before the rental-refund projection was recalculated.
             : (activePricing != null ? calculatedRentalRefund : zeroIfNull(returnCase.getRentalRefundAmount()));
+        // Capture the approved amounts before this review overwrites them.
+        BigDecimal previousDeductions = zeroIfNull(returnCase.getTotalDeductions());
+        BigDecimal previousRefund = zeroIfNull(returnCase.getNetRefundAmount());
+        BigDecimal previousDue = zeroIfNull(returnCase.getAmountDueFromCustomer());
         var settlement = calculateSettlement(returnCase, deductions, earlyTerminationCharge, rentalRefund);
         requireSettlementLimit(settlement.deductions());
         returnCase.setReviewedBy(manager);
@@ -1246,7 +1286,20 @@ public class ReturnSettlementService {
             returnCase.setProposedUnitStatus(request.proposedUnitStatus());
         }
 
-        if (settlement.due().signum() > 0) {
+        // A dispute resolution rewrites the statement amounts. The approved statement and the
+        // customer confirmation of the previous version are therefore no longer valid: the case
+        // must go back to the customer for a renewed confirmation instead of moving straight to
+        // collection or refund. Only an unchanged statement may continue to the money step.
+        boolean amountsChanged = previousDeductions.compareTo(settlement.deductions()) != 0
+            || previousRefund.compareTo(settlement.refund()) != 0
+            || previousDue.compareTo(settlement.due()) != 0;
+        if (amountsChanged) {
+            returnCase.setCustomerConfirmed(false);
+            returnCase.setCustomerConfirmedAt(null);
+            returnCase.setCustomerDecision(null);
+            returnCase.setCustomerDecisionNote(null);
+            returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
+        } else if (settlement.due().signum() > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
         } else if (settlement.refund().signum() > 0) {
             markRefundPending(returnCase);
@@ -1271,8 +1324,14 @@ public class ReturnSettlementService {
         notificationService.createNotification(
             saved.getCustomer().getId(),
             NotificationType.RETURN,
-            "Kết quả giải quyết khiếu nại quyết toán trả kho",
-            "Manager đã xem xét lại quyết toán cho gian " + saved.getStorageUnit().getCode() + ": " + request.resolutionNote(),
+            amountsChanged
+                ? "Bảng kê quyết toán đã được điều chỉnh, cần bạn xác nhận lại"
+                : "Kết quả giải quyết khiếu nại quyết toán trả kho",
+            amountsChanged
+                ? "Manager đã xem xét lại và điều chỉnh bảng kê cho gian " + saved.getStorageUnit().getCode()
+                    + ": " + request.resolutionNote()
+                    + " Vui lòng kiểm tra và xác nhận lại bảng kê mới. Hệ thống không tự đồng ý thay bạn."
+                : "Manager đã xem xét lại quyết toán cho gian " + saved.getStorageUnit().getCode() + ": " + request.resolutionNote(),
             saved.getId()
         );
 
@@ -1555,12 +1614,39 @@ public class ReturnSettlementService {
         BigDecimal deposit = zeroIfNull(rc.getDepositAmount()).setScale(2, RoundingMode.HALF_UP);
         BigDecimal rentalCredit = zeroIfNull(rentalRefund).setScale(2, RoundingMode.HALF_UP);
 
-        // Fees consume the security deposit first, then the unused-rent refund.
-        // This is the same rule for setup and active returns: a deposit shortfall
-        // is offset by unused rent, and only the remaining deficit is collected.
+        // An inventory-mismatch return refunds the prepaid rent but must still charge for the
+        // days the unit was actually used (verified usage, no fixed early-termination fee).
+        // rentalCredit holds the full prepaid rent here, so the usage charge is deducted from it.
+        if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH && zeroIfNull(rentalCharge).signum() > 0) {
+            BigDecimal usageCharge = zeroIfNull(rentalCharge).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal netRentalCredit = rentalCredit.subtract(usageCharge)
+                .max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal depositBalance = deposit.subtract(securityDeductions);
+            BigDecimal totalFees = securityDeductions.add(usageCharge).setScale(2, RoundingMode.HALF_UP);
+            return new Calculation(totalFees,
+                netRentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
+                depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
+        }
+
+        // During setup the agreed 20% retained amount is already represented by
+        // rentalRefund. Damage can consume the one-month deposit only; any excess
+        // becomes an amount due instead of silently consuming the 80% refund.
+        if (rc.isSetupEarlyExit()) {
+            BigDecimal depositBalance = deposit.subtract(securityDeductions);
+            return new Calculation(securityDeductions,
+                rentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
+                depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
+        }
+
+        // Once the paid rental period has started, fees consume the deposit first,
+        // then the refund for whole unused months, and only the remaining excess
+        // is collected from the customer.
         BigDecimal available = deposit.add(rentalCredit);
-        BigDecimal balance = available.subtract(securityDeductions);
-        return new Calculation(securityDeductions,
+        // Mismatch returns carry the full prepaid rent as credit, before usage.
+        BigDecimal totalDeductions = rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            ? securityDeductions.add(zeroIfNull(rentalCharge)) : securityDeductions;
+        BigDecimal balance = available.subtract(totalDeductions);
+        return new Calculation(totalDeductions,
             balance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
             balance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
     }
@@ -1615,7 +1701,14 @@ public class ReturnSettlementService {
             return requested != null ? requested : BigDecimal.ZERO;
         }
     }
+    /**
+     * Deliberately does not enforce a cap. The business has not yet decided the final rule for
+     * rounding and for limiting the usage fee against the total rent, and inventing a cap here
+     * would silently change how much a customer owes or gets back. The call sites are kept so the
+     * rule can be added in one place once it is decided.
+     */
     private void requireSettlementLimit(BigDecimal total) {
+        // No limit is applied until the business rule is confirmed. See the open-decisions report.
     }
 
     @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
@@ -1831,7 +1924,11 @@ public class ReturnSettlementService {
             noShowTask == null || noShowTask.getRecoveryWitness() == null ? null : noShowTask.getRecoveryWitness().getFullName(),
             noShowTask == null ? null : noShowTask.getDeadlineAt(),
             rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? rc.getRental().getInventoryRemovalDeadlineAt() : null,
-            rc.getLockInspectionResult()
+            rc.getLockInspectionResult(),
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? InventoryTimelinePolicy.resolveReturnWindowDays(rc.getRental(), rc) : null,
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+                ? (rc.getReturnPolicyVersion() != null ? rc.getReturnPolicyVersion() : rc.getRental().getInventoryReturnPolicyVersion())
+                : null
         );
     }
 
@@ -1905,6 +2002,12 @@ public class ReturnSettlementService {
         LocalDate setupStart = setupStartInstant.atZone(BusinessTime.ZONE).toLocalDate();
         boolean goodsMovedIn = rental.getMoveInCompletedAt() != null || rental.getInventoryVerifiedAt() != null;
         if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
+            // For a mismatch return, rental use starts only when the customer
+            // explicitly confirms that goods have been moved into the unit.
+            // Physical handover/setup may happen earlier and is not billable use.
+            Instant moveInCompletedAt = rental.getMoveInCompletedAt();
+            if (moveInCompletedAt == null) return null;
+            LocalDate usageStart = moveInCompletedAt.atZone(BusinessTime.ZONE).toLocalDate();
             Instant actual = returnCase.getSetupReturnedAt() != null ? returnCase.getSetupReturnedAt()
                 : returnCase.getInspectedAt();
             LocalDate endDate = actual == null ? returnCase.getScheduledDate()
@@ -1913,7 +2016,7 @@ public class ReturnSettlementService {
                 LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
                 if (endDate.isAfter(last)) endDate = last;
             }
-            int usedDays = EarlyTerminationPolicy.calendarUsageDays(setupStart, endDate);
+            int usedDays = EarlyTerminationPolicy.calendarUsageDays(usageStart, endDate);
             if (usedDays <= 0) return null;
             return EarlyTerminationPolicy.inventoryMismatchExit(
                 snapshot.getNetRentalAmount(), snapshot.getMonthlyPrice(), usedDays, goodsMovedIn
