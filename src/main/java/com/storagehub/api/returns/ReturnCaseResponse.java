@@ -218,6 +218,8 @@ public record ReturnCaseResponse(
         BigDecimal noticeCharge,
         BigDecimal totalRentalCharge,
         BigDecimal rentalRefundAmount,
-        int noticeDays
+        int noticeDays,
+        Integer rentalMonths,
+        BigDecimal monthlyPrice
     ) {}
 }

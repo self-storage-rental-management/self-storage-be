@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.UUID;
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(description = "Rental detail; absent/incomplete owner sources remain UNKNOWN/null. No raw credential is exposed.")
+@Schema(description = "Rental detail; absent/incomplete owner sources remain UNKNOWN/null. Customer owners may see the active physical lock reference, never a PIN or password secret.")
 public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryResponse.Customer customer,
     RentalSummaryResponse.Facility facility, RentalSummaryResponse.Unit storageUnit,
     RentalSummaryResponse.UnitType unitType, RentalStatus status, LocalDate startDate,
@@ -24,5 +24,10 @@ public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryRes
     public record Financial(@Schema(allowableValues = {"COMPLETE", "PARTIAL", "UNKNOWN"}) String completeness, String currency, BigDecimal outstandingAmount,
         BigDecimal overdueAmount, LocalDate nextDueDate, String reason,
         BigDecimal securityDepositAmount, String billingMode) {}
-    public record Access(String completeness, String status, String reason) {}
+    public record Access(String completeness, String status, String reference, String reason) {
+        /** Compatibility constructor for callers that only provide access state and reason. */
+        public Access(String completeness, String status, String reason) {
+            this(completeness, status, null, reason);
+        }
+    }
 }
