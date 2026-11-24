@@ -848,6 +848,8 @@ public class CheckInHandoverService {
     private org.springframework.beans.factory.ObjectProvider<ReturnSettlementService> inventoryReturnServices;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.domain.repo.CheckInInventoryConfirmationRepository inventoryConfirmations;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.storagehub.domain.repo.ReturnCaseRepository inventoryReturnCases;
 
     @Transactional
     public CheckInResponse resolveInventoryAtSite(ActorPrincipal actor, UUID checkInId,
@@ -981,6 +983,19 @@ public class CheckInHandoverService {
         inventoryConfirmations.saveAndFlush(confirmation);
     }
 
+    /**
+     * A setup-time return keeps the rental in return_requested while the return case is still
+     * open. The inventory inspection the case depends on may not have been recorded yet, so
+     * only those rentals may proceed to an inventory check from return_requested.
+     */
+    private boolean setupReturnAwaitingInspection(Rental rental) {
+        if (rental == null || rental.getStatus() != RentalStatus.return_requested
+            || inventoryReturnCases == null || rental.getId() == null) return false;
+        return inventoryReturnCases.findByRental_Id(rental.getId()).stream().anyMatch(returnCase ->
+            returnCase.getStatus() == com.storagehub.domain.model.ReturnCaseStatus.requested
+                || returnCase.getStatus() == com.storagehub.domain.model.ReturnCaseStatus.scheduled);
+    }
+
     private String writeEvidenceReferences(java.util.List<String> references) {
         try { return objectMapper.writeValueAsString(references); }
         catch (JsonProcessingException exception) {
@@ -1045,7 +1060,11 @@ public class CheckInHandoverService {
             && !rental.getStartDate().isAfter(now.atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate())) {
             rental.setStatus(RentalStatus.active);
         }
-        if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
+        // Inventory inspection is the mandatory step before a setup-time return can be accepted.
+        // A customer who already asked to return during setup leaves the rental in
+        // return_requested, so that state must still allow the inventory to be recorded.
+        if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active
+            && !setupReturnAwaitingInspection(rental)) {
             throw ApiExceptions.conflict("Hồ sơ thuê chưa sẵn sàng để kiểm kê.");
         }
         if (!request.checklist().identityVerified()) {
