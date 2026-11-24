@@ -93,6 +93,8 @@ public class ReturnSettlementService {
     private RentalPeriodResolver rentalPeriods;
     @Autowired(required = false)
     private com.storagehub.domain.repo.CheckInRepository inventoryCheckInRepository;
+    @Autowired(required = false)
+    private PalletInventoryService palletInventoryService;
     @Autowired
     private PaymentRepository paymentRepository;
     @Autowired
@@ -166,7 +168,14 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Hồ sơ đã chuyển sang chờ thu hồi. Vui lòng liên hệ cơ sở.");
         }
         if (!inventoryMismatchReturn && rental.isInventoryPending() && rental.getInventoryRemovalDeadlineAt() != null) {
-            throw ApiExceptions.conflict("Vui lòng đặt lịch trả kho từ kết quả kiểm kê hàng hóa.");
+            boolean decidedReturn = inventoryCheckInRepository != null && rental.getReservation() != null
+                && inventoryCheckInRepository.findByReservation_Id(rental.getReservation().getId())
+                    .map(ci -> ci.getInventoryResolutionStatus() == com.storagehub.domain.model.InventoryResolutionStatus.RETURN_REQUESTED)
+                    .orElse(false);
+            if (!decidedReturn) {
+                throw ApiExceptions.conflict("Vui lòng đặt lịch trả kho từ kết quả kiểm kê hàng hóa.");
+            }
+            inventoryMismatchReturn = true;
         }
         if (inventoryMismatchReturn
             && rental.getStatus() != RentalStatus.setup
@@ -852,8 +861,8 @@ public class ReturnSettlementService {
             maintenanceTaskRepository.save(noShowTask);
         }
 
-        boolean managerInventoryReview = inventoryMismatchExit || calendarSetup;
-        returnCase.setStatus(legacyPricingReview || managerInventoryReview
+        boolean managerInventoryReview = false;
+        returnCase.setStatus(legacyPricingReview
             ? ReturnCaseStatus.awaiting_business_review
             : ReturnCaseStatus.awaiting_customer_confirmation);
         ReturnCase saved = returnCaseRepository.save(returnCase);
@@ -1953,8 +1962,31 @@ public class ReturnSettlementService {
             rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? InventoryTimelinePolicy.resolveReturnWindowDays(rc.getRental(), rc) : null,
             rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
                 ? (rc.getReturnPolicyVersion() != null ? rc.getReturnPolicyVersion() : rc.getRental().getInventoryReturnPolicyVersion())
-                : null
+                : null,
+            resolveEquipment(rc)
         );
+    }
+
+    private ReturnCaseResponse.Equipment resolveEquipment(ReturnCase rc) {
+        if (rc == null) return null;
+        com.storagehub.api.checkin.CheckInResponse.Equipment unitEquipment =
+            palletInventoryService == null ? null : palletInventoryService.equipment(rc.getStorageUnit());
+        com.storagehub.api.checkin.HandoverRecord handover = null;
+        if (inventoryCheckInRepository != null && rc.getRental() != null && rc.getRental().getReservation() != null) {
+            var checkIn = inventoryCheckInRepository.findByReservation_Id(rc.getRental().getReservation().getId()).orElse(null);
+            if (checkIn != null && checkIn.getHandoverRecordJson() != null && !checkIn.getHandoverRecordJson().isBlank()) {
+                try {
+                    handover = objectMapper.readValue(checkIn.getHandoverRecordJson(), com.storagehub.api.checkin.HandoverRecord.class);
+                } catch (Exception ignored) {}
+            }
+        }
+        Integer handoverRacks = handover == null ? null : handover.rackCount();
+        Integer handoverPallets = handover == null ? null : handover.palletCount();
+        if (unitEquipment == null && handoverRacks == null && handoverPallets == null) return null;
+        int rackCount = handoverRacks != null ? handoverRacks : (unitEquipment != null ? unitEquipment.rackCount() : 0);
+        int frameCount = unitEquipment != null ? unitEquipment.frameCount() : rackCount;
+        Integer palletCount = handoverPallets != null ? handoverPallets : (unitEquipment != null ? unitEquipment.palletCount() : null);
+        return new ReturnCaseResponse.Equipment(rackCount, frameCount, palletCount, null);
     }
 
     private MaintenanceTask findNoShowRecoveryTask(ReturnCase returnCase) {
