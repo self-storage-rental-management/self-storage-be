@@ -1498,6 +1498,20 @@ public class ReturnSettlementService {
                 depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
         }
 
+        // An inventory-mismatch return refunds the prepaid rent but must still charge for the
+        // days the unit was actually used (verified usage, no fixed early-termination fee).
+        // rentalCredit holds the full prepaid rent here, so the usage charge is deducted from it.
+        if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH && zeroIfNull(rentalCharge).signum() > 0) {
+            BigDecimal usageCharge = zeroIfNull(rentalCharge).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal netRentalCredit = rentalCredit.subtract(usageCharge)
+                .max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal depositBalance = deposit.subtract(securityDeductions);
+            BigDecimal totalFees = securityDeductions.add(usageCharge).setScale(2, RoundingMode.HALF_UP);
+            return new Calculation(totalFees,
+                netRentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
+                depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
+        }
+
         // Once the paid rental period has started, fees consume the deposit first,
         // then the refund for whole unused months, and only the remaining excess
         // is collected from the customer.
