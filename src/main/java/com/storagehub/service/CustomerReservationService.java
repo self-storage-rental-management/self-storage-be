@@ -903,7 +903,7 @@ public class CustomerReservationService {
                 rental.setReservation(reservation);
                 rental.setMonthlyPrice(snapshot.getMonthlyPrice());
             }
-            rental.setStatus(setupEndsAt.isAfter(startedAt) ? RentalStatus.setup : RentalStatus.active);
+            rental.setStatus(paidRentalStart.isAfter(startedAt.atZone(zone).toLocalDate()) ? RentalStatus.setup : RentalStatus.active);
             rental.setSetupStartedAt(startedAt);
             rental.setSetupEndsAt(setupEndsAt);
             SetupCompletionPolicy.initialize(rental);
@@ -951,8 +951,9 @@ public class CustomerReservationService {
             notificationService.createNotification(
                 saved.getCustomer().getId(), NotificationType.CHECKIN,
                 "Đã xác nhận nhận kho",
-                "Thời gian chuẩn bị miễn phí theo lịch kết thúc ngày "
-                    + paidRentalStart.minusDays(1) + ". Kỳ thuê tính tiền bắt đầu từ " + paidRentalStart
+                "Thời gian chuẩn bị miễn phí kết thúc lúc "
+                    + java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy").withZone(zone).format(setupEndsAt)
+                    + ". Kỳ thuê tính tiền bắt đầu từ " + paidRentalStart
                     + "; việc hoàn tất chuẩn bị sớm không làm đổi mốc này.",
                 saved.getId()
             );
@@ -1116,7 +1117,8 @@ public class CustomerReservationService {
 
     private void activateReceivedRental(Rental rental) {
         if (rental.getStatus() == RentalStatus.setup
-            && (rental.getSetupEndsAt() == null || !rental.getSetupEndsAt().isAfter(Instant.now()))) {
+            && rental.getStartDate() != null
+            && !rental.getStartDate().isAfter(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")))) {
             rental.setStatus(RentalStatus.active);
             rentalRepository.saveAndFlush(rental);
         }
@@ -1157,7 +1159,7 @@ public class CustomerReservationService {
                 ||!rental.getInventoryVerifiedAt().equals(checkIn.getInventoryVerifiedAt())
                 ||!rental.getStartDate().equals(paidStart)
                 ||(!rental.getSetupEndsAt().equals(paidStart.atStartOfDay(zone).toInstant())
-                    && !rental.getSetupEndsAt().equals(rental.getSetupStartedAt().plus(java.time.Duration.ofDays(setupDays))))
+                    && !rental.getSetupEndsAt().equals(rental.getSetupStartedAt().plus(java.time.Duration.ofDays(snapshot.getFreeSetupDays()))))
                 ||!rental.getContractEndDate().equals(paidStart.plusMonths(snapshot.getRentalMonths()))
                 ||checkIn.getContractSignedAt().isAfter(rental.getSetupStartedAt())
                 ||checkIn.getPaymentCollectedAt().isAfter(rental.getSetupStartedAt())

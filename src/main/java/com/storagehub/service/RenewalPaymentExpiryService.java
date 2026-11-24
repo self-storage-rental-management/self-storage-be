@@ -132,7 +132,7 @@ public class RenewalPaymentExpiryService {
             Map.of("status",RenewalStatus.accepted),Map.of("status",RenewalStatus.payment_expired,"paymentId",payment.getId()));
         notifications.createNotification(renewal.getRental().getCustomer().getId(),NotificationType.RENEWAL,
             "Yêu cầu thanh toán gia hạn đã hết hạn",
-            manualReview ? "Yêu cầu đã đóng và lịch ký đã được nhả. Giao dịch cũ đang chờ đối soát; chưa thể thanh toán lượt mới."
+            manualReview ? "Yêu cầu đã đóng và lịch ký đã được giải phóng. Giao dịch cũ đang chờ đối soát; chưa thể thanh toán lượt mới."
                 : "Yêu cầu thanh toán gia hạn đã hết hạn và được đóng.",renewal.getId());
         notifications.createFacilityOperationsNotifications(renewal.getRental().getFacility().getId(),NotificationType.RENEWAL,
             manualReview ? "Cần đối soát giao dịch gia hạn đã đóng" : "Yêu cầu gia hạn đã hết hạn thanh toán",

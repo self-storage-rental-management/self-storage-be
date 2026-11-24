@@ -54,4 +54,8 @@ public class Refund extends BaseEntity {
 
     @Column(name = "gateway_transaction_no", length = 100)
     private String gatewayTransactionNo;
+
+    /** Actual payout evidence timestamp; approval and gateway acceptance leave this null. */
+    @Column
+    private Instant executedAt;
 }
