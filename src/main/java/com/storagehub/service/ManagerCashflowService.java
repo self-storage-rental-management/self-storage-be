@@ -34,8 +34,9 @@ public class ManagerCashflowService {
         LocalDate today = LocalDate.now(ZONE);
         LocalDate first = from == null ? today.withDayOfMonth(1).minusMonths(5) : from;
         LocalDate last = to == null ? today : to;
-        if (first.isAfter(last) || last.isAfter(today) || first.plusYears(2).isBefore(last))
-            throw ApiExceptions.validation("Chọn khoảng báo cáo không quá 2 năm và không vượt ngày hiện tại.", null);
+        LocalDate maxAllowed = today.withDayOfMonth(today.lengthOfMonth());
+        if (first.isAfter(last) || last.isAfter(maxAllowed) || first.plusYears(2).isBefore(last))
+            throw ApiExceptions.validation("Chọn khoảng báo cáo không quá 2 năm và không vượt tháng hiện tại.", null);
         Instant now = Instant.now();
         var warnings = new LinkedHashSet<String>();
         var payments = em.createQuery("""

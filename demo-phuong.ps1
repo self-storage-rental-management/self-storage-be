@@ -325,7 +325,7 @@ Print-Info "Tên chi nhánh" $mgrSum.data.facilityName
 Print-Info "Tổng số gian kho" $mgrSum.data.totalUnits
 Print-Info "Số gian sẵn sàng (Available)" $mgrSum.data.availableUnits
 Print-Info "Số gian đang thuê (Occupied)" $mgrSum.data.occupiedUnits
-Print-Info "Tỷ lệ lấp đầy (Occupancy Rate)" ("{0:P1}" -f ([double]$mgrSum.data.occupancyRate / 100))
+Print-Info "Công suất sử dụng (Occupancy Rate)" ("{0:P1}" -f ([double]$mgrSum.data.occupancyRate / 100))
 Print-Info "Doanh thu đã thu (Collected)" (Format-Vnd ([decimal]$mgrSum.data.collectedRevenue))
 Print-Info "Công việc bảo trì còn mở" $mgrSum.data.openMaintenanceTasksCount
 
