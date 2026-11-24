@@ -1591,6 +1591,7 @@ public class CustomerReservationService {
         checkInRepository.findByReservation_Id(reservation.getId()).ifPresent(checkIn -> {
             response.setCheckInStatus(checkIn.getStatus().name());
             response.setHandoverCompletedAt(checkIn.getCheckedInAt());
+            response.setLockReference(checkIn.getCheckedInAt() == null ? null : checkIn.getLockReference());
             Instant receiptDueAt = checkIn.getStatus() == CheckInStatus.handover_pending_receipt
                 ? ReservationCheckInPolicy.customerReceiptConfirmationDueAt(checkIn.getCheckedInAt())
                 : null;

@@ -50,7 +50,7 @@ public class CustomerRentalReadController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary="Read my rental record", description="404 for missing or other-owner records. Does not return raw access credentials.")
+    @Operation(summary="Read my rental record", description="404 for missing or other-owner records. Returns the active physical lock reference for the owner, never a PIN or password secret.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="Owner-scoped RentalDetail")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="Rental not found or not visible")
     public ApiResponse<RentalDetailResponse> detail(@PathVariable UUID id,

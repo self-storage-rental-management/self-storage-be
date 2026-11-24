@@ -1131,10 +1131,13 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Thiếu bảng tính thời gian sử dụng của hồ sơ kiểm kê sai lệch.");
         BigDecimal earlyTerminationCharge = mismatchReturn ? mismatchCalculation.totalRentalCharge() : returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getEarlyTerminationFee())
-            : (returnCase.getEarlyTerminationCharge() != null ? returnCase.getEarlyTerminationCharge() : calculatedEarlyTerminationCharge);
+            : (activePricing != null ? calculatedEarlyTerminationCharge : zeroIfNull(returnCase.getEarlyTerminationCharge()));
         BigDecimal rentalRefund = mismatchReturn ? zeroIfNull(returnCase.getRentalRefundCredit()) : returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getRentalRefundCredit())
-            : (returnCase.getRentalRefundAmount() != null ? returnCase.getRentalRefundAmount() : calculatedRentalRefund);
+            // The immutable pricing snapshot is authoritative for an active
+            // early return. A previously persisted amount may have been saved
+            // before the rental-refund projection was recalculated.
+            : (activePricing != null ? calculatedRentalRefund : zeroIfNull(returnCase.getRentalRefundAmount()));
         // Capture the approved amounts before this review overwrites them.
         BigDecimal previousDeductions = zeroIfNull(returnCase.getTotalDeductions());
         BigDecimal previousRefund = zeroIfNull(returnCase.getNetRefundAmount());
@@ -1488,16 +1491,6 @@ public class ReturnSettlementService {
         BigDecimal deposit = zeroIfNull(rc.getDepositAmount()).setScale(2, RoundingMode.HALF_UP);
         BigDecimal rentalCredit = zeroIfNull(rentalRefund).setScale(2, RoundingMode.HALF_UP);
 
-        // During setup the agreed 20% retained amount is already represented by
-        // rentalRefund. Damage can consume the one-month deposit only; any excess
-        // becomes an amount due instead of silently consuming the 80% refund.
-        if (rc.isSetupEarlyExit()) {
-            BigDecimal depositBalance = deposit.subtract(securityDeductions);
-            return new Calculation(securityDeductions,
-                rentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
-                depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
-        }
-
         // An inventory-mismatch return refunds the prepaid rent but must still charge for the
         // days the unit was actually used (verified usage, no fixed early-termination fee).
         // rentalCredit holds the full prepaid rent here, so the usage charge is deducted from it.
@@ -1509,6 +1502,16 @@ public class ReturnSettlementService {
             BigDecimal totalFees = securityDeductions.add(usageCharge).setScale(2, RoundingMode.HALF_UP);
             return new Calculation(totalFees,
                 netRentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
+                depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
+        }
+
+        // During setup the agreed 20% retained amount is already represented by
+        // rentalRefund. Damage can consume the one-month deposit only; any excess
+        // becomes an amount due instead of silently consuming the 80% refund.
+        if (rc.isSetupEarlyExit()) {
+            BigDecimal depositBalance = deposit.subtract(securityDeductions);
+            return new Calculation(securityDeductions,
+                rentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
                 depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
         }
 
@@ -1526,8 +1529,19 @@ public class ReturnSettlementService {
         BigDecimal deductions = zeroIfNull(rc.getDamageFee()).add(zeroIfNull(rc.getCleaningFee()))
             .add(zeroIfNull(rc.getLostItemFee())).add(zeroIfNull(rc.getOverdueFee()))
             .add(zeroIfNull(rc.getOutstandingFee()));
-        return calculateSettlement(rc, deductions, zeroIfNull(rc.getEarlyTerminationCharge()),
-            zeroIfNull(rc.getRentalRefundAmount()));
+        // Rebuild the rental credit from the immutable pricing snapshot. Older return
+        // cases can expose activeReturnPolicy.rentalRefundAmount while their persisted
+        // rentalRefundAmount/netRefundAmount still contain the deposit-only amount.
+        // Using the persisted value here would silently omit the unused rental months
+        // when the customer confirms or staff completes the refund.
+        var activePricing = activeReturnCalculation(rc);
+        BigDecimal rentalCharge = activePricing == null
+            ? zeroIfNull(rc.getEarlyTerminationCharge())
+            : activePricing.totalRentalCharge();
+        BigDecimal rentalRefund = activePricing == null
+            ? zeroIfNull(rc.getRentalRefundAmount())
+            : activePricing.rentalRefundAmount();
+        return calculateSettlement(rc, deductions, rentalCharge, rentalRefund);
     }
 
     private boolean hasOutdatedEarlyReturnAmounts(ReturnCase rc) {
@@ -1544,6 +1558,11 @@ public class ReturnSettlementService {
     private void requireCurrentEarlyReturnAmounts(ReturnCase rc) {
         if (hasOutdatedEarlyReturnAmounts(rc)) {
             var expected = expectedEarlyReturnSettlement(rc);
+            var activePricing = activeReturnCalculation(rc);
+            if (activePricing != null) {
+                rc.setEarlyTerminationCharge(activePricing.totalRentalCharge());
+                rc.setRentalRefundAmount(activePricing.rentalRefundAmount());
+            }
             rc.setTotalDeductions(expected.deductions());
             rc.setNetRefundAmount(expected.refund());
             rc.setAmountDueFromCustomer(expected.due());
@@ -1909,8 +1928,23 @@ public class ReturnSettlementService {
             calculation.noticeCharge(),
             calculation.totalRentalCharge(),
             calculation.rentalRefundAmount(),
-            snapshot == null ? EarlyTerminationPolicy.DEFAULT_NOTICE_DAYS : snapshot.getEarlyTerminationNoticeDays()
+            snapshot == null ? EarlyTerminationPolicy.DEFAULT_NOTICE_DAYS : snapshot.getEarlyTerminationNoticeDays(),
+            snapshot == null ? null : snapshot.getRentalMonths(),
+            effectiveMonthlyPrice(snapshot)
         );
+    }
+
+    /**
+     * The settlement screen must show the effective rent after the booked
+     * package discount, not the undiscounted catalogue rate.
+     */
+    private BigDecimal effectiveMonthlyPrice(ReservationPricingSnapshot snapshot) {
+        if (snapshot == null) return null;
+        if (snapshot.getNetRentalAmount() != null && snapshot.getRentalMonths() > 0) {
+            return snapshot.getNetRentalAmount()
+                .divide(BigDecimal.valueOf(snapshot.getRentalMonths()), 2, RoundingMode.HALF_UP);
+        }
+        return snapshot.getMonthlyPrice();
     }
 
     private EarlyTerminationPolicy.ActiveReturnCalculation activeReturnCalculation(ReturnCase returnCase) {
