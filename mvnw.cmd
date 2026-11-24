@@ -27,6 +27,8 @@
 @REM   MVNW_VERBOSE - true: enable verbose log; others: silence the output
 @REM ----------------------------------------------------------------------------
 
+@IF NOT DEFINED JAVA_HOME IF EXIST "%~dp0..\.local\runtimes\jdk-21.0.12.1+1\bin\java.exe" SET "JAVA_HOME=%~dp0..\.local\runtimes\jdk-21.0.12.1+1"
+@IF NOT DEFINED MAVEN_USER_HOME IF EXIST "%~dp0..\.local\maven-wrapper-home\wrapper\dists" SET "MAVEN_USER_HOME=%~dp0..\.local\maven-wrapper-home"
 @IF "%__MVNW_ARG0_NAME__%"=="" (SET __MVNW_ARG0_NAME__=%~nx0)
 @SET __MVNW_CMD__=
 @SET __MVNW_ERROR__=

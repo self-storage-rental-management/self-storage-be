@@ -124,16 +124,16 @@ public class CentralizedPolicy extends BaseEntity {
     // RULE 6: Late Payment Penalty
     // ==========================================
     @Column(name = "grace_period_days", nullable = false)
-    private int gracePeriodDays = 3;
+    private int gracePeriodDays = 0;
 
     @Column(name = "late_penalty_calculation_method", nullable = false, length = 32)
-    private String latePenaltyCalculationMethod = "FIXED_DAILY_AMOUNT";
+    private String latePenaltyCalculationMethod = "PERCENTAGE_DAILY_RATE";
 
     @Column(name = "late_fee_amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal lateFeeAmount = new BigDecimal("50000.00");
 
     @Column(name = "late_fee_percentage_rate", nullable = false, precision = 5, scale = 4)
-    private BigDecimal lateFeePercentageRate = new BigDecimal("0.0050");
+    private BigDecimal lateFeePercentageRate = new BigDecimal("1.0000");
 
     @Column(name = "max_overdue_grace_days_before_repossession", nullable = false)
     private int maxOverdueGraceDaysBeforeRepossession = 7;

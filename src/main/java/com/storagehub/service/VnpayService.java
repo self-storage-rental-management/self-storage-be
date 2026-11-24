@@ -71,6 +71,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 
 public class VnpayService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VnpayService.class);
     @Autowired
     private com.storagehub.domain.repo.RentalRepository refundRentals;
@@ -378,6 +380,9 @@ public class VnpayService {
                     return new CallbackResult("00","Payment received after deadline; reconciliation required",payment.getId(),null,renewalId,false,true);
                 }
                 payment.setStatus(PaymentStatus.PAID);
+                if (payment.getReceiptCode() == null) {
+                    payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+                }
                 payment.setPaidAt(payment.getPaidAt()==null?gatewayPaidAt:payment.getPaidAt());
                 payment.setFailureCode("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED");
                 payment.setFailureReason("Authenticated funds require Renewal source and obligation reconciliation");
@@ -396,6 +401,9 @@ public class VnpayService {
                 || reservation.getStatus() == ReservationStatus.CANCELLED
                 || reservation.getStatus() == ReservationStatus.EXPIRED) {
                 payment.setStatus(PaymentStatus.PAID);
+                if (payment.getReceiptCode() == null) {
+                    payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+                }
                 payment.setPaidAt(gatewayPaidAt);
                 payment.setFailureCode("PAYMENT_AFTER_RESERVATION_CLOSED");
                 payment.setFailureReason("VNPAY recorded funds for an already cancelled or expired reservation; manual reconciliation/refund required");
@@ -486,7 +494,11 @@ public class VnpayService {
                 if(renewalRequiresClosedPaymentReview(payment,gatewayPaidAt)) {
                     markRenewalLatePayment(payment,gatewayPaidAt);
                 } else {
-                    payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
+                    payment.setStatus(PaymentStatus.PAID);
+                    if (payment.getReceiptCode() == null) {
+                        payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+                    }
+                    payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
                     payment.setFailureCode("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED");
                     payment.setFailureReason("Verified funds await Ledger allocation and signing preparation");
                     if(authenticatedRenewalCallback(payment,response,gatewayPaidAt))recordVerifiedRenewalPayment(payment,response,gatewayPaidAt);
@@ -561,7 +573,11 @@ public class VnpayService {
                 if(renewalRequiresClosedPaymentReview(payment,gatewayPaidAt))
                     markRenewalLatePayment(payment,gatewayPaidAt);
                 else {
-                    payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
+                    payment.setStatus(PaymentStatus.PAID);
+                    if (payment.getReceiptCode() == null) {
+                        payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+                    }
+                    payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
                     payment.setFailureCode("RENEWAL_PAYMENT_RECONCILIATION_REQUIRED");
                     payment.setFailureReason("Verified funds await Ledger allocation and signing preparation");
                     if(authenticatedRenewalCallback(payment,gateway,gatewayPaidAt))recordVerifiedRenewalPayment(payment,gateway,gatewayPaidAt);
@@ -1152,6 +1168,9 @@ public class VnpayService {
         PaymentStatus previousStatus = payment.getStatus();
         Instant paidAt = payment.getPaidAt() != null ? payment.getPaidAt() : gatewayPaidAt;
         payment.setStatus(PaymentStatus.PAID);
+        if (payment.getReceiptCode() == null) {
+            payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+        }
         payment.setPaidAt(paidAt);
         payment.setProcessedAt(Instant.now());
         Reservation reservation = payment.getReservation();
@@ -1301,7 +1320,11 @@ public class VnpayService {
     private void markRenewalLatePayment(Payment payment,Instant gatewayPaidAt) {
         PaymentStatus previousStatus = payment.getStatus();
         boolean late = payment.getPaymentDeadline()==null || gatewayPaidAt.isAfter(payment.getPaymentDeadline());
-        payment.setStatus(PaymentStatus.PAID);payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
+        payment.setStatus(PaymentStatus.PAID);
+        if (payment.getReceiptCode() == null) {
+            payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+        }
+        payment.setPaidAt(gatewayPaidAt);payment.setProcessedAt(Instant.now());
         payment.setFailureCode(late ? "PAYMENT_AFTER_DEADLINE" : "RENEWAL_CLOSED_FUNDS_REVIEW");
         payment.setFailureReason(late ? "VNPAY recorded Renewal funds after the persisted payment deadline; manual financial reconciliation is required"
             : "VNPAY confirmed an in-time payment after the Renewal closed; manual financial reconciliation is required");
@@ -1356,6 +1379,9 @@ public class VnpayService {
         if(payment.getRenewal()!=null) { markRenewalLatePayment(payment,gatewayPaidAt); return; }
         PaymentStatus previousStatus = payment.getStatus();
         payment.setStatus(PaymentStatus.PAID);
+        if (payment.getReceiptCode() == null) {
+            payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+        }
         payment.setPaidAt(gatewayPaidAt);
         payment.setProcessedAt(Instant.now());
         payment.setFailureCode("PAYMENT_AFTER_DEADLINE");

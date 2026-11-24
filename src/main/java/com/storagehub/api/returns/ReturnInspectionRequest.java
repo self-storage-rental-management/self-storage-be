@@ -1,9 +1,11 @@
 package com.storagehub.api.returns;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.InventoryMatch;
+import com.storagehub.domain.model.LockInspectionResult;
 import com.storagehub.domain.model.StorageUnitStatus;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
@@ -57,7 +59,9 @@ public record ReturnInspectionRequest(
     boolean customerPresent,
 
     UUID recoveryWitnessStaffId,
-    List<DamageItem> damageItems
+    List<DamageItem> damageItems,
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    LockInspectionResult lockInspectionResult
 ) {
     public record DamageItem(String code, BigDecimal quantity) {}
 
@@ -80,12 +84,23 @@ public record ReturnInspectionRequest(
         @JsonProperty("recoveryHandoverLocation") String recoveryHandoverLocation,
         @JsonProperty("customerPresent") Boolean customerPresent,
         @JsonProperty("recoveryWitnessStaffId") UUID recoveryWitnessStaffId,
-        @JsonProperty("damageItems") List<DamageItem> damageItems
+        @JsonProperty("damageItems") List<DamageItem> damageItems,
+        @JsonProperty("lockInspectionResult") LockInspectionResult lockInspectionResult
     ) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock,
             proposedUnitStatus, unitVacated, recoveryHandoverLocation,
-            customerPresent == null || customerPresent, recoveryWitnessStaffId, damageItems);
+            customerPresent == null || customerPresent, recoveryWitnessStaffId, damageItems, lockInspectionResult);
+    }
+
+    public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
+        BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
+        BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
+        boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus, boolean unitVacated,
+        String recoveryHandoverLocation, boolean customerPresent, UUID recoveryWitnessStaffId, List<DamageItem> damageItems) {
+        this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus,
+            unitVacated, recoveryHandoverLocation, customerPresent, recoveryWitnessStaffId, damageItems, null);
     }
 
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,

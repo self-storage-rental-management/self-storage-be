@@ -3,6 +3,7 @@ package com.storagehub.api.returns;
 import com.storagehub.domain.model.CustomerDecision;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.InventoryMatch;
+import com.storagehub.domain.model.LockInspectionResult;
 import com.storagehub.domain.model.ReturnCaseStatus;
 import com.storagehub.domain.model.ReturnType;
 import com.storagehub.domain.model.SettlementMode;
@@ -93,7 +94,8 @@ public record ReturnCaseResponse(
     UUID recoveryWitnessStaffId,
     String recoveryWitnessStaffName,
     Instant recoveryTaskDeadlineAt,
-    Instant inventoryRemovalDeadlineAt
+    Instant inventoryRemovalDeadlineAt,
+    LockInspectionResult lockInspectionResult
 ) {
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
@@ -174,7 +176,7 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
@@ -184,8 +186,18 @@ public record ReturnCaseResponse(
         String paymentMethod,
         String transactionReference,
         UUID receiptFileId,
-        Instant recordedAt
-    ) {}
+        Instant recordedAt,
+        String receiptCode
+    ) {
+    public SettlementReceipt(String direction,
+        BigDecimal amount,
+        String paymentMethod,
+        String transactionReference,
+        UUID receiptFileId,
+        Instant recordedAt) {
+        this(direction, amount, paymentMethod, transactionReference, receiptFileId, recordedAt, null);
+    }
+}
 
     public record OverdueSettlement(
         BigDecimal accruedAmount,
