@@ -961,16 +961,20 @@ public class CheckInHandoverService {
         checkIn.setInventoryDecisionNote("Ghi nhận tại cơ sở khi chính chủ có mặt. " + (request.note() == null ? "" : request.note().trim()));
         if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.CANCEL_AND_RETURN) {
             if (checkIn.isInventoryFullFit()) throw ApiExceptions.conflict("Hàng vẫn vừa kho. Trả kho theo luồng trả kho thông thường.");
-            if (request.scheduledDate() == null) throw ApiExceptions.validation("Chọn ngày hẹn trả kho.", null);
             if (rental.getInventoryRemovalDeadlineAt() == null) {
                 Instant publishedAt = rental.getInventoryResultPublishedAt() == null ? now : rental.getInventoryResultPublishedAt();
                 InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
             }
+            java.time.LocalDate effectiveScheduledDate = request.scheduledDate() != null
+                ? request.scheduledDate()
+                : InventoryTimelinePolicy.removalEffectiveAt(
+                    rental.getInventoryRemovalPublishedAt() != null ? rental.getInventoryRemovalPublishedAt() : now
+                ).atZone(InventoryTimelinePolicy.ZONE).toLocalDate();
             rentalRepository.saveAndFlush(rental);
             var returns = inventoryReturnServices == null ? null : inventoryReturnServices.getIfAvailable();
             if (returns == null) throw ApiExceptions.conflict("Chưa thể mở hồ sơ trả kho.");
             returns.createInventoryReturnAtSite(actor, rental.getId(), new com.storagehub.api.returns.CustomerCreateReturnRequest(
-                request.scheduledDate(), checkIn.getInventoryDecisionNote(), com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH));
+                effectiveScheduledDate, checkIn.getInventoryDecisionNote(), com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH));
             checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.RETURN_REQUESTED);
         } else if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL) {
             checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.PARTIAL_ACCEPTED);
@@ -1928,8 +1932,59 @@ public class CheckInHandoverService {
                 ? checkIn.getCustomerReceiptConfirmedAt()
                 : checkIn.getSetupStartedAt()),
             reservation.getFacility().getAddress(),
-            resolveInventoryReturnWindowDays(reservation, rental)
+            resolveInventoryReturnWindowDays(reservation, rental),
+            rental == null ? null : rental.getInventoryRemovalPublishedAt(),
+            rental == null ? null : rental.getInventoryRemovalDeadlineAt(),
+            rental == null ? null : rental.getInventoryReturnLastReminderAt()
         );
+    }
+
+    @Transactional
+    public CheckInResponse sendInventoryReturnReminder(ActorPrincipal actor, UUID checkInId) {
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Check-in record not found"));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.RETURN_REQUESTED) {
+            throw ApiExceptions.conflict("Hồ sơ không ở trạng thái đang chờ khách trả kho.");
+        }
+        Rental rental = checkIn.getRental();
+        if (rental == null) {
+            rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
+                .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê."));
+        }
+        Instant deadline = rental.getInventoryRemovalDeadlineAt();
+        if (deadline == null || rental.getInventoryEscalatedAt() != null) {
+            throw ApiExceptions.conflict("Hồ sơ không có hạn trả kho đang mở để gửi nhắc.");
+        }
+        Instant now = Instant.now();
+        if (!now.isBefore(deadline)) {
+            throw ApiExceptions.conflict("Đã quá hạn trả kho.");
+        }
+        Instant reminderWindowStart = deadline.minus(2, java.time.temporal.ChronoUnit.DAYS);
+        if (now.isBefore(reminderWindowStart)) {
+            throw ApiExceptions.conflict("Chỉ được gửi nhắc khách trả kho trong vòng 2 ngày trước hạn cuối.");
+        }
+        Instant lastReminder = rental.getInventoryReturnLastReminderAt();
+        if (lastReminder != null && now.isBefore(lastReminder.plus(2, java.time.temporal.ChronoUnit.HOURS))) {
+            throw ApiExceptions.conflict("Vui lòng đợi đủ 2 giờ giữa các lần gửi nhắc khách trả kho.");
+        }
+        rental.setInventoryReturnLastReminderAt(now);
+        rentalRepository.saveAndFlush(rental);
+        if (notificationService != null && reservation.getCustomer() != null) {
+            String lastDay = deadline.atZone(InventoryTimelinePolicy.ZONE).toLocalDate().minusDays(1).toString();
+            notificationService.createNotification(
+                reservation.getCustomer().getId(),
+                NotificationType.RETURN,
+                "Nhắc hạn trả kho do kiểm kê sai lệch",
+                "Đơn " + reservation.getReservationCode() + " sắp đến hạn cuối trả kho (" + lastDay
+                    + "). Vui lòng chọn ngày hẹn trước hạn cuối ít nhất 1 ngày để hoàn tất nghiệm thu và quyết toán.",
+                reservation.getId()
+            );
+        }
+        return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
     }
 
     private Integer resolveInventoryReturnWindowDays(Reservation reservation, Rental rental) {
@@ -2322,18 +2377,13 @@ public class CheckInHandoverService {
         boolean partialFit
     ) {
         List<String> labels = new ArrayList<>();
-        if (packagingVariance(reservation, request)) labels.add("phương thức hoặc tình trạng đóng gói");
         if (hasPackageCountVariance(declared, request)) labels.add("số kiện");
-        if (hasMeasurementVariance(reservation, request, declared)) {
-            if (!labels.contains("khối lượng")) labels.add("khối lượng");
-            if (!labels.contains("thể tích")) labels.add("thể tích hoặc kích thước");
-        }
         if (hasGoodsDeclarationVariance(declared, request) || actualLineVariance(declared, request)) labels.add("loại hàng, chất liệu hoặc điều kiện xếp từng dòng");
         if (request.inventoryLines() != null && request.inventoryLines().stream()
             .anyMatch(line -> line.condition() == CompleteCheckInRequest.InventoryLine.Condition.DAMAGED)) {
             labels.add("tình trạng hàng hóa");
         }
-        if (packingMismatch) labels.add(partialFit ? "sức chứa, có thể nhận một phần" : "sức chứa hoặc cách xếp");
+        if (packingMismatch && partialFit) labels.add("sức chứa, có thể nhận một phần");
         return labels.isEmpty() ? null : String.join(", ", labels);
     }
 

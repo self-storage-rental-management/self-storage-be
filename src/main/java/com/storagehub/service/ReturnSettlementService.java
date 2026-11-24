@@ -91,6 +91,8 @@ public class ReturnSettlementService {
     private ReservationPricingSnapshotRepository reservationPricingSnapshotRepository;
     @Autowired
     private RentalPeriodResolver rentalPeriods;
+    @Autowired(required = false)
+    private com.storagehub.domain.repo.CheckInRepository inventoryCheckInRepository;
     @Autowired
     private PaymentRepository paymentRepository;
     @Autowired
@@ -190,8 +192,13 @@ public class ReturnSettlementService {
 
         LocalDate today = LocalDate.now(BusinessTime.ZONE);
         Instant now = Instant.now();
-        if (request.scheduledDate() != null && request.scheduledDate().isBefore(today)) {
-            throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+        if (request.scheduledDate() != null) {
+            if (staff == null && !request.scheduledDate().isAfter(today)) {
+                throw ApiExceptions.validation("Ngày hẹn trả kho phải sau ngày tạo đơn trả kho ít nhất 1 ngày.", null);
+            }
+            if (request.scheduledDate().isBefore(today)) {
+                throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+            }
         }
         if (inventoryMismatchReturn) InventoryDeadlinePolicy.requireRemovalDate(rental, request.scheduledDate(), now);
 
@@ -378,7 +385,13 @@ public class ReturnSettlementService {
             && !(fixedDeadline && record.getStatus() == ReturnCaseStatus.scheduled)) {
             throw ApiExceptions.conflict("Yêu cầu đã được nhân viên xử lý, không thể đổi ngày hoặc lý do.");
         }
-        if (request.scheduledDate().isBefore(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")))) throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+        LocalDate today = LocalDate.now(BusinessTime.ZONE);
+        LocalDate requestedDate = record.getRequestedAt() != null
+            ? record.getRequestedAt().atZone(BusinessTime.ZONE).toLocalDate()
+            : today;
+        LocalDate minAllowed = today.isAfter(requestedDate) ? today : requestedDate.plusDays(1);
+        if (request.scheduledDate().isBefore(today)) throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+        if (request.scheduledDate().isBefore(minAllowed)) throw ApiExceptions.validation("Ngày hẹn trả kho phải sau ngày tạo đơn trả kho ít nhất 1 ngày.", null);
         if (request.notes() == null || request.notes().isBlank()) throw ApiExceptions.validation("Vui lòng nhập lý do trả kho.", null);
         if (fixedDeadline) InventoryDeadlinePolicy.requireRemovalDate(record.getRental(), request.scheduledDate(), Instant.now());
         var before = toResponse(record);
@@ -411,8 +424,9 @@ public class ReturnSettlementService {
         LocalDate first = InventoryTimelinePolicy.removalEffectiveAt(rental.getInventoryRemovalPublishedAt())
             .atZone(BusinessTime.ZONE).toLocalDate();
         LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
-        if (date == null || date.isBefore(first) || date.isAfter(last))
-            throw ApiExceptions.validation("Vui lòng chọn ngày trả kho từ " + first + " đến " + last + ".", null);
+        LocalDate maxScheduleDate = last.isAfter(first) ? last.minusDays(1) : last;
+        if (date == null || date.isBefore(first) || date.isAfter(maxScheduleDate))
+            throw ApiExceptions.validation("Khách buộc chọn ngày trả kho từ " + first + " đến " + maxScheduleDate + " (trước hạn cuối 1 ngày).", null);
     }
 
     private void classifyScheduledReturn(ReturnCase record) {
@@ -1500,6 +1514,17 @@ public class ReturnSettlementService {
         rc.setSettlementPaymentId(reference);
         returnCaseRepository.saveAndFlush(rc);
         finalizeRentalAndUnit(rc);
+        if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH && rc.getRental() != null) {
+            rc.getRental().setInventoryPending(false);
+            rentalRepository.save(rc.getRental());
+            if (inventoryCheckInRepository != null && rc.getRental().getReservation() != null) {
+                inventoryCheckInRepository.findByReservation_Id(rc.getRental().getReservation().getId())
+                    .ifPresent(ci -> {
+                        ci.setStatus(com.storagehub.domain.model.CheckInStatus.completed);
+                        inventoryCheckInRepository.save(ci);
+                    });
+            }
+        }
         auditLogService.recordMutation("RETURN_FINANCIAL_SETTLED","return",returnId,rc.getFacility().getId(),null,toResponse(rc));
         notificationService.createNotification(rc.getCustomer().getId(),NotificationType.PAYMENT,"Đã ghi nhận quyết toán trả kho","Nhân viên đã đối chiếu biên lai và hoàn tất thu hoặc hoàn tiền cho hồ sơ trả kho.",returnId);
         return toResponse(rc);

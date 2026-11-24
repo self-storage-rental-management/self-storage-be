@@ -100,7 +100,10 @@ public record CheckInResponse(
     HandoverRecord handoverRecord,
     Instant customerReceiptConfirmedAt,
     String facilityAddress,
-    Integer inventoryReturnWindowDays
+    Integer inventoryReturnWindowDays,
+    Instant inventoryRemovalPublishedAt,
+    Instant inventoryRemovalDeadlineAt,
+    Instant inventoryReturnLastReminderAt
 ) {
     public record InventoryVisit(
         Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
@@ -205,7 +208,7 @@ public record CheckInResponse(
             null, null, null, null, null, null, null, null,
             null, 0L, null, null, null, false,
             null, false, null, false,
-            null, null, null, null, null, null, null, null, null, null
+            null, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 

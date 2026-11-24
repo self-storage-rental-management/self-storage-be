@@ -235,12 +235,18 @@ class ReturnSettlementServiceTests {
     @Test
     void inventoryMismatchReturnKeepsItsWorkflowMarker() {
         rental.setStatus(RentalStatus.setup);
-        CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
-            LocalDate.now(), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
+        CustomerCreateReturnRequest sameDayRequest = new CustomerCreateReturnRequest(
+            LocalDate.now(BusinessTime.ZONE), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
         );
         when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
         when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
         when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(), sameDayRequest))
+            .hasMessageContaining("sau ngày tạo đơn trả kho ít nhất 1 ngày");
+
+        CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
+            LocalDate.now(BusinessTime.ZONE).plusDays(1), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
+        );
         when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
             ReturnCase rc = invocation.getArgument(0);
             ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
@@ -1219,9 +1225,12 @@ class ReturnSettlementServiceTests {
             return rc;
         });
 
-        // D and D+11 are rejected; D+10 succeeds for XL.
+        // D, D+10 (final day), and D+11 are rejected; D+9 (1 day before final deadline) succeeds for XL.
         assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
             new CustomerCreateReturnRequest(today, "Trước ngày hiệu lực", ReturnType.INVENTORY_MISMATCH)))
+            .isInstanceOf(com.storagehub.common.api.ApiException.class);
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
+            new CustomerCreateReturnRequest(today.plusDays(10), "Sát hạn cuối", ReturnType.INVENTORY_MISMATCH)))
             .isInstanceOf(com.storagehub.common.api.ApiException.class);
         assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
             new CustomerCreateReturnRequest(today.plusDays(11), "Quá hạn 10 ngày", ReturnType.INVENTORY_MISMATCH)))
@@ -1230,9 +1239,9 @@ class ReturnSettlementServiceTests {
         // Mutate unitType after publication: active rental snapshot must stay 10 days.
         unitType.setCode("S");
         ReturnCaseResponse created = service.createCustomerReturnRequest(customerActor, rental.getId(),
-            new CustomerCreateReturnRequest(today.plusDays(10), "Đúng ngày cuối XL", ReturnType.INVENTORY_MISMATCH));
+            new CustomerCreateReturnRequest(today.plusDays(9), "Trước hạn cuối 1 ngày XL", ReturnType.INVENTORY_MISMATCH));
         assertThat(created.returnWindowDays()).isEqualTo(10);
-        assertThat(created.scheduledDate()).isEqualTo(today.plusDays(10));
+        assertThat(created.scheduledDate()).isEqualTo(today.plusDays(9));
     }
 
     @Test

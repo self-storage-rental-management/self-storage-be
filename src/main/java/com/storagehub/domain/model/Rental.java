@@ -89,6 +89,9 @@ public class Rental extends BaseEntity {
     private Instant inventoryRemovalDeadlineAt;
 
     @Column
+    private Instant inventoryReturnLastReminderAt;
+
+    @Column
     private Integer inventoryReturnWindowDays;
 
     @Column
