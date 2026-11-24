@@ -446,6 +446,8 @@ public class CheckInHandoverService {
         reservation.setAppointmentAt(appointmentAt);
         checkIn.setScheduledAt(appointmentAt);
         checkIn.setCheckedInAt(null);
+        checkIn.setHandoverRecordJson(null);
+        checkIn.setCustomerReceiptConfirmedAt(null);
         checkIn.setIdentityVerifiedAt(null);
         checkIn.setVerifiedIdentityDocument(null);
         checkIn.setIdentityVerificationNote(null);
@@ -464,6 +466,7 @@ public class CheckInHandoverService {
         checkIn.setInventorySuggestedQuantitiesJson(null);
         checkIn.setInventoryAcceptedQuantitiesJson(null);
         checkIn.setInventoryDecisionAt(null);
+        checkIn.setInventoryDecisionJson(null);
         checkIn.setInventoryDecisionNote(null);
         checkIn.setInventoryFullFit(false);
         checkIn.setInventoryPartialFitAvailable(false);
@@ -650,6 +653,19 @@ public class CheckInHandoverService {
             throw ApiExceptions.validation("Cần ít nhất một ảnh hoặc PDF bằng chứng kho trống trước khi bàn giao.", null);
         }
         validateEvidence(checkInId, request.evidenceReferences());
+        var handedOverItems = request.handedOverItems() == null ? List.<com.storagehub.api.checkin.HandoverRecord.Item>of() : request.handedOverItems();
+        var itemNames = new java.util.HashSet<String>();
+        for (var item : handedOverItems) {
+            if (!List.of("Chìa khóa", "Ổ khóa", "Thẻ ra vào", "Quyền truy cập").contains(item.name()) || !itemNames.add(item.name()))
+                throw ApiExceptions.validation("Danh sách bàn giao phải dùng đúng loại vật dụng và không trùng loại.", null);
+        }
+        String signedRecordReference = request.signedRecordReference() == null || request.signedRecordReference().isBlank()
+            ? null : request.signedRecordReference().trim();
+        if (signedRecordReference != null) {
+            if (request.evidenceReferences().contains(signedRecordReference) || signedRecordReference.equals(checkIn.getContractEvidenceReference()))
+                throw ApiExceptions.validation("Biên bản bàn giao ký hai bên phải là tệp riêng với bằng chứng kho trống và hợp đồng.", null);
+            validateEvidence(checkInId, List.of(signedRecordReference));
+        }
         User operator = requireActor(actor);
         Instant now = Instant.now();
         // This endpoint records only the physical handover. The paid rental and
@@ -682,12 +698,21 @@ public class CheckInHandoverService {
         checkIn.setInventorySuggestedQuantitiesJson(null);
         checkIn.setInventoryAcceptedQuantitiesJson(null);
         checkIn.setInventoryDecisionAt(null);
+        checkIn.setInventoryDecisionJson(null);
         checkIn.setInventoryDecisionNote(null);
         checkIn.setInventoryFullFit(false);
         checkIn.setInventoryPartialFitAvailable(false);
         checkIn.setInventorySuggestedPackageCount(null);
         checkIn.setInventoryMismatchSummary(null);
         checkIn.setCheckedInAt(now);
+        checkIn.setCustomerReceiptConfirmedAt(null);
+        var handoverRecord = new com.storagehub.api.checkin.HandoverRecord(
+            reservation.getFacility().getName(), reservation.getFacility().getAddress(), operator.getId(),
+            operator.getFullName(), now, handedOverItems.stream().filter(item -> item.quantity() > 0).toList(),
+            signedRecordReference, request.note());
+        try {
+            checkIn.setHandoverRecordJson(objectMapper.writeValueAsString(handoverRecord));
+        } catch (JsonProcessingException ex) { throw new IllegalStateException("Could not store handover record", ex); }
         checkIn.setRental(null);
         checkIn.setLockReference(lockReference);
         checkIn.setReadinessNote("Tình trạng kho trống: " + request.initialUnitCondition().trim()
@@ -783,6 +808,9 @@ public class CheckInHandoverService {
 
     @Autowired
     private CustomerReservationService customerReservations;
+
+    @Autowired
+    private InventoryDecisionService inventoryDecisions;
 
     private CheckIn requireOpenInventoryVisit(ActorPrincipal actor, UUID checkInId) {
         requireOperator(actor);
@@ -1206,6 +1234,7 @@ public class CheckInHandoverService {
             checkIn.setPerformedBy(operator);
             checkIn.setInventoryResolutionStatus(atSite ? InventoryResolutionStatus.PENDING_STAFF_RESOLUTION : InventoryResolutionStatus.PENDING_CUSTOMER);
             checkIn.setInventoryDecisionAt(null);
+        checkIn.setInventoryDecisionJson(null);
             checkIn.setInventoryDecisionNote(null);
             CheckIn saved = checkInRepository.saveAndFlush(checkIn);
             rentalRepository.saveAndFlush(rental);
@@ -1289,74 +1318,7 @@ public class CheckInHandoverService {
     ) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
-        if (request == null || !Boolean.TRUE.equals(request.remainderRemoved())) {
-            throw ApiExceptions.conflict("Cần xác nhận phần hàng không được tiếp nhận đã được đưa khỏi gian kho.");
-        }
-        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
-            .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
-        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
-        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
-        if (checkIn.getStatus() != CheckInStatus.setup_completed
-            || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PARTIAL_ACCEPTED) {
-            throw ApiExceptions.conflict("Hồ sơ chưa ở bước chờ xác nhận phần hàng dư đã được đưa ra.");
-        }
-        validateEvidence(checkInId, request.evidenceReferences());
-
-        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
-            .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê của thời gian chuẩn bị."));
-        UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
-            reservation.getId(), UnitAssignmentStatus.ACTIVE
-        ).orElseThrow(() -> ApiExceptions.conflict("Hồ sơ phân gian kho không còn hiệu lực."));
-        User operator = requireActor(actor);
-        Instant now = Instant.now();
-
-        InventoryDeadlinePolicy.requireInventoryOpen(rental, now);
-        checkIn.setPerformedBy(operator);
-        checkIn.setStatus(CheckInStatus.completed);
-        checkIn.setCheckedInAt(checkIn.getCheckedInAt() == null ? now : checkIn.getCheckedInAt());
-        checkIn.setInventoryVerifiedAt(now);
-        checkIn.setInventoryRemainderRemovedAt(now);
-        checkIn.setInventoryRemainderRemovalNote(request.notes().trim());
-        try {
-            checkIn.setInventoryRemainderEvidenceJson(objectMapper.writeValueAsString(request.evidenceReferences()));
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("Could not serialize remainder removal evidence", exception);
-        }
-        rental.setInventoryVerifiedAt(now);
-        rental.setInventoryPending(false);
-        completeInventoryTask(rental, now, "Đã xác nhận phần hàng không được tiếp nhận đã được đưa khỏi gian kho. " + request.notes().trim());
-        assignment.setStatus(UnitAssignmentStatus.COMPLETED);
-        reservation.setStatus(ReservationStatus.COMPLETED);
-        assignment.getStorageUnit().setStatus(StorageUnitStatus.occupied);
-
-        rentalRepository.saveAndFlush(rental);
-        storageUnitRepository.saveAndFlush(assignment.getStorageUnit());
-        assignmentRepository.saveAndFlush(assignment);
-        reservationRepository.saveAndFlush(reservation);
-        CheckIn saved = checkInRepository.saveAndFlush(checkIn);
-
-        notificationService.createNotification(
-            reservation.getCustomer().getId(), NotificationType.CHECKIN,
-            "Đã hoàn tất xử lý phần hàng không phù hợp",
-            "Nhân viên đã xác nhận phần hàng không được tiếp nhận đã được đưa khỏi gian kho. Hồ sơ thuê đã hoàn tất kiểm kê.",
-            reservation.getId()
-        );
-        notificationService.createFacilityOperationsNotifications(
-            reservation.getFacility().getId(), NotificationType.CHECKIN,
-            "Đã hoàn tất xử lý hàng không phù hợp",
-            "Đơn " + reservation.getReservationCode() + " đã hoàn tất bước xác nhận phần hàng dư được đưa khỏi gian kho.",
-            reservation.getId()
-        );
-        auditLogService.recordMutation(
-            operator, "CHECKIN_PARTIAL_INVENTORY_REMOVAL_CONFIRMED", "CheckIn", saved.getId(),
-            reservation.getFacility().getId(),
-            Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PARTIAL_ACCEPTED),
-            Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PARTIAL_ACCEPTED,
-                "inventoryRemainderRemovedAt", now,
-                "reservationStatus", ReservationStatus.COMPLETED)
-        );
-        return toResponse(actor, reservation, saved, assignment);
+        throw ApiExceptions.validation("Nghiệp vụ xác nhận đưa phần hàng dư ra đã ngừng áp dụng. Vui lòng chọn chuyển hàng hoặc trả kho.", null);
     }
 
     @Transactional
@@ -1958,7 +1920,11 @@ public class CheckInHandoverService {
             paymentEvidenceReference,
             inventoryVisit,
             checkInDeadline(reservation),
-            storageCapacity
+            storageCapacity,
+            inventoryDecisions == null ? null : inventoryDecisions.read(checkIn),
+            readHandoverRecord(checkIn),
+            checkIn == null ? null : checkIn.getCustomerReceiptConfirmedAt(),
+            reservation.getFacility().getAddress()
         );
     }
 
@@ -1967,7 +1933,15 @@ public class CheckInHandoverService {
         return confirmation == null ? null : confirmation.getConfirmedByName();
     }
 
-    private Instant checkInDeadline(Reservation reservation) {        if (reservation.getCreatedAt() == null) return null;
+    private com.storagehub.api.checkin.HandoverRecord readHandoverRecord(CheckIn checkIn) {
+        if (checkIn == null || checkIn.getHandoverRecordJson() == null) return null;
+        try {
+            return objectMapper.readValue(checkIn.getHandoverRecordJson(), com.storagehub.api.checkin.HandoverRecord.class);
+        } catch (JsonProcessingException ex) { throw new IllegalStateException("Could not read handover record", ex); }
+    }
+
+    private Instant checkInDeadline(Reservation reservation) {
+        if (reservation.getCreatedAt() == null) return null;
         return ReservationCheckInPolicy.plannedWindow(
             reservation.getCreatedAt(), reservation.getGoodsReviewStatus() != GoodsReviewStatus.NOT_REQUIRED
         ).deadlineAt();

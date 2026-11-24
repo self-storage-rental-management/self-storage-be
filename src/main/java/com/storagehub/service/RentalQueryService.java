@@ -24,6 +24,10 @@ public class RentalQueryService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.domain.repo.CheckInRepository checkIns;
     @org.springframework.beans.factory.annotation.Autowired
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private InventoryDecisionService inventoryDecisions;
+    @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RentalReadSources.FinancialSource> financialSources;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RentalReadSources.AccessSource> accessSources;
@@ -61,7 +65,18 @@ public class RentalQueryService {
             .map(c -> new RentalDetailResponse.Inventory(c.getInventoryActualJson(), c.getInventoryMismatchJson() != null,
                 c.isInventoryFullFit(), rental.getReservation().getGoodsCondition(),
                 Objects.toString(c.getInventoryResolutionStatus(), ""), c.getInventoryAcceptedQuantitiesJson(), rental.getInventoryRemainderDeadlineAt(),
-                c.getInventoryRemainderRemovedAt())).orElse(null);
+                c.getInventoryRemainderRemovedAt(), inventoryReport(c), c.getInventoryMismatchSummary(),
+                c.getInventoryMismatchJson(), inventoryDecisions == null ? null : inventoryDecisions.read(c))).orElse(null);
+    }
+
+    private com.storagehub.api.checkin.CompleteCheckInRequest inventoryReport(CheckIn checkIn) {
+        if (objectMapper == null || checkIn.getChecklistJson() == null) return null;
+        try {
+            return objectMapper.readValue(checkIn.getChecklistJson(), com.storagehub.api.checkin.CompleteCheckInRequest.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            log.warn("Could not read stored inventory report for check-in {}", checkIn.getId());
+            return null;
+        }
     }
 
     private RentalBookingEvidence bookingEvidence(ActorPrincipal actor,Rental rental,boolean manager) {

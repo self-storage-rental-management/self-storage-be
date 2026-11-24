@@ -62,14 +62,14 @@ class IntakeDeadlineSchedulerTests {
         assertThat(task.getDeadlineAt()).isAfter(Instant.now().plusSeconds(86300));
         assertThat(r.getActualReturnedAt()).isNull();assertThat(r.getCompletedAt()).isNull();
     }
-    @Test void excessTaskDoesNotEndRentalOrRequireWholeUnitEmpty() {
+    @Test void retiredPartialIntakeDoesNotCreateExcessRemovalTasks() {
         var r=rental();r.setMoveInCompletedAt(Instant.now().minusSeconds(400000));r.setInventoryResultPublishedAt(Instant.now().minusSeconds(300000));
         r.setInventoryRemainderDeadlineAt(Instant.now().minusSeconds(1));
         var c=new CheckIn();c.setInventoryResolutionStatus(InventoryResolutionStatus.PARTIAL_ACCEPTED);
         when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
-        scheduler.process();var capture=ArgumentCaptor.forClass(MaintenanceTask.class);verify(tasks).saveAndFlush(capture.capture());
-        assertThat(capture.getValue().getTaskType()).isEqualTo(MaintenanceTaskType.inventory_check);
-        assertThat(capture.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.EXCESS_ITEMS);
+        scheduler.process();
+        verify(tasks, never()).saveAndFlush(any());
+        org.mockito.Mockito.verifyNoInteractions(notifications);
         assertThat(r.getInventoryEscalatedAt()).isNull();assertThat(r.getStatus()).isEqualTo(RentalStatus.active);
     }
     @Test void alreadyEmptyUnitNeverGetsAnotherGoodsMovementTask() {

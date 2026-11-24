@@ -615,13 +615,21 @@ public class CustomerReservationService {
         CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Hồ sơ kiểm kê chưa được tạo."));
         applyInventoryDecision(actor, reservation, checkIn, request, null);
+        if (inventoryDecisions != null)
+            inventoryDecisions.record(checkIn, request.decision(), reservation.getCustomer(), false, List.of());
         return toDetailResponse(reservation);
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private InventoryDecisionService inventoryDecisions;
+
     void applyInventoryDecision(ActorPrincipal actor, Reservation reservation, CheckIn checkIn,
         InventoryResolutionRequest request, User staff) {
+        if (request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL)
+            throw ApiExceptions.validation("Phương án nhận một phần hàng hóa đã ngừng áp dụng. Vui lòng chọn chuyển hàng hoặc trả kho.", null);
         UUID reservationId = reservation.getId();
-        if (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
+        if ((checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
+            && checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PARTIAL_ACCEPTED)
             || checkIn.getStatus() != CheckInStatus.setup_completed) {
             throw ApiExceptions.conflict("Hồ sơ kiểm kê không còn chờ khách hàng quyết định.");
         }
@@ -634,6 +642,10 @@ public class CustomerReservationService {
             InventoryDeadlinePolicy.requireInventoryOpen(rental, now);
         }
         String note = clean(request.note());
+        // Legacy partial-intake records can select a supported replacement decision.
+        if (checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PARTIAL_ACCEPTED) {
+            rental.setInventoryRemainderDeadlineAt(null);
+        }
         if (request.decision() == InventoryResolutionRequest.Decision.REQUEST_TRANSFER) {
             if (staff == null || checkIn.isInventoryFullFit())
                 throw ApiExceptions.conflict("Chỉ nhân viên tại cơ sở được yêu cầu chuyển hàng khi hàng không vừa kho.");
@@ -647,7 +659,7 @@ public class CustomerReservationService {
         if (request.decision() == InventoryResolutionRequest.Decision.CANCEL_AND_RETURN) {
             boolean otherGoods = staff != null && goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservationId)
                 .stream().anyMatch(line -> line.getCategory() == com.storagehub.domain.model.GoodsCategory.OTHER);
-            if (otherGoods && note == null) throw ApiExceptions.validation("Cần ghi lý do từ chối tiếp nhận.", null);
+            if (staff != null && note == null) throw ApiExceptions.validation("Cần ghi lý do từ chối tiếp nhận.", null);
             if (checkIn.isInventoryFullFit() && !otherGoods)
                 throw ApiExceptions.conflict("Hàng hóa được tiếp nhận đầy đủ. Nếu muốn trả kho, vui lòng gửi yêu cầu trả kho thông thường.");
             if (request.scheduledDate() == null) {
@@ -674,6 +686,15 @@ public class CustomerReservationService {
                 ReturnType.INVENTORY_MISMATCH);
             if (staff == null) service.createCustomerReturnRequest(actor, rental.getId(), returnRequest);
             else service.createInventoryReturn(rental, returnRequest, staff);
+            if (staff != null) {
+                notificationService.createNotification(reservation.getCustomer().getId(), NotificationType.CHECKIN,
+                    "Cơ sở từ chối tiếp nhận hàng hóa",
+                    "Đơn " + reservation.getReservationCode() + " đã bị cơ sở từ chối tiếp nhận. Lý do: " + note
+                        + ". Biên bản đã ký và tiến trình trả kho được lưu trong hồ sơ.", reservation.getId());
+                notificationService.createFacilityOperationsNotifications(reservation.getFacility().getId(), NotificationType.CHECKIN,
+                    "Đã từ chối tiếp nhận hàng hóa", "Đơn " + reservation.getReservationCode()
+                        + " đã ghi nhận từ chối tiếp nhận và chuyển sang nghiệm thu, quyết toán trả kho.", reservation.getId());
+            }
             return;
         }
 
@@ -681,54 +702,6 @@ public class CustomerReservationService {
             && !checkIn.isInventoryFullFit()) {
             throw ApiExceptions.conflict("Số hàng thực tế chưa có phương án xếp đủ trong gian kho.");
         }
-        if (request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL
-            && (!checkIn.isInventoryPartialFitAvailable() && staff == null || checkIn.isInventoryFullFit())) {
-            throw ApiExceptions.conflict("Chưa có phương án xếp một phần hàng hóa trong gian kho này.");
-        }
-
-        if (request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL) {
-            rental.setInventoryRemovalDeadlineAt(null);
-            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.PARTIAL_ACCEPTED);
-            Rental partialRental = rentalRepository.findByReservationIdForUpdate(reservationId)
-                .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê."));
-            Instant deadline = InventoryTimelinePolicy.dayStart(now, 4);
-            if (staff != null || request.scheduledDate() != null) {
-                var today = now.atZone(InventoryTimelinePolicy.ZONE).toLocalDate();
-                var date = request.scheduledDate();
-                if (date == null || date.isBefore(today) || date.isAfter(today.plusDays(3)))
-                    throw ApiExceptions.validation("Chọn ngày đưa hàng dư ra từ hôm nay đến hết 3 ngày tới.", null);
-                deadline = date.plusDays(1).atStartOfDay(InventoryTimelinePolicy.ZONE).toInstant();
-            }
-            partialRental.setInventoryRemainderDeadlineAt(deadline);
-            rentalRepository.saveAndFlush(partialRental);
-            checkIn.setInventoryDecisionAt(Instant.now());
-            checkIn.setInventoryDecisionNote(note == null
-                ? "Khách xác nhận nhận phần hàng có thể xếp và đưa phần còn lại ra khỏi gian kho."
-                : note);
-            checkIn.setInventoryAcceptedQuantitiesJson(checkIn.getInventorySuggestedQuantitiesJson());
-            CheckIn savedCheckIn = checkInRepository.saveAndFlush(checkIn);
-            notificationService.createNotification(
-                reservation.getCustomer().getId(), NotificationType.CHECKIN,
-                "Đã ghi nhận phương án nhận một phần hàng hóa",
-                "Vui lòng đưa phần hàng không được tiếp nhận ra khỏi gian kho. Sau khi hoàn tất, Staff sẽ kiểm tra bằng chứng và xác nhận kết thúc kiểm kê.",
-                reservation.getId()
-            );
-            notificationService.createFacilityOperationsNotifications(
-                reservation.getFacility().getId(), NotificationType.CHECKIN,
-                "Khách đã chọn nhận một phần hàng hóa",
-                "Đơn " + reservation.getReservationCode()
-                    + " đang chờ Staff xác nhận phần hàng không được tiếp nhận đã được đưa khỏi gian kho.",
-                reservation.getId()
-            );
-            auditLogService.recordMutation(
-                staff == null ? savedCheckIn.getPerformedBy() : staff, staff == null ? "CUSTOMER_INVENTORY_PARTIAL_ACCEPTED" : "STAFF_INVENTORY_PARTIAL_ACCEPTED", "CheckIn", savedCheckIn.getId(),
-                reservation.getFacility().getId(),
-                Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PENDING_CUSTOMER),
-                Map.of("inventoryResolutionStatus", InventoryResolutionStatus.PARTIAL_ACCEPTED)
-            );
-            return;
-        }
-
         UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
             reservationId, UnitAssignmentStatus.ACTIVE
         ).orElseThrow(() -> ApiExceptions.conflict("Hồ sơ phân gian kho không còn hiệu lực."));
@@ -737,15 +710,10 @@ public class CustomerReservationService {
         assignment.setStatus(UnitAssignmentStatus.COMPLETED);
         reservation.setStatus(ReservationStatus.COMPLETED);
         checkIn.setStatus(CheckInStatus.completed);
-        checkIn.setInventoryResolutionStatus(request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL
-            ? InventoryResolutionStatus.PARTIAL_ACCEPTED : InventoryResolutionStatus.ACCEPTED);
+        checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.ACCEPTED);
         checkIn.setInventoryDecisionAt(Instant.now());
         checkIn.setInventoryDecisionNote(note);
-        checkIn.setInventoryAcceptedQuantitiesJson(
-            request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL
-                ? checkIn.getInventorySuggestedQuantitiesJson()
-                : checkIn.getInventoryActualJson()
-        );
+        checkIn.setInventoryAcceptedQuantitiesJson(checkIn.getInventoryActualJson());
         checkIn.setInventoryVerifiedAt(checkIn.getInventoryVerifiedAt() == null ? Instant.now() : checkIn.getInventoryVerifiedAt());
         rental.setInventoryVerifiedAt(checkIn.getInventoryVerifiedAt());
         rental.setInventoryPending(false);
@@ -757,9 +725,7 @@ public class CustomerReservationService {
             ).forEach(task -> {
                 task.setStatus(MaintenanceTaskStatus.completed);
                 task.setCompletedAt(checkIn.getInventoryVerifiedAt());
-                task.setResultReport(request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL
-                    ? "Khách đã xác nhận nhận một phần hàng hóa theo phương án xếp thực tế."
-                    : "Khách đã xác nhận hồ sơ hàng hóa thực tế.");
+                task.setResultReport("Khách đã xác nhận hồ sơ hàng hóa thực tế.");
                 maintenanceTaskRepository.save(task);
             });
         }
@@ -771,11 +737,8 @@ public class CustomerReservationService {
 
         notificationService.createNotification(
             savedReservation.getCustomer().getId(), NotificationType.CHECKIN,
-            request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL
-                ? "Đã xác nhận nhận một phần hàng hóa" : "Đã xác nhận kết quả kiểm kê",
-            request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL
-                ? "Bạn đã xác nhận phương án xếp một phần hàng hóa trong gian kho. Phần còn lại không được tiếp nhận vào gian này."
-                : "Bạn đã xác nhận kết quả kiểm kê. Hồ sơ thuê đã được hoàn tất.",
+            "Đã xác nhận kết quả kiểm kê",
+            "Bạn đã xác nhận kết quả kiểm kê. Hồ sơ thuê đã được hoàn tất.",
             savedReservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
@@ -959,6 +922,7 @@ public class CustomerReservationService {
             reservation.setStatus(ReservationStatus.PREPARING);
             Reservation saved = reservationRepository.saveAndFlush(reservation);
             checkIn.setStatus(CheckInStatus.setup_in_progress);
+            checkIn.setCustomerReceiptConfirmedAt(startedAt);
             checkIn.setSetupStartedAt(startedAt);
             checkIn.setSetupDueAt(setupEndsAt);
             checkIn.setRental(rental);
@@ -1018,6 +982,10 @@ public class CustomerReservationService {
         storageUnitRepository.saveAndFlush(reservation.getAssignedUnit());
         if (accessCredentialService != null) {
             accessCredentialService.attachToRental(reservation, rental);
+        }
+        if (checkIn.getCustomerReceiptConfirmedAt() == null) {
+            checkIn.setCustomerReceiptConfirmedAt(Instant.now());
+            checkInRepository.saveAndFlush(checkIn);
         }
         ReservationStatus previousStatus = reservation.getStatus();
         reservation.setStatus(ReservationStatus.COMPLETED);
@@ -1663,6 +1631,7 @@ public class CustomerReservationService {
             response.setInventoryArrivedAt(checkIn.getInventoryArrivedAt());
             response.setInventoryIdentityVerifiedAt(checkIn.getInventoryIdentityVerifiedAt());
             response.setInventoryResolutionStatus(checkIn.getInventoryResolutionStatus());
+            response.setInventoryDecision(inventoryDecisions == null ? null : inventoryDecisions.read(checkIn));
             response.setInventoryFullFit(checkIn.isInventoryFullFit());
             response.setInventoryPartialFitAvailable(checkIn.isInventoryPartialFitAvailable());
             response.setInventorySuggestedPackageCount(checkIn.getInventorySuggestedPackageCount());
