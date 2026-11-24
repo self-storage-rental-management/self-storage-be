@@ -88,6 +88,11 @@ public class CheckInController {
         return new ApiResponse<>(service.resolveInventoryAtSite(actorContext.required(), checkInId, request), CorrelationIdContext.current());
     }
 
+    @PostMapping("/{checkInId}/inventory-return-reminder")
+    public ApiResponse<CheckInResponse> sendInventoryReturnReminder(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.sendInventoryReturnReminder(actorContext.required(), checkInId), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{checkInId}/complete")
     public ApiResponse<CheckInResponse> complete(
         @PathVariable UUID checkInId,
