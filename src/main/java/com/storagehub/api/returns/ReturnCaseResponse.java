@@ -97,8 +97,10 @@ public record ReturnCaseResponse(
     Instant inventoryRemovalDeadlineAt,
     LockInspectionResult lockInspectionResult,
     Integer returnWindowDays,
-    String returnPolicyVersion
+    String returnPolicyVersion,
+    Equipment equipment
 ) {
+    public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
             && (returnType == ReturnType.INVENTORY_MISMATCH || returnType == ReturnType.RETURN_IN_SETUP || returnType == ReturnType.CANCELLED_IN_SETUP);
@@ -178,7 +180,7 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
