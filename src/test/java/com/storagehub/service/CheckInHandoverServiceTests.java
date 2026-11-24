@@ -220,6 +220,19 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void inventoryDraftOpensEmptyAndRejectsStaleSavesAndPublication() {
+        mockCompletionChecks(false);
+        reservation.setStatus(ReservationStatus.PREPARING);
+        UUID id = checkIn.getId();
+        assertThat(service.inventoryDraft(actor, id).revision()).isZero();
+        var request = validCompletionRequest();
+        var saved = service.saveInventoryDraft(actor, id, request, 0);
+        assertThat(service.inventoryDraft(actor, id)).isEqualTo(saved);
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, id, request, 0)).hasMessageContaining("đã thay đổi");
+        assertThatThrownBy(() -> service.publishInventoryDraft(actor, id, 0)).hasMessageContaining("đã thay đổi");
+    }
+
+    @Test
     void completesInventoryAndOccupiesAssignedUnit() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(true);

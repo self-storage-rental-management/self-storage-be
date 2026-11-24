@@ -19,7 +19,9 @@ public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryRes
     boolean inventoryPending, Instant inventoryDueAt, Instant setupStartedAt, Instant setupEndsAt,
     Instant inventoryFinalDeadlineAt,
     Instant moveInCompletedAt, Instant inventoryVerifiedAt, boolean setupExitReviewRequired,
-    boolean canConfirmRentalStart) {
+    boolean canConfirmRentalStart, Inventory inventory) {
+    public record Inventory(String actualJson, boolean mismatch, boolean fullFit, String declaredPackaging,
+        String decision, String acceptedQuantitiesJson, Instant removalDeadline, Instant removedAt) {}
     @Schema(description = "COMPLETE includes verified security deposit; PARTIAL has verified balances/billing but unknown deposit; UNKNOWN has no verified financial projection.")
     public record Financial(@Schema(allowableValues = {"COMPLETE", "PARTIAL", "UNKNOWN"}) String completeness, String currency, BigDecimal outstandingAmount,
         BigDecimal overdueAmount, LocalDate nextDueDate, String reason,

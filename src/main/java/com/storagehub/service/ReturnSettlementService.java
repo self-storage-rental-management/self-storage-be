@@ -131,7 +131,15 @@ public class ReturnSettlementService {
         if (!rental.getCustomer().getId().equals(actor.userId()))
             throw ApiExceptions.notFound("Rental was not found for this customer");
 
-        var existingReturns = returnCaseRepository.findByRental_Id(rentalId);
+        return createReturnRequest(rental, request, null);
+    }
+
+    ReturnCaseResponse createInventoryReturn(Rental rental, CustomerCreateReturnRequest request, User staff) {
+        return createReturnRequest(rental, request, staff);
+    }
+
+    private ReturnCaseResponse createReturnRequest(Rental rental, CustomerCreateReturnRequest request, User staff) {
+        var existingReturns = returnCaseRepository.findByRental_Id(rental.getId());
         var activeReturn = existingReturns.stream().filter(r -> r.getStatus() != ReturnCaseStatus.completed).findFirst();
         if (activeReturn.isPresent()) return toResponse(activeReturn.get());
         boolean inventoryMismatchReturn = request.returnType() == ReturnType.INVENTORY_MISMATCH;
@@ -153,8 +161,8 @@ public class ReturnSettlementService {
             recoveryGuard.requireNoActiveRecovery(rental);
         }
 
-        User customer = userRepository.findById(actor.userId())
-            .orElseThrow(() -> ApiExceptions.notFound("Customer user not found"));
+        User customer = staff == null ? userRepository.findById(rental.getCustomer().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Customer user not found")) : rental.getCustomer();
 
         // Only verified check-in funds establish the available security deposit.
         BigDecimal depositAmount = securityDeposit(rental);
@@ -171,7 +179,7 @@ public class ReturnSettlementService {
         returnCase.setFacility(rental.getFacility());
         returnCase.setStorageUnit(rental.getStorageUnit());
         returnCase.setCustomer(customer);
-        returnCase.setRequestedBy(customer);
+        returnCase.setRequestedBy(staff == null ? customer : staff);
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setRequestedAt(now);
         returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : today);
@@ -205,7 +213,7 @@ public class ReturnSettlementService {
         rentalRepository.save(rental);
 
         auditLogService.recordMutation(
-            "CUSTOMER_RETURN_REQUESTED",
+            staff == null ? "CUSTOMER_RETURN_REQUESTED" : "STAFF_INVENTORY_RETURN_REQUESTED",
             "return",
             saved.getId(),
             saved.getFacility().getId(),
@@ -1559,8 +1567,11 @@ public class ReturnSettlementService {
         // This is the same rule for setup and active returns: a deposit shortfall
         // is offset by unused rent, and only the remaining deficit is collected.
         BigDecimal available = deposit.add(rentalCredit);
-        BigDecimal balance = available.subtract(securityDeductions);
-        return new Calculation(securityDeductions,
+        // Mismatch returns carry the full prepaid rent as credit, before usage.
+        BigDecimal totalDeductions = rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            ? securityDeductions.add(zeroIfNull(rentalCharge)) : securityDeductions;
+        BigDecimal balance = available.subtract(totalDeductions);
+        return new Calculation(totalDeductions,
             balance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
             balance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
     }

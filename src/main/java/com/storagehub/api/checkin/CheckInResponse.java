@@ -76,6 +76,7 @@ public record CheckInResponse(
     Integer inventorySuggestedPackageCount,
     String inventoryMismatchSummary,
     String inventoryAcceptedQuantitiesJson,
+    Instant inventoryRemainderDeadlineAt,
     Instant inventoryRemainderRemovedAt,
     String inventoryRemainderRemovalNote,
     String inventoryActualJson,
@@ -89,7 +90,8 @@ public record CheckInResponse(
     String paymentEvidenceReference,
     InventoryVisit inventoryVisit,
     Instant checkInDeadline,
-    StorageCapacity storageCapacity
+    StorageCapacity storageCapacity,
+    Long inventoryResultVersion
 ) {
     public record InventoryVisit(
         Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
@@ -191,9 +193,9 @@ public record CheckInResponse(
             declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover,
             null, null, List.of(), IntakeAction.NONE,
             null, null, false, false,
-            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null, null,
             null, false, null, false,
-            null, null, null, null, null
+            null, null, null, null, null, null
         );
     }
 
