@@ -179,8 +179,8 @@ public class ReturnFinancialReconciliation {
                 throw ApiExceptions.conflict("Bảng kê trả kho trong thời gian chuẩn bị đã thay đổi; cần đối soát lại.");
             if (rc.isSetupEarlyExit() && (!SetupEarlyExitPolicy.applies(rc)
                 || !Objects.equals(proof.pricing().getSetupEarlyExitPolicyVersion(), rc.getSetupEarlyExitPolicyVersion())
-                || proof.pricing().getSetupEarlyExitFee().compareTo(rc.getEarlyTerminationFee()) != 0
-                || proof.pricing().getNetRentalAmount().compareTo(rc.getRentalRefundCredit()) != 0))
+                || SetupEarlyExitPolicy.retainedRental(proof.pricing().getNetRentalAmount()).compareTo(rc.getEarlyTerminationFee()) != 0
+                || SetupEarlyExitPolicy.refundableRental(proof.pricing().getNetRentalAmount()).compareTo(rc.getRentalRefundCredit()) != 0))
                 throw ApiExceptions.conflict("Điều khoản hoặc tiền thuê thực thu không khớp bảng kê thời gian chuẩn bị.");
         }
         if(!proof.payment().getId().toString().equals(row.get("security_payment_id"))

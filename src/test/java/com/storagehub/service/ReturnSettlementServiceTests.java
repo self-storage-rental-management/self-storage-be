@@ -136,7 +136,7 @@ class ReturnSettlementServiceTests {
         reservation.setReservationCode("RSV-SETUP-TEST");
         var quote = new com.storagehub.domain.model.ReservationQuote();
         quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
-        quote.setSetupEarlyExitFee(new BigDecimal("2000000"));
+        quote.setSetupEarlyExitFee(new BigDecimal("1200000"));
         reservation.setSourceQuote(quote);
         rental.setReservation(reservation);
 
@@ -265,6 +265,7 @@ class ReturnSettlementServiceTests {
         LocalDate receiptDate = LocalDate.now(BusinessTime.ZONE).minusDays(1);
         rental.setSetupStartedAt(receiptDate.atTime(10, 0).atZone(BusinessTime.ZONE).toInstant());
         rental.setSetupEndsAt(Instant.now().plus(24, java.time.temporal.ChronoUnit.HOURS));
+        rental.setSetupCompletionDeadlineAt(Instant.now().plus(72, java.time.temporal.ChronoUnit.HOURS));
         rental.setMoveInCompletedAt(rental.getSetupStartedAt().plus(1, java.time.temporal.ChronoUnit.HOURS));
         returnCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
         returnCase.setScheduledDate(LocalDate.now(BusinessTime.ZONE));
@@ -902,7 +903,7 @@ class ReturnSettlementServiceTests {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({"300000,2300000,5700000,0", "8000000,10000000,0,2000000"})
+    @org.junit.jupiter.params.provider.CsvSource({"300000,1500000,4500000,0", "8000000,8000000,0,8000000"})
     void setupRefundIncludesVerifiedRentAndOneMonthFeeWithoutCountingPrepaymentAgain(
         String damage, String deductions, String refund, String due) {
         var rc = setupReturn(ReturnCaseStatus.requested);
@@ -913,7 +914,7 @@ class ReturnSettlementServiceTests {
         pricing.setMonthlyPrice(new BigDecimal("2000000"));
         pricing.setNetRentalAmount(new BigDecimal("6000000"));
         pricing.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
-        pricing.setSetupEarlyExitFee(new BigDecimal("2000000"));
+        pricing.setSetupEarlyExitFee(new BigDecimal("1200000"));
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
         when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
         when(returnCaseRepository.save(rc)).thenReturn(rc);
@@ -931,8 +932,8 @@ class ReturnSettlementServiceTests {
             new BigDecimal(damage), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             "Vết xước khi trả kho, có ảnh đối chiếu", List.of(fileId.toString()), true, true, true, StorageUnitStatus.available, true);
         var response = service.performInspection(staffActor, rc.getId(), inspection);
-        assertThat(response.rentalRefundCredit()).isEqualByComparingTo("6000000");
-        assertThat(response.earlyTerminationFee()).isEqualByComparingTo("2000000");
+        assertThat(response.rentalRefundCredit()).isEqualByComparingTo("4800000");
+        assertThat(response.earlyTerminationFee()).isEqualByComparingTo("1200000");
         assertThat(response.totalDeductions()).isEqualByComparingTo(deductions);
         assertThat(response.netRefundAmount()).isEqualByComparingTo(refund);
         assertThat(response.amountDueFromCustomer()).isEqualByComparingTo(due);
@@ -946,16 +947,16 @@ class ReturnSettlementServiceTests {
         rc.setDamageFee(new BigDecimal("500000"));
         rc.setCleaningFee(BigDecimal.ZERO);
         rc.setLostItemFee(BigDecimal.ZERO);
-        rc.setEarlyTerminationFee(new BigDecimal("2000000"));
-        rc.setRentalRefundCredit(new BigDecimal("6000000"));
+        rc.setEarlyTerminationFee(new BigDecimal("1200000"));
+        rc.setRentalRefundCredit(new BigDecimal("4800000"));
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
         when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
         when(returnCaseRepository.save(rc)).thenReturn(rc);
         var response = service.managerReviewDispute(managerActor, rc.getId(),
             new ManagerReviewDisputeRequest("Giảm phí theo bằng chứng kiểm kê", new BigDecimal("300000"),
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, StorageUnitStatus.available));
-        assertThat(response.totalDeductions()).isEqualByComparingTo("2300000");
-        assertThat(response.netRefundAmount()).isEqualByComparingTo("5700000");
+        assertThat(response.totalDeductions()).isEqualByComparingTo("1500000");
+        assertThat(response.netRefundAmount()).isEqualByComparingTo("4500000");
         assertThat(response.amountDueFromCustomer()).isZero();
         // Amounts changed during the dispute review, so the customer must confirm the new
         // statement again instead of the refund being released straight away.
