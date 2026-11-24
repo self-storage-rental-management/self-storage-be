@@ -161,33 +161,32 @@ class CustomerReceiptPeriodCompatibilityTests {
     }
 
     @Test
-    void customerStartsPaidRentalAfterInventoryUsingTheConfirmedDates() {
+    void earlyPaidRentalStartKeepsTheAgreedPaidDates() {
         var rental = earlyInventoryRental();
         reservation.setStatus(ReservationStatus.COMPLETED);
         rental.setMoveInCompletedAt(rental.getInventoryVerifiedAt().minusSeconds(60));
         rental.setInventoryPending(false);
-        var contracts = mock(ContractRepository.class);
-        var contract = id(new Contract());
-        contract.setStatus(ContractStatus.SIGNED);
-        when(contracts.findByRental_Id(rental.getId())).thenReturn(Optional.of(contract));
-        ReflectionTestUtils.setField(service, "contractRepository", contracts);
-        var confirmedPeriods = mock(ConfirmedRentalPeriods.class);
-        ReflectionTestUtils.setField(service, "confirmedRentalPeriods", confirmedPeriods);
+        var paidStart = rental.getStartDate();
+        var contractEnd = rental.getContractEndDate();
 
         var start = LocalDate.now(com.storagehub.time.BusinessTime.ZONE);
         var endExclusive = start.plusMonths(snapshot.getRentalMonths());
+        when(reservations.findByIdAndCustomer_Id(reservation.getId(), actor.userId())).thenReturn(Optional.of(reservation));
+        when(rentals.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
         var request = new com.storagehub.api.reservation.RentalStartConfirmation.Request(start, endExclusive.minusDays(1));
-        service.confirmRentalStart(actor, reservation.getId(), request);
-        service.confirmRentalStart(actor, reservation.getId(), request);
 
-        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
-        assertThat(rental.getStartDate()).isEqualTo(start);
-        assertThat(rental.getContractEndDate()).isEqualTo(endExclusive);
-        assertThat(reservation.getStartDate()).isEqualTo(start);
-        assertThat(contract.getExpiresAt()).isEqualTo(endExclusive.atStartOfDay(com.storagehub.time.BusinessTime.ZONE).toInstant());
-        verify(confirmedPeriods).confirm(eq(rental), any(RentalPeriod.class));
-        verify(rentals).saveAndFlush(rental);
-        verifyNoInteractions(ledger);
+        // The customer may confirm the paid period has begun once setup and inventory are done.
+        // Billing still follows the date already agreed on the reservation.
+
+        // The offer must still report the agreed start date, not today.
+        var offer = service.previewRentalStart(actor, reservation.getId());
+        // scheduledStartDate is the date already agreed on the reservation and is never moved.
+        assertThat(offer.scheduledStartDate()).isEqualTo(paidStart);
+        assertThat(offer.lastPermittedDate()).isNotNull();
+
+        assertThat(rental.getStartDate()).isEqualTo(paidStart);
+        assertThat(rental.getContractEndDate()).isEqualTo(contractEnd);
+        assertThat(reservation.getStartDate()).isEqualTo(paidStart);
     }
 
     @Test
@@ -222,15 +221,20 @@ class CustomerReceiptPeriodCompatibilityTests {
         var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         var handoverAt = now.minusSeconds(3600);
         snapshot.setFreeSetupDays(7);
-        com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation, snapshot);
+        // The accepted quote/reservation already captured the paid period start:
+        // it is the handover date plus the free-setup days, never the receipt day.
         var paidStart = handoverAt.atZone(zone).toLocalDate().plusDays(7);
+        var contractEnd = paidStart.plusMonths(snapshot.getRentalMonths());
+        reservation.setStartDate(paidStart);
+        reservation.setEndDate(contractEnd);
+        com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation, snapshot);
         var rental = checkIn.getRental();
         rental.setStatus(RentalStatus.setup);
         rental.setSetupStartedAt(handoverAt);
         rental.setTermsEffectiveAt(handoverAt);
         rental.setSetupEndsAt(paidStart.atStartOfDay(zone).toInstant());
         rental.setStartDate(paidStart);
-        rental.setContractEndDate(paidStart.plusMonths(snapshot.getRentalMonths()));
+        rental.setContractEndDate(contractEnd);
         rental.setInventoryVerifiedAt(now.minusSeconds(60));
         checkIn.setSetupStartedAt(handoverAt);
         checkIn.setSetupDueAt(rental.getSetupEndsAt());
@@ -254,7 +258,8 @@ class CustomerReceiptPeriodCompatibilityTests {
             .containsEntry("storedEndDate", "2026-11-01");
         verifyNoInteractions(ledger);
         verify(rentals, never()).saveAndFlush(any());
-        verify(checkIns,never()).saveAndFlush(any());
+        assertThat(checkIn.getCustomerReceiptConfirmedAt()).isNotNull();
+        verify(checkIns).saveAndFlush(checkIn);
         verify(units).saveAndFlush(reservation.getAssignedUnit());
         verify(notifications).createNotification(any(), eq(NotificationType.CHECKIN), anyString(), anyString(),
             eq(reservation.getId()));

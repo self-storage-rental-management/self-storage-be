@@ -1,6 +1,9 @@
 package com.storagehub.common.api;
 
 import jakarta.validation.ConstraintViolationException;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.converter.HttpMessageNotWritableException;
+import org.springframework.web.util.DisconnectedClientHelper;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -25,6 +28,8 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private static final DisconnectedClientHelper disconnectedClients =
+        new DisconnectedClientHelper(GlobalExceptionHandler.class.getName() + ".DisconnectedClient");
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiErrorResponse> handleApiException(ApiException exception) {
@@ -93,6 +98,22 @@ public class GlobalExceptionHandler {
     public void handleDisconnectedResponse(org.springframework.web.context.request.async.AsyncRequestNotUsableException exception) {
         // The response is no longer writable. Do not serialize JSON into a closed SSE stream.
         log.debug("Client disconnected from async response: {}", exception.getMessage());
+    }
+
+    @ExceptionHandler(HttpMessageNotWritableException.class)
+    public ResponseEntity<ApiErrorResponse> handleUnwritableResponse(
+        HttpMessageNotWritableException exception, HttpServletResponse response
+    ) {
+        if (disconnectedClients.checkAndLogClientDisconnectedException(exception)) {
+            return null;
+        }
+        // Serialization errors still need an ERROR log even when headers/body
+        // were already sent. Only an uncommitted response can carry error JSON.
+        log.error("Response serialization failed, correlationId={}", CorrelationIdContext.current(), exception);
+        if (response.isCommitted()) return null;
+        response.resetBuffer();
+        return error(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR,
+            "Không thể tải dữ liệu. Vui lòng thử lại.", null);
     }
 
     @ExceptionHandler(org.springframework.dao.ConcurrencyFailureException.class)

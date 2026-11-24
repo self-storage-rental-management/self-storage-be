@@ -39,7 +39,7 @@ public class PaymentReceiptEmailQueue {
     @Transactional
     public void enqueue(UUID userId, String recipient, Map<String, Object> payload) {
         enqueue(userId, recipient, "payment-bill", "StorageHub - Biên lai xác nhận thanh toán thành công",
-            "PAYMENT_BILL_EMAIL_SENT", recipient + ":" + payload.get("transactionNo") + ":" + payload.get("invoiceNumber") + ":" + payload.get("paymentPurpose"), payload);
+            "PAYMENT_BILL_EMAIL_SENT", "payment-bill:" + payload.get("paymentId"), payload);
     }
 
     @Transactional
@@ -56,17 +56,20 @@ public class PaymentReceiptEmailQueue {
             }
             String body = mapper.writeValueAsString(payload);
             if (java.util.Set.of("verify-email", "reset-password", "reservation-verification").contains(template)) body = protect(body);
-            jdbc.update("INSERT INTO payment_receipt_emails (receipt_key,user_id,recipient,payload,template_name,subject,audit_action,expires_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE receipt_key=receipt_key",
+            // TIMESTAMP(3) defaults may round a fresh row into the next millisecond.
+            // Explicitly floor the first attempt so an immediate worker sees committed mail as due.
+            jdbc.update("INSERT INTO payment_receipt_emails (receipt_key,user_id,recipient,payload,template_name,subject,audit_action,expires_at,next_attempt_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE receipt_key=receipt_key",
                 key, userId == null ? null : userId.toString(), recipient, body, template, subject, auditAction,
-                expiry == null ? null : Timestamp.from(expiry));
+                expiry == null ? null : Timestamp.from(expiry), Timestamp.from(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS)));
         } catch (GeneralSecurityException | com.fasterxml.jackson.core.JsonProcessingException exception) {
             throw new IllegalStateException("Cannot queue transactional email", exception);
         }
     }
 
     public void deliverPending(TransactionalEmailService sender) {
+        Instant current = Instant.now();
         var ids = jdbc.query("SELECT id FROM payment_receipt_emails WHERE delivery_status='PENDING' AND next_attempt_at<=? AND (locked_until IS NULL OR locked_until<?) ORDER BY id LIMIT 20",
-            (rs, row) -> rs.getLong(1), Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            (rs, row) -> rs.getLong(1), Timestamp.from(current.plusSeconds(1)), Timestamp.from(current));
         for (Long id : ids) {
             Entry entry = transaction().execute(status -> claim(id));
             if (entry == null) continue;
@@ -75,6 +78,9 @@ public class PaymentReceiptEmailQueue {
             try {
                 Map<String, Object> payload = mapper.readValue(unprotect(entry.payload()), new TypeReference<Map<String, Object>>() {});
                 if (failure == null) {
+                    if ("payment-bill".equals(entry.template())) {
+                        payload.put("invoiceNumber", issuedInvoiceNumber(entry.userId(), payload));
+                    }
                     sent = sender.deliverEmail(entry.userId() == null ? null : UUID.fromString(entry.userId()),
                         entry.recipient(), entry.subject(), entry.template(), payload, entry.auditAction());
                     if (!sent) failure = "SMTP_FAILED";
@@ -95,13 +101,35 @@ public class PaymentReceiptEmailQueue {
         }
     }
 
+    private String issuedInvoiceNumber(String userId, Map<String, Object> payload) {
+        if (payload.get("paymentId") instanceof String paymentId) {
+            return jdbc.query("SELECT invoice_number FROM payments WHERE id = ?",
+                rs -> rs.next() ? rs.getString(1) : null, HexFormat.of().parseHex(paymentId.replace("-", "")));
+        }
+        // Older queued receipts only carry a transaction reference and may contain a fabricated invoice number.
+        if (userId == null || !(payload.get("transactionNo") instanceof String reference)
+            || reference.isBlank() || "N/A".equals(reference)) return null;
+        return jdbc.queryForObject("""
+            SELECT CASE WHEN COUNT(*) = 1 THEN MAX(p.invoice_number)
+                        ELSE MAX(CASE WHEN p.invoice_number = ? THEN p.invoice_number END)
+                   END
+            FROM payments p
+            LEFT JOIN reservations b ON b.id = p.reservation_id
+            LEFT JOIN renewals n ON n.id = p.renewal_id
+            LEFT JOIN rentals r ON r.id = n.rental_id
+            WHERE (p.gateway_transaction_no = ? OR p.gateway_intent_id = ?)
+              AND COALESCE(b.customer_id, r.customer_id) = ?
+            """, String.class, payload.get("invoiceNumber"), reference, reference,
+            HexFormat.of().parseHex(userId.replace("-", "")));
+    }
+
     private Entry claim(long id) {
         Instant now = Instant.now();
         var rows = jdbc.query("SELECT id,user_id,recipient,payload,attempts,template_name,subject,audit_action,expires_at FROM payment_receipt_emails WHERE id=? AND delivery_status='PENDING' AND next_attempt_at<=? AND (locked_until IS NULL OR locked_until<?) FOR UPDATE SKIP LOCKED",
             (rs, row) -> new Entry(rs.getLong("id"), rs.getString("user_id"), rs.getString("recipient"), rs.getString("payload"),
                 rs.getInt("attempts"), rs.getString("template_name"), rs.getString("subject"), rs.getString("audit_action"),
                 rs.getTimestamp("expires_at") == null ? null : rs.getTimestamp("expires_at").toInstant(), UUID.randomUUID().toString()),
-            id, Timestamp.from(now), Timestamp.from(now));
+            id, Timestamp.from(now.plusSeconds(1)), Timestamp.from(now));
         if (rows.isEmpty()) return null;
         Entry entry = rows.getFirst();
         if (entry.expiresAt() != null && !entry.expiresAt().isAfter(now)) {
@@ -110,6 +138,18 @@ public class PaymentReceiptEmailQueue {
         }
         if (entry.template().equals("customer-lifecycle")) try {
             var payload = mapper.readValue(entry.payload(), new TypeReference<Map<String, Object>>() {});
+            if (payload.get("_appointmentRef") != null) {
+                var current = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM renewal_operation_states s JOIN renewals r ON r.id=s.id
+                    WHERE s.appointment_ref=UNHEX(REPLACE(?,'-','')) AND s.phase='SIGNING'
+                      AND r.status='appointment_scheduled' AND s.arrival_ref IS NULL AND s.appointment_start>?
+                      AND (s.deposit_paid_at IS NOT NULL OR s.full_rent_paid_at IS NOT NULL)
+                    """, Integer.class, payload.get("_appointmentRef").toString(), Timestamp.from(now));
+                if (current == 0) {
+                    jdbc.update("UPDATE payment_receipt_emails SET delivery_status='CANCELLED',last_error='RESOURCE_STATE_CHANGED',locked_until=NULL,lock_token=NULL WHERE id=?", id);
+                    return null;
+                }
+            }
             if (payload.get("_requiredReservationStatus") != null && payload.get("_reservationId") != null) {
                 var states = jdbc.query("SELECT status FROM reservations WHERE id=UNHEX(REPLACE(?,'-',''))", (rs, row) -> rs.getString(1), payload.get("_reservationId").toString());
                 if (states.isEmpty() || !states.getFirst().equals(payload.get("_requiredReservationStatus"))) {

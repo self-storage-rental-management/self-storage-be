@@ -10,7 +10,8 @@ REM Tự động bổ sung JDK 21 vào PATH nếu chưa nhận
 if defined JAVA_HOME (
     set "PATH=%JAVA_HOME%\bin;%PATH%"
 ) else (
-    set "PATH=C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot\bin;%ProgramFiles%\Java\jdk-21\bin;%PATH%"
+    set "JAVA_HOME=%~dp0..\.local\runtimes\jdk-21.0.12.1+1"
+    set "PATH=%~dp0..\.local\runtimes\jdk-21.0.12.1+1\bin;%PATH%"
 )
 set "MAVEN_OPTS=-Xms64m -Xmx512m"
 REM Keep Java socket paths short on Windows (long sandbox TEMP paths break NIO).

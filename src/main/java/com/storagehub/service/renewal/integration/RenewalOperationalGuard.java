@@ -5,6 +5,7 @@ import com.storagehub.domain.model.*;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.TypedQuery;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 import lombok.RequiredArgsConstructor;
@@ -45,14 +46,29 @@ public class RenewalOperationalGuard {
             throw ApiExceptions.conflict("Another rental is committed to this unit");
         if(rental.getReservation()==null || rental.getReservation().getId()==null)
             throw ApiExceptions.conflict("DEFERRED_SOURCE: Rental reservation binding missing");
-        if(!currentQuery("select x from Reservation x where x.assignedUnit.id=:unit and x.id<>:reservation and x.status not in :terminal")
-            .setParameter("unit",unit.getId()).setParameter("reservation",rental.getReservation().getId())
-            .setParameter("terminal",List.of(ReservationStatus.CANCELLED,ReservationStatus.EXPIRED,ReservationStatus.REJECTED,ReservationStatus.COMPLETED)).getResultList().isEmpty())
-            throw ApiExceptions.conflict("Another booking is committed to this unit");
         if(!currentQuery("select x from OverdueFollowUp x where x.rental.id=:rental and x.type='RECOVERY_HANDOFF'")
             .setParameter("rental",rental.getId()).getResultList().isEmpty())
             throw ApiExceptions.conflict("Recovery handoff blocks renewal; receiver reconciliation required");
         // Absence of a handoff row cannot prove absence of externally initiated recovery.
+    }
+    public boolean hasBookingConflict(Rental rental, LocalDate start, LocalDate endExclusive) {
+        return !currentQuery("""
+            select x from Reservation x where x.assignedUnit.id=:unit and x.id<>:reservation
+              and x.status not in :terminal
+              and (x.startDate is null or x.startDate < :end)
+              and (x.endDate is null or x.endDate > :start)
+            """)
+            .setParameter("unit", rental.getStorageUnit().getId())
+            .setParameter("reservation", rental.getReservation().getId())
+            .setParameter("terminal", List.of(ReservationStatus.CANCELLED, ReservationStatus.EXPIRED,
+                ReservationStatus.REJECTED, ReservationStatus.COMPLETED))
+            .setParameter("start", start).setParameter("end", endExclusive).getResultList().isEmpty();
+    }
+
+    public void requireNoBookingConflict(Rental rental, LocalDate start, LocalDate endExclusive) {
+        if (hasBookingConflict(rental, start, endExclusive)) {
+            throw ApiExceptions.conflict("Another booking is committed to this unit");
+        }
     }
     private TypedQuery<Object> currentQuery(String jpql) {
         var query=em.createQuery(jpql,Object.class).setMaxResults(1);

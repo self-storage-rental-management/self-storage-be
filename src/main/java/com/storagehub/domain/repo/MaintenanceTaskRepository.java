@@ -31,6 +31,12 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
         Collection<MaintenanceTaskStatus> statuses
     );
 
+    java.util.Optional<MaintenanceTask> findFirstByReturnCase_IdAndRecoveryTypeOrderByCreatedAtDesc(
+        UUID returnCaseId,
+        com.storagehub.domain.model.MaintenanceRecoveryType recoveryType
+    );
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"rental.customer", "returnCase.customer"})
     @Query("""
         select t from MaintenanceTask t
         where (:facilityId is null or t.facility.id = :facilityId)

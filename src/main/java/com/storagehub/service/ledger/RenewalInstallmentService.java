@@ -121,7 +121,11 @@ public class RenewalInstallmentService {
         event(renewal,p,null);notice(renewal,p.getAmount());return new RenewalVnpaySettlementService.Result(true,receipt,null);
     }
     private void event(Renewal n,Payment p,UUID file){var payload=new LinkedHashMap<String,Object>();payload.put("paymentRef",p.getId());payload.put("amount",p.getAmount());payload.put("currency","VND");payload.put("receiptFileId",file);payload.put("receiptId",p.getRenewalLedgerReceiptRef());em.persist(new RenewalOperationEvent(n,"INSTALLMENT_PAYMENT",Instant.now(),p.getInitiatedBy().getId(),json(payload)));}
-    private void notice(Renewal n,BigDecimal amount){notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.RENEWAL,"Đã ghi nhận thanh toán kỳ gia hạn","Đã nhận "+amount.toPlainString()+" đồng và phân bổ vào các kỳ thuê đã chọn.",n.getId());}
+    private void notice(Renewal n,BigDecimal amount){
+        notifications.createNotification(n.getRental().getCustomer().getId(),NotificationType.RENEWAL,"Đã ghi nhận thanh toán kỳ gia hạn","Đã nhận "+amount.toPlainString()+" đồng và phân bổ vào các kỳ thuê đã chọn.",n.getId());
+        notifications.createFacilityOperationsNotifications(n.getRental().getFacility().getId(),NotificationType.RENEWAL,
+            "Đã ghi nhận thanh toán kỳ gia hạn","Khoản thanh toán kỳ gia hạn của khách hàng "+n.getRental().getCustomer().getFullName()+" đã được phân bổ thành công.",n.getId());
+    }
     /** Read-only writer proof used by the shared partial financial inventory. */
     public boolean receiptMatches(Payment p,LedgerStore.Receipt receipt){
         if(p.getRenewal()==null||p.getRenewalRevision()==null||p.getStatus()!=PaymentStatus.PAID||p.getRenewalLedgerReceiptRef()==null||!receipt.id().equals(p.getRenewalLedgerReceiptRef())

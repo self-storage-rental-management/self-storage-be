@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.ArrayList;
 import java.util.Locale;
 import java.util.UUID;
+import java.time.Instant;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -18,6 +19,10 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, JpaSpecificationExecutor<ReturnCase> {
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from ReturnCase r where r.id = :id")
+    Optional<ReturnCase> findByIdForUpdate(@Param("id") UUID id);
+
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from ReturnCase r where r.id = :id and r.customer.id = :customerId")
     Optional<ReturnCase> findOwnedForUpdate(@Param("id") UUID id, @Param("customerId") UUID customerId);
@@ -33,6 +38,7 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
           and (returnCase.netRefundAmount > 0 or returnCase.amountDueFromCustomer > 0)
           and (:pattern is null
             or lower(coalesce(returnCase.settlementPaymentId, '')) like :pattern
+            or returnCase.id in :receiptIds
             or lower(coalesce(customer.fullName, '')) like :pattern
             or lower(coalesce(storageUnit.code, '')) like :pattern)
         order by returnCase.settlementPaidAt desc, returnCase.id desc
@@ -46,12 +52,14 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
           and (returnCase.netRefundAmount > 0 or returnCase.amountDueFromCustomer > 0)
           and (:pattern is null
             or lower(coalesce(returnCase.settlementPaymentId, '')) like :pattern
+            or returnCase.id in :receiptIds
             or lower(coalesce(customer.fullName, '')) like :pattern
             or lower(coalesce(storageUnit.code, '')) like :pattern)
         """)
     Page<ReturnCase> searchFacilityPaymentSettlements(
         @Param("facilityId") UUID facilityId,
         @Param("pattern") String pattern,
+        @Param("receiptIds") java.util.Collection<UUID> receiptIds,
         Pageable pageable
     );
 
@@ -100,6 +108,11 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
     );
 
     List<ReturnCase> findByStatusIn(Collection<ReturnCaseStatus> statuses);
+
+    List<ReturnCase> findByStatusInAndRecoveryEligibleAtLessThanEqualAndRecoveryTaskCreatedAtIsNull(
+        Collection<ReturnCaseStatus> statuses,
+        Instant now
+    );
 
     @Query("select r from ReturnCase r where r.status = com.storagehub.domain.model.ReturnCaseStatus.awaiting_customer_confirmation and r.customerConfirmed = false and r.inspectedAt is not null and r.inspectedAt <= :cutoff")
     List<ReturnCase> findExpiredAwaitingConfirmation(@Param("cutoff") java.time.Instant cutoff);

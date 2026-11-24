@@ -18,6 +18,10 @@ public class V2026101103__ensure_rental_ledger_and_notification_outbox extends B
     private static final String SQL_RESOURCE="db/migration-history/legacy-1001/V2026101001__create_rental_ledger_and_notification_outbox.sql";
     private static final String SQL_HASH="0e7ad29986d1cfb6e5e5dd3380cc464067ef16e83a13a52b3d0eaf370426766f";
     private static final String SCHEMA_HASH="f933f9c259c8362e7795926dfea0edfc325c4396a965c46bb2530bcf995104af";
+    // MySQL 8.4 canonicalizes generated UUID expressions in SHOW CREATE TABLE
+    // with charset introducers; this is the equivalent fingerprint after that
+    // server-side normalization.
+    private static final String MYSQL_84_CANONICAL_SCHEMA_HASH="1eaac9cb23c385aba9eb39a23018014ab0689646fb0ffbefdc856206fa4884fe";
     private static final List<String> TABLES=List.of("rental_ledger_accounts","rental_ledger_allocations","rental_ledger_commands","rental_ledger_obligations","rental_ledger_receipts","rental_ledger_refunds","notification_outbox");
     @Override public Integer getChecksum(){return 2026101103;}
     @Override public boolean canExecuteInTransaction(){return false;}
@@ -53,7 +57,9 @@ public class V2026101103__ensure_rental_ledger_and_notification_outbox extends B
             if(!rows.next())throw new SQLException("Ledger schema missing table; no repair performed");
             schema.append(rows.getString(1)).append('\t').append(rows.getString(2).replace("\r\n","\n")).append('\n');
         }
-        if(!SCHEMA_HASH.equals(hash(schema.toString())))throw new SQLException("Ledger schema fingerprint differs from verified MySQL 8.4 definitions; no repair or existing-data change performed");
+        String schemaHash=hash(schema.toString());
+        if(!SCHEMA_HASH.equals(schemaHash) && !MYSQL_84_CANONICAL_SCHEMA_HASH.equals(schemaHash))
+            throw new SQLException("Ledger schema fingerprint differs from verified MySQL 8.4 definitions; no repair or existing-data change performed");
     }
     private static String hash(String value) throws Exception {return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}
 }

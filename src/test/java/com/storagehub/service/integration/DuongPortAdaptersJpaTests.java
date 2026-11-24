@@ -32,7 +32,7 @@ import org.springframework.test.context.*;
 @TestPropertySource(properties="storagehub.integration.rental-period.enabled=true")
 @Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
     RenewalPolicyPublicationService.class,EffectiveRenewalPolicySource.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
-    ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,
+    ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,com.storagehub.service.renewal.RenewalDisplayIdentity.class,
     RenewalPersistence.class,com.storagehub.service.FileStorageService.class,
     com.storagehub.service.AdminAuthorizationService.class,com.storagehub.service.FacilityScopeService.class,
     com.storagehub.service.NotificationService.class,com.storagehub.service.support.SupportService.class,

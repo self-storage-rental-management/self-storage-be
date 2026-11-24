@@ -15,6 +15,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SetupEarlyExitPolicyTests {
+    @Test
+    void mismatchUsesVerifiedRentWithoutRequiringOrdinarySetupFeeTerms() {
+        record.setReturnType(com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        record.getRental().getReservation().setSourceQuote(null);
+        pricing.setSetupEarlyExitPolicyVersion(null);
+        pricing.setSetupEarlyExitFee(null);
+        SetupEarlyExitPolicy.capture(record, pricing);
+        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("0");
+        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo("6000000");
+        assertThat(record.isSetupEarlyExit()).isFalse();
+        assertThat(record.getSetupEarlyExitPolicyVersion()).isEqualTo("INVENTORY_MISMATCH_USAGE_V1");
+    }
     private ReturnCase record;
     private ReservationPricingSnapshot pricing;
     private ReservationQuote quote;
@@ -24,7 +36,7 @@ class SetupEarlyExitPolicyTests {
     void setUp() {
         quote = new ReservationQuote();
         quote.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
-        quote.setSetupEarlyExitFee(new BigDecimal("2000000"));
+        quote.setSetupEarlyExitFee(new BigDecimal("1200000"));
         var reservation = new Reservation();
         reservation.setSourceQuote(quote);
         var rental = new Rental();
@@ -39,7 +51,7 @@ class SetupEarlyExitPolicyTests {
         pricing.setReservation(reservation);
         pricing.setSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
         pricing.setMonthlyPrice(new BigDecimal("2000000"));
-        pricing.setSetupEarlyExitFee(new BigDecimal("2000000"));
+        pricing.setSetupEarlyExitFee(new BigDecimal("1200000"));
         pricing.setNetRentalAmount(new BigDecimal("6000000"));
     }
 
@@ -53,19 +65,19 @@ class SetupEarlyExitPolicyTests {
         record.setRequestedAt(boundary.minusSeconds(3600));record.setSetupReturnedAt(boundary.plusSeconds(seconds));
         SetupEarlyExitPolicy.capture(record,pricing);
         assertThat(record.isSetupEarlyExit()).isEqualTo(eligible);
-        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo(eligible?"2000000":"0");
-        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo(eligible?"6000000":"0");
+        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo(eligible?"1200000":"0");
+        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo(eligible?"4800000":"0");
     }
 
     @Test
-    void creditsTheWholeVerifiedRentalOnceAndChargesOneSnapshotMonth() {
+    void repeatedCaptureCreditsEightyPercentAndRetainsTwentyPercent() {
         SetupEarlyExitPolicy.capture(record, pricing);
         assertThat(record.isSetupEarlyExit()).isTrue();
-        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo("6000000");
-        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("2000000");
+        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo("4800000");
+        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("1200000");
         SetupEarlyExitPolicy.capture(record, pricing);
-        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo("6000000");
-        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("2000000");
+        assertThat(record.getRentalRefundCredit()).isEqualByComparingTo("4800000");
+        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("1200000");
     }
 
     @Test
@@ -75,7 +87,7 @@ class SetupEarlyExitPolicyTests {
         record.getRental().getReservation().setUnitType(currentType);
         record.getRental().setMonthlyPrice(new BigDecimal("9000000"));
         SetupEarlyExitPolicy.capture(record, pricing);
-        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("2000000");
+        assertThat(record.getEarlyTerminationFee()).isEqualByComparingTo("1200000");
     }
 
     @Test
@@ -111,7 +123,7 @@ class SetupEarlyExitPolicyTests {
     void changedFeeOrUnacceptedQuoteCannotBeUsedForRefund() {
         pricing.setSetupEarlyExitFee(new BigDecimal("1000000"));
         assertThatThrownBy(() -> SetupEarlyExitPolicy.capture(record, pricing)).hasMessageContaining("đã chấp nhận");
-        pricing.setSetupEarlyExitFee(new BigDecimal("2000000"));
+        pricing.setSetupEarlyExitFee(new BigDecimal("1200000"));
         quote.setSetupEarlyExitPolicyVersion(null);
         assertThatThrownBy(() -> SetupEarlyExitPolicy.capture(record, pricing)).hasMessageContaining("đã chấp nhận");
     }

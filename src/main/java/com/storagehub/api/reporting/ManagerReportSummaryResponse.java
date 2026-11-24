@@ -20,8 +20,94 @@ public record ManagerReportSummaryResponse(
     long openReturnsCount,
     long openMaintenanceTasksCount,
     List<StatusCount> unitStatusBreakdown,
-    List<TypeCapacity> unitTypeBreakdown
+    List<TypeCapacity> unitTypeBreakdown,
+    BigDecimal totalRefunds,
+    BigDecimal grossRevenue,
+    List<BusinessRevenueReportResponse.MonthlyRevenue> monthlyRevenue
 ) {
+    public ManagerReportSummaryResponse(
+        UUID facilityId,
+        String facilityName,
+        long totalUnits,
+        long availableUnits,
+        long occupiedUnits,
+        long maintenanceUnits,
+        long reservedUnits,
+        double occupancyRate,
+        BigDecimal monthlyRecurringRevenue,
+        BigDecimal collectedRevenue,
+        long overdueRentalsCount,
+        long monthCheckinsCount,
+        long openReturnsCount,
+        long openMaintenanceTasksCount,
+        List<StatusCount> unitStatusBreakdown,
+        List<TypeCapacity> unitTypeBreakdown
+    ) {
+        this(
+            facilityId,
+            facilityName,
+            totalUnits,
+            availableUnits,
+            occupiedUnits,
+            maintenanceUnits,
+            reservedUnits,
+            occupancyRate,
+            monthlyRecurringRevenue,
+            collectedRevenue,
+            overdueRentalsCount,
+            monthCheckinsCount,
+            openReturnsCount,
+            openMaintenanceTasksCount,
+            unitStatusBreakdown,
+            unitTypeBreakdown,
+            BigDecimal.ZERO,
+            collectedRevenue != null ? collectedRevenue : BigDecimal.ZERO,
+            List.of()
+        );
+    }
+
+    public ManagerReportSummaryResponse(
+        UUID facilityId,
+        String facilityName,
+        long totalUnits,
+        long availableUnits,
+        long occupiedUnits,
+        long maintenanceUnits,
+        long reservedUnits,
+        double occupancyRate,
+        BigDecimal monthlyRecurringRevenue,
+        BigDecimal collectedRevenue,
+        long overdueRentalsCount,
+        long monthCheckinsCount,
+        long openReturnsCount,
+        long openMaintenanceTasksCount,
+        List<StatusCount> unitStatusBreakdown,
+        List<TypeCapacity> unitTypeBreakdown,
+        BigDecimal totalRefunds,
+        BigDecimal grossRevenue
+    ) {
+        this(
+            facilityId,
+            facilityName,
+            totalUnits,
+            availableUnits,
+            occupiedUnits,
+            maintenanceUnits,
+            reservedUnits,
+            occupancyRate,
+            monthlyRecurringRevenue,
+            collectedRevenue,
+            overdueRentalsCount,
+            monthCheckinsCount,
+            openReturnsCount,
+            openMaintenanceTasksCount,
+            unitStatusBreakdown,
+            unitTypeBreakdown,
+            totalRefunds,
+            grossRevenue,
+            List.of()
+        );
+    }
     public record StatusCount(
         String status,
         String name,
