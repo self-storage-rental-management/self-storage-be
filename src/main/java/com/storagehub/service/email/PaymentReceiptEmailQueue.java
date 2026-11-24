@@ -67,8 +67,9 @@ public class PaymentReceiptEmailQueue {
     }
 
     public void deliverPending(TransactionalEmailService sender) {
+        Instant current = Instant.now();
         var ids = jdbc.query("SELECT id FROM payment_receipt_emails WHERE delivery_status='PENDING' AND next_attempt_at<=? AND (locked_until IS NULL OR locked_until<?) ORDER BY id LIMIT 20",
-            (rs, row) -> rs.getLong(1), Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            (rs, row) -> rs.getLong(1), Timestamp.from(current.plusSeconds(1)), Timestamp.from(current));
         for (Long id : ids) {
             Entry entry = transaction().execute(status -> claim(id));
             if (entry == null) continue;
@@ -128,7 +129,7 @@ public class PaymentReceiptEmailQueue {
             (rs, row) -> new Entry(rs.getLong("id"), rs.getString("user_id"), rs.getString("recipient"), rs.getString("payload"),
                 rs.getInt("attempts"), rs.getString("template_name"), rs.getString("subject"), rs.getString("audit_action"),
                 rs.getTimestamp("expires_at") == null ? null : rs.getTimestamp("expires_at").toInstant(), UUID.randomUUID().toString()),
-            id, Timestamp.from(now), Timestamp.from(now));
+            id, Timestamp.from(now.plusSeconds(1)), Timestamp.from(now));
         if (rows.isEmpty()) return null;
         Entry entry = rows.getFirst();
         if (entry.expiresAt() != null && !entry.expiresAt().isAfter(now)) {
