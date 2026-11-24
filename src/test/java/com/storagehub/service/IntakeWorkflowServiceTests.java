@@ -60,6 +60,25 @@ class IntakeWorkflowServiceTests {
         assertThat(rental.getInventoryFinalDeadlineAt()).isEqualTo(finalDeadline);
         assertThat(rental.getWorkflowHistoryJson()).contains("APPOINTMENT");
     }
+
+    @Test void appointmentIsMirroredToCheckInAndNotifiesFacilityOperations() {
+        Instant finalDeadline = Instant.now().plusSeconds(172800);
+        Instant appointment = Instant.now().plusSeconds(3600);
+        rental.setMoveInCompletedAt(Instant.now());
+        rental.setInventoryFinalDeadlineAt(finalDeadline);
+        var checkIn = new CheckIn();
+        checkIn.setReservation(rental.getReservation());
+        when(checkins.findByReservation_Id(reservationId)).thenReturn(Optional.of(checkIn));
+
+        service.change(customer, reservationId, new IntakeWorkflowService.Command("APPOINTMENT", appointment, null, null, null));
+
+        assertThat(rental.getInventoryAppointmentAt()).isEqualTo(appointment);
+        assertThat(checkIn.getInventoryAppointmentAt()).isEqualTo(appointment);
+        verify(checkins).saveAndFlush(checkIn);
+        verify(notifications).createFacilityOperationsNotifications(
+            eq(rental.getFacility().getId()), eq(NotificationType.CHECKIN),
+            eq("Đã đặt lịch kiểm kê"), contains("lịch kiểm kê"), eq(reservationId));
+    }
     @Test void staffAndManagerHaveIndependentReminderCooldowns() {
         var staff = actor(UUID.randomUUID(), RoleCode.STAFF); var manager=actor(UUID.randomUUID(), RoleCode.MANAGER);
         var cmd = new IntakeWorkflowService.Command("REMIND", null, null, null, null);

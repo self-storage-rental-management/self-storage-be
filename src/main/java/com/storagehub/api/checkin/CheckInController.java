@@ -31,6 +31,44 @@ public class CheckInController {
         return new ApiResponse<>(service.inventoryAlternatives(actorContext.required(), checkInId), CorrelationIdContext.current());
     }
 
+    @GetMapping("/{checkInId}/inventory-draft")
+    public ApiResponse<InventoryDraftResponse> inventoryDraft(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.getInventoryDraft(actorContext.required(), checkInId), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/inventory-draft")
+    public ApiResponse<InventoryDraftResponse> saveInventoryDraft(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody SaveInventoryDraftRequest request
+    ) {
+        return new ApiResponse<>(
+            service.saveInventoryDraft(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/inventory-draft/resolve")
+    public ApiResponse<CheckInResponse> prepareInventoryResolution(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody PrepareInventoryResolutionRequest request
+    ) {
+        return new ApiResponse<>(
+            service.prepareInventoryResolution(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{checkInId}/inventory-resolution-at-site")
+    public ApiResponse<CheckInResponse> resolveInventoryAtSite(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody ResolveInventoryAtSiteRequest request
+    ) {
+        return new ApiResponse<>(
+            service.resolveInventoryAtSite(actorContext.required(), checkInId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{checkInId}/identity-correction")
     public ApiResponse<CheckInResponse> correctIdentity(@PathVariable UUID checkInId, @Valid @RequestBody VerifyCheckInIdentityRequest request) {
         return new ApiResponse<>(service.correctIdentity(actorContext.required(), checkInId, request), CorrelationIdContext.current());

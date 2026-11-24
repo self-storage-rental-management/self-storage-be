@@ -232,6 +232,100 @@ public class ReturnSettlementService {
         return toResponse(saved);
     }
 
+    /**
+     * Creates the same inventory-mismatch return case when the customer and
+     * Staff agree on the return at the facility. The customer remains the
+     * owner of the rental, while the Staff account is recorded as requester.
+     */
+    @Transactional
+    public ReturnCaseResponse createStaffInventoryMismatchReturnRequest(
+        ActorPrincipal actor,
+        UUID rentalId,
+        CustomerCreateReturnRequest request
+    ) {
+        if (!actor.hasRole(RoleCode.STAFF)) {
+            throw ApiExceptions.forbidden("Chỉ nhân viên được ghi nhận yêu cầu trả kho tại cơ sở.");
+        }
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        Rental rental = rentalRepository.findByIdForUpdate(rentalId)
+            .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
+        facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
+        if (request == null || request.returnType() != ReturnType.INVENTORY_MISMATCH || request.scheduledDate() == null) {
+            throw ApiExceptions.validation("Yêu cầu trả kho do sai lệch cần có ngày trả dự kiến.", null);
+        }
+        var existingReturns = returnCaseRepository.findByRental_Id(rentalId);
+        var activeReturn = existingReturns.stream().filter(r -> r.getStatus() != ReturnCaseStatus.completed).findFirst();
+        if (activeReturn.isPresent()) return toResponse(activeReturn.get());
+        if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
+            throw ApiExceptions.conflict("Hồ sơ không còn ở bước có thể tạo yêu cầu trả kho.");
+        }
+        if (rental.getInventoryRemovalPublishedAt() != null) {
+            validateRemovalDate(rental, request.scheduledDate());
+        }
+        if (!rental.isInventoryPending() && rental.getInventoryRemovalPublishedAt() == null) {
+            throw ApiExceptions.conflict("Hồ sơ không còn ở bước kiểm kê hàng hóa để kết thúc do sai lệch.");
+        }
+        InventoryDeadlinePolicy.requireRemovalDate(rental, request.scheduledDate(), Instant.now());
+        var recoveryGuard = recoveryGuard();
+        if (recoveryGuard != null) recoveryGuard.requireNoActiveRecovery(rental);
+
+        User customer = rental.getCustomer();
+        User staff = userRepository.findById(actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Staff user not found"));
+        LocalDate today = LocalDate.now(BusinessTime.ZONE);
+        if (request.scheduledDate().isBefore(today)) {
+            throw ApiExceptions.validation("Ngày trả kho không được ở quá khứ.", null);
+        }
+        Instant now = Instant.now();
+        ReturnCase returnCase = new ReturnCase();
+        returnCase.setRental(rental);
+        returnCase.setFacility(rental.getFacility());
+        returnCase.setStorageUnit(rental.getStorageUnit());
+        returnCase.setCustomer(customer);
+        returnCase.setRequestedBy(staff);
+        returnCase.setStatus(ReturnCaseStatus.requested);
+        returnCase.setRequestedAt(now);
+        returnCase.setScheduledDate(request.scheduledDate());
+        returnCase.setRecoveryEligibleAt(rental.getInventoryRemovalDeadlineAt() == null
+            ? noShowRecoveryEligibleAt(request.scheduledDate()) : rental.getInventoryRemovalDeadlineAt());
+        returnCase.setCustomerNotes(request.notes());
+        returnCase.setDepositAmount(securityDeposit(rental));
+        returnCase.setSetupExitRequested(true);
+        returnCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        returnCase.setSettlementMode(SettlementMode.MANUAL_REVIEW);
+
+        ReturnCase saved = returnCaseRepository.save(returnCase);
+        rental.setSetupExitReviewRequired(true);
+        rental.setStatus(RentalStatus.return_requested);
+        rentalRepository.save(rental);
+        notificationService.createBusinessNotifications(
+            NotificationType.RETURN,
+            "Yêu cầu trả kho do kiểm kê không phù hợp",
+            "Đơn " + rental.getReservation().getReservationCode()
+                + " được nhân viên ghi nhận yêu cầu trả kho sau khi khách xác nhận tại cơ sở.",
+            saved.getId()
+        );
+        auditLogService.recordMutation(
+            "STAFF_INVENTORY_RETURN_REQUESTED", "return", saved.getId(), saved.getFacility().getId(),
+            Map.of("requestedBy", staff.getId(), "customerId", customer.getId()), toResponse(saved)
+        );
+        notificationService.createNotification(
+            customer.getId(), NotificationType.RETURN,
+            "Đã ghi nhận yêu cầu trả kho",
+            "Nhân viên đã ghi nhận yêu cầu trả kho do kết quả kiểm kê không phù hợp cho gian "
+                + rental.getStorageUnit().getCode() + ".",
+            saved.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            rental.getFacility().getId(), NotificationType.RETURN,
+            "Đã tạo yêu cầu trả kho từ bước kiểm kê",
+            "Đơn " + rental.getReservation().getReservationCode()
+                + " đã được nhân viên ghi nhận phương án trả kho tại cơ sở.",
+            saved.getId()
+        );
+        return toResponse(saved);
+    }
+
     @Transactional
     public ReturnCaseResponse updateCustomerReturnRequest(ActorPrincipal actor, UUID returnId, CustomerCreateReturnRequest request) {
         if (!actor.hasRole(com.storagehub.domain.model.RoleCode.CUSTOMER)) throw ApiExceptions.forbidden("Chỉ khách hàng được sửa yêu cầu trả kho.");
