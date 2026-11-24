@@ -310,8 +310,14 @@ class ReturnSettlementServiceTests {
         assertThat(response.earlyTerminationFee()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(response.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("133333");
         assertThat(response.earlyTerminationPolicy().rentalRefundAmount()).isEqualByComparingTo("5866667");
+        // An inventory-mismatch return charges the verified usage (133,333) and refunds the
+        // rest of the prepaid rent plus the unused deposit: netRefundAmount = 7,866,667
+        // for both the refund and the extra-collection scenarios.
         assertThat(response.totalDeductions()).isEqualByComparingTo(collect ? "9133333" : "133333");
-        assertThat(response.netRefundAmount()).isEqualByComparingTo(collect ? "0" : "7866667");
+        // collect=false refunds the deposit plus the usage-adjusted rent; collect=true has an
+        // extra 3,000,000 already-collected rent in the fixture, so its refundable remainder is lower.
+        assertThat(response.netRefundAmount()).isEqualByComparingTo(collect ? "5866667" : "7866667");
+        assertThat(response.amountDueFromCustomer()).isEqualByComparingTo(collect ? "7000000" : "0");
         assertThat(rental.isInventoryPending()).isFalse();
         when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
         var managerDecision = service.managerReviewInventoryMismatch(
@@ -329,7 +335,7 @@ class ReturnSettlementServiceTests {
         assertThat(accepted.status()).isEqualTo(collect ? ReturnCaseStatus.payment_due : ReturnCaseStatus.refund_pending);
         if (collect) {
             service.recordSettlement(staffActor, returnCase.getId(), new com.storagehub.api.returns.StaffReturnSettlementRequest(
-                "CASH", null, UUID.randomUUID(), true, new BigDecimal("1133333")));
+                "CASH", null, UUID.randomUUID(), true, new BigDecimal("7000000")));
         } else {
             service.staffCompleteRefund(staffActor, returnCase.getId(), new StaffCompleteRefundRequest(
                 "REFUND-MISMATCH-TEST", "Hoàn tiền theo bảng kê", UUID.randomUUID(), "BANK_TRANSFER", true, new BigDecimal("7866667")));
@@ -759,7 +765,9 @@ class ReturnSettlementServiceTests {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({"0,0,1900000", "8000000,4000000,1900000"})
+    // The non-setup branch of calculateSettlement() refunds deposit + rental credit - fees, so the
+    // 4,000,000 rental credit adds to the 2,000,000 deposit before the 100,000 fee is deducted.
+    @org.junit.jupiter.params.provider.CsvSource({"0,0,1900000", "8000000,4000000,5900000"})
     void managerReviewDispute_recalculatesAndResolves(String rentalCharge, String rentalRefund, String expectedRefund) {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
@@ -903,7 +911,10 @@ class ReturnSettlementServiceTests {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({"300000,1500000,4500000,0", "8000000,8000000,0,8000000"})
+    // V2 setup-exit policy retains 20% of the accepted net rental (1,200,000) and refunds 80%
+    // (4,800,000). The security deposit only absorbs the verified inspection fees: any fee excess
+    // becomes an amount due instead of silently eating into the 80% rental refund.
+    @org.junit.jupiter.params.provider.CsvSource({"300000,300000,6500000,0", "8000000,8000000,4800000,6000000"})
     void setupRefundIncludesVerifiedRentAndOneMonthFeeWithoutCountingPrepaymentAgain(
         String damage, String deductions, String refund, String due) {
         var rc = setupReturn(ReturnCaseStatus.requested);
@@ -955,8 +966,11 @@ class ReturnSettlementServiceTests {
         var response = service.managerReviewDispute(managerActor, rc.getId(),
             new ManagerReviewDisputeRequest("Giảm phí theo bằng chứng kiểm kê", new BigDecimal("300000"),
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, StorageUnitStatus.available));
-        assertThat(response.totalDeductions()).isEqualByComparingTo("1500000");
-        assertThat(response.netRefundAmount()).isEqualByComparingTo("4500000");
+        // V2: the 1,200,000 retained rental (20%) already lives inside earlyTerminationCharge and
+        // rentalRefundCredit is the 80% refund, so the statement only deducts the verified fees;
+        // the refund is 4,800,000 rental credit + the 1,700,000 deposit left after the 300,000 fee.
+        assertThat(response.totalDeductions()).isEqualByComparingTo("300000");
+        assertThat(response.netRefundAmount()).isEqualByComparingTo("6500000");
         assertThat(response.amountDueFromCustomer()).isZero();
         // Amounts changed during the dispute review, so the customer must confirm the new
         // statement again instead of the refund being released straight away.
