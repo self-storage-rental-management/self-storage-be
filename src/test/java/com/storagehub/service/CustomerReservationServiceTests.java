@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -86,6 +87,16 @@ class CustomerReservationServiceTests {
     private ActorPrincipal actor;
     private Reservation reservation;
     private ReservationPricingSnapshot snapshot;
+
+    @Test
+    void rejectsRetiredPartialIntakeWithoutChangingTheReservation() {
+        var request = new com.storagehub.api.reservation.InventoryResolutionRequest(
+            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL, null);
+        assertThatThrownBy(() -> service.applyInventoryDecision(null, new Reservation(), new CheckIn(), request, null))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ngừng áp dụng");
+        org.mockito.Mockito.verifyNoInteractions(rentalRepository, reservationRepository, checkInRepository);
+    }
 
     @BeforeEach
     void setUp() {
@@ -265,6 +276,10 @@ class CustomerReservationServiceTests {
         rental.setStorageUnit(storageUnit);
         rental.setStatus(RentalStatus.setup);
         rental.setInventoryDueAt(Instant.now().plusSeconds(86_400));
+        Instant setupStart = Instant.parse("2026-11-23T08:17:00Z");
+        Instant setupEnd = setupStart.plusSeconds(3 * 86_400);
+        rental.setSetupStartedAt(setupStart);
+        rental.setSetupEndsAt(setupEnd);
 
         CheckIn checkIn = entityWithId(new CheckIn());
         checkIn.setReservation(reservation);
@@ -275,6 +290,7 @@ class CustomerReservationServiceTests {
             .thenReturn(Optional.of(reservation));
         when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
         when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+        when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
 
         var response = service.markPreparationComplete(actor, reservation.getId(),
             new CustomerPreparationCompleteRequest("Khách đã sắp xếp hàng xong"));
@@ -282,8 +298,81 @@ class CustomerReservationServiceTests {
         assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
         assertThat(checkIn.getSetupCompletedAt()).isNotNull();
         assertThat(rental.getMoveInCompletedAt()).isNotNull();
+        assertThat(rental.getInventoryDueAt()).isEqualTo(InventoryTimelinePolicy.reminderAt(checkIn.getSetupCompletedAt()));
+        assertThat(rental.getInventoryFinalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.inventoryDeadline(checkIn.getSetupCompletedAt()));
+        assertThat(rental.getSetupStartedAt()).isEqualTo(setupStart);
+        assertThat(rental.getSetupEndsAt()).isEqualTo(setupEnd);
         assertThat(response.getCheckInStatus()).isEqualTo(CheckInStatus.setup_completed.name());
+        assertThat(response.getSetupCompletedAt()).isEqualTo(checkIn.getSetupCompletedAt());
         verify(checkInRepository).saveAndFlush(checkIn);
+    }
+
+    @Test
+    void schedulesAndReschedulesInventoryWithoutRestartingTheDeadline() {
+        CheckIn checkIn = inventoryReadyFixture();
+        Rental rental = checkIn.getRental();
+        Instant first = rental.getMoveInCompletedAt().plusSeconds(7200);
+        Instant second = first.plusSeconds(3600);
+        Instant reminder = rental.getInventoryDueAt();
+        Instant deadline = rental.getInventoryFinalDeadlineAt();
+        when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+
+        assertThat(service.setInventoryAppointment(actor, reservation.getId(), first, null).getInventoryAppointmentAt())
+            .isEqualTo(first);
+        assertThat(service.setInventoryAppointment(actor, reservation.getId(), second, "Khách đổi ca làm")
+            .getInventoryAppointmentAt()).isEqualTo(second);
+
+        assertThat(rental.getInventoryDueAt()).isEqualTo(reminder);
+        assertThat(rental.getInventoryFinalDeadlineAt()).isEqualTo(deadline);
+        verify(auditLogService).recordMutation(reservation.getCustomer(), "INVENTORY_APPOINTMENT_SAVED", "CheckIn",
+            checkIn.getId(), reservation.getFacility().getId(), Map.of("appointmentAt", first),
+            Map.of("appointmentAt", second, "reason", "Khách đổi ca làm"));
+        verify(notificationService).createFacilityOperationsNotifications(
+            org.mockito.ArgumentMatchers.eq(reservation.getFacility().getId()),
+            org.mockito.ArgumentMatchers.eq(com.storagehub.domain.model.NotificationType.CHECKIN),
+            org.mockito.ArgumentMatchers.eq("Đã đổi lịch kiểm kê"), any(String.class),
+            org.mockito.ArgumentMatchers.eq(reservation.getId()));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"past", "at deadline", "after deadline", "already arrived"})
+    void rejectsInventoryAppointmentOutsideTheOpenWindow(String scenario) {
+        CheckIn checkIn = inventoryReadyFixture();
+        Instant deadline = checkIn.getRental().getInventoryFinalDeadlineAt();
+        Instant appointment = switch (scenario) {
+            case "past" -> Instant.now().minusSeconds(60);
+            case "at deadline" -> deadline;
+            case "after deadline" -> deadline.plusSeconds(60);
+            default -> Instant.now().plusSeconds(3600);
+        };
+        if (scenario.equals("already arrived")) checkIn.setInventoryArrivedAt(Instant.now());
+
+        assertThatThrownBy(() -> service.setInventoryAppointment(actor, reservation.getId(), appointment, null))
+            .isInstanceOf(ApiException.class);
+        assertThat(checkIn.getInventoryAppointmentAt()).isNull();
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    private CheckIn inventoryReadyFixture() {
+        reservation.setStatus(ReservationStatus.PREPARING);
+        Instant readyAt = Instant.now().minusSeconds(300);
+        Rental rental = entityWithId(new Rental());
+        rental.setInventoryPending(true);
+        rental.setMoveInCompletedAt(readyAt);
+        rental.setInventoryDueAt(readyAt.plusSeconds(4 * 86_400));
+        rental.setInventoryFinalDeadlineAt(readyAt.plusSeconds(7 * 86_400));
+        CheckIn checkIn = entityWithId(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setRental(rental);
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setSetupCompletedAt(readyAt);
+        when(checkInRepository.findOwnedByReservationForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+        return checkIn;
     }
 
     @Test

@@ -40,7 +40,7 @@ public class CustomerRentalReadController {
         @Parameter(name="page", in=ParameterIn.QUERY, schema=@Schema(type="integer", defaultValue="0", minimum="0")),
         @Parameter(name="size", in=ParameterIn.QUERY, schema=@Schema(type="integer", defaultValue="20", minimum="1", maximum="100")),
         @Parameter(name="status", in=ParameterIn.QUERY, schema=@Schema(allowableValues={"setup","active","return_requested","return_inspection","closing","completed"})),
-        @Parameter(name="search", in=ParameterIn.QUERY, description="Exact Rental UUID or literal unit-code substring; max 200 characters"),
+        @Parameter(name="search", in=ParameterIn.QUERY, description="Exact SH display code, rental UUID or literal unit-code substring; max 200 characters"),
         @Parameter(name="endFrom", in=ParameterIn.QUERY, schema=@Schema(type="string", format="date")),
         @Parameter(name="endTo", in=ParameterIn.QUERY, schema=@Schema(type="string", format="date")),
         @Parameter(name="sort", in=ParameterIn.QUERY, description="createdAt,contractEndDate,startDate,monthlyPrice,id / asc,desc", schema=@Schema(defaultValue="createdAt,desc"))})
@@ -50,7 +50,7 @@ public class CustomerRentalReadController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary="Read my rental record", description="404 for missing or other-owner records. Does not return raw access credentials.")
+    @Operation(summary="Read my rental record", description="404 for missing or other-owner records. Returns the active physical lock reference for the owner, never a PIN or password secret.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="Owner-scoped RentalDetail")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="Rental not found or not visible")
     public ApiResponse<RentalDetailResponse> detail(@PathVariable UUID id,

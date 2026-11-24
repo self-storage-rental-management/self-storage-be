@@ -57,6 +57,17 @@ public class ManagerReturnController {
         );
     }
 
+    @PostMapping("/{returnId}/inventory-mismatch-decision")
+    public ApiResponse<ReturnCaseResponse> decideInventoryMismatch(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody ManagerInventoryMismatchDecisionRequest request
+    ) {
+        return new ApiResponse<>(
+            returnSettlementService.managerReviewInventoryMismatch(actorContext.required(), returnId, request),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/scan-auto-settlement")
     public ApiResponse<java.util.Map<String, Object>> scanAutoSettlement() {
         int processed = returnSettlementService.autoSettleExpiredReturns(actorContext.required());

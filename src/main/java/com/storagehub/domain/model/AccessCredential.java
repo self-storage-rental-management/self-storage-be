@@ -53,6 +53,10 @@ public class AccessCredential extends BaseEntity {
     @Column(name = "reference", nullable = false, length = 160)
     private String reference;
 
+    /** Whether this lock code is still reserved for this allocation, even after access is revoked. */
+    @Column(name = "lock_code_held", nullable = false)
+    private boolean lockCodeHeld;
+
     /** SHA-256 of a sensitive PIN/access code, when one is supplied. */
     @Column(name = "secret_hash", length = 64)
     private String secretHash;

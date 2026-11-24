@@ -23,14 +23,24 @@ public class VnpayPublicController {
 
     @GetMapping("/ipn")
     public Map<String, String> ipn(@RequestParam Map<String, String> query) {
-        VnpayService.CallbackResult result = service.processCallback(query);
+        VnpayService.CallbackResult result = handleCallback(query);
         return Map.of("RspCode", result.rspCode(), "Message", result.message());
     }
 
     @GetMapping("/return")
     public ResponseEntity<Void> returnFromVnpay(@RequestParam Map<String, String> query) {
-        VnpayService.CallbackResult result = service.processCallback(query);
+        VnpayService.CallbackResult result = handleCallback(query);
         return ResponseEntity.status(302).location(frontendLocation(result)).build();
+    }
+
+    private VnpayService.CallbackResult handleCallback(Map<String, String> query) {
+        try {
+            return service.processCallback(query);
+        } catch (VnpayService.ReceiptProcessingException ex) {
+            // The original transaction has rolled back before this second call.
+            org.slf4j.LoggerFactory.getLogger(getClass()).error("VNPay receipt failed for payment {}", ex.paymentId, ex);
+            return service.deferReceipt(ex.paymentId);
+        }
     }
 
     java.net.URI frontendLocation(VnpayService.CallbackResult result) {

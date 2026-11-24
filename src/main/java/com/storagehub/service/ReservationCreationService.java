@@ -142,6 +142,11 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
+        Instant appointmentAt = request.getAppointmentAt();
+        if (appointmentAt == null) {
+            String message = "Vui lòng chọn ngày và giờ nhận kho trước khi gửi đơn.";
+            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
+        }
         if (bookingUsers != null) {
             var account = bookingUsers.findByIdForUpdate(actor.userId())
                 .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
@@ -179,12 +184,11 @@ public class ReservationCreationService {
         ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
             now, quotedReviewRequired
         );
-        if (request.getAppointmentAt() != null
-            && !checkInWindow.contains(request.getAppointmentAt())) {
+        if (!checkInWindow.contains(appointmentAt)) {
             String message = "Ngày nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
             throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
         }
-        java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
+        java.time.LocalDate rentalStartDate = appointmentAt
             .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(quote.getFreeSetupDays());
         java.time.LocalDate handoverDate = rentalStartDate.minusDays(quote.getFreeSetupDays());
         java.time.LocalDate rentalEndDate = rentalStartDate.plusMonths(quote.getRentalMonths());
@@ -217,7 +221,7 @@ public class ReservationCreationService {
         String bookingIdentity = clean(request.getIdentityDocumentNumber()) == null ? profileIdentity
             : com.storagehub.validation.CccdPolicy.normalize(request.getIdentityDocumentNumber());
         if (profile != null && profile.getIdentityVerifiedAt() != null && !java.util.Objects.equals(profileIdentity, bookingIdentity))
-            throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+            throw ApiExceptions.conflict("CCCD đã được nhân viên đối chiếu. Vui lòng liên hệ cơ sở nếu cần chỉnh sửa.");
         reservation.setIdentityDocumentNumber(bookingIdentity);
         reservation.setCustomerPhone(clean(request.getCustomerPhone()) != null
             ? clean(request.getCustomerPhone()) : clean(quote.getCustomer().getPhone()));
@@ -234,7 +238,7 @@ public class ReservationCreationService {
         reservation.setStartDate(rentalStartDate);
         reservation.setEndDate(rentalStartDate.plusMonths(quote.getRentalMonths()));
         reservation.setSetupDaysSnapshot(quote.getFreeSetupDays());
-        reservation.setAppointmentAt(request.getAppointmentAt());
+        reservation.setAppointmentAt(appointmentAt);
         reservation.setAmount(quote.getTotalAfterDiscount());
         reservation.setGoodsCondition(clean(request.getGoodsCondition()));
         reservation.setTotalGoodsVolumeM3(compatibility.getTotalGoodsVolumeM3());
@@ -305,7 +309,7 @@ public class ReservationCreationService {
                 : com.storagehub.validation.CccdPolicy.normalize(profile.getIdentityDocumentNumber());
             if (profile != null && profile.getIdentityVerifiedAt() != null
                 && !java.util.Objects.equals(currentIdentity, normalizedIdentity)) {
-                throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+                throw ApiExceptions.conflict("CCCD đã được nhân viên đối chiếu. Vui lòng liên hệ cơ sở nếu cần chỉnh sửa.");
             }
             if (bookingUsers != null) {
                 CustomerIdentityPolicy.assign(customer, normalizedIdentity, bookingUsers);

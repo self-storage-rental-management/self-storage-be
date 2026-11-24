@@ -21,6 +21,7 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class ReturnCase extends BaseEntity {
+    @Column private Instant readyForInspectionAt;
 
     @Column(nullable = false)
     private boolean setupExitRequested;
@@ -78,6 +79,21 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false)
     private LocalDate scheduledDate;
 
+    /** The time after the scheduled return date and grace period when no-show recovery may start. */
+    @Column
+    private Instant recoveryEligibleAt;
+
+    /** Set when the customer did not arrive by recoveryEligibleAt. */
+    @Column
+    private Instant noShowAt;
+
+    /** Set once the operational recovery task has been created. */
+    @Column
+    private Instant recoveryTaskCreatedAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String recoveryNotes;
+
     @Column(columnDefinition = "TEXT")
     private String customerNotes;
 
@@ -111,6 +127,10 @@ public class ReturnCase extends BaseEntity {
 
     @Column(nullable = false)
     private boolean returnedLock = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lock_inspection_result", length = 32)
+    private LockInspectionResult lockInspectionResult;
 
     /** Whether this return was requested after the rental had become ACTIVE. */
     @Column(nullable = false)
@@ -208,4 +228,16 @@ public class ReturnCase extends BaseEntity {
 
     @Column
     private Instant refundExpectedAt;
+
+    @Column
+    private Integer returnWindowDays;
+
+    @Column
+    private Integer returnExtensionDays;
+
+    @Column(nullable = false)
+    private int returnExtensionCount = 0;
+
+    @Column(length = 64)
+    private String returnPolicyVersion;
 }

@@ -1,6 +1,7 @@
 package com.storagehub.api.renewal;
 
 import jakarta.validation.constraints.*;
+import java.math.BigDecimal;
 import java.util.UUID;
 import java.time.LocalDate;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -20,14 +21,32 @@ public final class RenewalCommands {
     public record Cancel(@NotBlank @Size(max=2000) String reason,@NotNull @PositiveOrZero Long expectedVersion) { @com.fasterxml.jackson.annotation.JsonAnySetter public void unknown(String key,Object value){reject(key);} }
     public enum DecisionType { APPROVE, REJECT }
     private static void reject(String field){throw new IllegalArgumentException("Unknown Renewal command field: "+field);}
-    @Schema(description="Shared integration is deferred; never a synthetic option or quote")
-    public record Option(String pricingPackageCode,int rentalMonths,String pricingPackageName) {
+    @Schema(description="Eligible renewal package at its current catalog discount")
+    public record Option(String pricingPackageCode, int rentalMonths, String pricingPackageName,
+        @Schema(description="Discount as a fraction of the rental subtotal", minimum="0", maximum="1", example="0.0725")
+        BigDecimal discountRate) {
         @com.fasterxml.jackson.annotation.JsonProperty("signingWindowDays")
         public int signingWindowDays(){return com.storagehub.service.renewal.RenewalSigningDeadline.daysForMonths(rentalMonths);}
         @com.fasterxml.jackson.annotation.JsonProperty("paymentPlans")
         public java.util.List<RenewalPaymentPlan> paymentPlans(){return java.util.List.of(RenewalPaymentPlan.FULL_TERM);}
         public Option(String pricingPackageCode,int rentalMonths) {
-            this(pricingPackageCode,rentalMonths,null);
+            this(pricingPackageCode,rentalMonths,null,null);
+        }
+        public Option(String pricingPackageCode,int rentalMonths,String pricingPackageName) {
+            this(pricingPackageCode,rentalMonths,pricingPackageName,null);
+        }
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Option other)) return false;
+            return rentalMonths == other.rentalMonths
+                && java.util.Objects.equals(pricingPackageCode, other.pricingPackageCode)
+                && java.util.Objects.equals(pricingPackageName, other.pricingPackageName)
+                && (discountRate == null || other.discountRate == null || discountRate.compareTo(other.discountRate) == 0);
+        }
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(pricingPackageCode, rentalMonths, pricingPackageName);
         }
     }
 }

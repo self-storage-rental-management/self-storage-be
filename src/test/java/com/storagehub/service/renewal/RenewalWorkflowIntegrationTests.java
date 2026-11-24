@@ -2,6 +2,7 @@ package com.storagehub.service.renewal;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,7 +46,8 @@ class RenewalWorkflowIntegrationTests {
     }
     static class TestPrice implements RenewalSources.PricingSource {
         BigDecimal rate=new BigDecimal("100");
-        public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,BigDecimal.ZERO,"VND",2)));}
+        BigDecimal discountRate=BigDecimal.ZERO;
+        public Optional<List<RenewalSources.Price>> read(Rental r,LocalDate start){return Optional.of(List.of(new RenewalSources.Price(PACKAGE,"TEST","v1",r.getStorageUnit().getUnitType().getId(),1,rate,discountRate,"VND",2)));}
     }
     static class TestPolicy implements RenewalSources.PolicySource {
         String version="v1";
@@ -82,12 +84,13 @@ class RenewalWorkflowIntegrationTests {
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @Autowired javax.sql.DataSource datasource;
     @Autowired TestClock clock;
+    @Autowired com.storagehub.service.rental.period.RentalPeriodResolver periods;
     @Autowired com.storagehub.domain.repo.ReservationPricingSnapshotRepository pricingSnapshots;
     @Autowired com.storagehub.domain.repo.PaymentRepository paymentHistory;
     @Autowired com.storagehub.domain.repo.ActivityLogRepository activityLogs;
     @Autowired RenewalPersistence persistence;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
-    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");policy.version="v1";eligibility.unknown=false;}
+    @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");pricing.discountRate=BigDecimal.ZERO;policy.version="v1";eligibility.unknown=false;}
     @Test void completedVerificationUsesHistoricalEvidenceAfterRentalAndPolicyChange() throws Exception {
         var rental=fixture();var actor=customer(rental);
         var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
@@ -177,10 +180,15 @@ class RenewalWorkflowIntegrationTests {
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CustomerRenewalController(context,reads,commands),new ManagerRenewalController(context,reads))
             .setControllerAdvice(new RenewalRequestAdvice(),new com.storagehub.common.api.GlobalExceptionHandler()).build();
         String path="/api/customer/rentals/"+r.getId();
+        pricing.discountRate = new BigDecimal("0.0725");
+        mvc.perform(get(path+"/renewal-options")).andExpect(status().isOk())
+            .andExpect(jsonPath("data[0].pricingPackageCode").value("TEST"))
+            .andExpect(jsonPath("data[0].discountRate").value(0.0725));
         mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\",\"amount\":1}")).andExpect(status().isBadRequest());
         mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\",\"fullPayment\":true}")).andExpect(status().isBadRequest());
         var quote=mvc.perform(post(path+"/renewal-quote").contentType("application/json").content("{\"pricingPackageCode\":\"TEST\"}"))
-            .andExpect(status().isOk()).andExpect(jsonPath("data.monthlyPrice").value(100)).andReturn();
+            .andExpect(status().isOk()).andExpect(jsonPath("data.monthlyPrice").value(100))
+            .andExpect(jsonPath("data.discountRate").value(0.0725)).andReturn();
         String quoteId=new ObjectMapper().readTree(quote.getResponse().getContentAsString()).path("data").path("id").asText();
         mvc.perform(post(path+"/renewal-requests").contentType("application/json").content("{\"renewalQuoteId\":\""+quoteId+"\"}")).andExpect(status().isBadRequest());
         String body="{\"renewalQuoteId\":\""+quoteId+"\"}";
@@ -192,10 +200,38 @@ class RenewalWorkflowIntegrationTests {
     @BeforeEach void resetSources(){pricing.rate=new BigDecimal("100");eligibility.unknown=false;finance.unknown=false;finance.debt=false;finance.consistent=true;lifecycle.available=true;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;}
     @Test void optionsRemainReadableWhenEligibilityIsUnknownButQuoteStaysBlocked(){
         var r=fixture();var actor=customer(r);eligibility.unknown=true;
-        assertThat(commands.options(actor,r.getId())).containsExactly(new RenewalCommands.Option("TEST",1));
+        assertThat(commands.options(actor,r.getId())).containsExactly(new RenewalCommands.Option("TEST",1,null,BigDecimal.ZERO));
         assertThatThrownBy(()->commands.quote(actor,r.getId(),new RenewalCommands.Quote("TEST")))
             .isInstanceOf(ApiException.class).hasMessageContaining("Eligibility UNKNOWN");
         assertThat(em.createQuery("select count(q) from RenewalQuote q",Long.class).getSingleResult()).isZero();
+    }
+    @Test void quoteLastsFifteenMinutesAndExpiresAtExactBoundary(){
+        var rental=fixture();var actor=customer(rental);
+        var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
+        assertThat(quote.expiresAt()).isEqualTo(NOW.plusSeconds(900));
+        assertThat(em.find(RenewalQuote.class,quote.id()).getExpiresAt()).isEqualTo(quote.expiresAt());
+        assertThat(em.createQuery("select count(a) from ActivityLog a where a.entityId=:id and a.action='RENEWAL_QUOTE_CREATED'",Long.class)
+            .setParameter("id",rental.getId()).getSingleResult()).isEqualTo(1);
+        clock.time=quote.expiresAt();
+        assertThatThrownBy(()->commands.submit(actor,rental.getId(),new RenewalCommands.Submit(quote.id(),null),"expired-quote"))
+            .isInstanceOfSatisfying(ApiException.class,error->assertThat(error.getDetails())
+                .isEqualTo(Map.of("reason","RENEWAL_QUOTE_EXPIRED")));
+    }
+    @Test void quoteBlocksDueDebt(){
+        var rental=fixture();var actor=customer(rental);
+        finance.debt=true;
+        assertThatThrownBy(()->commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST")))
+            .hasMessageContaining("khoản đến hạn");
+    }
+    @Test void newQuoteKeepsContinuousCoverageWhenSignedAfterTheOriginalEnd(){
+        var rental=fixture();var actor=customer(rental);
+        var quote=commands.quote(actor,rental.getId(),new RenewalCommands.Quote("TEST"));
+        var period=periods.require(rental);
+        var signingAt=period.endExclusive().plusDays(2).atStartOfDay(com.storagehub.time.BusinessTime.ZONE).toInstant();
+        var effective=com.storagehub.service.rental.period.RenewalEffectivePeriod.at(period,quote.terms(),signingAt);
+        assertThat(quote.terms().continuousPeriod()).isTrue();
+        assertThat(effective.startDate()).isEqualTo(period.endExclusive());
+        assertThat(effective.endExclusive()).isEqualTo(period.endExclusive().plusMonths(1));
     }
     @Test void acceptedTermsSurviveReloadAndCurrentPriceChange(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
@@ -311,11 +347,12 @@ class RenewalWorkflowIntegrationTests {
                 case "RETURNED" -> r.setActualReturnedAt(NOW);
                 case "MAINTENANCE" -> {var task=new MaintenanceTask();task.setFacility(r.getFacility());task.setStorageUnit(r.getStorageUnit());task.setTitle("TEST");task.setReason("TEST");task.setReportedBy(r.getCustomer());em.persist(task);}
                 case "RECOVERY" -> em.persist(new com.storagehub.service.overdue.OverdueFollowUp("RENTAL_TERM:"+r.getId(),r,"RECOVERY_HANDOFF","TEST",r.getCustomer().getId(),NOW,UUID.randomUUID(),"TEST","1"));
-                case "BOOKING" -> {var other=new Reservation();other.setReservationCode("OTHER");other.setIdempotencyKey("OTHER");other.setCustomer(r.getCustomer());other.setSourceQuote(r.getReservation().getSourceQuote());other.setFacility(r.getFacility());other.setUnitType(r.getStorageUnit().getUnitType());other.setAssignedUnit(r.getStorageUnit());other.setStartDate(r.getStartDate());other.setEndDate(r.getContractEndDate());other.setStatus(ReservationStatus.CONFIRMED);em.persist(other);}
+                case "BOOKING" -> {var other=new Reservation();other.setReservationCode("OTHER");other.setIdempotencyKey("OTHER");other.setCustomer(r.getCustomer());other.setSourceQuote(r.getReservation().getSourceQuote());other.setFacility(r.getFacility());other.setUnitType(r.getStorageUnit().getUnitType());other.setAssignedUnit(r.getStorageUnit());other.setStartDate(q.terms().extensionStartDate());other.setEndDate(q.terms().extensionStartDate().plusDays(7));other.setStatus(ReservationStatus.CONFIRMED);em.persist(other);}
             }
             em.flush();
-            String expected=switch(kind){case "RETURNED" -> "non-active rental";case "MAINTENANCE" -> "Active maintenance";case "RECOVERY" -> "Recovery handoff";default -> "Another booking";};
-            assertThatThrownBy(()->commands.options(a,r.getId())).hasMessageContaining(expected);
+            String expected=switch(kind){case "RETURNED" -> "non-active rental";case "MAINTENANCE" -> "Active maintenance";case "RECOVERY" -> "Recovery handoff";default -> "lịch đặt trùng";};
+            if (kind.equals("BOOKING")) assertThat(commands.options(a,r.getId())).isNotEmpty();
+            else assertThatThrownBy(()->commands.options(a,r.getId())).hasMessageContaining(expected);
             assertThatThrownBy(()->commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"))).hasMessageContaining(expected);
             assertThatThrownBy(()->commands.submit(a,r.getId(),new RenewalCommands.Submit(q2.id(),null),"after-conflict")).hasMessageContaining(expected);
             assertThatThrownBy(()->commands.edit(a,n.id(),new RenewalCommands.Edit(q2.id(),null,n.version()),"edit-conflict")).hasMessageContaining(expected);

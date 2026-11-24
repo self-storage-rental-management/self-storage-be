@@ -222,10 +222,10 @@ class FacilityDeletionSafetyTests {
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(
             service, "createPhysicalUnits", type, 2, "Tầng 2", "Khu B");
 
-        var captor = ArgumentCaptor.forClass(StorageUnit.class);
-        verify(units, times(2)).save(captor.capture());
-        assertThat(captor.getAllValues()).extracting(StorageUnit::getCode)
-            .containsExactly("B-205", "B-206");
+        var codes = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, times(2)).update(contains("INSERT INTO storage_units"), any(), any(), any(),
+            codes.capture(), eq("Tầng 2"), eq("Khu B"), isNull());
+        assertThat(codes.getAllValues()).containsExactly("B-205", "B-206");
     }
 
     private UnitTypeChangeRequest submittedChange(UnitType type) {

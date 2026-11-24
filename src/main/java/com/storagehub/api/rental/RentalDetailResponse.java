@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.UUID;
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(description = "Rental detail; absent/incomplete owner sources remain UNKNOWN/null. No raw credential is exposed.")
-public record RentalDetailResponse(UUID id, RentalSummaryResponse.Customer customer,
+@Schema(description = "Rental detail; absent/incomplete owner sources remain UNKNOWN/null. Customer owners may see the active physical lock reference, never a PIN or password secret.")
+public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryResponse.Customer customer,
     RentalSummaryResponse.Facility facility, RentalSummaryResponse.Unit storageUnit,
     RentalSummaryResponse.UnitType unitType, RentalStatus status, LocalDate startDate,
     LocalDate contractEndDate, BigDecimal monthlyPrice, String currency,
@@ -17,11 +17,27 @@ public record RentalDetailResponse(UUID id, RentalSummaryResponse.Customer custo
     Instant actualReturnedAt, Instant completedAt, Financial financialSummary, Access access,
     RentalSummaryResponse.DateSemantics dateSemantics, RentalBookingEvidence bookingEvidence,
     boolean inventoryPending, Instant inventoryDueAt, Instant setupStartedAt, Instant setupEndsAt,
+    Instant inventoryFinalDeadlineAt,
     Instant moveInCompletedAt, Instant inventoryVerifiedAt, boolean setupExitReviewRequired,
-    boolean canConfirmRentalStart) {
+    boolean canConfirmRentalStart, Inventory inventory) {
+    public record Inventory(String actualJson, boolean mismatch, boolean fullFit, String declaredPackaging,
+        String decision, String acceptedQuantitiesJson, Instant removalDeadline, Instant removedAt,
+        com.storagehub.api.checkin.CompleteCheckInRequest report, String mismatchSummary, String mismatchJson,
+        com.storagehub.api.checkin.InventoryDecisionResponse intakeDecision) {
+        public Inventory(String actualJson, boolean mismatch, boolean fullFit, String declaredPackaging,
+            String decision, String acceptedQuantitiesJson, Instant removalDeadline, Instant removedAt) {
+            this(actualJson, mismatch, fullFit, declaredPackaging, decision, acceptedQuantitiesJson,
+                removalDeadline, removedAt, null, null, null, null);
+        }
+    }
     @Schema(description = "COMPLETE includes verified security deposit; PARTIAL has verified balances/billing but unknown deposit; UNKNOWN has no verified financial projection.")
     public record Financial(@Schema(allowableValues = {"COMPLETE", "PARTIAL", "UNKNOWN"}) String completeness, String currency, BigDecimal outstandingAmount,
         BigDecimal overdueAmount, LocalDate nextDueDate, String reason,
         BigDecimal securityDepositAmount, String billingMode) {}
-    public record Access(String completeness, String status, String reason) {}
+    public record Access(String completeness, String status, String reference, String reason) {
+        /** Compatibility constructor for callers that only provide access state and reason. */
+        public Access(String completeness, String status, String reason) {
+            this(completeness, status, null, reason);
+        }
+    }
 }

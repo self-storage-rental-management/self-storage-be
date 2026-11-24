@@ -1,6 +1,10 @@
 package com.storagehub.service;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.TypedQuery;
 
 import com.storagehub.config.DevelopMigrationHistoryLocations;
 import com.storagehub.config.LedgerMigrationSafetyCallback;
@@ -63,11 +67,15 @@ class BusinessRecordCodesMySqlTests {
         jdbc.execute("CREATE TABLE renewals(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE support_tickets(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE overdue_follow_ups(case_ref VARCHAR(120),recorded_at TIMESTAMP(6))");
-        jdbc.execute("CREATE TABLE rentals(id BINARY(16) PRIMARY KEY,status VARCHAR(24),actual_returned_at TIMESTAMP(6),completed_at TIMESTAMP(6),start_date DATE,contract_end_date DATE)");
+        jdbc.execute("CREATE TABLE rentals(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL,status VARCHAR(24),actual_returned_at TIMESTAMP(6),completed_at TIMESTAMP(6),start_date DATE,contract_end_date DATE)");
     }
 
     void migrateCodes() {
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V2026102006__business_record_display_codes.sql")).execute(datasource);
+    }
+
+    void migrateHistoricalRentalCodes() {
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V2026112204__backfill_rental_business_codes.sql")).execute(datasource);
     }
 
     @Test void canonicalMigrationChainAppliesAndValidatesOnEmptyMySql() {
@@ -79,6 +87,34 @@ class BusinessRecordCodesMySqlTests {
         flyway.migrate();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE version='2026102006' AND success=1",Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM business_record_codes",Integer.class)).isZero();
+    }
+
+    @Test void receiptMigrationPreservesExistingCodesAndConcurrentIssuanceIsIdempotent() throws Exception {
+        jdbc.execute("CREATE TABLE payments(id INT PRIMARY KEY, receipt_code VARCHAR(17) NULL)");
+        jdbc.update("INSERT INTO payments VALUES (1, 'legacy')");
+        var flyway = Flyway.configure().dataSource(datasource)
+            .locations("classpath:db/migration-history/receipt-checked-2403").baselineOnMigrate(true).load();
+        flyway.migrate();
+        flyway.validate();
+        var receipts = new MoneyReceiptCodes(jdbc);
+        var source = UUID.randomUUID();
+        var start = new CyclicBarrier(2);
+        Callable<String> issue = () -> tx.execute(status -> {
+            try {
+                start.await(10, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            return receipts.issue("PAYMENT", source, false);
+        });
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(issue);
+            var second = pool.submit(issue);
+            assertThat(first.get(15, TimeUnit.SECONDS)).isEqualTo(second.get(15, TimeUnit.SECONDS));
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM money_receipt_codes", Integer.class)).isOne();
+        assertThat(receipts.find("PAYMENT", source)).startsWith("PT-");
+        assertThat(jdbc.queryForObject("SELECT receipt_code FROM payments WHERE id=1", String.class)).isEqualTo("legacy");
     }
 
     @Test void backfillsHistoricalCodesAndContinuesTheCorrectVietnamMonth() {
@@ -100,6 +136,81 @@ class BusinessRecordCodesMySqlTests {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM business_record_codes WHERE resource_key=?",Integer.class,ref)).isEqualTo(1);
     }
 
+    @Test void concurrentRecordsKeepDistinctCodesAndResolveOnlyInTheirOwnType() throws Exception {
+        sourceTables();
+        migrateCodes();
+        var records = Map.of("TH:one", "TH", "GH:one", "GH", "GH:two", "GH", "HT:one", "HT", "RENTAL_TERM:one", "QH");
+        var start = new CyclicBarrier(records.size());
+        var assigned = new HashSet<String>();
+        try (var pool = Executors.newFixedThreadPool(records.size())) {
+            var jobs = new HashMap<String, Future<String>>();
+            for (var entry : records.entrySet()) {
+                jobs.put(entry.getKey(), pool.submit(() -> {
+                    start.await(10, TimeUnit.SECONDS);
+                    return tx.execute(s -> codes.assign(entry.getValue(), entry.getKey(), Instant.now()));
+                }));
+            }
+            for (var entry : records.entrySet()) {
+                String key = entry.getKey(), type = entry.getValue();
+                String code = jobs.get(key).get(15, TimeUnit.SECONDS);
+                assertThat(code).matches("SH-[1-9][0-9]{5}");
+                assertThat(assigned.add(code)).isTrue();
+                assertThat(codes.find(key)).isEqualTo(code);
+                assertThat(tx.<String>execute(s -> codes.assign(type, key, Instant.now()))).isEqualTo(code);
+                assertThat(codes.resource(type, " " + code.toLowerCase(Locale.ROOT) + " ")).isEqualTo(key);
+                assertThat(codes.resource(type.equals("GH") ? "HT" : "GH", code)).isNull();
+            }
+        }
+    }
+
+    @Test void migrationSynchronouslyBackfillsMoreThanOneCoordinatorBatchOfHistoricalRentals() {
+        sourceTables();
+        migrateCodes();
+        var created = Timestamp.from(Instant.parse("2026-11-01T00:00:00Z"));
+        jdbc.update("INSERT INTO business_record_codes(resource_key,type_code,period,display_code,recorded_at) VALUES('HT:occupied','HT','2611','SH-100000',?)", created);
+        var rentalIds = new ArrayList<String>();
+        for (int index = 0; index < 137; index++) {
+            String rentalId = UUID.randomUUID().toString();
+            rentalIds.add(rentalId);
+            jdbc.update("INSERT INTO rentals(id,created_at,status) VALUES(UUID_TO_BIN(?),?,'active')", rentalId, created);
+        }
+
+        migrateHistoricalRentalCodes();
+
+        var keys = rentalIds.stream().map(id -> "TH:" + id).toList();
+        var assigned = codes.findAll(keys);
+        assertThat(assigned).hasSize(137).containsOnlyKeys(keys);
+        assertThat(assigned.values()).doesNotHaveDuplicates()
+            .allMatch(code -> code.matches("SH-[1-9][0-9]{5}"));
+        assertThat(assigned.values()).doesNotContain("SH-100000");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void existingActiveAndCompletedRentalsKeepTheirCodesAcrossRegistrationRuns() {
+        sourceTables();
+        migrateCodes();
+        String active = UUID.randomUUID().toString();
+        String completed = UUID.randomUUID().toString();
+        var created = Timestamp.from(Instant.parse("2026-10-01T00:00:00Z"));
+        jdbc.update("INSERT INTO rentals(id, created_at, status) VALUES(UUID_TO_BIN(?), ?, 'active'), (UUID_TO_BIN(?), ?, 'completed')",
+            active, created, completed, created);
+
+        var em = mock(EntityManager.class);
+        TypedQuery<UUID> overdueRentals = mock(TypedQuery.class, RETURNS_SELF);
+        when(em.createQuery(anyString(), eq(UUID.class))).thenReturn(overdueRentals);
+        when(overdueRentals.getResultList()).thenReturn(List.of());
+        var coordinator = new BusinessRecordCodeCoordinator(jdbc, em, codes, null, null, null);
+        tx.executeWithoutResult(status -> coordinator.register());
+        var keys = List.of("TH:" + active, "TH:" + completed);
+        var labels = codes.findAll(keys);
+        assertThat(labels).containsOnlyKeys(keys);
+        assertThat(labels.values()).doesNotHaveDuplicates().allMatch(code -> code.matches("SH-[1-9][0-9]{5}"));
+        tx.executeWithoutResult(status -> coordinator.register());
+        assertThat(codes.findAll(keys)).isEqualTo(labels);
+        assertThat(codes.findAll(List.of())).isEmpty();
+    }
+
     @Test void rolledBackCodesDoNotLeaveARegistryEntryOrConsumeTheCounter() {
         sourceTables();migrateCodes();
         Instant at=Instant.parse("2026-10-20T01:00:00Z");
@@ -108,13 +219,30 @@ class BusinessRecordCodesMySqlTests {
         assertThat(tx.<String>execute(s->codes.assign("HT","HT:committed",at))).matches("SH-[0-9]{6}");
     }
 
-    @Test void concurrentFirstAssignmentsForOneResourceReturnOneCode() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {
+        TransactionDefinition.ISOLATION_READ_COMMITTED, TransactionDefinition.ISOLATION_REPEATABLE_READ
+    })
+    void concurrentFirstAssignmentsForOneResourceReturnOneCode(int isolation) throws Exception {
+        tx.setIsolationLevel(isolation);
         sourceTables();migrateCodes();
         Instant at=Instant.parse("2026-10-20T01:00:00Z");
         var ready=new CountDownLatch(4);var start=new CountDownLatch(1);
         try(var pool=Executors.newFixedThreadPool(4)) {
             var jobs=new ArrayList<Future<String>>();
-            for(int i=0;i<4;i++)jobs.add(pool.submit(()->{ready.countDown();if(!start.await(10,TimeUnit.SECONDS))throw new IllegalStateException("barrier timeout");return tx.execute(s->codes.assign("GH","GH:concurrent",at));}));
+            for (int i = 0; i < 4; i++) {
+                jobs.add(pool.submit(() -> tx.execute(s -> {
+                    assertThat(codes.find("GH:concurrent")).isNull();
+                    ready.countDown();
+                    try {
+                        assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                    return codes.assign("GH", "GH:concurrent", at);
+                })));
+            }
             assertThat(ready.await(10,TimeUnit.SECONDS)).isTrue();start.countDown();
             var results=new HashSet<String>();
             for(var job:jobs)results.add(job.get(20,TimeUnit.SECONDS));

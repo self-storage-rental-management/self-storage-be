@@ -53,9 +53,25 @@ public final class EarlyTerminationPolicy {
         BigDecimal feeCoefficient,
         int feeCapMonths
     ) {
+        return setupExit(totalAfterDiscount, reservationDepositAmount, listMonthlyPrice, rentalMonths,
+            freeSetupDays, usedSetupDays, goodsMovedIn, feeCoefficient, feeCapMonths, false);
+    }
+
+    public static SetupExitCalculation setupExit(
+        BigDecimal totalAfterDiscount,
+        BigDecimal reservationDepositAmount,
+        BigDecimal listMonthlyPrice,
+        int rentalMonths,
+        int freeSetupDays,
+        int usedSetupDays,
+        boolean goodsMovedIn,
+        BigDecimal feeCoefficient,
+        int feeCapMonths,
+        boolean waiveEarlyTerminationFee
+    ) {
         BigDecimal total = money(totalAfterDiscount);
-        // A return during setup keeps 20% of the rental amount and refunds 80%.
-        // The security deposit is settled separately after inspection.
+        // A return during setup keeps 20% of the rental amount and refunds 80%. This is the
+        // accepted policy version stored on the case; the security deposit settles separately.
         BigDecimal totalCharge = SetupEarlyExitPolicy.retainedRental(total)
             .min(total)
             .setScale(2, RoundingMode.HALF_UP);
@@ -67,6 +83,39 @@ public final class EarlyTerminationPolicy {
             totalCharge,
             total.subtract(totalCharge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)
         );
+    }
+
+    /**
+     * Inventory mismatch exits are not charged the fixed early-termination fee.
+     * They settle only the verified usage time and return the unused prepaid rent.
+     */
+    public static SetupExitCalculation inventoryMismatchExit(
+        BigDecimal totalAfterDiscount,
+        BigDecimal listMonthlyPrice,
+        int usedDays,
+        boolean goodsMovedIn
+    ) {
+        BigDecimal total = money(totalAfterDiscount);
+        // Receipt grants use of the unit, regardless of the move-in declaration.
+        BigDecimal usageCharge = daysCharge(listMonthlyPrice, Math.max(1, usedDays));
+        return new SetupExitCalculation(
+            SetupExitType.GOODS_MOVED_IN,
+            BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
+            Math.max(1, usedDays),
+            usageCharge,
+            usageCharge,
+            total.subtract(usageCharge).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP)
+        );
+    }
+
+    /**
+     * Inventory-mismatch returns use calendar dates recorded in the workflow.
+     * Both the customer's move-in confirmation date and the return date count as used days;
+     * the same calendar date therefore counts as one day.
+     */
+    public static int calendarUsageDays(LocalDate startDate, LocalDate endDate) {
+        if (startDate == null || endDate == null || endDate.isBefore(startDate)) return 0;
+        return Math.max(1, Math.toIntExact(ChronoUnit.DAYS.between(startDate, endDate) + 1));
     }
 
     /**

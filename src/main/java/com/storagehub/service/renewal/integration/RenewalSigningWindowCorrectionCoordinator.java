@@ -7,7 +7,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Component @RequiredArgsConstructor @Profile("shared-payment-schema")
-@ConditionalOnProperty(name="storagehub.integration.renewal-signing-window-correction.enabled",havingValue="true")
+@ConditionalOnProperty(name={"storagehub.integration.renewal-signing-window-correction.enabled",
+    "storagehub.integration.renewal-simple-payment.enabled"},havingValue="true")
 public class RenewalSigningWindowCorrectionCoordinator {
     private final RenewalSigningWindowCorrectionService service;
     private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(RenewalSigningWindowCorrectionCoordinator.class);

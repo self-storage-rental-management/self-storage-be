@@ -14,7 +14,12 @@ public final class RentalReadSources {
     public record Financial(UUID rentalId, Instant checkedAt, String currency,
         BigDecimal outstandingAmount, BigDecimal overdueAmount, BigDecimal securityDepositAmount,
         LocalDate nextDueDate, BillingMode billingMode) {}
-    public record Access(UUID rentalId, Instant checkedAt, AccessStatus status) {}
+    public record Access(UUID rentalId, Instant checkedAt, AccessStatus status, String reference) {
+        /** Compatibility constructor for sources that only provide the access state. */
+        public Access(UUID rentalId, Instant checkedAt, AccessStatus status) {
+            this(rentalId, checkedAt, status, null);
+        }
+    }
     /** Evidence applies to these exact stored dates, not merely a facility-wide convention. */
     public record Dates(UUID rentalId, LocalDate startDate, LocalDate inclusiveEndDate, String reference,
         LocalDate storedEndDate, com.storagehub.service.rental.period.RentalPeriod.Convention convention) {

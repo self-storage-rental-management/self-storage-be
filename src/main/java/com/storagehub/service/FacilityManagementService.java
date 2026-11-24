@@ -18,17 +18,24 @@ import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
 public class FacilityManagementService {
+    private static final Pattern NUMBERED_FACILITY_CODE = Pattern.compile("(.+-F)([0-9]{2,})");
+    private final JdbcTemplate jdbc;
 
     private final FacilityRepository facilityRepository;
     private final UnitTypeRepository unitTypeRepository;
@@ -36,16 +43,13 @@ public class FacilityManagementService {
     private final RentalPackagePolicyRepository rentalPackagePolicyRepository;
     private final UserFacilityScopeRepository userFacilityScopeRepository;
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public FacilityResponse createFacility(ActorPrincipal actor, CreateFacilityRequest request) {
         if (!actor.hasAnyRole(RoleCode.ADMIN, RoleCode.BUSINESS)) {
             throw ApiExceptions.forbidden("Chỉ Business Owner hoặc Admin mới có quyền tạo hoặc cập nhật cơ sở");
         }
 
-        String code = request.code().trim().toUpperCase();
-        if (facilityRepository.findByCodeIgnoreCase(code).isPresent()) {
-            throw ApiExceptions.conflict("Facility code already exists");
-        }
+        String code = availableFacilityCode(request.code(), Boolean.TRUE.equals(request.autoCode()));
 
         Facility facility = new Facility();
         facility.setCode(code);
@@ -85,6 +89,31 @@ public class FacilityManagementService {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private String availableFacilityCode(String proposed, boolean automatic) {
+        String code = proposed.trim().toUpperCase(Locale.ROOT);
+        var parts = NUMBERED_FACILITY_CODE.matcher(code);
+        if (parts.matches()) {
+            String prefix = parts.group(1);
+            // Manual and automatic creates share this prefix lock until their facility is committed.
+            jdbc.update("INSERT INTO facility_code_prefixes(code_prefix) VALUES (?) ON DUPLICATE KEY UPDATE code_prefix=code_prefix", prefix);
+            if (automatic) {
+                BigInteger sequence = new BigInteger(parts.group(2));
+                while (facilityRepository.findByCodeIgnoreCase(code).isPresent()) {
+                    sequence = sequence.add(BigInteger.ONE);
+                    code = prefix + String.format(Locale.ROOT, "%02d", sequence);
+                    if (code.length() > 32) throw ApiExceptions.conflict("Đã hết mã cơ sở cho tiền tố này.");
+                }
+                return code;
+            }
+        } else if (automatic) {
+            throw ApiExceptions.validation("Mã cơ sở tự động cần có tiền tố và số thứ tự, ví dụ HN-F01.", null);
+        }
+        if (facilityRepository.findByCodeIgnoreCase(code).isPresent()) {
+            throw ApiExceptions.conflict("Facility code already exists");
+        }
+        return code;
     }
 
     private List<String> managerNames(UUID facilityId) {
