@@ -1115,10 +1115,13 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Thiếu bảng tính thời gian sử dụng của hồ sơ kiểm kê sai lệch.");
         BigDecimal earlyTerminationCharge = mismatchReturn ? mismatchCalculation.totalRentalCharge() : returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getEarlyTerminationFee())
-            : (returnCase.getEarlyTerminationCharge() != null ? returnCase.getEarlyTerminationCharge() : calculatedEarlyTerminationCharge);
+            : (activePricing != null ? calculatedEarlyTerminationCharge : zeroIfNull(returnCase.getEarlyTerminationCharge()));
         BigDecimal rentalRefund = mismatchReturn ? zeroIfNull(returnCase.getRentalRefundCredit()) : returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getRentalRefundCredit())
-            : (returnCase.getRentalRefundAmount() != null ? returnCase.getRentalRefundAmount() : calculatedRentalRefund);
+            // The immutable pricing snapshot is authoritative for an active
+            // early return. A previously persisted amount may have been saved
+            // before the rental-refund projection was recalculated.
+            : (activePricing != null ? calculatedRentalRefund : zeroIfNull(returnCase.getRentalRefundAmount()));
         var settlement = calculateSettlement(returnCase, deductions, earlyTerminationCharge, rentalRefund);
         requireSettlementLimit(settlement.deductions());
         returnCase.setReviewedBy(manager);
@@ -1449,19 +1452,9 @@ public class ReturnSettlementService {
         BigDecimal deposit = zeroIfNull(rc.getDepositAmount()).setScale(2, RoundingMode.HALF_UP);
         BigDecimal rentalCredit = zeroIfNull(rentalRefund).setScale(2, RoundingMode.HALF_UP);
 
-        // During setup the agreed 20% retained amount is already represented by
-        // rentalRefund. Damage can consume the one-month deposit only; any excess
-        // becomes an amount due instead of silently consuming the 80% refund.
-        if (rc.isSetupEarlyExit()) {
-            BigDecimal depositBalance = deposit.subtract(securityDeductions);
-            return new Calculation(securityDeductions,
-                rentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
-                depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
-        }
-
-        // Once the paid rental period has started, fees consume the deposit first,
-        // then the refund for whole unused months, and only the remaining excess
-        // is collected from the customer.
+        // Fees consume the security deposit first, then the unused-rent refund.
+        // This is the same rule for setup and active returns: a deposit shortfall
+        // is offset by unused rent, and only the remaining deficit is collected.
         BigDecimal available = deposit.add(rentalCredit);
         BigDecimal balance = available.subtract(securityDeductions);
         return new Calculation(securityDeductions,
@@ -1473,8 +1466,19 @@ public class ReturnSettlementService {
         BigDecimal deductions = zeroIfNull(rc.getDamageFee()).add(zeroIfNull(rc.getCleaningFee()))
             .add(zeroIfNull(rc.getLostItemFee())).add(zeroIfNull(rc.getOverdueFee()))
             .add(zeroIfNull(rc.getOutstandingFee()));
-        return calculateSettlement(rc, deductions, zeroIfNull(rc.getEarlyTerminationCharge()),
-            zeroIfNull(rc.getRentalRefundAmount()));
+        // Rebuild the rental credit from the immutable pricing snapshot. Older return
+        // cases can expose activeReturnPolicy.rentalRefundAmount while their persisted
+        // rentalRefundAmount/netRefundAmount still contain the deposit-only amount.
+        // Using the persisted value here would silently omit the unused rental months
+        // when the customer confirms or staff completes the refund.
+        var activePricing = activeReturnCalculation(rc);
+        BigDecimal rentalCharge = activePricing == null
+            ? zeroIfNull(rc.getEarlyTerminationCharge())
+            : activePricing.totalRentalCharge();
+        BigDecimal rentalRefund = activePricing == null
+            ? zeroIfNull(rc.getRentalRefundAmount())
+            : activePricing.rentalRefundAmount();
+        return calculateSettlement(rc, deductions, rentalCharge, rentalRefund);
     }
 
     private boolean hasOutdatedEarlyReturnAmounts(ReturnCase rc) {
@@ -1491,6 +1495,11 @@ public class ReturnSettlementService {
     private void requireCurrentEarlyReturnAmounts(ReturnCase rc) {
         if (hasOutdatedEarlyReturnAmounts(rc)) {
             var expected = expectedEarlyReturnSettlement(rc);
+            var activePricing = activeReturnCalculation(rc);
+            if (activePricing != null) {
+                rc.setEarlyTerminationCharge(activePricing.totalRentalCharge());
+                rc.setRentalRefundAmount(activePricing.rentalRefundAmount());
+            }
             rc.setTotalDeductions(expected.deductions());
             rc.setNetRefundAmount(expected.refund());
             rc.setAmountDueFromCustomer(expected.due());
@@ -1849,8 +1858,23 @@ public class ReturnSettlementService {
             calculation.noticeCharge(),
             calculation.totalRentalCharge(),
             calculation.rentalRefundAmount(),
-            snapshot == null ? EarlyTerminationPolicy.DEFAULT_NOTICE_DAYS : snapshot.getEarlyTerminationNoticeDays()
+            snapshot == null ? EarlyTerminationPolicy.DEFAULT_NOTICE_DAYS : snapshot.getEarlyTerminationNoticeDays(),
+            snapshot == null ? null : snapshot.getRentalMonths(),
+            effectiveMonthlyPrice(snapshot)
         );
+    }
+
+    /**
+     * The settlement screen must show the effective rent after the booked
+     * package discount, not the undiscounted catalogue rate.
+     */
+    private BigDecimal effectiveMonthlyPrice(ReservationPricingSnapshot snapshot) {
+        if (snapshot == null) return null;
+        if (snapshot.getNetRentalAmount() != null && snapshot.getRentalMonths() > 0) {
+            return snapshot.getNetRentalAmount()
+                .divide(BigDecimal.valueOf(snapshot.getRentalMonths()), 2, RoundingMode.HALF_UP);
+        }
+        return snapshot.getMonthlyPrice();
     }
 
     private EarlyTerminationPolicy.ActiveReturnCalculation activeReturnCalculation(ReturnCase returnCase) {
