@@ -161,32 +161,18 @@ class CustomerReceiptPeriodCompatibilityTests {
     }
 
     @Test
-    void customerStartsPaidRentalAfterInventoryUsingTheConfirmedDates() {
+    void customerCannotAdvanceScheduledPaidStartAfterInventory() {
         var rental = earlyInventoryRental();
         reservation.setStatus(ReservationStatus.COMPLETED);
         rental.setMoveInCompletedAt(rental.getInventoryVerifiedAt().minusSeconds(60));
         rental.setInventoryPending(false);
-        var contracts = mock(ContractRepository.class);
-        var contract = id(new Contract());
-        contract.setStatus(ContractStatus.SIGNED);
-        when(contracts.findByRental_Id(rental.getId())).thenReturn(Optional.of(contract));
-        ReflectionTestUtils.setField(service, "contractRepository", contracts);
-        var confirmedPeriods = mock(ConfirmedRentalPeriods.class);
-        ReflectionTestUtils.setField(service, "confirmedRentalPeriods", confirmedPeriods);
-
         var start = LocalDate.now(com.storagehub.time.BusinessTime.ZONE);
-        var endExclusive = start.plusMonths(snapshot.getRentalMonths());
-        var request = new com.storagehub.api.reservation.RentalStartConfirmation.Request(start, endExclusive.minusDays(1));
-        service.confirmRentalStart(actor, reservation.getId(), request);
-        service.confirmRentalStart(actor, reservation.getId(), request);
-
-        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
-        assertThat(rental.getStartDate()).isEqualTo(start);
-        assertThat(rental.getContractEndDate()).isEqualTo(endExclusive);
-        assertThat(reservation.getStartDate()).isEqualTo(start);
-        assertThat(contract.getExpiresAt()).isEqualTo(endExclusive.atStartOfDay(com.storagehub.time.BusinessTime.ZONE).toInstant());
-        verify(confirmedPeriods).confirm(eq(rental), any(RentalPeriod.class));
-        verify(rentals).saveAndFlush(rental);
+        var request = new com.storagehub.api.reservation.RentalStartConfirmation.Request(start, start.plusMonths(snapshot.getRentalMonths()).minusDays(1));
+        assertThatThrownBy(() -> service.confirmRentalStart(actor, reservation.getId(), request))
+            .hasMessageContaining("không hỗ trợ bắt đầu sớm");
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.setup);
+        assertThat(rental.getStartDate()).isEqualTo(reservation.getStartDate());
+        verify(rentals, never()).saveAndFlush(any());
         verifyNoInteractions(ledger);
     }
 
@@ -224,6 +210,8 @@ class CustomerReceiptPeriodCompatibilityTests {
         snapshot.setFreeSetupDays(7);
         com.storagehub.testing.AcceptedReservationSnapshotFixture.bind(reservation, snapshot);
         var paidStart = handoverAt.atZone(zone).toLocalDate().plusDays(7);
+        reservation.setStartDate(paidStart);
+        reservation.setEndDate(paidStart.plusMonths(snapshot.getRentalMonths()));
         var rental = checkIn.getRental();
         rental.setStatus(RentalStatus.setup);
         rental.setSetupStartedAt(handoverAt);
