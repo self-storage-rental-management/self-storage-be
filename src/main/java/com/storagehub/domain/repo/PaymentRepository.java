@@ -57,6 +57,7 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
           and (:pattern is null
             or lower(coalesce(p.gatewayTransactionNo, '')) like :pattern
             or lower(coalesce(p.gatewayIntentId, '')) like :pattern
+            or lower(coalesce(p.receiptCode, '')) like :pattern
             or lower(coalesce(reservation.reservationCode, '')) like :pattern
             or lower(coalesce(reservationCustomer.fullName, '')) like :pattern
             or lower(coalesce(reservationUnit.code, '')) like :pattern
@@ -76,6 +77,7 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
           and (:pattern is null
             or lower(coalesce(p.gatewayTransactionNo, '')) like :pattern
             or lower(coalesce(p.gatewayIntentId, '')) like :pattern
+            or lower(coalesce(p.receiptCode, '')) like :pattern
             or lower(coalesce(reservation.reservationCode, '')) like :pattern
             or lower(coalesce(reservationCustomer.fullName, '')) like :pattern
             or lower(coalesce(reservationUnit.code, '')) like :pattern
