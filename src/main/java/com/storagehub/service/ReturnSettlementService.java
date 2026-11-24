@@ -224,8 +224,10 @@ public class ReturnSettlementService {
         notificationService.createNotification(
             customer.getId(),
             NotificationType.RETURN,
-            "Yêu cầu trả kho đã được ghi nhận",
-            "Yêu cầu trả kho cho gian " + rental.getStorageUnit().getCode() + " đã được tiếp nhận.",
+            staff != null && inventoryMismatchReturn ? "Cơ sở đã tạo hồ sơ trả kho sau kiểm kê" : "Yêu cầu trả kho đã được ghi nhận",
+            staff != null && inventoryMismatchReturn
+                ? "Cơ sở đã ghi nhận phương án trả kho sau kiểm kê cho gian " + rental.getStorageUnit().getCode() + ". Vui lòng theo dõi lịch nghiệm thu và quyết toán."
+                : "Yêu cầu trả kho cho gian " + rental.getStorageUnit().getCode() + " đã được tiếp nhận.",
             saved.getId()
         );
 
@@ -233,8 +235,8 @@ public class ReturnSettlementService {
             rental.getFacility().getId(),
             NotificationType.RETURN,
             "Yêu cầu trả kho mới",
-            "Khách hàng " + customer.getFullName() + " đã gửi yêu cầu trả kho cho gian "
-                + rental.getStorageUnit().getCode() + ". Vui lòng kiểm tra và nghiệm thu kho.",
+            (staff != null && inventoryMismatchReturn ? "Nhân viên đã ghi nhận tại cơ sở phương án trả kho của " : "Khách hàng ")
+                + customer.getFullName() + " cho gian " + rental.getStorageUnit().getCode() + ". Vui lòng kiểm tra và nghiệm thu kho.",
             saved.getId()
         );
 

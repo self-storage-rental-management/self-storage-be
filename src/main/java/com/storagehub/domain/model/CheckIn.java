@@ -58,6 +58,12 @@ public class CheckIn extends BaseEntity {
     @Column
     private Instant checkedInAt;
 
+    @Column(name = "handover_record_json", columnDefinition = "LONGTEXT")
+    private String handoverRecordJson;
+
+    @Column(name = "customer_receipt_confirmed_at")
+    private Instant customerReceiptConfirmedAt;
+
     @Column
     private Instant identityVerifiedAt;
 
@@ -117,6 +123,9 @@ public class CheckIn extends BaseEntity {
 
     @Column(name = "inventory_accepted_quantities_json", columnDefinition = "LONGTEXT")
     private String inventoryAcceptedQuantitiesJson;
+
+    @Column(name = "inventory_decision_json", columnDefinition = "LONGTEXT")
+    private String inventoryDecisionJson;
 
     @Column(name = "inventory_decision_at")
     private Instant inventoryDecisionAt;
