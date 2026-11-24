@@ -48,8 +48,13 @@ public record ReturnInspectionRequest(
     boolean returnedLock,
 
     StorageUnitStatus proposedUnitStatus,
-    boolean unitVacated
+    boolean unitVacated,
+
+    /** Hạng mục hư hỏng lấy từ bảng giá chuẩn; damageFee không còn là nguồn nhập tự do. */
+    List<DamageItem> damageItems
 ) {
+    public record DamageItem(String code, BigDecimal quantity) {}
+
     @JsonCreator
     public ReturnInspectionRequest(
         @JsonProperty("inventoryMatch") InventoryMatch inventoryMatch,
@@ -65,7 +70,8 @@ public record ReturnInspectionRequest(
         @JsonProperty("returnedCard") boolean returnedCard,
         @JsonProperty("returnedLock") boolean returnedLock,
         @JsonProperty("proposedUnitStatus") StorageUnitStatus proposedUnitStatus,
-        @JsonProperty("unitVacated") boolean unitVacated
+        @JsonProperty("unitVacated") boolean unitVacated,
+        @JsonProperty("damageItems") List<DamageItem> damageItems
     ) {
         this.inventoryMatch = inventoryMatch;
         this.damageClassification = damageClassification;
@@ -81,6 +87,7 @@ public record ReturnInspectionRequest(
         this.returnedLock = returnedLock;
         this.proposedUnitStatus = proposedUnitStatus;
         this.unitVacated = unitVacated;
+        this.damageItems = damageItems;
     }
 
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
@@ -88,6 +95,15 @@ public record ReturnInspectionRequest(
         BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
         boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
-            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, false);
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, false, null);
+    }
+
+    /** Backward-compatible constructor used by existing tests and recovery flows. */
+    public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
+        BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
+        BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
+        boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus, boolean unitVacated) {
+        this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, unitVacated, null);
     }
 }
