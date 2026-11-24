@@ -117,6 +117,7 @@ class RenewalPaymentTransactionTests {
         gateway=new VnpayService(config,payments,mock(PaymentComplaintRepository.class),mock(ReservationRepository.class),
             mock(ReservationPricingSnapshotRepository.class),mock(UserRepository.class),mock(AdminAuthorizationService.class),
             audit,mock(NotificationService.class),mapper,mock(RenewalWorkflowService.class),settlementProvider);
+        org.springframework.test.util.ReflectionTestUtils.setField(gateway, "receiptCodes", mock(com.storagehub.service.MoneyReceiptCodes.class));
     }
 
     @Test void callbackCommitsVerifiedMoneyBeforeAnyAllocationAndDelayedArrivalStillAllocates() throws Exception {
@@ -330,6 +331,7 @@ class RenewalPaymentTransactionTests {
         var provider=new org.springframework.beans.factory.support.StaticListableBeanFactory();provider.addBean("finance",finance);
         var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
         var manualPayments = new ManualRentalPaymentService(payments, audit);
+        org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptCodes", mock(com.storagehub.service.MoneyReceiptCodes.class));
         org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptEmails",
             mock(com.storagehub.service.email.TransactionalEmailService.class));
         org.springframework.test.util.ReflectionTestUtils.setField(accounting, "manualPayments", manualPayments);

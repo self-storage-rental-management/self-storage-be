@@ -31,6 +31,7 @@ class VnpayProvenanceCallbackTests {
         mock(AdminAuthorizationService.class), audit, notifications, new ObjectMapper());
     <T extends BaseEntity> T id(T entity) { ReflectionTestUtils.setField(entity, "id", UUID.randomUUID()); return entity; }
     Payment fixture() {
+        ReflectionTestUtils.setField(service, "receiptCodes", org.mockito.Mockito.mock(MoneyReceiptCodes.class));
         config.setEnabled(true); config.setTmnCode("TEST_MERCHANT"); config.setHashSecret("test-only-signature-secret");
         var p = id(new Payment()); var r = id(new Reservation());
         r.setCustomer(id(new User())); r.setFacility(id(new Facility())); r.setStatus(ReservationStatus.AWAITING_PAYMENT);
