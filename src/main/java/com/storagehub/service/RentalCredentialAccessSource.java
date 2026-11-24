@@ -10,7 +10,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Projects persisted credential state without exposing credential references or secrets. */
+/** Projects persisted access state and the physical lock reference, never PIN or password secrets. */
 @Component
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -20,15 +20,22 @@ public class RentalCredentialAccessSource implements RentalReadSources.AccessSou
 
     @Override
     public Optional<RentalReadSources.Access> read(Rental rental) {
+        var activeCredentials = credentials.findByRental_IdAndStatus(rental.getId(), AccessCredentialStatus.ACTIVE);
         RentalReadSources.AccessStatus status;
-        if (!credentials.findByRental_IdAndStatus(rental.getId(), AccessCredentialStatus.ACTIVE).isEmpty()) {
+        if (!activeCredentials.isEmpty()) {
             status = RentalReadSources.AccessStatus.ACTIVE;
         } else if (!credentials.findByRental_IdAndStatus(rental.getId(), AccessCredentialStatus.REVOKED).isEmpty()) {
             status = RentalReadSources.AccessStatus.REVOKED;
         } else {
             status = RentalReadSources.AccessStatus.INACTIVE;
         }
+        String lockReference = activeCredentials.stream()
+            .filter(credential -> credential.getType() == com.storagehub.domain.model.AccessCredentialType.LOCK)
+            .map(com.storagehub.domain.model.AccessCredential::getReference)
+            .filter(reference -> reference != null && !reference.isBlank())
+            .findFirst()
+            .orElse(null);
         Clock clock = clocks.getIfAvailable(Clock::systemUTC);
-        return Optional.of(new RentalReadSources.Access(rental.getId(), clock.instant(), status));
+        return Optional.of(new RentalReadSources.Access(rental.getId(), clock.instant(), status, lockReference));
     }
 }

@@ -13,6 +13,7 @@ import com.storagehub.common.api.PageResponse;
 import com.storagehub.domain.model.MaintenanceTask;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.MaintenanceTaskType;
+import com.storagehub.domain.model.MaintenanceRecoveryType;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.StorageUnit;
@@ -47,6 +48,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class MaintenanceService {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.storagehub.domain.repo.RentalRepository rentalRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private AccessCredentialService accessCredentialService;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.storagehub.domain.repo.FileAssetRepository fileAssetRepository;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
 
@@ -289,8 +296,16 @@ public class MaintenanceService {
 
     @Transactional(readOnly = true)
     public List<MaintenanceStaffOption> listEligibleStaff(ActorPrincipal actor, UUID facilityId) {
-        authorizationService.require(actor, SystemPermission.MANAGE_STAFF_TASKS);
-        facilityScopeService.assertCanManage(actor, facilityId);
+        if (!actor.hasPermission(SystemPermission.MANAGE_STAFF_TASKS)
+            && !actor.hasPermission(SystemPermission.PERFORM_CHECKIN)
+            && !actor.hasPermission(SystemPermission.PROCESS_RETURNS)) {
+            authorizationService.require(actor, SystemPermission.MANAGE_STAFF_TASKS);
+        }
+        if (actor.hasRole(RoleCode.STAFF)) {
+            facilityScopeService.assertCanOperate(actor, facilityId);
+        } else {
+            facilityScopeService.assertCanManage(actor, facilityId);
+        }
         return userRepository.findEligibleStaff(
                 UserStatus.ACTIVE,
                 RoleCode.STAFF,
@@ -355,6 +370,42 @@ public class MaintenanceService {
         if (task.getTaskType() == MaintenanceTaskType.inventory_check) {
             throw ApiExceptions.conflict("Inventory check tasks must be completed from the check-in workflow");
         }
+        boolean noShowRecovery = task.getRecoveryType() == MaintenanceRecoveryType.RETURN_NO_SHOW
+            || task.getReturnCase() != null
+                && task.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required;
+        boolean recoveryTask = task.getRecoveryType() != null
+            && task.getRecoveryType() != MaintenanceRecoveryType.NONE;
+        if (recoveryTask && !actor.hasRole(RoleCode.STAFF))
+            throw ApiExceptions.forbidden("Chỉ Staff được ghi nhận hoàn tất thu hồi thực tế.");
+        if (noShowRecovery) {
+            throw ApiExceptions.conflict("Nhiệm vụ thu hồi khách không đến phải được hoàn tất trong biên bản nghiệm thu trả kho.");
+        }
+        if (recoveryTask && (request.evidencePhotos() == null || request.evidencePhotos().isEmpty())) {
+            throw ApiExceptions.validation("Cần tải bằng chứng kiểm kê và bàn giao trước khi hoàn tất thu hồi hàng.", null);
+        }
+        if (task.getRecoveryType() == MaintenanceRecoveryType.SETUP_OVERDUE
+            || task.getRecoveryType() == MaintenanceRecoveryType.MISMATCH_REMOVAL) {
+            if (request.resultReport() == null || request.resultReport().isBlank())
+                throw ApiExceptions.validation("Vui lòng nhập biên bản, danh mục hàng và người nhận bàn giao.", null);
+            if (fileAssetRepository == null) throw ApiExceptions.conflict("Chưa thể xác minh bằng chứng thu hồi.");
+            for (String reference : request.evidencePhotos()) {
+                com.storagehub.domain.model.FileAsset file;
+                try { file = fileAssetRepository.findById(UUID.fromString(reference)).orElse(null); }
+                catch (IllegalArgumentException e) { throw ApiExceptions.validation("Bằng chứng thu hồi không hợp lệ.", null); }
+                if (file == null || file.getStatus() != com.storagehub.domain.model.FileAssetStatus.ACTIVE
+                    || !"MAINTENANCE_TASK".equals(file.getEntityType()) || !taskId.equals(file.getEntityId()))
+                    throw ApiExceptions.validation("Bằng chứng phải thuộc đúng nhiệm vụ thu hồi.", null);
+            }
+        }
+        if (recoveryTask && !Boolean.TRUE.equals(request.unitVacated())) {
+            throw ApiExceptions.conflict("Cần xác nhận toàn bộ hàng đã được đưa khỏi gian trước khi hoàn tất thu hồi.");
+        }
+        if (recoveryTask && (request.recoveryHandoverLocation() == null || request.recoveryHandoverLocation().isBlank())) {
+            throw ApiExceptions.validation("Cần ghi nhận khu vực lưu tạm khi hoàn tất thu hồi hàng.", null);
+        }
+        User recoveryWitness = recoveryTask
+            ? requireRecoveryWitness(request.recoveryWitnessStaffId(), task.getFacility().getId(), actor.userId())
+            : null;
 
         task.setStatus(MaintenanceTaskStatus.completed);
         task.setCompletedAt(Instant.now());
@@ -366,10 +417,45 @@ public class MaintenanceService {
             } catch (Exception ignored) {
             }
         }
+        if (recoveryTask) {
+            task.setRecoveryHandoverLocation(request.recoveryHandoverLocation().trim());
+            task.setRecoveryWitness(recoveryWitness);
+        }
 
         MaintenanceTask saved = maintenanceTaskRepository.save(task);
 
-        boolean makeAvailable = request.makeUnitAvailable() == null || request.makeUnitAvailable();
+        boolean makeAvailable = !recoveryTask && (request.makeUnitAvailable() == null || request.makeUnitAvailable());
+        if ((saved.getRecoveryType() == MaintenanceRecoveryType.SETUP_OVERDUE
+            || saved.getRecoveryType() == MaintenanceRecoveryType.MISMATCH_REMOVAL) && saved.getRental() != null) {
+            var rental = saved.getRental();
+            if (accessCredentialService != null) accessCredentialService.revokeForRental(actor, rental, "Thu hồi quyền truy cập sau khi xác nhận gian trống");
+            rental.setActualReturnedAt(saved.getCompletedAt());
+            rental.setInventoryPending(false);
+            rental.setSetupExitReviewRequired(true);
+            rental.setStatus(com.storagehub.domain.model.RentalStatus.return_requested);
+            var existingReturn = returnCaseRepository.findByRental_Id(rental.getId()).stream()
+                .filter(rc -> rc.getStatus() != com.storagehub.domain.model.ReturnCaseStatus.completed).findFirst();
+            var rc = existingReturn.orElseGet(com.storagehub.domain.model.ReturnCase::new);
+            if (rc.getId() == null) {
+                rc.setRental(rental); rc.setCustomer(rental.getCustomer()); rc.setFacility(rental.getFacility());
+                rc.setRequestedBy(userRepository.findById(actor.userId()).orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy nhân viên xử lý.")));
+                rc.setStorageUnit(rental.getStorageUnit()); rc.setStatus(com.storagehub.domain.model.ReturnCaseStatus.requested);
+                rc.setRequestedAt(saved.getCompletedAt()); rc.setScheduledDate(saved.getCompletedAt().atZone(BusinessTime.ZONE).toLocalDate());
+                rc.setReturnType(saved.getRecoveryType() == MaintenanceRecoveryType.MISMATCH_REMOVAL
+                    ? com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH : com.storagehub.domain.model.ReturnType.RETURN_IN_SETUP);
+                rc.setSetupExitRequested(true); rc.setSetupReturnedAt(saved.getCompletedAt());
+                rc.setSettlementMode(com.storagehub.domain.model.SettlementMode.MANUAL_REVIEW);
+                // No monetary claim is inferred from the physical recovery. Finance captures verified funds at inspection.
+                rc.setDepositAmount(java.math.BigDecimal.ZERO);
+                rc.setCustomerNotes("Hồ sơ quyết toán sau thu hồi. Cần nghiệm thu và đối soát trước khi hoàn tiền hoặc thu thêm.");
+                returnCaseRepository.saveAndFlush(rc);
+            }
+            saved.setReturnCase(rc);
+            maintenanceTaskRepository.save(saved);
+            if (rentalRepository != null) rentalRepository.save(rental);
+            notificationService.createFacilityOperationsNotifications(rental.getFacility().getId(), NotificationType.RETURN,
+                "Chờ quyết toán sau thu hồi", "Kho đã trống. Vui lòng mở hồ sơ trả kho để nghiệm thu và gửi Manager duyệt bảng kê.", rc.getId());
+        }
         StorageUnit unit = saved.getStorageUnit();
         boolean hasOtherOpenTasks = hasOtherActiveMaintenanceTasks(unit.getId(), saved.getId());
         unit.setStatus(makeAvailable && !hasOtherOpenTasks ? StorageUnitStatus.available : StorageUnitStatus.maintenance);
@@ -400,6 +486,12 @@ public class MaintenanceService {
         }
         if (task.getStatus() == MaintenanceTaskStatus.cancelled) {
             throw ApiExceptions.conflict("Task is already cancelled");
+        }
+
+        if ((task.getRecoveryType() != null && task.getRecoveryType() != MaintenanceRecoveryType.NONE)
+            || task.getReturnCase() != null
+                && task.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required) {
+            throw ApiExceptions.conflict("Không thể hủy nhiệm vụ thu hồi khi hàng vẫn đang chờ xử lý.");
         }
 
         task.setStatus(MaintenanceTaskStatus.cancelled);
@@ -546,7 +638,15 @@ public class MaintenanceService {
             t.getAssignedTo() != null ? t.getAssignedTo().getId() : null,
             t.getAssignedTo() != null ? t.getAssignedTo().getFullName() : null,
             t.getStatus(),
+            t.getRecoveryType() != null && t.getRecoveryType() != MaintenanceRecoveryType.NONE
+                || t.getReturnCase() != null
+                && t.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required,
+            t.getRecoveryType() == null ? MaintenanceRecoveryType.NONE : t.getRecoveryType(),
             t.getDueAt(),
+            t.getDeadlineAt(),
+            t.getRecoveryHandoverLocation(),
+            t.getRecoveryWitness() != null ? t.getRecoveryWitness().getId() : null,
+            t.getRecoveryWitness() != null ? t.getRecoveryWitness().getFullName() : null,
             t.getStartedAt(),
             t.getCompletedAt(),
             t.getResultReport(),
@@ -564,5 +664,18 @@ public class MaintenanceService {
         if (staff.getStatus() != UserStatus.ACTIVE || !isStaff || !hasFacilityScope) {
             throw ApiExceptions.forbidden("Assigned user must be an active Staff with OPERATE scope at this facility");
         }
+    }
+
+    private User requireRecoveryWitness(UUID witnessId, UUID facilityId, UUID actorId) {
+        if (witnessId == null) {
+            throw ApiExceptions.validation("Cần chọn nhân viên thứ hai cùng xác nhận việc thu hồi hàng.", null);
+        }
+        if (witnessId.equals(actorId)) {
+            throw ApiExceptions.conflict("Nhân viên xác nhận thứ hai phải khác người đang hoàn tất nhiệm vụ.");
+        }
+        User witness = userRepository.findById(witnessId)
+            .orElseThrow(() -> ApiExceptions.notFound("Nhân viên xác nhận thứ hai không tồn tại."));
+        assertEligibleStaff(witness, facilityId);
+        return witness;
     }
 }

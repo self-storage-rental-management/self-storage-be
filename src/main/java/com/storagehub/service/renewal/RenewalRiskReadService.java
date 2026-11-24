@@ -66,10 +66,13 @@ public class RenewalRiskReadService {
         Instant startedAt=task==null?null:task.receivedAt();
         UUID taskId=task==null?null:task.id();
         BigDecimal remainder=null;
+        boolean continuousPeriod=false;
         if(renewal!=null) {
             var workflow=em.find(RenewalWorkflow.class,id);
             if(workflow!=null)try {
-                remainder=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class).dueAtSigning();
+                var accepted=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);
+                remainder=accepted.dueAtSigning();
+                continuousPeriod=Boolean.TRUE.equals(accepted.continuousPeriod());
             }catch(Exception invalid){throw ApiExceptions.conflict("Accepted financial terms invalid");}
         }
         if(term==null)return new View(rental.getId(),id,now,"UNKNOWN",null,"UNKNOWN",signing,null,null,
@@ -79,7 +82,9 @@ public class RenewalRiskReadService {
         long days=RenewalOverdueTimeline.overdueDays(term.lastPermittedDate(),now,zone);
         boolean allowed=task==null&&rental.getStatus()==RentalStatus.active&&rental.getActualReturnedAt()==null&&now.isBefore(term.recoveryCutoff());
         BigDecimal fee=null;var feeSource=overdueFees==null?null:overdueFees.getIfAvailable();
-        if(feeSource!=null)try{fee=feeSource.estimateAtSigning(rental,now);}catch(com.storagehub.common.api.ApiException unavailable){/* Keep the deadline warning visible when fee policy is unavailable. */}
+        if(continuousPeriod && renewal.getStatus()!=RenewalStatus.cancelled && renewal.getStatus()!=RenewalStatus.payment_expired)
+            fee=BigDecimal.ZERO;
+        else if(feeSource!=null)try{fee=renewal==null ? feeSource.estimate(rental,now) : feeSource.estimateAtSigning(rental,now);}catch(com.storagehub.common.api.ApiException unavailable){/* Keep the deadline warning visible when fee policy is unavailable. */}
         return new View(rental.getId(),id,now,"COMPLETE",days,RenewalOverdueTimeline.severity(days,now,term.recoveryCutoff()),
             signing,term.recoveryCutoff(),term.recoveryStart(),allowed,remainder,fee,"VND",recoveryStatus,startedAt,taskId);
     }

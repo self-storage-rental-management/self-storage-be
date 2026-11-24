@@ -56,9 +56,11 @@ public class PaymentReceiptEmailQueue {
             }
             String body = mapper.writeValueAsString(payload);
             if (java.util.Set.of("verify-email", "reset-password", "reservation-verification").contains(template)) body = protect(body);
-            jdbc.update("INSERT INTO payment_receipt_emails (receipt_key,user_id,recipient,payload,template_name,subject,audit_action,expires_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE receipt_key=receipt_key",
+            // TIMESTAMP(3) defaults may round a fresh row into the next millisecond.
+            // Explicitly floor the first attempt so an immediate worker sees committed mail as due.
+            jdbc.update("INSERT INTO payment_receipt_emails (receipt_key,user_id,recipient,payload,template_name,subject,audit_action,expires_at,next_attempt_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE receipt_key=receipt_key",
                 key, userId == null ? null : userId.toString(), recipient, body, template, subject, auditAction,
-                expiry == null ? null : Timestamp.from(expiry));
+                expiry == null ? null : Timestamp.from(expiry), Timestamp.from(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS)));
         } catch (GeneralSecurityException | com.fasterxml.jackson.core.JsonProcessingException exception) {
             throw new IllegalStateException("Cannot queue transactional email", exception);
         }

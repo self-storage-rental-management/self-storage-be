@@ -13,6 +13,7 @@ public record RentalSummaryResponse(UUID id, String displayCode, Customer custom
     Unit storageUnit, UnitType unitType, RentalStatus status, LocalDate startDate,
     LocalDate contractEndDate, BigDecimal monthlyPrice, String currency, List<Warning> dataWarnings,
     DateSemantics dateSemantics, boolean inventoryPending, Instant inventoryDueAt,
+    Instant inventoryFinalDeadlineAt,
     Instant setupStartedAt, Instant setupEndsAt, Instant moveInCompletedAt, Instant inventoryVerifiedAt,
     boolean setupExitReviewRequired, boolean canConfirmRentalStart) {
     public record Customer(UUID id, String fullName) {}

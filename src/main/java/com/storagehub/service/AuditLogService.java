@@ -26,6 +26,11 @@ public class AuditLogService {
     private final ActorContext actorContext;
     private final ObjectMapper objectMapper;
 
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public void recordDenial(String action, String entityType, UUID entityId, UUID facilityId, Object reason) {
+        recordMutation(action, entityType, entityId, facilityId, null, reason);
+    }
+
     @Transactional
     public ActivityLog recordMutation(
         String action,

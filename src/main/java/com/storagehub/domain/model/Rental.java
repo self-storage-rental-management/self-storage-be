@@ -75,8 +75,45 @@ public class Rental extends BaseEntity {
     @Column
     private Instant inventoryDueAt;
 
+    /** First operational deadline after the customer reports inventory readiness. */
+    @Column
+    private Instant inventoryFinalDeadlineAt;
+
+    /** New-policy removal window. Legacy records intentionally remain null. */
+    @Column
+    private Instant inventoryRemovalPublishedAt;
+
+    /** Compatibility alias for older inventory-removal callers. */
+    public Instant getInventoryRemovalNotifiedAt() {
+        return inventoryRemovalPublishedAt;
+    }
+
+    public void setInventoryRemovalNotifiedAt(Instant value) {
+        inventoryRemovalPublishedAt = value;
+    }
+
+    @Column
+    private Instant inventoryRemovalDeadlineAt;
+
+    @Column private Instant setupCompletionDeadlineAt;
+    @Column private Integer setupExtensionDays;
+    @Column private Integer setupExtensionCount;
+    @Column private Instant inventoryAppointmentAt;
+    @Column private Instant inventoryArrivedAt;
+    @Column private Instant inventoryIdentityVerifiedAt;
+    @Column private java.util.UUID inventoryIdentityPhotoId;
+    @Column private java.util.UUID inventoryIdentityVerifiedBy;
+    @Column private Instant inventoryResultPublishedAt;
+    @Column private Instant inventoryRemainderDeadlineAt;
+    @Column(columnDefinition = "LONGTEXT") private String workflowHistoryJson;
+
+
     @Column(nullable = false)
     private boolean inventoryPending;
+
+    /** The first inventory deadline reminder is separate from the final escalation. */
+    @Column
+    private Instant inventoryDeadlineReminderAt;
 
     /** A setup return must pass physical inspection and financial reconciliation. */
     @Column(nullable = false)

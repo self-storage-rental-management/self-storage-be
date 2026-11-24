@@ -5,6 +5,7 @@ import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.UnitReleaseDisposition;
+import com.storagehub.domain.model.InventoryResolutionStatus;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.math.BigDecimal;
@@ -68,11 +69,52 @@ public record CheckInResponse(
     BigDecimal setupEarlyExitFee,
     List<DeclaredGoodsLine> declaredGoodsLines,
     IntakeAction intakeAction,
-    String paymentEvidenceReference
+    Instant inventoryFinalDeadlineAt,
+    InventoryResolutionStatus inventoryResolutionStatus,
+    boolean inventoryFullFit,
+    boolean inventoryPartialFitAvailable,
+    Integer inventorySuggestedPackageCount,
+    String inventoryMismatchSummary,
+    String inventoryAcceptedQuantitiesJson,
+    Instant inventoryRemainderRemovedAt,
+    String inventoryRemainderRemovalNote,
+    String inventoryActualJson,
+    String inventoryMismatchJson,
+    String inventorySuggestedQuantitiesJson,
+    Instant receiptConfirmationDueAt,
+    boolean receiptConfirmationOverdue,
+    Instant receiptConfirmationReleaseAt,
+    boolean receiptReleaseEligible,
+    String declaredPackagingMethod,
+    String paymentEvidenceReference,
+    InventoryVisit inventoryVisit,
+    Instant checkInDeadline,
+    StorageCapacity storageCapacity
 ) {
+    public record InventoryVisit(
+        Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
+        String verifiedByName, UUID photoId
+    ) {}
+
+    public record StorageCapacity(
+        BigDecimal volumeM3,
+        BigDecimal maxLoadKg,
+        BigDecimal maxCargoLengthCm,
+        BigDecimal maxCargoWidthCm,
+        BigDecimal maxCargoHeightCm,
+        BigDecimal maxCargoWeightKg
+    ) {}
+
     public record DeclaredGoodsLine(UUID id, String code, String name, String categoryName,
         String materialName, int quantity, BigDecimal lengthCm, BigDecimal widthCm,
-        BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+        BigDecimal heightCm, BigDecimal weightPerPackageKg, UUID catalogCategoryId, UUID catalogMaterialId,
+        com.storagehub.domain.model.GoodsCategory category, boolean fragile, boolean stackable,
+        boolean allowHorizontalPlacement, int maxStackLayers) {
+        public DeclaredGoodsLine(UUID id, String code, String name, String categoryName, String materialName, int quantity,
+            BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {
+            this(id, code, name, categoryName, materialName, quantity, lengthCm, widthCm, heightCm, weightPerPackageKg,
+                null, null, null, false, false, false, 1);
+        }
         /** Compatibility constructor for readers that only populated the original measurements. */
         public DeclaredGoodsLine(UUID id, String code, String name, int quantity,
             BigDecimal lengthCm, BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightPerPackageKg) {
@@ -133,7 +175,26 @@ public record CheckInResponse(
         BigDecimal dueAtCheckIn,
         CompleteCheckInRequest handover
     ) {
-        this(checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt, identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote, contractSignedAt, contractEvidenceReference, paymentCollectedAt, setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn, setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending, lockReference, readinessNote, rejectionReason, rejectionDisposition, performedBy, performedByName, null, null, reservationId, reservationCode, reservationStatus, customerId, customerName, customerEmail, identityDocumentNumber, customerPhone, facilityId, facilityName, storageUnitId, storageUnitCode, storageUnitStatus, assignmentId, assignmentStatus, startDate, endDate, declaredPackageCount, declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm, declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover, null, null, List.of(), IntakeAction.NONE, null);
+        this(
+            checkInId, checkInStatus, scheduledAt, appointmentAt, checkedInAt,
+            identityVerifiedAt, verifiedIdentityDocument, identityVerificationNote,
+            contractSignedAt, contractEvidenceReference, paymentCollectedAt,
+            setupStartedAt, setupDueAt, freeSetupDays, paidRentalStartsOn,
+            setupCompletedAt, inventoryVerifiedAt, inventoryDueAt, inventoryPending,
+            lockReference, readinessNote, rejectionReason, rejectionDisposition,
+            performedBy, performedByName, null, null, reservationId, reservationCode,
+            reservationStatus, customerId, customerName, customerEmail,
+            identityDocumentNumber, customerPhone, facilityId, facilityName,
+            storageUnitId, storageUnitCode, storageUnitStatus, assignmentId,
+            assignmentStatus, startDate, endDate, declaredPackageCount,
+            declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm,
+            declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover,
+            null, null, List.of(), IntakeAction.NONE,
+            null, null, false, false,
+            null, null, null, null, null, null, null, null,
+            null, false, null, false,
+            null, null, null, null, null
+        );
     }
 
 }

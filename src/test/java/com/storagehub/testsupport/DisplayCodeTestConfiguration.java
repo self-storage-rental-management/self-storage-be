@@ -9,6 +9,11 @@ import static org.mockito.Mockito.mock;
 @TestConfiguration(proxyBeanMethods=false)
 public class DisplayCodeTestConfiguration {
     @Bean
+    com.storagehub.service.MoneyReceiptCodes moneyReceiptCodes() {
+        return mock(com.storagehub.service.MoneyReceiptCodes.class);
+    }
+
+    @Bean
     BusinessRecordCodes businessRecordCodes() {
         return mock(BusinessRecordCodes.class);
     }
