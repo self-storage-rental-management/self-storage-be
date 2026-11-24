@@ -708,6 +708,58 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void customerConfirmSettlement_includesUnusedRentalRefundInFinalAmount() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
+        returnCase.setReturnType(ReturnType.NORMAL);
+        returnCase.setRequestedAt(Instant.parse("2026-01-01T00:00:00Z"));
+        returnCase.setScheduledDate(LocalDate.of(2026, 1, 1));
+        returnCase.setInspectedAt(Instant.parse("2026-01-01T01:00:00Z"));
+        returnCase.setActiveReturnRepricingRequired(true);
+        returnCase.setDepositAmount(new BigDecimal("5500000.00"));
+        returnCase.setCleaningFee(new BigDecimal("100000.00"));
+        returnCase.setTotalDeductions(new BigDecimal("100000.00"));
+        returnCase.setNetRefundAmount(new BigDecimal("5400000.00"));
+        returnCase.setAmountDueFromCustomer(BigDecimal.ZERO);
+        returnCase.setEarlyTerminationCharge(BigDecimal.ZERO);
+        returnCase.setRentalRefundAmount(BigDecimal.ZERO);
+        rental.setStartDate(LocalDate.of(2026, 1, 1));
+
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setRentalMonths(3);
+        pricing.setMonthlyPrice(new BigDecimal("4400000.00"));
+        pricing.setNetRentalAmount(new BigDecimal("13200000.00"));
+        pricing.setReservationDepositAmount(new BigDecimal("5500000.00"));
+        pricing.setFreeSetupDays(3);
+        pricing.setEarlyTerminationFeeCoefficient(BigDecimal.ONE);
+        pricing.setEarlyTerminationPricingSnapshotJson(
+            "[{\"rentalMonths\":3,\"monthlyPrice\":4400000,\"freeSetupDays\":3}]"
+        );
+
+        when(pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId()))
+            .thenReturn(Optional.of(pricing));
+        when(returnCaseRepository.findByIdAndCustomer_Id(returnCase.getId(), customer.getId()))
+            .thenReturn(Optional.of(returnCase));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ReturnCaseResponse response = service.customerConfirmSettlement(
+            customerActor,
+            returnCase.getId(),
+            new CustomerConfirmSettlementRequest(CustomerDecision.accepted, "Đồng ý bảng kê")
+        );
+
+        assertThat(response.activeReturnPolicy().rentalRefundAmount()).isEqualByComparingTo("8800000.00");
+        assertThat(returnCase.getNetRefundAmount()).isEqualByComparingTo("14200000.00");
+        assertThat(response.netRefundAmount()).isEqualByComparingTo("14200000.00");
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+    }
+
+    @Test
     void customerConfirmSettlement_disputed_setsDisputedStatus() {
         ReturnCase returnCase = new ReturnCase();
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
@@ -776,6 +828,66 @@ class ReturnSettlementServiceTests {
         assertThat(response.amountDueFromCustomer()).isZero();
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
         assertThat(response.reviewedByName()).isEqualTo("Le Van Manager");
+    }
+
+    @Test
+    void managerReviewDispute_usesActiveRentalRefundInFinalSettlement() {
+        ReturnCase returnCase = new ReturnCase();
+        ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
+        returnCase.setRental(rental);
+        returnCase.setFacility(facility);
+        returnCase.setStorageUnit(unit);
+        returnCase.setCustomer(customer);
+        returnCase.setStatus(ReturnCaseStatus.disputed);
+        returnCase.setReturnType(ReturnType.EARLY_RETURN);
+        returnCase.setRequestedAt(Instant.parse("2026-01-01T00:00:00Z"));
+        returnCase.setScheduledDate(LocalDate.of(2026, 1, 1));
+        returnCase.setInspectedAt(Instant.parse("2026-01-01T01:00:00Z"));
+        returnCase.setActiveReturnRepricingRequired(true);
+        returnCase.setDepositAmount(new BigDecimal("5500000.00"));
+        returnCase.setCleaningFee(new BigDecimal("100000.00"));
+        returnCase.setTotalDeductions(new BigDecimal("100000.00"));
+        returnCase.setNetRefundAmount(new BigDecimal("5400000.00"));
+        returnCase.setAmountDueFromCustomer(BigDecimal.ZERO);
+        returnCase.setEarlyTerminationCharge(BigDecimal.ZERO);
+        returnCase.setRentalRefundAmount(BigDecimal.ZERO);
+        rental.setStartDate(LocalDate.of(2026, 1, 1));
+
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setRentalMonths(3);
+        pricing.setMonthlyPrice(new BigDecimal("4400000.00"));
+        pricing.setNetRentalAmount(new BigDecimal("13200000.00"));
+        pricing.setReservationDepositAmount(new BigDecimal("5500000.00"));
+        pricing.setFreeSetupDays(3);
+        pricing.setEarlyTerminationFeeCoefficient(BigDecimal.ONE);
+        pricing.setEarlyTerminationPricingSnapshotJson(
+            "[{\"rentalMonths\":3,\"monthlyPrice\":4400000,\"freeSetupDays\":3}]"
+        );
+
+        when(pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId()))
+            .thenReturn(Optional.of(pricing));
+        when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
+        when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ReturnCaseResponse response = service.managerReviewDispute(
+            managerActor,
+            returnCase.getId(),
+            new ManagerReviewDisputeRequest(
+                "Xác nhận lại khoản thuê chưa sử dụng theo bảng giá đã chốt",
+                BigDecimal.ZERO,
+                new BigDecimal("100000.00"),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                StorageUnitStatus.available
+            )
+        );
+
+        assertThat(response.activeReturnPolicy().rentalRefundAmount()).isEqualByComparingTo("8800000.00");
+        assertThat(returnCase.getRentalRefundAmount()).isEqualByComparingTo("8800000.00");
+        assertThat(response.netRefundAmount()).isEqualByComparingTo("14200000.00");
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
     }
 
     @Test
