@@ -620,6 +620,56 @@ public class CustomerReservationService {
         return toDetailResponse(reservation);
     }
 
+    @Transactional
+    public ReservationDetailResponse extendInventoryReturnWindow(ActorPrincipal actor, UUID reservationId) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Only customers can extend inventory return window");
+        }
+        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Hồ sơ kiểm kê chưa được tạo."));
+        if (checkIn.getStatus() != CheckInStatus.setup_completed
+            || checkIn.isInventoryFullFit()
+            || (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
+                && checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.RETURN_REQUESTED)) {
+            throw ApiExceptions.conflict("Hồ sơ không ở trạng thái được phép gia hạn thời gian trả kho.");
+        }
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId)
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê của thời gian chuẩn bị."));
+        Instant now = Instant.now();
+        Instant nextDeadline = InventoryTimelinePolicy.extendRemovalWindow(rental, now);
+        rentalRepository.saveAndFlush(rental);
+
+        if (setupReturns != null) {
+            setupReturns.findByRental_Id(rental.getId()).stream()
+                .filter(rc -> rc.getReturnType() == com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH
+                    && rc.getStatus() != com.storagehub.domain.model.ReturnCaseStatus.completed
+                    && rc.getStatus() != com.storagehub.domain.model.ReturnCaseStatus.recovery_required)
+                .forEach(rc -> {
+                    rc.setReturnWindowDays(rental.getInventoryReturnWindowDays());
+                    rc.setReturnExtensionDays(rental.getInventoryReturnExtensionDays());
+                    rc.setReturnExtensionCount(rental.getInventoryReturnExtensionCount());
+                    rc.setRecoveryEligibleAt(nextDeadline);
+                    setupReturns.saveAndFlush(rc);
+                });
+        }
+
+        if (notificationService != null) {
+            String deadlineText = nextDeadline.atZone(BusinessTime.ZONE).toLocalDate().toString();
+            notificationService.createNotification(
+                reservation.getCustomer().getId(),
+                NotificationType.RETURN,
+                "Đã gia hạn thời gian trả kho lần " + rental.getInventoryReturnExtensionCount(),
+                "Thời hạn trả kho của đơn " + reservation.getReservationCode()
+                    + " đã được kéo dài thêm " + rental.getInventoryReturnExtensionDays()
+                    + " ngày. Hạn cuối mới: " + deadlineText + ".",
+                reservation.getId()
+            );
+        }
+        return toDetailResponse(reservation);
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     private InventoryDecisionService inventoryDecisions;
 
@@ -669,9 +719,10 @@ public class CustomerReservationService {
             checkIn.setInventoryDecisionAt(Instant.now());
             checkIn.setInventoryDecisionNote(note == null ? "Khách yêu cầu trả kho do kết quả kiểm kê không phù hợp." : note);
             checkInRepository.saveAndFlush(checkIn);
-            if (rental.getInventoryRemovalPublishedAt() == null && rental.getInventoryResultPublishedAt() != null) {
-                rental.setInventoryRemovalPublishedAt(rental.getInventoryResultPublishedAt());
-                rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(rental.getInventoryResultPublishedAt()));
+            if (rental.getInventoryRemovalDeadlineAt() == null) {
+                Instant publishedAt = rental.getInventoryResultPublishedAt() == null
+                    ? Instant.now() : rental.getInventoryResultPublishedAt();
+                InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
                 rentalRepository.saveAndFlush(rental);
             }
             // The return window replaces the "did not arrive for inventory" clock. Stop the
@@ -1621,6 +1672,11 @@ public class CustomerReservationService {
                 response.setInventoryRemainderDeadlineAt(rental.getInventoryRemainderDeadlineAt());
                 response.setInventoryRemovalPublishedAt(rental.getInventoryRemovalPublishedAt());
                 response.setInventoryRemovalDeadlineAt(rental.getInventoryRemovalDeadlineAt());
+                response.setInventoryReturnWindowDays(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null));
+                response.setInventoryReturnExtensionDays(rental.getInventoryReturnExtensionDays());
+                response.setInventoryReturnExtensionCount(rental.getInventoryReturnExtensionCount());
+                response.setInventoryReturnCanExtend(InventoryTimelinePolicy.canExtendRemovalWindow(rental, Instant.now()));
+                response.setInventoryReturnPolicyVersion(rental.getInventoryReturnPolicyVersion());
                 response.setSetupStartedAt(rental.getSetupStartedAt());
                 response.setSetupDueAt(rental.getSetupEndsAt());
                 response.setPaidRentalStartsOn(rental.getStartDate());

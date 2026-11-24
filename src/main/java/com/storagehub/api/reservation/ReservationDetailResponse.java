@@ -49,6 +49,11 @@ public class ReservationDetailResponse {
     private Instant inventoryRemainderDeadlineAt;
     private Instant inventoryRemovalPublishedAt;
     private Instant inventoryRemovalDeadlineAt;
+    private Integer inventoryReturnWindowDays;
+    private Integer inventoryReturnExtensionDays;
+    private Integer inventoryReturnExtensionCount;
+    private boolean inventoryReturnCanExtend;
+    private String inventoryReturnPolicyVersion;
     private Instant inventoryEscalatedAt;
     private Instant setupCompletedAt;
     private Instant inventoryAppointmentAt;
@@ -141,6 +146,16 @@ public class ReservationDetailResponse {
     public void setInventoryFinalDeadlineAt(Instant value) { inventoryFinalDeadlineAt = value; }
     public Instant getInventoryRemovalDeadlineAt() { return inventoryRemovalDeadlineAt; }
     public void setInventoryRemovalDeadlineAt(Instant value) { inventoryRemovalDeadlineAt = value; }
+    public Integer getInventoryReturnWindowDays() { return inventoryReturnWindowDays; }
+    public void setInventoryReturnWindowDays(Integer value) { inventoryReturnWindowDays = value; }
+    public Integer getInventoryReturnExtensionDays() { return inventoryReturnExtensionDays; }
+    public void setInventoryReturnExtensionDays(Integer value) { inventoryReturnExtensionDays = value; }
+    public Integer getInventoryReturnExtensionCount() { return inventoryReturnExtensionCount; }
+    public void setInventoryReturnExtensionCount(Integer value) { inventoryReturnExtensionCount = value; }
+    public boolean isInventoryReturnCanExtend() { return inventoryReturnCanExtend; }
+    public void setInventoryReturnCanExtend(boolean value) { inventoryReturnCanExtend = value; }
+    public String getInventoryReturnPolicyVersion() { return inventoryReturnPolicyVersion; }
+    public void setInventoryReturnPolicyVersion(String value) { inventoryReturnPolicyVersion = value; }
     public Instant getInventoryResultPublishedAt() { return inventoryResultPublishedAt; }
     public void setInventoryResultPublishedAt(Instant value) { inventoryResultPublishedAt = value; }
     public Instant getInventoryRemainderDeadlineAt() { return inventoryRemainderDeadlineAt; }

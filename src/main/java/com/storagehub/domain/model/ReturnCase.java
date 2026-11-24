@@ -228,4 +228,16 @@ public class ReturnCase extends BaseEntity {
 
     @Column
     private Instant refundExpectedAt;
+
+    @Column
+    private Integer returnWindowDays;
+
+    @Column
+    private Integer returnExtensionDays;
+
+    @Column(nullable = false)
+    private int returnExtensionCount = 0;
+
+    @Column(length = 64)
+    private String returnPolicyVersion;
 }

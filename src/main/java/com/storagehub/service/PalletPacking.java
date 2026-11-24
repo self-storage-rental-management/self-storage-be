@@ -390,11 +390,10 @@ final class PalletPacking {
     private static String packingIssue3d(RackLayout.Result layout, Line3d line,
                                          List<RackSpace> racks, List<PalletState> states, int remainingQuantity) {
         boolean geometry = racks.stream().anyMatch(rack -> rack.compartments.stream()
-            .anyMatch(compartment -> compartment.freeSlots > 0
-                && placements(line.cargo).stream().anyMatch(placement -> fits(
-                    new PalletState(0, rack, compartment, layout.configuration().pallet(),
-                        rack.preview.maxCargoHeightCm()), line, placement,
-                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO))));
+            .anyMatch(compartment -> placements(line.cargo).stream().anyMatch(placement -> fits(
+                new PalletState(0, rack, compartment, layout.configuration().pallet(),
+                    rack.preview.maxCargoHeightCm()), line, placement,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO))));
         if (!geometry) return noPalletIssue(layout.configuration().pallet(), line.itemNumber, line.cargo, racks);
         int freeSlots = racks.stream().mapToInt(rack -> rack.freeSlots).sum();
         return "Không đủ vị trí tấm kê hoặc tải trọng còn lại để xếp hàng " + line.itemNumber
