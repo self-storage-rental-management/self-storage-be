@@ -25,6 +25,32 @@ class IntakeDeadlineSchedulerTests {
     @Test void oldRecordsWithoutNewDeadlineAreNotReclaimed() {
         rental(); scheduler.process(); verify(tasks,never()).saveAndFlush(any());
     }
+    @Test void expiredInventoryCreatesRecoveryOnlyWhenCustomerHasNotArrived() {
+        var r = rental();
+        r.setStatus(RentalStatus.active);
+        r.setInventoryPending(true);
+        r.setMoveInCompletedAt(Instant.now().minusSeconds(8 * 86400L));
+        r.setInventoryFinalDeadlineAt(Instant.now().minusSeconds(1));
+        scheduler.process();
+        var capture = ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(tasks).saveAndFlush(capture.capture());
+        assertThat(capture.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.INVENTORY_OVERDUE);
+        assertThat(r.getInventoryEscalatedAt()).isNotNull();
+        scheduler.process();
+        verify(tasks, times(1)).saveAndFlush(any());
+    }
+
+    @Test void customerArrivalBeforeDeadlineDoesNotCreateRecovery() {
+        var r = rental();
+        r.setStatus(RentalStatus.active);
+        r.setInventoryPending(true);
+        r.setMoveInCompletedAt(Instant.now().minusSeconds(8 * 86400L));
+        r.setInventoryFinalDeadlineAt(Instant.now().minusSeconds(1));
+        r.setInventoryArrivedAt(r.getInventoryFinalDeadlineAt().minusSeconds(60));
+        scheduler.process();
+        verify(tasks, never()).saveAndFlush(any());
+        InventoryDeadlinePolicy.requireInventoryOpen(r, Instant.now());
+    }
     @Test void secondExtensionDoesNotRecoverBeforeFinalDeadline() {
         var r=rental();r.setSetupExtensionCount(2);r.setSetupCompletionDeadlineAt(Instant.now().plusSeconds(3600));
         scheduler.process();verify(tasks,never()).saveAndFlush(any());

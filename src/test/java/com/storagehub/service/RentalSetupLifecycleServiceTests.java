@@ -72,25 +72,47 @@ class RentalSetupLifecycleServiceTests {
         rental.setInventoryFinalDeadlineAt(Instant.now().minusSeconds(60));
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void createsOneHighPriorityRecoveryTaskForTheCurrentExpiredDeadline(boolean removal) {
+    @Test
+    void leavesExpiredInventoryRecoveryToTheDeadlineScheduler() {
         when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of());
         when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of(rental));
-        when(maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(any(), any(), any())).thenReturn(List.of());
-        when(maintenanceTaskRepository.saveAndFlush(any(MaintenanceTask.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        if (removal) rental.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(10));
 
         service.advanceSetupRentals();
+
+        assertThat(rental.getInventoryEscalatedAt()).isNull();
+        verify(maintenanceTaskRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void startsPaidRentalOnAgreedDateEvenIfFreeSetupHasNotEnded() {
+        var zone = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
+        rental.setStatus(RentalStatus.setup);
+        rental.setStartDate(LocalDate.now(zone));
+        rental.setSetupEndsAt(Instant.now().plus(1, ChronoUnit.DAYS));
+        when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of(rental));
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of());
+
         service.advanceSetupRentals();
 
-        assertThat(rental.getInventoryEscalatedAt()).isNotNull();
-        var task = org.mockito.ArgumentCaptor.forClass(MaintenanceTask.class);
-        verify(maintenanceTaskRepository).saveAndFlush(task.capture());
-        assertThat(task.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.INVENTORY_OVERDUE);
-        assertThat(task.getValue().getReason()).contains(removal ? "hết hạn đưa hàng sai lệch" : "quá hạn kiểm kê");
-        assertThat(task.getValue().getPriority()).isEqualTo(com.storagehub.domain.model.TaskPriority.high);
-        assertThat(task.getValue().getDeadlineAt()).isAfter(Instant.now());
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
+    }
+
+    @Test
+    void sendsOnlyLastDayReminderWhenEarlierReminderWasMissed() {
+        var zone = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
+        rental.setStatus(RentalStatus.setup);
+        rental.setSetupEndsAt(LocalDate.now(zone).plusDays(1).atTime(12, 0).atZone(zone).toInstant());
+        when(rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)).thenReturn(List.of(rental));
+        when(rentalRepository.findByInventoryPendingTrueAndStatusIn(any())).thenReturn(List.of());
+        service.advanceSetupRentals();
+        service.advanceSetupRentals();
+        verify(notificationService).createNotification(
+            org.mockito.ArgumentMatchers.eq(rental.getCustomer().getId()),
+            org.mockito.ArgumentMatchers.eq(com.storagehub.domain.model.NotificationType.CHECKIN),
+            org.mockito.ArgumentMatchers.eq("Hôm nay là ngày chuẩn bị miễn phí cuối cùng"),
+            any(String.class), org.mockito.ArgumentMatchers.eq(rental.getReservation().getId()));
+        verify(notificationService, never()).createNotification(any(), any(),
+            org.mockito.ArgumentMatchers.eq("Nhắc thời gian chuẩn bị sắp kết thúc"), any(), any());
     }
 
     @Test
@@ -107,7 +129,7 @@ class RentalSetupLifecycleServiceTests {
             org.mockito.ArgumentMatchers.eq(rental.getCustomer().getId()),
             org.mockito.ArgumentMatchers.eq(com.storagehub.domain.model.NotificationType.CHECKIN),
             org.mockito.ArgumentMatchers.eq("Sắp đến hạn kiểm kê hàng hóa"), any(String.class),
-            org.mockito.ArgumentMatchers.eq(rental.getId()));
+            org.mockito.ArgumentMatchers.eq(rental.getReservation().getId()));
         verify(maintenanceTaskRepository, never()).saveAndFlush(any());
     }
 

@@ -355,9 +355,19 @@ public class ReturnSettlementService {
 
         BigDecimal deposit = returnCase.getDepositAmount() == null
             ? BigDecimal.ZERO : returnCase.getDepositAmount().setScale(2, RoundingMode.HALF_UP);
+        BigDecimal securityDeductions = zeroIfNull(returnCase.getDamageFee())
+            .add(zeroIfNull(returnCase.getCleaningFee()))
+            .add(zeroIfNull(returnCase.getLostItemFee()))
+            .add(zeroIfNull(returnCase.getOverdueFee()))
+            .add(zeroIfNull(returnCase.getOutstandingFee()))
+            .setScale(2, RoundingMode.HALF_UP);
         BigDecimal approvedRefund = request.approvedRefundAmount().setScale(2, RoundingMode.HALF_UP);
         if (approvedRefund.compareTo(deposit) > 0) {
             throw ApiExceptions.conflict("Khoản hoàn được duyệt không thể vượt quá tiền cọc đảm bảo thuê đã xác minh");
+        }
+        BigDecimal maximumDepositRefund = deposit.subtract(securityDeductions).max(BigDecimal.ZERO);
+        if (approvedRefund.compareTo(maximumDepositRefund) > 0) {
+            throw ApiExceptions.conflict("Khoản hoàn cọc không thể vượt quá tiền cọc sau khi trừ các khoản hư hỏng và công nợ đã có chứng cứ");
         }
 
         User business = userRepository.findById(actor.userId())
@@ -374,12 +384,14 @@ public class ReturnSettlementService {
         returnCase.setRentalRefundAmount(approvedRentalRefund);
         returnCase.setTotalDeductions(retained.add(rentalCharge).setScale(2, RoundingMode.HALF_UP));
         returnCase.setNetRefundAmount(approvedRefund.add(approvedRentalRefund).setScale(2, RoundingMode.HALF_UP));
-        returnCase.setAmountDueFromCustomer(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+        BigDecimal amountDue = securityDeductions.subtract(deposit).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        returnCase.setAmountDueFromCustomer(amountDue);
         boolean refundPending = approvedRefund.signum() > 0 || approvedRentalRefund.signum() > 0;
-        if (refundPending) markRefundPending(returnCase); else returnCase.setStatus(ReturnCaseStatus.completed);
+        if (amountDue.signum() > 0) returnCase.setStatus(ReturnCaseStatus.payment_due);
+        else if (refundPending) markRefundPending(returnCase); else returnCase.setStatus(ReturnCaseStatus.completed);
 
         rental.setSetupExitReviewRequired(false);
-        if (!refundPending) {
+        if (!refundPending && amountDue.signum() == 0) {
             var reconciliation = finance();
             if (reconciliation != null) {
                 reconciliation.requireCurrent(returnCase);
@@ -405,8 +417,12 @@ public class ReturnSettlementService {
             NotificationType.RETURN,
             "Business đã quyết định xử lý yêu cầu trả kho trong thời gian chuẩn bị",
             refundPending
-                ? "Khoản hoàn tiền thuê và/hoặc cọc đã được duyệt. Staff sẽ đối chiếu chứng từ thực tế trước khi hoàn tiền."
-                : "Yêu cầu đã được chốt không hoàn tiền và hệ thống đã giải phóng hồ sơ trả kho.",
+                ? (amountDue.signum() > 0
+                    ? "Phí hư hỏng vượt tiền cọc. Khách cần thanh toán khoản còn thiếu trước khi hoàn phần tiền được duyệt."
+                    : "Khoản hoàn tiền thuê và/hoặc cọc đã được duyệt. Staff sẽ đối chiếu chứng từ thực tế trước khi hoàn tiền.")
+                : (amountDue.signum() > 0
+                    ? "Phí hư hỏng vượt tiền cọc. Khách cần thanh toán khoản còn thiếu để hoàn tất trả kho."
+                    : "Yêu cầu đã được chốt không hoàn tiền và hệ thống đã giải phóng hồ sơ trả kho."),
             saved.getId()
         );
         return toResponse(saved);
@@ -541,7 +557,7 @@ public class ReturnSettlementService {
             returnCase.setSetupReturnedAt((returnCase.getRental().getActualReturnedAt() != null
                 ? returnCase.getRental().getActualReturnedAt() : returnCase.getReadyForInspectionAt() != null
                     ? returnCase.getReadyForInspectionAt() : Instant.now()).truncatedTo(java.time.temporal.ChronoUnit.MICROS));
-            if (request.damageFee().signum() > 0 || request.cleaningFee().signum() > 0 || request.lostItemFee().signum() > 0) {
+            if (calculatedDamageFee(request).signum() > 0 || request.cleaningFee().signum() > 0 || request.lostItemFee().signum() > 0) {
                 if (request.staffNotes() == null || request.staffNotes().isBlank() || request.evidencePhotos() == null || request.evidencePhotos().isEmpty())
                     throw ApiExceptions.validation("Phí phát sinh trong thời gian chuẩn bị cần ghi chú và bằng chứng kiểm kê.", null);
                 for (String photo : request.evidencePhotos()) {
@@ -558,7 +574,7 @@ public class ReturnSettlementService {
         User staff = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Staff user not found"));
 
-        BigDecimal safeDamage = safeFee(request.damageFee());
+        BigDecimal safeDamage = calculatedDamageFee(request);
         BigDecimal safeCleaning = safeFee(request.cleaningFee());
         BigDecimal safeLostItem = safeFee(request.lostItemFee());
         BigDecimal safeOverdue = safeFee(request.overdueFee());
@@ -622,7 +638,14 @@ public class ReturnSettlementService {
         returnCase.setInspectedAt(inspectionAt);
         returnCase.setInventoryMatch(request.inventoryMatch());
         returnCase.setDamageClassification(request.damageClassification());
-        returnCase.setInspectionNotes(request.staffNotes());
+        String damageBreakdown = ReturnDamagePricing.describe(request.damageItems());
+        String inspectionNotes = request.staffNotes();
+        if (!damageBreakdown.isBlank()) {
+            inspectionNotes = (inspectionNotes == null ? "" : inspectionNotes.trim());
+            inspectionNotes = (inspectionNotes.isBlank() ? "" : inspectionNotes + "\n\n")
+                + "Bảng giá hư hỏng tự động: " + damageBreakdown;
+        }
+        returnCase.setInspectionNotes(inspectionNotes);
         returnCase.setReturnedKey(request.returnedKey());
         returnCase.setReturnedCard(request.returnedCard());
         returnCase.setReturnedLock(request.returnedLock());
@@ -1422,17 +1445,26 @@ public class ReturnSettlementService {
     }
     private record Calculation(BigDecimal deductions, BigDecimal refund, BigDecimal due) {}
     private Calculation calculateSettlement(ReturnCase rc, BigDecimal deductions, BigDecimal rentalCharge, BigDecimal rentalRefund) {
-        boolean inventoryMismatchExit = rc.isSetupExitRequested() && rc.getReturnType() == ReturnType.INVENTORY_MISMATCH;
-        boolean setupRentalSettlement = rc.isSetupEarlyExit() || inventoryMismatchExit;
-        BigDecimal total = deductions.add(setupRentalSettlement ? rentalCharge : BigDecimal.ZERO);
-        // Normal returns settle only the security deposit against recorded fees.
-        // Setup early exits are a separate flow where verified prepaid rent is also refundable.
-        BigDecimal refundableFunds = zeroIfNull(rc.getDepositAmount());
-        if (setupRentalSettlement) {
-            refundableFunds = refundableFunds.add(rentalRefund);
+        BigDecimal securityDeductions = zeroIfNull(deductions).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal deposit = zeroIfNull(rc.getDepositAmount()).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal rentalCredit = zeroIfNull(rentalRefund).setScale(2, RoundingMode.HALF_UP);
+
+        // During setup the agreed 20% retained amount is already represented by
+        // rentalRefund. Damage can consume the one-month deposit only; any excess
+        // becomes an amount due instead of silently consuming the 80% refund.
+        if (rc.isSetupEarlyExit()) {
+            BigDecimal depositBalance = deposit.subtract(securityDeductions);
+            return new Calculation(securityDeductions,
+                rentalCredit.add(depositBalance.max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP),
+                depositBalance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
         }
-        BigDecimal balance = refundableFunds.subtract(total);
-        return new Calculation(total.setScale(2, RoundingMode.HALF_UP),
+
+        // Once the paid rental period has started, fees consume the deposit first,
+        // then the refund for whole unused months, and only the remaining excess
+        // is collected from the customer.
+        BigDecimal available = deposit.add(rentalCredit);
+        BigDecimal balance = available.subtract(securityDeductions);
+        return new Calculation(securityDeductions,
             balance.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
             balance.negate().max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
     }
@@ -1545,6 +1577,30 @@ public class ReturnSettlementService {
         if(fee.signum()<0)throw ApiExceptions.validation("Phí quyết toán không được âm.",null);
         try{return fee.setScale(0,RoundingMode.UNNECESSARY);}
         catch(ArithmeticException invalid){throw ApiExceptions.validation("Phí quyết toán phải là số nguyên đồng Việt Nam.",null);}
+    }
+
+    private BigDecimal calculatedDamageFee(ReturnInspectionRequest request) {
+        if (request.damageItems() == null) return safeFee(request.damageFee());
+        try {
+            BigDecimal calculated = ReturnDamagePricing.calculate(request.damageItems());
+            if (!request.damageItems().isEmpty()
+                && request.damageClassification() == com.storagehub.domain.model.DamageClassification.no_damage) {
+                throw new IllegalArgumentException("Đã chọn hạng mục hư hỏng nhưng mức độ đang là không hư hại.");
+            }
+            if (!request.damageItems().isEmpty()
+                && (request.damageClassification() == com.storagehub.domain.model.DamageClassification.minor_damage
+                    || request.damageClassification() == com.storagehub.domain.model.DamageClassification.major_damage)) {
+                String expectedCategory = request.damageClassification() == com.storagehub.domain.model.DamageClassification.major_damage ? "major" : "minor";
+                boolean wrongCategory = request.damageItems().stream().anyMatch(item -> {
+                    var price = ReturnDamagePricing.catalog().get(item.code());
+                    return price == null || !expectedCategory.equals(price.category());
+                });
+                if (wrongCategory) throw new IllegalArgumentException("Hạng mục không khớp mức độ hư hỏng đã chọn.");
+            }
+            return calculated;
+        } catch (IllegalArgumentException invalid) {
+            throw ApiExceptions.validation(invalid.getMessage(), null);
+        }
     }
 
     private BigDecimal zeroIfNull(BigDecimal value) {
