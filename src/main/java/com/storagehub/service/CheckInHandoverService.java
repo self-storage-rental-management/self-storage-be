@@ -788,12 +788,225 @@ public class CheckInHandoverService {
         return checkIn;
     }
 
+    @Transactional(readOnly = true)
+    public com.storagehub.api.checkin.InventoryDraftResponse getInventoryDraft(ActorPrincipal actor, UUID checkInId) {
+        requireCheckInReader(actor);
+        CheckIn checkIn = checkInRepository.findById(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
+        facilityScopeService.assertCanRead(actor, checkIn.getReservation().getFacility().getId());
+        return inventoryDraftResponse(checkIn);
+    }
+
+    @Transactional
+    public com.storagehub.api.checkin.InventoryDraftResponse saveInventoryDraft(ActorPrincipal actor, UUID checkInId,
+        com.storagehub.api.checkin.SaveInventoryDraftRequest input) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy đơn đặt kho."));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (checkIn.getStatus() != CheckInStatus.setup_completed
+            || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.NOT_STARTED)
+            throw ApiExceptions.conflict("Kết quả đã gửi khách hoặc hồ sơ không còn cho phép chỉnh sửa kiểm kê.");
+        if (checkIn.getInventoryArrivedAt() == null || checkIn.getInventoryIdentityVerifiedAt() == null)
+            throw ApiExceptions.conflict("Cần xác minh khách đến trước khi lưu kiểm kê.");
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê."));
+        InventoryDeadlinePolicy.requireInventoryOpen(rental, Instant.now());
+        if (input.expectedRevision() != checkIn.getInventoryDraftRevision())
+            throw ApiExceptions.conflict("Bản kiểm kê đã được người khác chỉnh sửa. Vui lòng mở lại để lấy bản mới nhất.");
+        validateEvidence(checkInId, input.request().evidenceReferences());
+        String json = writeHandover(input.request());
+        if (json.equals(checkIn.getInventoryDraftJson())) return inventoryDraftResponse(checkIn);
+        checkIn.setInventoryDraftJson(json);
+        checkIn.setInventoryDraftSavedAt(Instant.now());
+        checkIn.setInventoryDraftRevision(checkIn.getInventoryDraftRevision() + 1);
+        checkInRepository.saveAndFlush(checkIn);
+        auditLogService.recordMutation(requireActor(actor), "INVENTORY_DRAFT_SAVED", "CheckIn", checkInId,
+            reservation.getFacility().getId(), null, Map.of("revision", checkIn.getInventoryDraftRevision()));
+        return inventoryDraftResponse(checkIn);
+    }
+
+    @Transactional
+    public CheckInResponse publishInventoryDraft(ActorPrincipal actor, UUID checkInId, long expectedRevision) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
+        facilityScopeService.assertCanOperate(actor, checkIn.getReservation().getFacility().getId());
+        if (checkIn.getInventoryDraftJson() == null || checkIn.getInventoryDraftRevision() != expectedRevision)
+            throw ApiExceptions.conflict("Bản kiểm kê đã thay đổi. Vui lòng mở lại và xác nhận bản mới nhất.");
+        if (checkIn.getStatus() == CheckInStatus.completed || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.NOT_STARTED)
+            return toResponse(actor, checkIn.getReservation(), checkIn, latestAssignment(checkIn.getReservation().getId()));
+        return completeInventory(actor, checkInId, inventoryDraftResponse(checkIn).request(), true);
+    }
+
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<ReturnSettlementService> inventoryReturnServices;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.CheckInInventoryConfirmationRepository inventoryConfirmations;
+
+    @Transactional
+    public CheckInResponse resolveInventoryAtSite(ActorPrincipal actor, UUID checkInId,
+        com.storagehub.api.checkin.ResolveInventoryAtSiteRequest request) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy đơn đặt kho."));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (request == null || request.decision() == null || !Boolean.TRUE.equals(request.customerPresent())
+            || checkIn.getInventoryArrivedAt() == null || checkIn.getInventoryIdentityVerifiedAt() == null)
+            throw ApiExceptions.conflict("Cần xác nhận đã trao đổi phương án với chính chủ đang có mặt tại cơ sở.");
+        if (checkIn.getStatus() != CheckInStatus.setup_completed
+            || (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_STAFF_RESOLUTION
+                && checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER))
+            throw ApiExceptions.conflict("Hồ sơ không còn chờ xử lý sai lệch. Vui lòng cập nhật trạng thái.");
+        // The staff confirmation is bound to the inspection record version. If the record was
+        // edited after the customer looked at it, the confirmation must not silently apply.
+        if (request.resultVersion() != null && request.resultVersion() != inventoryResultVersion(checkIn))
+            throw ApiExceptions.conflict("Biên bản kiểm kê đã được điều chỉnh. Vui lòng xem lại kết quả mới nhất trước khi ghi nhận phương án.");
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê."));
+        Instant now = Instant.now();
+        var decision = request.decision();
+        if (rental.getInventoryRemovalDeadlineAt() == null || decision != com.storagehub.api.reservation.InventoryResolutionRequest.Decision.CANCEL_AND_RETURN)
+            InventoryDeadlinePolicy.requireInventoryOpen(rental, now);
+        if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL && !checkIn.isInventoryFullFit())
+            throw ApiExceptions.conflict("Không có phương án xếp toàn bộ hàng. Chọn nhận một phần hoặc trả kho.");
+        if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL && !checkIn.isInventoryPartialFitAvailable())
+            throw ApiExceptions.conflict("Không có phương án nhận một phần hàng hóa phù hợp.");
+        // The identity photo only proves the customer was present; it does not prove they agreed
+        // to the arrangement. The signed paper record photographed at the facility is the consent
+        // evidence, and it is mandatory before any acceptance is recorded.
+        if (request.evidenceReferences() == null || request.evidenceReferences().isEmpty())
+            throw ApiExceptions.validation("Cần ảnh biên bản giấy có chữ ký xác nhận của khách cho phương án này.", null);
+        validateEvidence(checkInId, request.evidenceReferences());
+        User operator = requireActor(actor);
+        var previous = checkIn.getInventoryResolutionStatus();
+        checkIn.setInventoryDecisionAt(now);
+        checkIn.setInventoryDecisionNote("Ghi nhận tại cơ sở khi chính chủ có mặt. " + (request.note() == null ? "" : request.note().trim()));
+        if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.CANCEL_AND_RETURN) {
+            if (checkIn.isInventoryFullFit()) throw ApiExceptions.conflict("Hàng vẫn vừa kho. Trả kho theo luồng trả kho thông thường.");
+            if (request.scheduledDate() == null) throw ApiExceptions.validation("Chọn ngày hẹn trả kho.", null);
+            if (rental.getInventoryRemovalPublishedAt() == null) {
+                rental.setInventoryRemovalPublishedAt(rental.getInventoryResultPublishedAt() == null ? now : rental.getInventoryResultPublishedAt());
+                rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(rental.getInventoryRemovalPublishedAt()));
+            }
+            rentalRepository.saveAndFlush(rental);
+            var returns = inventoryReturnServices == null ? null : inventoryReturnServices.getIfAvailable();
+            if (returns == null) throw ApiExceptions.conflict("Chưa thể mở hồ sơ trả kho.");
+            returns.createInventoryReturnAtSite(actor, rental.getId(), new com.storagehub.api.returns.CustomerCreateReturnRequest(
+                request.scheduledDate(), checkIn.getInventoryDecisionNote(), com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH));
+            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.RETURN_REQUESTED);
+        } else if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL) {
+            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.PARTIAL_ACCEPTED);
+            checkIn.setInventoryAcceptedQuantitiesJson(checkIn.getInventorySuggestedQuantitiesJson());
+            rental.setInventoryRemovalDeadlineAt(null);
+            rental.setInventoryRemainderDeadlineAt(InventoryTimelinePolicy.dayStart(now, 4));
+            rentalRepository.saveAndFlush(rental);
+        } else {
+            UnitAssignment assignment = latestAssignment(reservation.getId());
+            if (assignment == null || assignment.getStatus() != UnitAssignmentStatus.ACTIVE)
+                throw ApiExceptions.conflict("Phân kho không còn hiệu lực.");
+            checkIn.setStatus(CheckInStatus.completed);
+            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.ACCEPTED);
+            checkIn.setInventoryAcceptedQuantitiesJson(checkIn.getInventoryActualJson());
+            checkIn.setInventoryVerifiedAt(now);
+            rental.setInventoryVerifiedAt(now); rental.setInventoryPending(false);
+            reservation.setStatus(ReservationStatus.COMPLETED);
+            assignment.setStatus(UnitAssignmentStatus.COMPLETED);
+            assignment.getStorageUnit().setStatus(StorageUnitStatus.occupied);
+            completeInventoryTask(rental, now, "Đã tiếp nhận toàn bộ hàng, ghi nhận phương án trực tiếp tại cơ sở.");
+            rentalRepository.saveAndFlush(rental); reservationRepository.saveAndFlush(reservation);
+            storageUnitRepository.saveAndFlush(assignment.getStorageUnit()); assignmentRepository.saveAndFlush(assignment);
+        }
+        checkIn.setPerformedBy(operator);
+        // The verified customer is present, so no online confirmation or 48-hour wait applies.
+        // Record who confirmed, when, the evidence and the exact record version approved.
+        recordAtSiteConfirmation(checkIn, operator, now, request.evidenceReferences());
+        checkInRepository.saveAndFlush(checkIn);
+        auditLogService.recordMutation(operator, "INVENTORY_RESOLVED_AT_SITE", "CheckIn", checkInId,
+            reservation.getFacility().getId(), Map.of("status", previous),
+            Map.of("decision", decision, "customerPresent", true,
+                "inventoryResultVersion", inventoryResultVersion(checkIn)));
+        notificationService.createNotification(reservation.getCustomer().getId(), NotificationType.CHECKIN,
+            "Đã ghi nhận phương án kiểm kê tại cơ sở", "Nhân viên đã lưu phương án xử lý hàng hóa được trao đổi trực tiếp tại cơ sở.", reservation.getId());
+        return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
+    }
+
+    /** Reads the inspection-record version, defaulting to 0 for records created before versioning. */
+    private long inventoryResultVersion(CheckIn checkIn) {
+        var confirmation = inventoryConfirmation(checkIn);
+        return confirmation == null ? 0L : confirmation.getResultVersion();
+    }
+
+    private com.storagehub.domain.model.CheckInInventoryConfirmation inventoryConfirmation(CheckIn checkIn) {
+        if (checkIn == null || checkIn.getId() == null || inventoryConfirmations == null) return null;
+        return inventoryConfirmations.findById(checkIn.getId()).orElse(null);
+    }
+
+    private void recordAtSiteConfirmation(CheckIn checkIn, User operator, Instant now,
+        java.util.List<String> evidenceReferences) {
+        if (inventoryConfirmations == null) return;
+        var confirmation = inventoryConfirmations.findById(checkIn.getId())
+            .orElseGet(() -> {
+                var created = new com.storagehub.domain.model.CheckInInventoryConfirmation();
+                created.setCheckInId(checkIn.getId());
+                return created;
+            });
+        confirmation.setConfirmedBy(operator.getId());
+        confirmation.setConfirmedByName(operator.getFullName());
+        confirmation.setConfirmedAt(now);
+        if (evidenceReferences != null && !evidenceReferences.isEmpty()) {
+            confirmation.setEvidenceJson(writeEvidenceReferences(evidenceReferences));
+        }
+        inventoryConfirmations.saveAndFlush(confirmation);
+    }
+
+    /** Publishing a new result invalidates any earlier at-site confirmation by moving the version. */
+    private void bumpInventoryResultVersion(CheckIn checkIn) {
+        if (inventoryConfirmations == null || checkIn.getId() == null) return;
+        var confirmation = inventoryConfirmations.findById(checkIn.getId())
+            .orElseGet(() -> {
+                var created = new com.storagehub.domain.model.CheckInInventoryConfirmation();
+                created.setCheckInId(checkIn.getId());
+                return created;
+            });
+        confirmation.setResultVersion(confirmation.getResultVersion() + 1);
+        inventoryConfirmations.saveAndFlush(confirmation);
+    }
+
+    private String writeEvidenceReferences(java.util.List<String> references) {
+        try { return objectMapper.writeValueAsString(references); }
+        catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Could not serialize at-site evidence references", exception);
+        }
+    }
+
+    private com.storagehub.api.checkin.InventoryDraftResponse inventoryDraftResponse(CheckIn checkIn) {
+        CompleteCheckInRequest request = null;
+        if (checkIn.getInventoryDraftJson() != null) {
+            try { request = objectMapper.readValue(checkIn.getInventoryDraftJson(), CompleteCheckInRequest.class); }
+            catch (JsonProcessingException ex) { throw ApiExceptions.conflict("Không đọc được bản kiểm kê đã lưu."); }
+        }
+        return new com.storagehub.api.checkin.InventoryDraftResponse(request, checkIn.getInventoryDraftRevision(), checkIn.getInventoryDraftSavedAt());
+    }
+
     @Transactional
     public CheckInResponse complete(
         ActorPrincipal actor,
         UUID checkInId,
         CompleteCheckInRequest request
     ) {
+        return completeInventory(actor, checkInId, request, false);
+    }
+
+    private CheckInResponse completeInventory(ActorPrincipal actor, UUID checkInId, CompleteCheckInRequest request, boolean atSite) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
         CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
@@ -809,7 +1022,8 @@ public class CheckInHandoverService {
         if (checkIn.getStatus() != CheckInStatus.setup_completed) {
             throw ApiExceptions.conflict("Khách hàng phải báo đã chuẩn bị hàng xong trước khi kiểm kê hàng hóa");
         }
-        if (checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_CUSTOMER
+        if (checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_STAFF_RESOLUTION
+            || checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_CUSTOMER
             || checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PARTIAL_ACCEPTED
             || checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.RETURN_REQUESTED) {
             throw ApiExceptions.conflict("Kết quả kiểm kê đã được công bố và đang chờ xử lý.");
@@ -916,6 +1130,9 @@ public class CheckInHandoverService {
             : null);
         checkIn.setInventorySuggestedQuantitiesJson(writeSuggestedQuantities(fit.suggestedQuantities()));
         checkIn.setChecklistJson(writeHandover(request));
+        // Publishing a result creates a new version of the inspection record. An at-site
+        // confirmation is bound to this version so a later edit cannot silently inherit it.
+        bumpInventoryResultVersion(checkIn);
         if (inventoryMismatch || rental.getSetupCompletionDeadlineAt() != null || rental.getInventoryAppointmentAt() != null) {
             rental.setInventoryResultPublishedAt(now);
             String removalNotice = "";
@@ -931,22 +1148,22 @@ public class CheckInHandoverService {
                         .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")) + ".";
             }
             checkIn.setPerformedBy(operator);
-            checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_CUSTOMER);
+            checkIn.setInventoryResolutionStatus(atSite ? InventoryResolutionStatus.PENDING_STAFF_RESOLUTION : InventoryResolutionStatus.PENDING_CUSTOMER);
             checkIn.setInventoryDecisionAt(null);
             checkIn.setInventoryDecisionNote(null);
             CheckIn saved = checkInRepository.saveAndFlush(checkIn);
             rentalRepository.saveAndFlush(rental);
             notificationService.createNotification(
                 reservation.getCustomer().getId(), NotificationType.CHECKIN,
-                "Cần bạn xác nhận kết quả kiểm kê",
-                "Hàng hóa thực tế của đơn " + reservation.getReservationCode()
+                atSite ? "Đã lưu kết quả kiểm kê tại cơ sở" : "Cần bạn xác nhận kết quả kiểm kê",
+                atSite ? "Nhân viên đang trao đổi và ghi nhận phương án xử lý hàng hóa trực tiếp tại cơ sở." : "Hàng hóa thực tế của đơn " + reservation.getReservationCode()
                     + " có điểm khác với khai báo. Vui lòng chọn phương án nhận hàng phù hợp hoặc yêu cầu trả kho.",
                 reservation.getId()
             );
             notificationService.createFacilityOperationsNotifications(
                 reservation.getFacility().getId(), NotificationType.CHECKIN,
-                "Kiểm kê có sai lệch, chờ khách xác nhận",
-                "Đơn " + reservation.getReservationCode()
+                atSite ? "Kiểm kê chờ xử lý tại cơ sở" : "Kiểm kê có sai lệch, chờ khách xác nhận",
+                atSite ? "Nhân viên ghi nhận phương án xử lý trực tiếp tại cơ sở." : "Đơn " + reservation.getReservationCode()
                     + " đã ghi nhận sai lệch hàng hóa. Hệ thống đã tính phương án xếp và đang chờ khách chọn hướng xử lý.",
                 reservation.getId()
             );
@@ -1667,6 +1884,11 @@ public class CheckInHandoverService {
             checkIn == null ? null : checkIn.getInventoryActualJson(),
             checkIn == null ? null : checkIn.getInventoryMismatchJson(),
             checkIn == null ? null : checkIn.getInventorySuggestedQuantitiesJson(),
+            checkIn == null ? 0L : inventoryResultVersion(checkIn),
+            checkIn == null || inventoryConfirmation(checkIn) == null ? null : inventoryConfirmation(checkIn).getConfirmedBy(),
+            atSiteConfirmerName(checkIn),
+            checkIn == null || inventoryConfirmation(checkIn) == null ? null : inventoryConfirmation(checkIn).getConfirmedAt(),
+            checkIn != null && checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_CUSTOMER,
             receiptConfirmationDueAt,
             receiptConfirmationOverdue,
             receiptConfirmationReleaseAt,
@@ -1679,8 +1901,12 @@ public class CheckInHandoverService {
         );
     }
 
-    private Instant checkInDeadline(Reservation reservation) {
-        if (reservation.getCreatedAt() == null) return null;
+    private String atSiteConfirmerName(CheckIn checkIn) {
+        var confirmation = inventoryConfirmation(checkIn);
+        return confirmation == null ? null : confirmation.getConfirmedByName();
+    }
+
+    private Instant checkInDeadline(Reservation reservation) {        if (reservation.getCreatedAt() == null) return null;
         return ReservationCheckInPolicy.plannedWindow(
             reservation.getCreatedAt(), reservation.getGoodsReviewStatus() != GoodsReviewStatus.NOT_REQUIRED
         ).deadlineAt();
@@ -2000,12 +2226,37 @@ public class CheckInHandoverService {
         item.setDescription(original.getDescription() == null ? "Hàng hóa kiểm kê thực tế" : original.getDescription());
         item.setCustomerNote(original.getCustomerNote());
         item.setQuantity(line.actualQuantity());
+        // Actual measurements take priority. Declared values are only a fallback when the
+        // operator truly did not record any actual size, so that a fit is never decided
+        // from the customer declaration while an actual size exists.
         var measurements = line.measurements();
-        item.setLengthCm(measurements == null ? original.getLengthCm() : measurements.lengthCm());
-        item.setWidthCm(measurements == null ? original.getWidthCm() : measurements.widthCm());
-        item.setHeightCm(measurements == null ? original.getHeightCm() : measurements.heightCm());
-        BigDecimal totalWeight = measurements == null ? original.getWeightKg()
-            : measurements.weightKg();
+        GoodsItemRequest actualGoods = item;
+        boolean hasActualGoodsSize = line.actualGoods() != null
+            && actualGoods.getLengthCm() != null && actualGoods.getWidthCm() != null
+            && actualGoods.getHeightCm() != null;
+        if (measurements != null) {
+            item.setLengthCm(measurements.lengthCm());
+            item.setWidthCm(measurements.widthCm());
+            item.setHeightCm(measurements.heightCm());
+        } else if (hasActualGoodsSize) {
+            item.setLengthCm(actualGoods.getLengthCm());
+            item.setWidthCm(actualGoods.getWidthCm());
+            item.setHeightCm(actualGoods.getHeightCm());
+        } else {
+            item.setLengthCm(original.getLengthCm());
+            item.setWidthCm(original.getWidthCm());
+            item.setHeightCm(original.getHeightCm());
+        }
+        BigDecimal totalWeight;
+        if (measurements != null) {
+            totalWeight = measurements.weightKg();
+        } else if (hasActualGoodsSize && actualGoods.getWeightPerItemKg() != null
+            && actualGoods.getWeightPerItemKg().signum() > 0 && line.actualQuantity() != null) {
+            totalWeight = actualGoods.getWeightPerItemKg()
+                .multiply(BigDecimal.valueOf(line.actualQuantity()));
+        } else {
+            totalWeight = original.getWeightKg();
+        }
         item.setWeightPerItemKg(line.actualQuantity() == null || line.actualQuantity() <= 0
             ? totalWeight : totalWeight.divide(BigDecimal.valueOf(line.actualQuantity()), 6, java.math.RoundingMode.HALF_UP));
         return item;

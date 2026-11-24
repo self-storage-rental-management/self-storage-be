@@ -123,6 +123,30 @@ public class RentalSetupLifecycleService {
         rental.setInventoryDeadlineReminderAt(now);
     }
 
+    /**
+     * Closes the "customer did not arrive for inventory" recovery task once the case has
+     * moved to the mismatch-return branch. The two clocks must not run at the same time:
+     * the return window owns the case from this point on.
+     */
+    @Transactional
+    public int supersedeInventoryAttendanceTasks(Rental rental, String reason) {
+        if (maintenanceTaskRepository == null || rental == null || rental.getId() == null) return 0;
+        int closed = 0;
+        for (MaintenanceTask task : maintenanceTaskRepository.findByRental_IdAndTaskTypeAndStatusIn(
+            rental.getId(),
+            MaintenanceTaskType.maintenance,
+            java.util.List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress))) {
+            if (task.getRecoveryType() != MaintenanceRecoveryType.INVENTORY_OVERDUE) continue;
+            task.setStatus(MaintenanceTaskStatus.cancelled);
+            task.setResultReport((task.getResultReport() == null ? "" : task.getResultReport() + " | ")
+                + "Đã dừng theo dõi quá hạn kiểm kê: " + reason);
+            maintenanceTaskRepository.save(task);
+            closed++;
+        }
+        if (closed > 0) maintenanceTaskRepository.flush();
+        return closed;
+    }
+
     private void escalateInventory(Rental rental, Instant now, boolean removalOverdue) {
         String title = removalOverdue ? "Đã hết hạn đưa hàng sai lệch ra khỏi kho" : "Đã quá hạn kiểm kê hàng hóa";
         createInventoryRecoveryTask(rental, now, title);

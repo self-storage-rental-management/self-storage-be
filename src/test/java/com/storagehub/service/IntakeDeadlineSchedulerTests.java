@@ -46,4 +46,43 @@ class IntakeDeadlineSchedulerTests {
         assertThat(capture.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.EXCESS_ITEMS);
         assertThat(r.getInventoryEscalatedAt()).isNull();assertThat(r.getStatus()).isEqualTo(RentalStatus.active);
     }
+    @Test void alreadyEmptyUnitNeverGetsAnotherGoodsMovementTask() {
+        // The unit was handed back empty but finance is still open. "Unit empty" and
+        // "settlement finished" are separate states, so no new recovery task may be created.
+        var r=rental();
+        r.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(1));
+        r.setActualReturnedAt(Instant.now().minusSeconds(86400));
+        r.setStatus(RentalStatus.return_requested);
+        scheduler.process();
+        verify(tasks,never()).saveAndFlush(any());
+    }
+    @Test void emptyUnitBeforeRemovalDeadlineAlsoCreatesNoTask() {
+        var r=rental();
+        r.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(3600));
+        r.setActualReturnedAt(Instant.now());
+        r.setStatus(RentalStatus.return_requested);
+        scheduler.process();
+        verify(tasks,never()).saveAndFlush(any());
+    }
+    @Test void atSiteResolutionDoesNotStartTheFourtyEightHourClock() {
+        // The verified customer is present and the arrangement was recorded at the facility.
+        // No online confirmation and therefore no 48-hour reminder may be started.
+        var r=rental();
+        r.setInventoryResultPublishedAt(Instant.now().minusSeconds(5*86400));
+        var c=new CheckIn();
+        c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
+        scheduler.process();
+        verify(notifications,never()).createNotificationOnce(any(),any(),eq("Đã quá hạn xác nhận kiểm kê"),any(),any());
+        verify(notifications,never()).createNotificationOnce(any(),any(),eq("Nhắc xác nhận kết quả kiểm kê"),any(),any());
+    }
+    @Test void onlineConfirmationStillGetsTheFourtyEightHourEscalation() {
+        var r=rental();
+        r.setInventoryResultPublishedAt(Instant.now().minusSeconds(5*86400));
+        var c=new CheckIn();
+        c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_CUSTOMER);
+        when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
+        scheduler.process();
+        verify(notifications).createNotificationOnce(any(),any(),eq("Đã quá hạn xác nhận kiểm kê"),any(),any());
+    }
 }

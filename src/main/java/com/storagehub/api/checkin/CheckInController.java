@@ -65,6 +65,29 @@ public class CheckInController {
         );
     }
 
+    @GetMapping("/{checkInId}/inventory-draft")
+    public ApiResponse<InventoryDraftResponse> inventoryDraft(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.getInventoryDraft(actorContext.required(), checkInId), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/inventory-draft")
+    public ApiResponse<InventoryDraftResponse> saveInventoryDraft(@PathVariable UUID checkInId,
+        @Valid @RequestBody SaveInventoryDraftRequest request) {
+        return new ApiResponse<>(service.saveInventoryDraft(actorContext.required(), checkInId, request), CorrelationIdContext.current());
+    }
+
+    @PostMapping({"/{checkInId}/inventory-draft/publish", "/{checkInId}/inventory-draft/resolve"})
+    public ApiResponse<CheckInResponse> publishInventoryDraft(@PathVariable UUID checkInId,
+        @Valid @RequestBody PublishInventoryDraftRequest request) {
+        return new ApiResponse<>(service.publishInventoryDraft(actorContext.required(), checkInId, request.expectedRevision()), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/inventory-resolution-at-site")
+    public ApiResponse<CheckInResponse> resolveInventoryAtSite(@PathVariable UUID checkInId,
+        @Valid @RequestBody ResolveInventoryAtSiteRequest request) {
+        return new ApiResponse<>(service.resolveInventoryAtSite(actorContext.required(), checkInId, request), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{checkInId}/complete")
     public ApiResponse<CheckInResponse> complete(
         @PathVariable UUID checkInId,
