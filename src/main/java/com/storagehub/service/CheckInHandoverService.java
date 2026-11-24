@@ -990,8 +990,9 @@ public class CheckInHandoverService {
             "Gian kho " + unit.getCode() + " của đơn " + reservation.getReservationCode()
                 + " đã được nhân viên kiểm kê sau khi bạn báo chuẩn bị hàng xong."
                 + (rental.getStatus() == RentalStatus.setup
-                    ? " Mở Hồ sơ thuê để xác nhận bắt đầu kỳ thuê ngay. Nếu chưa xác nhận sớm, kỳ thuê tính tiền từ "
-                        + rental.getStartDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) + " theo lịch."
+                    ? " Kỳ thuê vẫn bắt đầu theo lịch từ "
+                        + rental.getStartDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                        + " sau thời gian chuẩn bị miễn phí; hoàn tất sớm không làm đổi mốc này."
                     : ""),
             reservation.getId()
         );

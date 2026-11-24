@@ -935,8 +935,9 @@ public class CustomerReservationService {
             notificationService.createNotification(
                 saved.getCustomer().getId(), NotificationType.CHECKIN,
                 "Đã xác nhận nhận kho",
-                "Thời gian chuẩn bị miễn phí bắt đầu từ hôm nay, đến hết "
-                    + paidRentalStart.minusDays(1) + ". Kỳ thuê tính tiền từ " + paidRentalStart + ".",
+                "Thời gian chuẩn bị miễn phí theo lịch kết thúc ngày "
+                    + paidRentalStart.minusDays(1) + ". Kỳ thuê tính tiền bắt đầu từ " + paidRentalStart
+                    + "; việc hoàn tất chuẩn bị sớm không làm đổi mốc này.",
                 saved.getId()
             );
             notificationService.createFacilityOperationsNotifications(
@@ -1071,22 +1072,7 @@ public class CustomerReservationService {
     }
 
     private RentalStartConfirmation rentalStartOffer(Reservation reservation, Rental rental, Instant now) {
-        requireReceiptRentalStatus(rental);
-        if (rental.getStatus() == RentalStatus.active) {
-            throw ApiExceptions.conflict("Kỳ thuê của hồ sơ này đã bắt đầu.");
-        }
-        if (!RentalSetupLifecycleService.customerCanStartAfterInventory(rental, now)) {
-            throw ApiExceptions.conflict("Chỉ xác nhận bắt đầu sớm sau khi khách báo chuẩn bị xong và nhân viên hoàn tất kiểm kê, trong thời gian miễn phí.");
-        }
-        CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId())
-            .filter(item -> item.getStatus() == CheckInStatus.completed)
-            .orElseThrow(() -> ApiExceptions.conflict("Chưa có biên bản kiểm kê hoàn tất."));
-        ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
-            .orElseThrow(() -> ApiExceptions.conflict("Thiếu báo giá đã chấp nhận của hồ sơ thuê."));
-        requireReceiptTimeline(reservation, checkIn, rental, snapshot);
-        var start = now.atZone(BusinessTime.ZONE).toLocalDate();
-        return new RentalStartConfirmation(rental.getStartDate(), start,
-            start.plusMonths(snapshot.getRentalMonths()).minusDays(1), snapshot.getRentalMonths());
+        throw ApiExceptions.conflict("Kỳ thuê bắt đầu theo lịch sau thời gian chuẩn bị miễn phí; không hỗ trợ bắt đầu sớm.");
     }
 
     private void ensureSignedContract(Reservation reservation, Rental rental) {
@@ -1144,10 +1130,11 @@ public class CustomerReservationService {
             ||rental.getStartDate()==null||rental.getContractEndDate()==null||rental.getInventoryVerifiedAt()==null
             ||checkIn.getContractSignedAt()==null||checkIn.getPaymentCollectedAt()==null||checkIn.getInventoryVerifiedAt()==null)
             throw ApiExceptions.conflict(missing);
-        int setupDays=ReservationSnapshotView.requireSetupDays(reservation,snapshot);
+        int setupDays = ReservationSnapshotView.requireSetupDays(reservation,snapshot);
         try {
             var now=Instant.now();var zone=com.storagehub.time.BusinessTime.ZONE;
-            var paidStart=rental.getSetupStartedAt().atZone(zone).toLocalDate().plusDays(setupDays);
+            var paidStart=reservation.getStartDate();
+            if (paidStart == null) throw new IllegalArgumentException("missing reservation paid start");
             if(!rental.getSetupStartedAt().equals(checkIn.getSetupStartedAt())
                 ||!rental.getSetupStartedAt().equals(rental.getTermsEffectiveAt())
                 ||!rental.getSetupEndsAt().equals(checkIn.getSetupDueAt())

@@ -56,8 +56,13 @@ public record ReturnInspectionRequest(
 
     boolean customerPresent,
 
-    UUID recoveryWitnessStaffId
+    UUID recoveryWitnessStaffId,
+
+    /** Hạng mục hư hỏng lấy từ bảng giá chuẩn; damageFee không còn là nguồn nhập tự do. */
+    List<DamageItem> damageItems
 ) {
+    public record DamageItem(String code, BigDecimal quantity) {}
+
     @JsonCreator
     public ReturnInspectionRequest(
         @JsonProperty("inventoryMatch") InventoryMatch inventoryMatch,
@@ -76,12 +81,13 @@ public record ReturnInspectionRequest(
         @JsonProperty("unitVacated") boolean unitVacated,
         @JsonProperty("recoveryHandoverLocation") String recoveryHandoverLocation,
         @JsonProperty("customerPresent") Boolean customerPresent,
-        @JsonProperty("recoveryWitnessStaffId") UUID recoveryWitnessStaffId
+        @JsonProperty("recoveryWitnessStaffId") UUID recoveryWitnessStaffId,
+        @JsonProperty("damageItems") List<DamageItem> damageItems
     ) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock,
             proposedUnitStatus, unitVacated, recoveryHandoverLocation,
-            customerPresent == null || customerPresent, recoveryWitnessStaffId);
+            customerPresent == null || customerPresent, recoveryWitnessStaffId, damageItems);
     }
 
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
@@ -90,16 +96,17 @@ public record ReturnInspectionRequest(
         boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus,
-            false, null, true, null);
+            false, null, true, null, null);
     }
 
+    /** Backward-compatible constructor used by existing tests and recovery flows. */
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
         BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
         BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
         boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus, boolean unitVacated) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus,
-            unitVacated, null, true, null);
+            unitVacated, null, true, null, null);
     }
 
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
@@ -109,6 +116,16 @@ public record ReturnInspectionRequest(
         String recoveryHandoverLocation, boolean customerPresent) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock,
-            proposedUnitStatus, unitVacated, recoveryHandoverLocation, customerPresent, null);
+            proposedUnitStatus, unitVacated, recoveryHandoverLocation, customerPresent, null, null);
+    }
+
+    public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
+        BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
+        BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
+        boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus, boolean unitVacated,
+        String recoveryHandoverLocation, boolean customerPresent, UUID recoveryWitnessStaffId) {
+        this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock,
+            proposedUnitStatus, unitVacated, recoveryHandoverLocation, customerPresent, recoveryWitnessStaffId, null);
     }
 }
