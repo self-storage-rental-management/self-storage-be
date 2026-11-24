@@ -29,6 +29,7 @@ public class ReservationDetailResponse {
     private List<CustomerPaymentReceiptResponse> payments;
     private String checkInStatus;
     private Instant handoverCompletedAt;
+    private String lockReference;
     private Instant receiptConfirmationDueAt;
     private boolean receiptConfirmationOverdue;
     private Instant receiptConfirmationReleaseAt;
@@ -107,6 +108,8 @@ public class ReservationDetailResponse {
     public void setCheckInStatus(String checkInStatus) { this.checkInStatus = checkInStatus; }
     public Instant getHandoverCompletedAt() { return handoverCompletedAt; }
     public void setHandoverCompletedAt(Instant value) { handoverCompletedAt = value; }
+    public String getLockReference() { return lockReference; }
+    public void setLockReference(String value) { lockReference = value; }
     public Instant getReceiptConfirmationDueAt() { return receiptConfirmationDueAt; }
     public void setReceiptConfirmationDueAt(Instant value) { receiptConfirmationDueAt = value; }
     public boolean isReceiptConfirmationOverdue() { return receiptConfirmationOverdue; }
