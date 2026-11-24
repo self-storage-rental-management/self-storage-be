@@ -109,8 +109,8 @@ public final class EarlyTerminationPolicy {
     }
 
     /**
-     * Inventory-mismatch returns use calendar dates agreed in the return request.
-     * Both the receipt date and the scheduled return date count as used days;
+     * Inventory-mismatch returns use calendar dates recorded in the workflow.
+     * Both the customer's move-in confirmation date and the return date count as used days;
      * the same calendar date therefore counts as one day.
      */
     public static int calendarUsageDays(LocalDate startDate, LocalDate endDate) {

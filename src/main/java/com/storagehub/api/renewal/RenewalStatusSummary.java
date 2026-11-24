@@ -30,7 +30,13 @@ public record RenewalStatusSummary(
     public record Transaction(UUID paymentId, String reference, String purpose,
         @io.swagger.v3.oas.annotations.media.Schema(implementation=com.storagehub.api.StatusContract.PaymentTransactionStatus.class) String status,
         BigDecimal amount, BigDecimal refundedAmount, String currency, Instant paymentDeadline,
-        boolean deadlineExpired, boolean receiptAvailable, Instant paidAt) {
+        boolean deadlineExpired, boolean receiptAvailable, Instant paidAt, String receiptCode) {
+        public Transaction(UUID paymentId, String reference, String purpose, String status, BigDecimal amount,
+            BigDecimal refundedAmount, String currency, Instant paymentDeadline, boolean deadlineExpired,
+            boolean receiptAvailable, Instant paidAt) {
+            this(paymentId, reference, purpose, status, amount, refundedAmount, currency, paymentDeadline,
+                deadlineExpired, receiptAvailable, paidAt, null);
+        }
         public Transaction {
             com.storagehub.api.StatusContract.PaymentTransactionStatus.valueOf(status);
         }

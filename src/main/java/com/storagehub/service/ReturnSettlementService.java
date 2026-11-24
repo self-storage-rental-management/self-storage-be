@@ -1988,6 +1988,12 @@ public class ReturnSettlementService {
         LocalDate setupStart = setupStartInstant.atZone(BusinessTime.ZONE).toLocalDate();
         boolean goodsMovedIn = rental.getMoveInCompletedAt() != null || rental.getInventoryVerifiedAt() != null;
         if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
+            // For a mismatch return, rental use starts only when the customer
+            // explicitly confirms that goods have been moved into the unit.
+            // Physical handover/setup may happen earlier and is not billable use.
+            Instant moveInCompletedAt = rental.getMoveInCompletedAt();
+            if (moveInCompletedAt == null) return null;
+            LocalDate usageStart = moveInCompletedAt.atZone(BusinessTime.ZONE).toLocalDate();
             Instant actual = returnCase.getSetupReturnedAt() != null ? returnCase.getSetupReturnedAt()
                 : returnCase.getInspectedAt();
             LocalDate endDate = actual == null ? returnCase.getScheduledDate()
@@ -1996,7 +2002,7 @@ public class ReturnSettlementService {
                 LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
                 if (endDate.isAfter(last)) endDate = last;
             }
-            int usedDays = EarlyTerminationPolicy.calendarUsageDays(setupStart, endDate);
+            int usedDays = EarlyTerminationPolicy.calendarUsageDays(usageStart, endDate);
             if (usedDays <= 0) return null;
             return EarlyTerminationPolicy.inventoryMismatchExit(
                 snapshot.getNetRentalAmount(), snapshot.getMonthlyPrice(), usedDays, goodsMovedIn
