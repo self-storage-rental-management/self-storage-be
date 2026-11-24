@@ -157,6 +157,8 @@ class ReportingServiceTests {
         assertThat(summary.occupancyRate()).isEqualTo(50.0);
         assertThat(summary.monthlyRecurringRevenue()).isEqualByComparingTo("1500000");
         assertThat(summary.collectedRevenue()).isEqualByComparingTo("1500000");
+        assertThat(summary.grossRevenue()).isEqualByComparingTo("1500000");
+        assertThat(summary.totalRefunds()).isEqualByComparingTo("0");
         assertThat(summary.monthCheckinsCount()).isEqualTo(5);
         assertThat(summary.openReturnsCount()).isEqualTo(1);
         assertThat(summary.openMaintenanceTasksCount()).isEqualTo(2);
