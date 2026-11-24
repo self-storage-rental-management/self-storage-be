@@ -487,7 +487,7 @@ public class AuthService {
             String oldIdentity = previous == null ? null : com.storagehub.validation.CccdPolicy.normalize(previous.getIdentityDocumentNumber());
             String newIdentity = com.storagehub.validation.CccdPolicy.normalize(request.profileDetails().getIdentityDocumentNumber());
             if (verifiedAt != null && !java.util.Objects.equals(oldIdentity, newIdentity))
-                throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff để chỉnh sửa.");
+                throw ApiExceptions.conflict("CCCD đã được nhân viên đối chiếu. Vui lòng liên hệ cơ sở để chỉnh sửa.");
             request.profileDetails().setIdentityVerifiedAt(verifiedAt);
             user.setProfileDetails(request.profileDetails());
             CustomerIdentityPolicy.assign(user, newIdentity, userRepository);

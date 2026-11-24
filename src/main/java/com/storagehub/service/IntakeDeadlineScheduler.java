@@ -47,11 +47,21 @@ public class IntakeDeadlineScheduler {
                         notify(r, "Nhắc đưa phần hàng dư ra", "Vui lòng đưa phần hàng không được tiếp nhận ra đúng hạn và phối hợp Staff xác nhận.");
                 }
             }
-            // Once the unit has actually been handed back empty, no further goods-movement task
-            // may be created: only the finance step remains. "Unit empty" and "settlement done"
-            // are two separate states, so the case is still tracked while finance is open.
-            if (r.getInventoryRemovalDeadlineAt() != null && !now.isBefore(r.getInventoryRemovalDeadlineAt())
+            // Customer never arrived for the inventory visit: escalate once the final
+            // deadline passes, as long as nothing else already owns the case.
+            if (r.getMoveInCompletedAt() != null && r.isInventoryPending()
+                && r.getInventoryArrivedAt() == null && r.getInventoryResultPublishedAt() == null
+                && r.getInventoryRemovalPublishedAt() == null && r.getInventoryEscalatedAt() == null
+                && r.getInventoryFinalDeadlineAt() != null && !now.isBefore(r.getInventoryFinalDeadlineAt())
+                && List.of(RentalStatus.setup, RentalStatus.active).contains(r.getStatus())) {
+                recovery(r, now, "Quá hạn đến kiểm kê", false);
+            }
+            // Once the unit has actually been handed back empty, no further goods-movement
+            // task may be created: only the finance step remains. "Unit empty" and
+            // "settlement finished" are two separate states.
+            if (r.getInventoryRemovalDeadlineAt() != null && r.getInventoryEscalatedAt() == null
                 && r.getActualReturnedAt() == null
+                && !now.isBefore(r.getInventoryRemovalDeadlineAt())
                 && r.getStatus() != RentalStatus.return_inspection && r.getStatus() != RentalStatus.closing)
                 recovery(r, now, "Quá hạn trả hàng do kiểm kê sai lệch", false);
         }
@@ -113,7 +123,8 @@ public class IntakeDeadlineScheduler {
         t.setRental(r); t.setFacility(r.getFacility()); t.setStorageUnit(r.getStorageUnit());
         t.setTitle(title); t.setReason(reason + (partial ? ". Chỉ xử lý phần hàng dư, không kết thúc toàn bộ hợp đồng." : ". Không tự di chuyển hàng hoặc ghi nhận kho trống."));
         t.setRecoveryType(partial ? MaintenanceRecoveryType.EXCESS_ITEMS : r.getMoveInCompletedAt() == null
-            ? MaintenanceRecoveryType.SETUP_OVERDUE : MaintenanceRecoveryType.MISMATCH_REMOVAL);
+            ? MaintenanceRecoveryType.SETUP_OVERDUE : r.getInventoryRemovalPublishedAt() == null
+                ? MaintenanceRecoveryType.INVENTORY_OVERDUE : MaintenanceRecoveryType.MISMATCH_REMOVAL);
         t.setTaskType(taskType); t.setStatus(MaintenanceTaskStatus.open); t.setPriority(TaskPriority.high);
         t.setDeadlineAt(now.plus(24, ChronoUnit.HOURS)); t.setDueAt(now.atZone(InventoryTimelinePolicy.ZONE).toLocalDate());
         tasks.saveAndFlush(t);

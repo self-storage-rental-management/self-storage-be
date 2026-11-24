@@ -65,7 +65,7 @@ public class RentalSetupLifecycleService {
         for (Rental rental : rentalRepository.findByStatusAndSetupEndsAtIsNotNull(RentalStatus.setup)) {
             LocalDate paidStart = rental.getSetupEndsAt().atZone(VIETNAM_ZONE).toLocalDate();
             long daysUntilPaidStart = ChronoUnit.DAYS.between(today, paidStart);
-            if (daysUntilPaidStart <= 2 && daysUntilPaidStart > 0
+            if (daysUntilPaidStart == 2
                 && rental.getSetupReminderTwoDaysAt() == null) {
                 notifyCustomer(rental,
                     daysUntilPaidStart == 2 ? "Còn 2 ngày chuẩn bị miễn phí" : "Nhắc thời gian chuẩn bị sắp kết thúc",
@@ -80,7 +80,7 @@ public class RentalSetupLifecycleService {
                     timeline(rental) + " Kỳ thuê sẽ tự động bắt đầu theo lịch đã chốt.");
                 rental.setSetupReminderLastDayAt(now);
             }
-            if (!rental.getSetupEndsAt().isAfter(now)) {
+            if (rental.getStartDate() != null && !rental.getStartDate().isAfter(today)) {
                 rental.setStatus(RentalStatus.active);
             }
             rentalRepository.save(rental);

@@ -221,7 +221,7 @@ public class ReservationCreationService {
         String bookingIdentity = clean(request.getIdentityDocumentNumber()) == null ? profileIdentity
             : com.storagehub.validation.CccdPolicy.normalize(request.getIdentityDocumentNumber());
         if (profile != null && profile.getIdentityVerifiedAt() != null && !java.util.Objects.equals(profileIdentity, bookingIdentity))
-            throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+            throw ApiExceptions.conflict("CCCD đã được nhân viên đối chiếu. Vui lòng liên hệ cơ sở nếu cần chỉnh sửa.");
         reservation.setIdentityDocumentNumber(bookingIdentity);
         reservation.setCustomerPhone(clean(request.getCustomerPhone()) != null
             ? clean(request.getCustomerPhone()) : clean(quote.getCustomer().getPhone()));
@@ -309,7 +309,7 @@ public class ReservationCreationService {
                 : com.storagehub.validation.CccdPolicy.normalize(profile.getIdentityDocumentNumber());
             if (profile != null && profile.getIdentityVerifiedAt() != null
                 && !java.util.Objects.equals(currentIdentity, normalizedIdentity)) {
-                throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+                throw ApiExceptions.conflict("CCCD đã được nhân viên đối chiếu. Vui lòng liên hệ cơ sở nếu cần chỉnh sửa.");
             }
             if (bookingUsers != null) {
                 CustomerIdentityPolicy.assign(customer, normalizedIdentity, bookingUsers);

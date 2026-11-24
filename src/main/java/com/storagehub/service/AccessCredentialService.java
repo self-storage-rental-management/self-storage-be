@@ -282,11 +282,21 @@ public class AccessCredentialService {
         }
         if (current.getType() == AccessCredentialType.LOCK) {
             validateLockReference(reference);
-            lockFacilityForCredentialAssignment(rental.getFacility().getId());
-            if (credentialRepository.existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
-                rental.getFacility().getId(), AccessCredentialStatus.ACTIVE, reference, current.getId())) {
-                throw ApiExceptions.conflict("Mã ổ khóa đang được sử dụng tại cơ sở này");
+        }
+        String secret = clean(request.secret());
+        if (current.getType() == AccessCredentialType.PIN) {
+            if (secret == null) throw ApiExceptions.validation("Vui lòng nhập mã PIN mới", null);
+            if (reference.contains(secret) || reason.contains(secret)
+                || (request.note() != null && request.note().contains(secret))) {
+                throw ApiExceptions.validation("Không ghi mã PIN vào mã tham chiếu, lý do hoặc ghi chú", null);
             }
+        } else if (secret != null) {
+            throw ApiExceptions.validation("Chỉ quyền truy cập PIN được nhập mã bí mật", null);
+        }
+        lockFacilityForCredentialAssignment(rental.getFacility().getId());
+        if (credentialRepository.existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
+            rental.getFacility().getId(), AccessCredentialStatus.ACTIVE, reference, current.getId())) {
+            throw ApiExceptions.conflict("Mã tham chiếu đang được sử dụng tại cơ sở này");
         }
 
         User staff = requireActor(actor);
