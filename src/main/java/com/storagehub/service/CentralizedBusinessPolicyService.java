@@ -157,7 +157,7 @@ public class CentralizedBusinessPolicyService {
         if (request.earlyTerminationMinFee() != null) draft.setEarlyTerminationMinFee(request.earlyTerminationMinFee());
 
         // Rule 6: Late Payment
-        if (request.gracePeriodDays() != null) draft.setGracePeriodDays(request.gracePeriodDays());
+        draft.setGracePeriodDays(0);
         if (request.latePenaltyCalculationMethod() != null) draft.setLatePenaltyCalculationMethod(request.latePenaltyCalculationMethod().trim());
         if (request.lateFeeAmount() != null) draft.setLateFeeAmount(request.lateFeeAmount());
         if (request.lateFeePercentageRate() != null) draft.setLateFeePercentageRate(request.lateFeePercentageRate());
@@ -373,11 +373,11 @@ public class CentralizedBusinessPolicyService {
         }
 
         // 2. Late penalty calculation
-        int grace = policy.getGracePeriodDays();
+        int grace = 0;
         int chargeableOverdue = Math.max(0, overdueDays - grace);
         BigDecimal penalty;
         String penaltyFormula;
-        String penaltyMethod = policy.getLatePenaltyCalculationMethod();
+        String penaltyMethod = "PERCENTAGE_DAILY_RATE";
 
         if (chargeableOverdue == 0) {
             penalty = BigDecimal.ZERO;
@@ -387,10 +387,10 @@ public class CentralizedBusinessPolicyService {
         } else {
             if ("PERCENTAGE_DAILY_RATE".equalsIgnoreCase(penaltyMethod)) {
                 BigDecimal dailyRent = monthlyRent.divide(BigDecimal.valueOf(30), 2, RoundingMode.HALF_UP);
-                BigDecimal dailyRate = policy.getLateFeePercentageRate() != null ? policy.getLateFeePercentageRate() : new BigDecimal("0.0050");
-                BigDecimal dailyFee = dailyRent.multiply(dailyRate).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal dailyRate = BigDecimal.ONE;
+                BigDecimal dailyFee = dailyRent.multiply(dailyRate).multiply(new BigDecimal("1.5")).setScale(2, RoundingMode.HALF_UP);
                 penalty = dailyFee.multiply(BigDecimal.valueOf(chargeableOverdue)).setScale(2, RoundingMode.HALF_UP);
-                penaltyFormula = String.format("%d ngày tính phạt (sau ân hạn %d ngày) × (%s%% × %s đ/ngày) = %s",
+                penaltyFormula = String.format("%d ngày tính phạt (ân hạn %d ngày) × (%s%% × %s đ/ngày × 1,5) = %s",
                     chargeableOverdue, grace, dailyRate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString(), formatVndProse(dailyRent), formatVndProse(penalty));
             } else { // FIXED_DAILY_AMOUNT
                 BigDecimal dailyRate = policy.getLateFeeAmount() != null ? policy.getLateFeeAmount() : new BigDecimal("50000.00");
@@ -440,14 +440,14 @@ public class CentralizedBusinessPolicyService {
 
     public BigDecimal calculateLatePenalty(BigDecimal monthlyRent, int overdueDays) {
         CentralizedPolicy policy = getActiveEntity();
-        if (overdueDays <= policy.getGracePeriodDays() || monthlyRent == null || monthlyRent.signum() <= 0) {
+        if (overdueDays <= 0 || monthlyRent == null || monthlyRent.signum() <= 0) {
             return BigDecimal.ZERO;
         }
-        int chargeableDays = overdueDays - policy.getGracePeriodDays();
-        if ("PERCENTAGE_DAILY_RATE".equalsIgnoreCase(policy.getLatePenaltyCalculationMethod())) {
+        int chargeableDays = overdueDays;
+        if (true) {
             BigDecimal dailyRent = monthlyRent.divide(BigDecimal.valueOf(30), 2, RoundingMode.HALF_UP);
-            BigDecimal rate = policy.getLateFeePercentageRate() != null ? policy.getLateFeePercentageRate() : new BigDecimal("0.0050");
-            return dailyRent.multiply(rate).multiply(BigDecimal.valueOf(chargeableDays)).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal rate = BigDecimal.ONE;
+            return dailyRent.multiply(rate).multiply(new BigDecimal("1.5")).multiply(BigDecimal.valueOf(chargeableDays)).setScale(2, RoundingMode.HALF_UP);
         } else {
             BigDecimal dailyFee = policy.getLateFeeAmount() != null ? policy.getLateFeeAmount() : new BigDecimal("50000.00");
             return dailyFee.multiply(BigDecimal.valueOf(chargeableDays)).setScale(2, RoundingMode.HALF_UP);
@@ -455,7 +455,7 @@ public class CentralizedBusinessPolicyService {
     }
 
     private void syncSystemSettings(CentralizedPolicy policy) {
-        saveSetting("gracePeriod", String.valueOf(policy.getGracePeriodDays()));
+        saveSetting("gracePeriod", "0");
         saveSetting("lateFeeAmount", policy.getLateFeeAmount().toPlainString());
         saveSetting("defaultDepositRatio", policy.getDepositPercentageRate().toPlainString());
     }
@@ -476,7 +476,7 @@ public class CentralizedBusinessPolicyService {
 
     private void addDiff(List<PolicyDiffItem> diffs, String category, String key, String label, String oldVal, String newVal) {
         boolean changed = !Objects.equals(oldVal, newVal);
-        diffs.add(new PolicyDiffItem(category, key, label, oldVal != null ? oldVal : "—", newVal != null ? newVal : "—", changed));
+        diffs.add(new PolicyDiffItem(category, key, label, oldVal != null ? oldVal : "-", newVal != null ? newVal : "-", changed));
     }
 
     private String formatVndProse(BigDecimal amount) {
@@ -563,10 +563,10 @@ public class CentralizedBusinessPolicyService {
         p.setEarlyTerminationFeeCapMonths(1);
         p.setEarlyTerminationMinFee(new BigDecimal("500000.00"));
 
-        p.setGracePeriodDays(3);
-        p.setLatePenaltyCalculationMethod("FIXED_DAILY_AMOUNT");
+        p.setGracePeriodDays(0);
+        p.setLatePenaltyCalculationMethod("PERCENTAGE_DAILY_RATE");
         p.setLateFeeAmount(new BigDecimal("50000.00"));
-        p.setLateFeePercentageRate(new BigDecimal("0.0050"));
+        p.setLateFeePercentageRate(BigDecimal.ONE);
         p.setMaxOverdueGraceDaysBeforeRepossession(7);
 
         p.setDeductionCategories("[{\"code\":\"UNPAID_RENT\",\"name\":\"Tiền thuê kho quá hạn chưa thanh toán\",\"description\":\"Tiền thuê tính theo số ngày thực tế sử dụng chưa tất toán\"},{\"code\":\"UNPAID_SERVICES\",\"name\":\"Phí dịch vụ phụ trợ\",\"description\":\"Các dịch vụ phát sinh như bốc xếp, lưu pallet, hỗ trợ kỹ thuật\"},{\"code\":\"UNPAID_UTILITIES\",\"name\":\"Chi phí tiện ích phát sinh\",\"description\":\"Điện nước hoặc phụ phí môi trường theo hợp đồng\"},{\"code\":\"CUSTOMER_DAMAGE\",\"name\":\"Chi phí bồi thường hư hại cơ sở vật chất\",\"description\":\"Hư hỏng vách ngăn, cửa cuốn, đèn, sàn kho do lỗi khách hàng (loại trừ hao mòn tự nhiên)\"},{\"code\":\"LOST_KEYS_LOCKS\",\"name\":\"Phí thay khóa / cấp lại thẻ từ\",\"description\":\"Thẻ từ ra vào hoặc chìa khóa kho bị mất hoặc hư hỏng nặng\"}]");

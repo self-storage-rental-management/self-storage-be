@@ -31,6 +31,7 @@ class VnpayProvenanceCallbackTests {
         mock(AdminAuthorizationService.class), audit, notifications, new ObjectMapper());
     <T extends BaseEntity> T id(T entity) { ReflectionTestUtils.setField(entity, "id", UUID.randomUUID()); return entity; }
     Payment fixture() {
+        ReflectionTestUtils.setField(service, "receiptCodes", org.mockito.Mockito.mock(MoneyReceiptCodes.class));
         config.setEnabled(true); config.setTmnCode("TEST_MERCHANT"); config.setHashSecret("test-only-signature-secret");
         var p = id(new Payment()); var r = id(new Reservation());
         r.setCustomer(id(new User())); r.setFacility(id(new Facility())); r.setStatus(ReservationStatus.AWAITING_PAYMENT);
@@ -90,6 +91,48 @@ class VnpayProvenanceCallbackTests {
     void noProof() {
         verify(audit, never()).recordMutation(isNull(), eq(PaymentProvenance.CALLBACK_ACTION), eq("Payment"),
             any(), any(), isNull(), any());
+    }
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"deposit", "closed", "late", "renewal", "late-renewal"})
+    void failedReceiptCanBeReplayedAfterRollback(String scenario) throws Exception {
+        var payment = fixture();
+        var reservation = payment.getReservation();
+        if (scenario.equals("closed")) reservation.setStatus(ReservationStatus.EXPIRED);
+        if (scenario.contains("renewal")) {
+            var rental = id(new Rental());
+            rental.setFacility(reservation.getFacility());
+            rental.setCustomer(reservation.getCustomer());
+            var renewal = id(new Renewal());
+            renewal.setRental(rental);
+            payment.setRenewal(renewal);
+            payment.setPurpose(PaymentType.RENEWAL);
+            payment.setPaymentDeadline(reservation.getPaymentExpiresAt());
+            payment.setReservation(null);
+        }
+        var receipts = mock(MoneyReceiptCodes.class);
+        ReflectionTestUtils.setField(service, "receiptCodes", receipts);
+        when(receipts.issue("PAYMENT", payment.getId(), false))
+            .thenThrow(scenario.equals("closed") ? new IllegalStateException("receipt collisions")
+                : new org.springframework.dao.DataAccessResourceFailureException("receipt storage unavailable"))
+            .thenReturn("PT-1234-5678-ABCD");
+        var signed = callback(scenario.contains("late") ? Map.of("vnp_PayDate", "20261011100000") : Map.of());
+        assertThatThrownBy(() -> service.processCallback(signed))
+            .isInstanceOf(VnpayService.ReceiptProcessingException.class);
+        // The second transaction reloads the persisted row after the first rolled back.
+        payment.setStatus(PaymentStatus.PENDING);
+        when(payments.findByIdForUpdate(payment.getId())).thenReturn(Optional.of(payment));
+        var deferred = service.deferReceipt(payment.getId());
+        assertThat(deferred.requiresReconciliation()).isTrue();
+        assertThat(deferred.renewalId()).isEqualTo(payment.getRenewal() == null ? null : payment.getRenewal().getId());
+        assertThat(deferred.reservationId()).isEqualTo(payment.getReservation() == null ? null : reservation.getId());
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
+        service.processCallback(signed);
+        var replay = service.processCallback(signed);
+        assertThat(replay.requiresReconciliation()).isEqualTo(!scenario.equals("deposit"));
+        assertThat(service.deferReceipt(payment.getId()).requiresReconciliation()).isEqualTo(replay.requiresReconciliation());
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
+        assertThat(payment.getReceiptCode()).isEqualTo("PT-1234-5678-ABCD");
+        verify(receipts, times(2)).issue("PAYMENT", payment.getId(), false);
     }
     @ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})

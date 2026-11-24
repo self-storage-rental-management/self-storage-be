@@ -26,7 +26,14 @@ public class RenewalPaymentReceiptController {
     public record Receipt(UUID paymentId,UUID renewalId,String transactionReference,String gatewayTransactionNo,
         BigDecimal amount,String currency,String paymentStatus,String paymentMethod,String gatewayPayDate,
         Instant paidAt,Instant processedAt,String initiatedByName,String kind,String environment,
-        String invoiceNumber, InvoiceStatus invoiceStatus, Instant invoiceIssuedAt) {}
+        String invoiceNumber, InvoiceStatus invoiceStatus, Instant invoiceIssuedAt, String receiptCode) {
+    public Receipt(UUID paymentId,UUID renewalId,String transactionReference,String gatewayTransactionNo,
+        BigDecimal amount,String currency,String paymentStatus,String paymentMethod,String gatewayPayDate,
+        Instant paidAt,Instant processedAt,String initiatedByName,String kind,String environment,
+        String invoiceNumber, InvoiceStatus invoiceStatus, Instant invoiceIssuedAt) {
+        this(paymentId, renewalId, transactionReference, gatewayTransactionNo, amount, currency, paymentStatus, paymentMethod, gatewayPayDate, paidAt, processedAt, initiatedByName, kind, environment, invoiceNumber, invoiceStatus, invoiceIssuedAt, null);
+    }
+}
     @GetMapping("/api/{role:customer|manager|staff}/renewals/{id}/payments/{paymentId}/receipt")
     @Transactional(readOnly=true)
     public ApiResponse<Receipt> read(@PathVariable String role,@PathVariable UUID id,@PathVariable UUID paymentId) {
@@ -52,6 +59,6 @@ public class RenewalPaymentReceiptController {
         return new ApiResponse<>(new Receipt(payment.getId(),id,payment.getGatewayIntentId(),payment.getGatewayTransactionNo(),
             payment.getAmount(),payment.getCurrency(),payment.getStatus().name(),payment.getGatewayBankCode(),payment.getGatewayPayDate(),
             payment.getPaidAt(),payment.getProcessedAt(),payment.getInitiatedBy().getFullName(),kind,environment,
-            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt()),CorrelationIdContext.current());
+            payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(), payment.getReceiptCode()),CorrelationIdContext.current());
     }
 }

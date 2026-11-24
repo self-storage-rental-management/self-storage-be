@@ -57,6 +57,7 @@ class PaymentComplaintServiceTests {
             authorizationService, facilityScopeService, notificationService,
             auditLogService
         );
+        ReflectionTestUtils.setField(service, "receiptCodes", org.mockito.Mockito.mock(MoneyReceiptCodes.class));
         customer = entity(new User());
         manager = entity(new User());
         Facility facility = entity(new Facility());

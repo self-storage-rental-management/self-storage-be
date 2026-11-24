@@ -75,6 +75,17 @@ class EarlyTerminationPolicyTests {
     }
 
     @Test
+    void inventoryMismatchReturnWaivesEarlyTerminationFeeButKeepsUsedSetupCharge() {
+        var result = EarlyTerminationPolicy.inventoryMismatchExit(
+            new BigDecimal("11400000"), new BigDecimal("1000000"), 10, true
+        );
+
+        assertThat(result.earlyTerminationFee()).isZero();
+        assertThat(result.usedGoodsCharge()).isEqualByComparingTo("333333");
+        assertThat(result.totalRentalCharge()).isEqualByComparingTo("333333");
+    }
+
+    @Test
     void inventoryMismatchReturnUsesCalendarDaysWithoutFixedFee() {
         var oneDay = EarlyTerminationPolicy.inventoryMismatchExit(
             new BigDecimal("12000000"), new BigDecimal("3000000"), 1, true
@@ -119,7 +130,7 @@ class EarlyTerminationPolicyTests {
         assertThat(result.pricingTierMonths()).isNull();
         assertThat(result.chargeableSetupDays()).isZero();
         assertThat(result.dailyPrice()).isEqualByComparingTo("31667");
-        assertThat(result.earlyTerminationFee()).isEqualByComparingTo("0");
+        assertThat(result.earlyTerminationFee()).isZero();
         assertThat(result.totalRentalCharge()).isEqualByComparingTo("2850000");
         assertThat(result.rentalRefundAmount()).isEqualByComparingTo("8550000");
     }
@@ -162,7 +173,7 @@ class EarlyTerminationPolicyTests {
         );
 
         assertThat(withShortNotice.noticeShortfallDays()).isZero();
-        assertThat(withShortNotice.noticeCharge()).isEqualByComparingTo("0");
+        assertThat(withShortNotice.noticeCharge()).isZero();
         assertThat(withShortNotice.totalRentalCharge())
             .isEqualByComparingTo(withFullNotice.totalRentalCharge());
         assertThat(EarlyTerminationPolicy.daysCharge(new BigDecimal("970000"), 8))
@@ -181,7 +192,7 @@ class EarlyTerminationPolicyTests {
 
         assertThat(result.completedRentalMonths()).isEqualTo(11);
         assertThat(result.noticeShortfallDays()).isZero();
-        assertThat(result.noticeCharge()).isEqualByComparingTo("0");
+        assertThat(result.noticeCharge()).isZero();
         assertThat(result.totalRentalCharge()).isEqualByComparingTo("12000000");
         assertThat(result.rentalRefundAmount()).isEqualByComparingTo("0");
     }

@@ -1,6 +1,10 @@
 package com.storagehub.api.checkin;
+
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.storagehub.api.reservation.InventoryResolutionRequest;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
@@ -13,20 +17,21 @@ import java.util.List;
  */
 public record ResolveInventoryAtSiteRequest(
     @NotNull InventoryResolutionRequest.Decision decision,
-    @NotNull Boolean customerPresent,
+    @AssertTrue(message = "Cần xác nhận khách hàng đang có mặt tại cơ sở.") boolean customerPresent,
     @Size(max = 2000) String note,
-    LocalDate scheduledDate,
+    @JsonFormat(pattern = "yyyy-MM-dd") LocalDate scheduledDate,
+    @NotEmpty(message = "Cần tải ít nhất một ảnh biên bản có chữ ký khách.")
     @Size(max = 20) List<@NotBlank @Size(max = 500) String> evidenceReferences,
     Long resultVersion
 ) {
     public ResolveInventoryAtSiteRequest(InventoryResolutionRequest.Decision decision,
         Boolean customerPresent, String note, LocalDate scheduledDate) {
-        this(decision, customerPresent, note, scheduledDate, null, null);
+        this(decision, Boolean.TRUE.equals(customerPresent), note, scheduledDate, null, null);
     }
 
     public ResolveInventoryAtSiteRequest(InventoryResolutionRequest.Decision decision,
         Boolean customerPresent, String note, LocalDate scheduledDate,
         List<String> evidenceReferences) {
-        this(decision, customerPresent, note, scheduledDate, evidenceReferences, null);
+        this(decision, Boolean.TRUE.equals(customerPresent), note, scheduledDate, evidenceReferences, null);
     }
 }

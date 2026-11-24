@@ -22,25 +22,29 @@ public class RentalHandoverFileReader {
     public record Document(UUID id,String name,String contentType,long sizeBytes,Instant uploadedAt,String kind) {}
     public List<Document> read(ActorPrincipal actor,UUID rentalId,boolean manager) {
         var rental=rentals.detail(actor,rentalId,manager); // Reuse ownership and facility scope checks.
-        var checkIns=em.createQuery("select c from CheckIn c where (c.rental.id=:rental or (c.rental is null and c.reservation.id=:reservation)) and c.status=:status order by c.checkedInAt desc,c.id desc",CheckIn.class)
+        var checkIns=em.createQuery("select c from CheckIn c where (c.rental.id=:rental or (c.rental is null and c.reservation.id=:reservation)) and (c.status=:status or (c.contractSignedAt is not null and c.contractEvidenceReference is not null)) order by c.checkedInAt desc,c.id desc",CheckIn.class)
             .setParameter("rental",rentalId).setParameter("reservation",rental.reservationId()).setParameter("status",CheckInStatus.completed).getResultList();
         var result=new LinkedHashMap<UUID,Document>();
         for(var checkIn:checkIns) {
-            final CompleteCheckInRequest handover;
-            try { handover=mapper.readValue(checkIn.getChecklistJson(),CompleteCheckInRequest.class); }
-            catch(Exception invalid){throw ApiExceptions.conflict("Completed handover document references require reconciliation");}
-            var referencedFiles=new HashSet<UUID>();
-            if(handover.evidenceReferences()!=null) {
-                for(String reference:handover.evidenceReferences()) {
-                    final UUID id;
-                    try{id=UUID.fromString(reference);}catch(Exception invalid){throw ApiExceptions.conflict("Invalid handover file reference");}
-                    referencedFiles.add(id);
+            boolean completed = checkIn.getStatus() == CheckInStatus.completed;
+            var referencedFiles = new HashSet<UUID>();
+            if (completed) {
+                final CompleteCheckInRequest handover;
+                try { handover=mapper.readValue(checkIn.getChecklistJson(),CompleteCheckInRequest.class); }
+                catch(Exception invalid){throw ApiExceptions.conflict("Completed handover document references require reconciliation");}
+                if(handover.evidenceReferences()!=null) {
+                    for(String reference:handover.evidenceReferences()) {
+                        final UUID id;
+                        try{id=UUID.fromString(reference);}catch(Exception invalid){throw ApiExceptions.conflict("Invalid handover file reference");}
+                        referencedFiles.add(id);
+                    }
                 }
             }
             var assets=em.createQuery("select f from FileAsset f where f.entityType=:type and f.entityId=:checkIn and f.status=:status order by f.createdAt asc",FileAsset.class)
                 .setParameter("type","CHECK_IN").setParameter("checkIn",checkIn.getId()).setParameter("status",FileAssetStatus.ACTIVE).getResultList();
             for(var file:assets) {
-                boolean signedContract=isSignedContract(file);
+                boolean signedContract = file.getId().toString().equalsIgnoreCase(checkIn.getContractEvidenceReference())
+                    || (completed && checkIn.getContractEvidenceReference() == null && isSignedContract(file));
                 if(!signedContract&&!referencedFiles.contains(file.getId()))continue;
                 String kind=signedContract?"SIGNED_CONTRACT":"HANDOVER_EVIDENCE";
                 result.putIfAbsent(file.getId(),new Document(file.getId(),file.getOriginalName(),file.getContentType(),file.getSizeBytes(),file.getCreatedAt(),kind));

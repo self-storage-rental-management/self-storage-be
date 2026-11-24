@@ -79,10 +79,6 @@ class BusinessPolicyServiceTests {
 
     @Test
     void getBusinessConfig_success() {
-        SystemSetting graceSetting = new SystemSetting();
-        graceSetting.setValue("5");
-        when(systemSettingRepository.findBySettingKey("gracePeriod")).thenReturn(Optional.of(graceSetting));
-
         SystemSetting lateFeeSetting = new SystemSetting();
         lateFeeSetting.setValue("500000");
         when(systemSettingRepository.findBySettingKey("lateFeeAmount")).thenReturn(Optional.of(lateFeeSetting));
@@ -90,7 +86,7 @@ class BusinessPolicyServiceTests {
         BusinessConfigResponse config = service.getBusinessConfig(businessActor);
 
         assertThat(config).isNotNull();
-        assertThat(config.gracePeriodDays()).isEqualTo(5);
+        assertThat(config.gracePeriodDays()).isZero();
         assertThat(config.lateFeeAmount()).isEqualByComparingTo("500000");
         verify(authorizationService).require(businessActor, SystemPermission.VIEW_POLICIES);
     }
