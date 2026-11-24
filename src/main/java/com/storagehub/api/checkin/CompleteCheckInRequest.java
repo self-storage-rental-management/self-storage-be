@@ -52,7 +52,7 @@ public record CompleteCheckInRequest(
         @Valid InventoryMeasurements measurements,
         UUID actualCategoryId,
         UUID actualMaterialId,
-        @Valid com.storagehub.api.reservation.GoodsItemRequest actualGoods
+        @Valid @jakarta.validation.groups.ConvertGroup(to = com.storagehub.api.reservation.GoodsItemRequest.InventoryChecks.class) com.storagehub.api.reservation.GoodsItemRequest actualGoods
     ) {
         public enum Condition { INTACT, DAMAGED, NOT_PRESENT }
         public InventoryLine {
