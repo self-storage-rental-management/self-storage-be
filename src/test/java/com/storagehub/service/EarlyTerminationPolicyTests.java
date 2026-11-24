@@ -28,35 +28,34 @@ class EarlyTerminationPolicyTests {
     }
 
     @Test
-    void setupWithoutGoodsChargesOnlyTheEarlyTerminationFee() {
+    void setupWithoutGoodsRetainsTwentyPercent() {
         var result = EarlyTerminationPolicy.setupExit(
             new BigDecimal("11400000"), new BigDecimal("2280000"), new BigDecimal("1000000"),
             12, 15, 2, false, BigDecimal.ONE, 1
         );
 
         assertThat(result.type()).isEqualTo(EarlyTerminationPolicy.SetupExitType.NO_GOODS_MOVED_IN);
-        assertThat(result.totalRentalCharge()).isEqualByComparingTo("950000");
-        assertThat(result.rentalRefundAmount()).isEqualByComparingTo("10450000");
+        assertThat(result.totalRentalCharge()).isEqualByComparingTo("2280000");
+        assertThat(result.rentalRefundAmount()).isEqualByComparingTo("9120000");
     }
 
     @Test
-    void setupWithGoodsChargesUsedSetupDaysAtTheSnapshottedListPrice() {
+    void setupWithGoodsRetainsTheSameTwentyPercent() {
         var result = EarlyTerminationPolicy.setupExit(
             new BigDecimal("11400000"), new BigDecimal("2280000"), new BigDecimal("1000000"),
             12, 15, 10, true, BigDecimal.ONE, 1
         );
 
-        assertThat(result.earlyTerminationFee()).isEqualByComparingTo("950000");
-        assertThat(result.usedGoodsCharge()).isEqualByComparingTo("333333");
-        assertThat(result.totalRentalCharge()).isEqualByComparingTo("1283333");
-        assertThat(result.rentalRefundAmount()).isEqualByComparingTo("10116667");
+        assertThat(result.earlyTerminationFee()).isEqualByComparingTo("2280000");
+        assertThat(result.usedGoodsCharge()).isEqualByComparingTo("0");
+        assertThat(result.totalRentalCharge()).isEqualByComparingTo("2280000");
+        assertThat(result.rentalRefundAmount()).isEqualByComparingTo("9120000");
     }
 
     @Test
     void inventoryMismatchReturnWaivesEarlyTerminationFeeButKeepsUsedSetupCharge() {
-        var result = EarlyTerminationPolicy.setupExit(
-            new BigDecimal("11400000"), new BigDecimal("2280000"), new BigDecimal("1000000"),
-            12, 15, 10, true, BigDecimal.ONE, 1, true
+        var result = EarlyTerminationPolicy.inventoryMismatchExit(
+            new BigDecimal("11400000"), new BigDecimal("1000000"), 10, true
         );
 
         assertThat(result.earlyTerminationFee()).isZero();
@@ -90,7 +89,7 @@ class EarlyTerminationPolicyTests {
     }
 
     @Test
-    void activeReturnBeforeThreeMonthsUsesListPriceAndEarlyTerminationFee() {
+    void activeReturnChargesEachStartedMonthAtContractPrice() {
         var result = EarlyTerminationPolicy.activeReturn(
             LocalDate.of(2026, 1, 16), LocalDate.of(2026, 3, 16), LocalDate.of(2026, 1, 1),
             12, 15, new BigDecimal("1000000"), new BigDecimal("11400000"),
@@ -103,14 +102,14 @@ class EarlyTerminationPolicyTests {
 
         assertThat(result.recalculationRequired()).isTrue();
         assertThat(result.completedRentalMonths()).isEqualTo(2);
-        assertThat(result.pricingTierMonths()).isZero();
-        assertThat(result.earlyTerminationFee()).isEqualByComparingTo("950000");
-        assertThat(result.totalRentalCharge()).isEqualByComparingTo("3450000");
-        assertThat(result.rentalRefundAmount()).isEqualByComparingTo("7950000");
+        assertThat(result.pricingTierMonths()).isNull();
+        assertThat(result.earlyTerminationFee()).isZero();
+        assertThat(result.totalRentalCharge()).isEqualByComparingTo("2850000");
+        assertThat(result.rentalRefundAmount()).isEqualByComparingTo("8550000");
     }
 
     @Test
-    void activeReturnUsesTheCompletedTierAndCapsFreeSetupDays() {
+    void activeReturnIgnoresHistoricPricingTiersAndSetupDays() {
         var result = EarlyTerminationPolicy.activeReturn(
             LocalDate.of(2026, 1, 16), LocalDate.of(2026, 8, 16), LocalDate.of(2026, 1, 1),
             12, 15, new BigDecimal("1000000"), new BigDecimal("11400000"),
@@ -122,15 +121,15 @@ class EarlyTerminationPolicyTests {
         );
 
         assertThat(result.completedRentalMonths()).isEqualTo(7);
-        assertThat(result.pricingTierMonths()).isEqualTo(6);
+        assertThat(result.pricingTierMonths()).isNull();
         assertThat(result.earlyTerminationFee()).isZero();
-        assertThat(result.chargeableSetupDays()).isEqualTo(8);
+        assertThat(result.chargeableSetupDays()).isZero();
         assertThat(result.noticeShortfallDays()).isEqualTo(0);
         assertThat(result.totalRentalCharge()).isLessThan(new BigDecimal("11400000"));
     }
 
     @Test
-    void activeReturnAddsOnlyTheMissingNoticeDaysToTheSnapshotCharge() {
+    void shortNoticeAddsNoChargeToStartedMonthBilling() {
         var result = EarlyTerminationPolicy.activeReturn(
             LocalDate.of(2026, 1, 16), LocalDate.of(2026, 3, 16), LocalDate.of(2026, 1, 1),
             12, 15, new BigDecimal("1000000"), new BigDecimal("11400000"),
@@ -140,23 +139,24 @@ class EarlyTerminationPolicyTests {
             )
         );
 
-        assertThat(result.noticeShortfallDays()).isEqualTo(4);
-        assertThat(result.noticeCharge()).isEqualByComparingTo("133333");
+        assertThat(result.noticeShortfallDays()).isZero();
+        assertThat(result.noticeCharge()).isZero();
 
         assertThat(EarlyTerminationPolicy.daysCharge(new BigDecimal("970000"), 8))
             .isEqualByComparingTo("258667");
     }
 
     @Test
-    void activeReturnCapsNoticeShortfallAtTheRemainingContractDays() {
+    void lastMonthReturnChargesTheFullTermWithoutNoticeFee() {
         var result = EarlyTerminationPolicy.activeReturn(
             LocalDate.of(2026, 1, 16), LocalDate.of(2027, 1, 12), LocalDate.of(2026, 1, 16),
             12, 15, new BigDecimal("1000000"), new BigDecimal("12000000"),
             new BigDecimal("2400000"), BigDecimal.ONE, 1, 14, 0, List.of()
         );
 
-        assertThat(result.noticeShortfallDays()).isEqualTo(3);
-        assertThat(result.noticeCharge()).isEqualByComparingTo("100000");
+        assertThat(result.noticeShortfallDays()).isZero();
+        assertThat(result.noticeCharge()).isZero();
+        assertThat(result.totalRentalCharge()).isEqualByComparingTo("12000000");
     }
 
     @Test

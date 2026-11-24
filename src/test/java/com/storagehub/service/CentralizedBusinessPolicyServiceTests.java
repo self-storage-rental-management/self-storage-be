@@ -147,7 +147,7 @@ class CentralizedBusinessPolicyServiceTests {
     }
 
     @Test
-    @DisplayName("RULE 6: Late payment penalty respects grace period and calculates correct fee")
+    @DisplayName("RULE 6: Late payment penalty charges 150% of daily rent from the first overdue day")
     void testLatePenaltyCalculation() {
         CentralizedPolicy p = samplePolicy("POL-2026.1", PublicationStatus.PUBLISHED, true);
         p.setGracePeriodDays(3);
@@ -157,13 +157,13 @@ class CentralizedBusinessPolicyServiceTests {
 
         BigDecimal monthlyRent = new BigDecimal("3000000.00");
 
-        // Within grace period (2 days <= 3 days) -> 0 fee
-        BigDecimal feeWithinGrace = service.calculateLatePenalty(monthlyRent, 2);
-        assertThat(feeWithinGrace).isEqualByComparingTo("0.00");
+        // Daily penalty is 3,000,000 / 30 x 1.5.
+        BigDecimal twoDayFee = service.calculateLatePenalty(monthlyRent, 2);
+        assertThat(twoDayFee).isEqualByComparingTo("300000.00");
 
-        // Overdue by 5 days (5 - 3 = 2 chargeable days) -> 2 * 50,000 = 100,000
+        // All five overdue days accrue.
         BigDecimal feeOverdue = service.calculateLatePenalty(monthlyRent, 5);
-        assertThat(feeOverdue).isEqualByComparingTo("100000.00");
+        assertThat(feeOverdue).isEqualByComparingTo("750000.00");
     }
 
     @Test
@@ -241,9 +241,9 @@ class CentralizedBusinessPolicyServiceTests {
         assertThat(res.calculatedDepositAmount()).isEqualByComparingTo("3500000.00");
         assertThat(res.depositFormulaDescription()).contains("1 tháng tiền thuê");
 
-        // 7 overdue days - 3 grace days = 4 chargeable days * 50,000 = 200,000
-        assertThat(res.chargeableOverdueDays()).isEqualTo(4);
-        assertThat(res.calculatedPenaltyAmount()).isEqualByComparingTo("200000.00");
-        assertThat(res.penaltyFormulaDescription()).contains("4 ngày tính phạt");
+        // Round daily rent to cents before applying the multiplier.
+        assertThat(res.chargeableOverdueDays()).isEqualTo(7);
+        assertThat(res.calculatedPenaltyAmount()).isEqualByComparingTo("1225000.07");
+        assertThat(res.penaltyFormulaDescription()).contains("7 ngày tính phạt");
     }
 }
