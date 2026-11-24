@@ -1092,9 +1092,6 @@ public class CheckInHandoverService {
         if (rental.getSetupEndsAt() == null) {
             throw ApiExceptions.conflict("Thiếu mốc thời gian chuẩn bị của hồ sơ thuê");
         }
-        if ((rental.getSetupCompletionDeadlineAt() != null || rental.getInventoryAppointmentAt() != null)
-            && (rental.getInventoryArrivedAt() == null || rental.getInventoryIdentityVerifiedAt() == null))
-            throw ApiExceptions.conflict("Vui lòng ghi nhận khách đến và xác minh chính chủ bằng ảnh trước khi kiểm kê.");
         if (rental.getStatus() == RentalStatus.setup && rental.getStartDate() != null
             && !rental.getStartDate().isAfter(now.atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate())) {
             rental.setStatus(RentalStatus.active);

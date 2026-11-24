@@ -168,6 +168,21 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     );
 
     @Query("""
+        select r from Reservation r
+        where r.goodsReviewStatus <> com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED
+          and (r.goodsReviewStatus <> com.storagehub.domain.model.GoodsReviewStatus.PENDING
+            or r.status <> com.storagehub.domain.model.ReservationStatus.AWAITING_REVIEW)
+          and (:facilityId is null or r.facility.id = :facilityId)
+          and (:scoped = false or r.facility.id in :facilityIds)
+        """)
+    Page<Reservation> findCompletedGoodsReviews(
+        @Param("facilityId") UUID facilityId,
+        @Param("scoped") boolean scoped,
+        @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    );
+
+    @Query("""
         select reservation from Reservation reservation
         left join reservation.assignedUnit assignedUnit
         where reservation.status in :activeStatuses
