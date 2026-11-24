@@ -84,8 +84,22 @@ public class RentalSetupLifecycleService {
         for (Rental rental : rentalRepository.findByInventoryPendingTrueAndStatusIn(
             java.util.List.of(RentalStatus.setup, RentalStatus.active))) {
             // A published removal window replaces the inventory attendance clock.
-            if (rental.getInventoryRemovalPublishedAt() != null) continue;
+            if (rental.getInventoryRemovalDeadlineAt() != null) {
+                if (!rental.getInventoryRemovalDeadlineAt().isAfter(now)
+                    && rental.getInventoryEscalatedAt() == null) {
+                    escalateInventory(rental, now, true);
+                    rentalRepository.save(rental);
+                }
+                continue;
+            }
             if (rental.getInventoryArrivedAt() != null || rental.getInventoryResultPublishedAt() != null) continue;
+            if (rental.getInventoryFinalDeadlineAt() != null
+                && !rental.getInventoryFinalDeadlineAt().isAfter(now)
+                && rental.getInventoryEscalatedAt() == null) {
+                escalateInventory(rental, now, false);
+                rentalRepository.save(rental);
+                continue;
+            }
             if (rental.getInventoryDueAt() != null && !rental.getInventoryDueAt().isAfter(now)
                 && rental.getInventoryDeadlineReminderAt() == null) {
                 remindInventoryDeadline(rental, now);
