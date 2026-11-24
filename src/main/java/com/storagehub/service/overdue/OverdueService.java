@@ -46,7 +46,12 @@ public class OverdueService {
         Instant asOf=now();var missing=new TreeSet<String>();String search=q.search().toLowerCase(Locale.ROOT);
         Comparator<OverdueResponse> order=switch(q.sort()){case "overdueDays"->Comparator.comparingLong(OverdueResponse::overdueDays);case "caseRef"->Comparator.comparing(r->r.displayCode()==null?r.caseRef():r.displayCode());default->Comparator.comparingInt(r->"COMPLETED".equals(r.workflowStatus())?0:priority(r.priority()));};
         if(q.descending())order=order.reversed();
-        var page=new OverduePageCollector<OverdueResponse>(q.page(),q.size(),order.thenComparing(OverdueResponse::caseRef));
+        // Within the same group the nearest deadline must come first. Cases without a due
+        // time sort after cases that have one, and the case reference is only the last tie-break.
+        Comparator<OverdueResponse> nearestDue=Comparator.comparing(
+            (OverdueResponse r)->r.dueAt()==null?null:r.dueAt(),
+            Comparator.nullsLast(Comparator.naturalOrder()));
+        var page=new OverduePageCollector<OverdueResponse>(q.page(),q.size(),order.thenComparing(nearestDue).thenComparing(OverdueResponse::caseRef));
         // Do not paginate rentals before expanding/filtering cases: one rental may create several cases.
         // Closing the JPA stream releases cursor resources; managed entities/owner source work still require benchmarking.
         try(var rentals=query.getResultStream()) {

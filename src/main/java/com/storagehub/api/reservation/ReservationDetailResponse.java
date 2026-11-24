@@ -60,6 +60,9 @@ public class ReservationDetailResponse {
     private String inventoryActualJson;
     private String inventoryMismatchJson;
     private String inventorySuggestedQuantitiesJson;
+    private long inventoryResultVersion;
+    private String inventoryAtSiteConfirmedByName;
+    private java.time.Instant inventoryDecisionAt;
 
     public record CurrentFacility(String name, String address, String city, String phone, String accessHours) {}
     public record CurrentUnitType(String name, BigDecimal lengthM, BigDecimal widthM, BigDecimal heightM,
@@ -163,4 +166,10 @@ public class ReservationDetailResponse {
     public void setInventoryMismatchJson(String value) { inventoryMismatchJson = value; }
     public String getInventorySuggestedQuantitiesJson() { return inventorySuggestedQuantitiesJson; }
     public void setInventorySuggestedQuantitiesJson(String value) { inventorySuggestedQuantitiesJson = value; }
+    public long getInventoryResultVersion() { return inventoryResultVersion; }
+    public void setInventoryResultVersion(long value) { inventoryResultVersion = value; }
+    public String getInventoryAtSiteConfirmedByName() { return inventoryAtSiteConfirmedByName; }
+    public void setInventoryAtSiteConfirmedByName(String value) { inventoryAtSiteConfirmedByName = value; }
+    public java.time.Instant getInventoryDecisionAt() { return inventoryDecisionAt; }
+    public void setInventoryDecisionAt(java.time.Instant value) { inventoryDecisionAt = value; }
 }

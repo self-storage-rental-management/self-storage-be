@@ -47,7 +47,11 @@ public class IntakeDeadlineScheduler {
                         notify(r, "Nhắc đưa phần hàng dư ra", "Vui lòng đưa phần hàng không được tiếp nhận ra đúng hạn và phối hợp Staff xác nhận.");
                 }
             }
+            // Once the unit has actually been handed back empty, no further goods-movement task
+            // may be created: only the finance step remains. "Unit empty" and "settlement done"
+            // are two separate states, so the case is still tracked while finance is open.
             if (r.getInventoryRemovalDeadlineAt() != null && !now.isBefore(r.getInventoryRemovalDeadlineAt())
+                && r.getActualReturnedAt() == null
                 && r.getStatus() != RentalStatus.return_inspection && r.getStatus() != RentalStatus.closing)
                 recovery(r, now, "Quá hạn trả hàng do kiểm kê sai lệch", false);
         }

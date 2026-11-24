@@ -165,6 +165,26 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void onsiteInventoryReturnKeepsCustomerOwnerAndRecordsActualStaffRequester() {
+        rental.setStatus(RentalStatus.setup); rental.setInventoryPending(true);
+        var request = new CustomerCreateReturnRequest(LocalDate.now(BusinessTime.ZONE).plusDays(1), "Khách chọn trả kho tại cơ sở", com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
+        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
+            ReturnCase rc = invocation.getArgument(0); ReflectionTestUtils.setField(rc, "id", UUID.randomUUID()); return rc;
+        });
+        service.createInventoryReturnAtSite(staffActor, rental.getId(), request);
+        var captured = org.mockito.ArgumentCaptor.forClass(ReturnCase.class);
+        verify(returnCaseRepository).save(captured.capture());
+        assertThat(captured.getValue().getCustomer()).isEqualTo(customer);
+        assertThat(captured.getValue().getRequestedBy()).isEqualTo(staff);
+        assertThat(captured.getValue().getReturnType()).isEqualTo(com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        verify(facilityScopeService).assertCanOperate(staffActor, facility.getId());
+    }
+
+    @Test
     void createCustomerReturnRequest_success() {
         CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
             LocalDate.now().plusDays(5),
@@ -774,7 +794,11 @@ class ReturnSettlementServiceTests {
         assertThat(response.totalDeductions()).isEqualByComparingTo(new BigDecimal("100000.00"));
         assertThat(response.netRefundAmount()).isEqualByComparingTo(expectedRefund);
         assertThat(response.amountDueFromCustomer()).isZero();
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        // The dispute review changed the approved amounts, so the previous customer
+        // confirmation no longer applies: the case must return to the customer before any
+        // refund is released, never jump straight to refund_pending.
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(response.customerConfirmed()).isFalse();
         assertThat(response.reviewedByName()).isEqualTo("Le Van Manager");
     }
 
@@ -933,7 +957,10 @@ class ReturnSettlementServiceTests {
         assertThat(response.totalDeductions()).isEqualByComparingTo("2300000");
         assertThat(response.netRefundAmount()).isEqualByComparingTo("5700000");
         assertThat(response.amountDueFromCustomer()).isZero();
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+        // Amounts changed during the dispute review, so the customer must confirm the new
+        // statement again instead of the refund being released straight away.
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(response.customerConfirmed()).isFalse();
     }
 
     @Test

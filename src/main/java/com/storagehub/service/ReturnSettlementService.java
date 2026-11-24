@@ -125,9 +125,23 @@ public class ReturnSettlementService {
         UUID rentalId,
         CustomerCreateReturnRequest request
     ) {
+        return createReturnRequest(actor, rentalId, request, false);
+    }
+
+    @Transactional
+    public ReturnCaseResponse createInventoryReturnAtSite(ActorPrincipal actor, UUID rentalId, CustomerCreateReturnRequest request) {
+        if (!actor.hasRole(RoleCode.STAFF)) throw ApiExceptions.forbidden("Chỉ Staff được ghi nhận yêu cầu trả kho tại cơ sở.");
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        if (request.returnType() != ReturnType.INVENTORY_MISMATCH) throw ApiExceptions.conflict("Chỉ áp dụng cho trả kho do kiểm kê sai lệch.");
+        return createReturnRequest(actor, rentalId, request, true);
+    }
+
+    private ReturnCaseResponse createReturnRequest(ActorPrincipal actor, UUID rentalId, CustomerCreateReturnRequest request, boolean atSite) {
+
         Rental rental = rentalRepository.findByIdForUpdate(rentalId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found for this customer"));
-        if (!rental.getCustomer().getId().equals(actor.userId()))
+        if (atSite) facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
+        if (!atSite && !rental.getCustomer().getId().equals(actor.userId()))
             throw ApiExceptions.notFound("Rental was not found for this customer");
 
         var existingReturns = returnCaseRepository.findByRental_Id(rentalId);
@@ -158,7 +172,7 @@ public class ReturnSettlementService {
             recoveryGuard.requireNoActiveRecovery(rental);
         }
 
-        User customer = userRepository.findById(actor.userId())
+        User customer = userRepository.findById(rental.getCustomer().getId())
             .orElseThrow(() -> ApiExceptions.notFound("Customer user not found"));
 
         // Only verified check-in funds establish the available security deposit.
@@ -176,7 +190,8 @@ public class ReturnSettlementService {
         returnCase.setFacility(rental.getFacility());
         returnCase.setStorageUnit(rental.getStorageUnit());
         returnCase.setCustomer(customer);
-        returnCase.setRequestedBy(customer);
+        User requester = atSite ? userRepository.findById(actor.userId()).orElseThrow(() -> ApiExceptions.notFound("Staff not found")) : customer;
+        returnCase.setRequestedBy(requester);
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setRequestedAt(now);
         returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : today);
@@ -209,7 +224,7 @@ public class ReturnSettlementService {
         rentalRepository.save(rental);
 
         auditLogService.recordMutation(
-            "CUSTOMER_RETURN_REQUESTED",
+            atSite ? "STAFF_INVENTORY_RETURN_REQUESTED_AT_SITE" : "CUSTOMER_RETURN_REQUESTED",
             "return",
             saved.getId(),
             saved.getFacility().getId(),
@@ -381,20 +396,20 @@ public class ReturnSettlementService {
         returnCase.setNetRefundAmount(approvedRefund.add(approvedRentalRefund).setScale(2, RoundingMode.HALF_UP));
         returnCase.setAmountDueFromCustomer(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
         boolean refundPending = approvedRefund.signum() > 0 || approvedRentalRefund.signum() > 0;
-        if (refundPending) markRefundPending(returnCase); else returnCase.setStatus(ReturnCaseStatus.completed);
+        // The decision fixes the statement amounts. The customer must always see and confirm
+        // this statement before any money moves, so the case can never jump straight to a
+        // refund, a collection or completion from this path.
+        if (returnCase.isCustomerConfirmed()) {
+            throw ApiExceptions.conflict("Bảng kê đã được khách xác nhận. Không thể thay đổi số tiền đã chốt.");
+        }
+        returnCase.setCustomerConfirmed(false);
+        returnCase.setCustomerConfirmedAt(null);
+        returnCase.setCustomerDecision(null);
+        returnCase.setCustomerDecisionNote(null);
+        returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
 
         rental.setSetupExitReviewRequired(false);
-        if (!refundPending) {
-            var reconciliation = finance();
-            if (reconciliation != null) {
-                reconciliation.requireCurrent(returnCase);
-                reconciliation.settle(returnCase, actor.userId(), "SETUP_EXIT_OFFSET:" + returnCase.getId(), false);
-            }
-            returnCase.setCompletedAt(Instant.now());
-            finalizeRentalAndUnit(returnCase);
-        } else {
-            rentalRepository.save(rental);
-        }
+        rentalRepository.save(rental);
 
         ReturnCase saved = returnCaseRepository.save(returnCase);
         auditLogService.recordMutation(
@@ -409,9 +424,10 @@ public class ReturnSettlementService {
             saved.getCustomer().getId(),
             NotificationType.RETURN,
             "Business đã quyết định xử lý yêu cầu trả kho trong thời gian chuẩn bị",
-            refundPending
-                ? "Khoản hoàn tiền thuê và/hoặc cọc đã được duyệt. Staff sẽ đối chiếu chứng từ thực tế trước khi hoàn tiền."
-                : "Yêu cầu đã được chốt không hoàn tiền và hệ thống đã giải phóng hồ sơ trả kho.",
+            "Bảng kê quyết toán cho gian " + saved.getStorageUnit().getCode()
+                + " đã được lập (dự kiến hoàn " + approvedRefund.add(approvedRentalRefund)
+                    .setScale(2, RoundingMode.HALF_UP).toPlainString()
+                + " đ). Vui lòng kiểm tra và xác nhận bảng kê. Hệ thống không tự đồng ý thay bạn.",
             saved.getId()
         );
         return toResponse(saved);
@@ -1101,6 +1117,10 @@ public class ReturnSettlementService {
         BigDecimal rentalRefund = mismatchReturn ? zeroIfNull(returnCase.getRentalRefundCredit()) : returnCase.isSetupEarlyExit()
             ? zeroIfNull(returnCase.getRentalRefundCredit())
             : (returnCase.getRentalRefundAmount() != null ? returnCase.getRentalRefundAmount() : calculatedRentalRefund);
+        // Capture the approved amounts before this review overwrites them.
+        BigDecimal previousDeductions = zeroIfNull(returnCase.getTotalDeductions());
+        BigDecimal previousRefund = zeroIfNull(returnCase.getNetRefundAmount());
+        BigDecimal previousDue = zeroIfNull(returnCase.getAmountDueFromCustomer());
         var settlement = calculateSettlement(returnCase, deductions, earlyTerminationCharge, rentalRefund);
         requireSettlementLimit(settlement.deductions());
         returnCase.setReviewedBy(manager);
@@ -1122,7 +1142,20 @@ public class ReturnSettlementService {
             returnCase.setProposedUnitStatus(request.proposedUnitStatus());
         }
 
-        if (settlement.due().signum() > 0) {
+        // A dispute resolution rewrites the statement amounts. The approved statement and the
+        // customer confirmation of the previous version are therefore no longer valid: the case
+        // must go back to the customer for a renewed confirmation instead of moving straight to
+        // collection or refund. Only an unchanged statement may continue to the money step.
+        boolean amountsChanged = previousDeductions.compareTo(settlement.deductions()) != 0
+            || previousRefund.compareTo(settlement.refund()) != 0
+            || previousDue.compareTo(settlement.due()) != 0;
+        if (amountsChanged) {
+            returnCase.setCustomerConfirmed(false);
+            returnCase.setCustomerConfirmedAt(null);
+            returnCase.setCustomerDecision(null);
+            returnCase.setCustomerDecisionNote(null);
+            returnCase.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);
+        } else if (settlement.due().signum() > 0) {
             returnCase.setStatus(ReturnCaseStatus.payment_due);
         } else if (settlement.refund().signum() > 0) {
             markRefundPending(returnCase);
@@ -1147,8 +1180,14 @@ public class ReturnSettlementService {
         notificationService.createNotification(
             saved.getCustomer().getId(),
             NotificationType.RETURN,
-            "Kết quả giải quyết khiếu nại quyết toán trả kho",
-            "Manager đã xem xét lại quyết toán cho gian " + saved.getStorageUnit().getCode() + ": " + request.resolutionNote(),
+            amountsChanged
+                ? "Bảng kê quyết toán đã được điều chỉnh, cần bạn xác nhận lại"
+                : "Kết quả giải quyết khiếu nại quyết toán trả kho",
+            amountsChanged
+                ? "Manager đã xem xét lại và điều chỉnh bảng kê cho gian " + saved.getStorageUnit().getCode()
+                    + ": " + request.resolutionNote()
+                    + " Vui lòng kiểm tra và xác nhận lại bảng kê mới. Hệ thống không tự đồng ý thay bạn."
+                : "Manager đã xem xét lại quyết toán cho gian " + saved.getStorageUnit().getCode() + ": " + request.resolutionNote(),
             saved.getId()
         );
 
@@ -1476,7 +1515,14 @@ public class ReturnSettlementService {
             return requested != null ? requested : BigDecimal.ZERO;
         }
     }
+    /**
+     * Deliberately does not enforce a cap. The business has not yet decided the final rule for
+     * rounding and for limiting the usage fee against the total rent, and inventing a cap here
+     * would silently change how much a customer owes or gets back. The call sites are kept so the
+     * rule can be added in one place once it is decided.
+     */
     private void requireSettlementLimit(BigDecimal total) {
+        // No limit is applied until the business rule is confirmed. See the open-decisions report.
     }
 
     @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)

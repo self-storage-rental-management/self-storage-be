@@ -98,6 +98,10 @@ public class CustomerReservationService {
     private PaymentProvenance paymentProvenance;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired(required = false)
+    private com.storagehub.domain.repo.CheckInInventoryConfirmationRepository inventoryConfirmations;
+    @Autowired(required = false)
+    private RentalSetupLifecycleService setupLifecycle;
 
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
@@ -632,6 +636,11 @@ public class CustomerReservationService {
                 rental.setInventoryRemovalPublishedAt(rental.getInventoryResultPublishedAt());
                 rental.setInventoryRemovalDeadlineAt(InventoryTimelinePolicy.removalDeadline(rental.getInventoryResultPublishedAt()));
                 rentalRepository.saveAndFlush(rental);
+            }
+            // The return window replaces the "did not arrive for inventory" clock. Stop the
+            // attendance recovery task so the two clocks never escalate the same case.
+            if (setupLifecycle != null) {
+                setupLifecycle.supersedeInventoryAttendanceTasks(rental, "hồ sơ đã chuyển sang trả kho do sai lệch kiểm kê");
             }
             var service = returnSettlementServices == null ? null : returnSettlementServices.getIfAvailable();
             if (service == null && returnSettlements != null) service = returnSettlements.getIfAvailable();
@@ -1615,6 +1624,14 @@ public class CustomerReservationService {
             response.setInventoryActualJson(checkIn.getInventoryActualJson());
             response.setInventoryMismatchJson(checkIn.getInventoryMismatchJson());
             response.setInventorySuggestedQuantitiesJson(checkIn.getInventorySuggestedQuantitiesJson());
+            // The at-site confirmation lives in a side table; a legacy record simply has none.
+            if (inventoryConfirmations != null) {
+                inventoryConfirmations.findById(checkIn.getId()).ifPresent(confirmation -> {
+                    response.setInventoryResultVersion(confirmation.getResultVersion());
+                    response.setInventoryDecisionAt(confirmation.getConfirmedAt());
+                    response.setInventoryAtSiteConfirmedByName(confirmation.getConfirmedByName());
+                });
+            }
         });
         return response;
     }
