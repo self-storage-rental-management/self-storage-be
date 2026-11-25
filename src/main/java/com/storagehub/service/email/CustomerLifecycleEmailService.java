@@ -83,6 +83,9 @@ public class CustomerLifecycleEmailService {
             periods.read(rental).ifPresent(period -> details.put("Ngày cuối được sử dụng", period.lastPermittedDate().toString()));
             if (rental.getSetupStartedAt() != null) details.put("Bắt đầu chuẩn bị", TIME.format(rental.getSetupStartedAt()));
             if (rental.getSetupEndsAt() != null) details.put("Kết thúc chuẩn bị", TIME.format(rental.getSetupEndsAt()));
+            if (rental.getInventoryFinalDeadlineAt() != null) details.put("Hạn đến kiểm kê", TIME.format(rental.getInventoryFinalDeadlineAt()));
+            if (rental.getInventoryAppointmentAt() != null) details.put("Lịch hẹn kiểm kê", TIME.format(rental.getInventoryAppointmentAt()));
+            if (rental.getInspectionCompletionDeadlineAt() != null) details.put("Hạn hoàn tất kiểm kê (72 giờ)", TIME.format(rental.getInspectionCompletionDeadlineAt()));
         }
         if (returned != null && returned.getCustomer().getId().equals(user.getId())) {
             details.put("Lịch kiểm tra/trả kho dự kiến", returned.getScheduledDate().toString());
