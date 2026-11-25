@@ -54,11 +54,11 @@ public class Rental extends BaseEntity {
     @Column(nullable = false)
     private LocalDate contractEndDate;
 
-    /** Actual handover instant. Contract responsibilities apply from this moment. */
+    /** Customer-selected handover appointment used as the timeline anchor. */
     @Column
     private Instant setupStartedAt;
 
-    /** Exclusive setup boundary. The paid rental becomes active at this instant. */
+    /** Exclusive free-setup boundary calculated from the selected appointment. */
     @Column
     private Instant setupEndsAt;
 
