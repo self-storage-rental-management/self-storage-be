@@ -186,7 +186,16 @@ public record ReturnCaseResponse(
         OverdueSettlement overdueSettlement,
         String settlementBlocker
     ) {
-            settlementReceipt, overdueSettlement, settlementBlocker,
+        this(
+            id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName,
+            customerEmail, customerPhone, status, null, null, requestedAt, scheduledDate, customerNotes,
+            inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes,
+            evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount,
+            damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount,
+            amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision,
+            customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
+            settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
+            recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
             null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, 0, null, null, List.of(), null, null
         );
     }
