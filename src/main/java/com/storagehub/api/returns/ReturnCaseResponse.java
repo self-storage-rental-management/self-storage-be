@@ -86,8 +86,13 @@ public record ReturnCaseResponse(
     Instant setupReturnedAt,
     String setupEarlyExitPolicyVersion,
     BigDecimal rentalRefundCredit,
-    BigDecimal earlyTerminationFee
+    BigDecimal earlyTerminationFee,
+    Equipment equipment,
+    Integer missingPalletCount,
+    BigDecimal palletLossFee
 ) {
+    public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
+
     /** Existing readers can omit the new setup settlement projection fields. */
     public ReturnCaseResponse(
         UUID id,
@@ -144,7 +149,7 @@ public record ReturnCaseResponse(
         OverdueSettlement overdueSettlement,
         String settlementBlocker
     ) {
-        this(id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName, customerEmail, customerPhone, status, null, null, requestedAt, scheduledDate, customerNotes, inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount, damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount, amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision, customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote, settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus, recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker, null, null, false, false, null, false, false, null, null, null, null);
+        this(id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName, customerEmail, customerPhone, status, null, null, requestedAt, scheduledDate, customerNotes, inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount, damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount, amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision, customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote, settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus, recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker, null, null, false, false, null, false, false, null, null, null, null, null, null, null);
     }
 
     public record SettlementReceipt(
