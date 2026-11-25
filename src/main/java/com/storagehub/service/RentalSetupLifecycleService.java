@@ -88,6 +88,8 @@ public class RentalSetupLifecycleService {
 
         for (Rental rental : rentalRepository.findByInventoryPendingTrueAndStatusIn(
             java.util.List.of(RentalStatus.setup, RentalStatus.active))) {
+            // Unified-policy rentals are owned exclusively by IntakeDeadlineScheduler.
+            if (IntakePolicyProperties.POLICY_VERSION.equals(rental.getIntakePolicyVersion())) continue;
             // A published removal window replaces the inventory attendance clock.
             if (rental.getInventoryRemovalPublishedAt() != null) continue;
             if (rental.getInventoryArrivedAt() != null || rental.getInventoryResultPublishedAt() != null) continue;

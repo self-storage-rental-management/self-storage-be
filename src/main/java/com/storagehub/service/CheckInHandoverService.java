@@ -767,7 +767,24 @@ public class CheckInHandoverService {
         CheckIn checkIn = requireOpenInventoryVisit(actor, checkInId);
         Reservation reservation = checkIn.getReservation();
         if (checkIn.getInventoryArrivedAt() == null) {
-            Instant arrivedAt = Instant.now();
+            Instant arrivedAt = nowInstant();
+            Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElse(null);
+            if (rental != null && intakeTimelineCalculator != null && intakeTimelineCalculator.isUnifiedPolicy(rental)) {
+                if (rental.getSetupStartedAt() != null && arrivedAt.isBefore(rental.getSetupStartedAt())) {
+                    throw ApiExceptions.validation("Thời điểm đến không thể trước thời điểm nhận kho.", null);
+                }
+                Instant d = intakeTimelineCalculator.arrivalDeadline(rental);
+                if (d != null && arrivedAt.isAfter(d)
+                    && !IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME.equals(rental.getAttendanceReviewStatus())) {
+                    throw ApiExceptions.deadlineExpired("Khách đến sau hạn đến kiểm kê.");
+                }
+                rental.setActualArrivedAt(arrivedAt);
+                rental.setArrivalRecordedAt(arrivedAt);
+                rental.setArrivalRecordedBy(actor.userId());
+                rental.setInventoryArrivedAt(arrivedAt);
+                rental.setAppointmentStatus(IntakeTimelineCalculator.APPT_ATTENDED);
+                rentalRepository.saveAndFlush(rental);
+            }
             checkIn.setInventoryArrivedAt(arrivedAt);
             checkInRepository.saveAndFlush(checkIn);
             auditLogService.recordMutation(requireActor(actor), "INVENTORY_CUSTOMER_ARRIVED", "CheckIn", checkInId,
@@ -782,8 +799,21 @@ public class CheckInHandoverService {
         com.storagehub.api.checkin.VerifyInventoryIdentityRequest request) {
         CheckIn checkIn = requireOpenInventoryVisit(actor, checkInId);
         Reservation reservation = checkIn.getReservation();
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElse(null);
         if (checkIn.getInventoryArrivedAt() == null || !Boolean.TRUE.equals(request.bookingCustomerPresent())) {
             throw ApiExceptions.conflict("Cần ghi nhận đúng người đặt kho đã trực tiếp đến kiểm kê.");
+        }
+        if (rental != null && intakeTimelineCalculator != null && intakeTimelineCalculator.isUnifiedPolicy(rental)) {
+            if (IntakeTimelineCalculator.VERIF_PASSED.equals(rental.getVerificationStatus())) {
+                if (request.photoId() != null && request.photoId().equals(checkIn.getInventoryIdentityPhotoId())) {
+                    return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
+                }
+                throw ApiExceptions.invalidState("Hồ sơ đã xác minh danh tính thành công, không thể xác minh lại thông thường.");
+            }
+            if (rental.getVerificationAttemptCount() >= 2
+                || IntakeTimelineCalculator.VERIF_FAILED_MAX_ATTEMPTS.equals(rental.getVerificationStatus())) {
+                throw ApiExceptions.verificationLimit("Đã hết tối đa 2 lần xác minh danh tính.");
+            }
         }
         validateIdentityDocument(reservation, request.identityDocumentNumber());
         FileAsset photo = requireInventoryIdentityPhoto(checkIn, request.photoId());
@@ -794,7 +824,40 @@ public class CheckInHandoverService {
             return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
         }
         User verifier = requireActor(actor);
-        Instant verifiedAt = Instant.now();
+        Instant verifiedAt = nowInstant();
+        if (rental != null) {
+            if (rental.getFirstIdentityVerificationAt() == null) {
+                rental.setFirstIdentityVerificationAt(verifiedAt);
+                rental.setInspectionCompletionDeadlineAt(
+                    intakeTimelineCalculator != null
+                        ? intakeTimelineCalculator.completionDeadline(verifiedAt)
+                        : verifiedAt.plus(72, java.time.temporal.ChronoUnit.HOURS)
+                );
+            } else if (rental.getInspectionCompletionDeadlineAt() != null
+                && verifiedAt.isAfter(rental.getInspectionCompletionDeadlineAt())) {
+                throw ApiExceptions.deadlineExpired("Đã quá hạn hoàn tất kiểm kê 72 giờ.");
+            }
+            int nextAttempt = rental.getVerificationAttemptCount() + 1;
+            rental.setVerificationAttemptCount(nextAttempt);
+            rental.setVerificationStatus(IntakeTimelineCalculator.VERIF_PASSED);
+            rental.setInventoryIdentityVerifiedAt(verifiedAt);
+            rental.setInventoryIdentityVerifiedBy(verifier.getId());
+            rental.setInventoryIdentityPhotoId(photo.getId());
+            if (rental.getInspectionStartedAt() == null) {
+                rental.setInspectionStartedAt(verifiedAt);
+            }
+            rentalRepository.saveAndFlush(rental);
+            if (intakeVerificationAttempts != null) {
+                com.storagehub.domain.model.IntakeVerificationAttempt attempt = new com.storagehub.domain.model.IntakeVerificationAttempt();
+                attempt.setRental(rental);
+                attempt.setSubstantiveOrdinal(nextAttempt);
+                attempt.setOutcome("PASS");
+                attempt.setRecordedAt(verifiedAt);
+                attempt.setStaffId(verifier.getId());
+                attempt.setEvidenceFileId(photo.getId());
+                intakeVerificationAttempts.saveAndFlush(attempt);
+            }
+        }
         UUID previousPhoto = checkIn.getInventoryIdentityPhotoId();
         checkIn.setInventoryIdentityVerifiedAt(verifiedAt);
         checkIn.setInventoryIdentityVerifiedBy(verifier);
@@ -811,6 +874,19 @@ public class CheckInHandoverService {
 
     @Autowired
     private InventoryDecisionService inventoryDecisions;
+
+    @Autowired(required = false)
+    private java.time.Clock clock;
+
+    private Instant nowInstant() {
+        return (clock == null || java.time.Clock.systemUTC().equals(clock)) ? Instant.now() : clock.instant();
+    }
+
+    @Autowired(required = false)
+    private IntakeTimelineCalculator intakeTimelineCalculator;
+
+    @Autowired(required = false)
+    private com.storagehub.domain.repo.IntakeVerificationAttemptRepository intakeVerificationAttempts;
 
     private CheckIn requireOpenInventoryVisit(ActorPrincipal actor, UUID checkInId) {
         requireOperator(actor);
@@ -1262,6 +1338,7 @@ public class CheckInHandoverService {
         checkIn.setInventoryVerifiedAt(now);
         checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.ACCEPTED);
         rental.setInventoryVerifiedAt(now);
+        rental.setInspectionCompletedAt(now);
         rental.setInventoryPending(false);
         rentalRepository.saveAndFlush(rental);
         completeInventoryTask(rental, now, request.notes());
@@ -2076,6 +2153,11 @@ public class CheckInHandoverService {
     }
 
     private void scheduleInventoryDeadlines(Rental rental, Instant readyAt) {
+        if (rental.getOriginalInspectionArrivalDeadlineAt() != null
+            || IntakePolicyProperties.POLICY_VERSION.equals(rental.getIntakePolicyVersion())) {
+            rental.setInventoryPending(true);
+            return;
+        }
         rental.setInventoryDueAt(InventoryTimelinePolicy.reminderAt(readyAt));
         rental.setInventoryFinalDeadlineAt(InventoryTimelinePolicy.inventoryDeadline(readyAt));
         rental.setInventoryDeadlineReminderAt(null);
