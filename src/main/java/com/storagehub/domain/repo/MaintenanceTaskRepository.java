@@ -48,6 +48,7 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
           and (:scoped = false or t.facility.id in :allowedFacilityIds)
           and (
             :q is null or :q = ''
+            or lower(t.displayCode) like lower(concat('%', :q, '%'))
             or lower(t.title) like lower(concat('%', :q, '%'))
             or lower(t.reason) like lower(concat('%', :q, '%'))
             or lower(t.storageUnit.code) like lower(concat('%', :q, '%'))

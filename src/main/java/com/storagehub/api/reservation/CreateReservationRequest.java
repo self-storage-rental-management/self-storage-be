@@ -48,6 +48,10 @@ public class CreateReservationRequest {
 
     /** Must be explicitly true on the public create endpoint before payment is possible. */
     private Boolean acceptedTerms;
+    @Size(max = 40)
+    private String acceptedHandoverTermsVersion;
+    public String getAcceptedHandoverTermsVersion() { return acceptedHandoverTermsVersion; }
+    public void setAcceptedHandoverTermsVersion(String value) { acceptedHandoverTermsVersion = value; }
 
     public CreateReservationRequest() {
     }

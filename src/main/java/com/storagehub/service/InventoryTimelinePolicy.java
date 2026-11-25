@@ -92,8 +92,11 @@ public final class InventoryTimelinePolicy {
             throw ApiExceptions.conflict("Bạn đã sử dụng hết số lần gia hạn trả kho cho phép.");
         }
         int nextCount = rental.getInventoryReturnExtensionCount() + 1;
-        int nextWindowDays = rental.getInventoryReturnWindowDays() + rental.getInventoryReturnExtensionDays();
-        Instant nextDeadline = removalDeadline(rental.getInventoryRemovalPublishedAt(), nextWindowDays);
+        Instant nextDeadline = rental.getInventoryRemovalDeadlineAt().atZone(ZONE)
+            .plusDays(rental.getInventoryReturnExtensionDays()).toInstant();
+        int nextWindowDays = Math.toIntExact(ChronoUnit.DAYS.between(
+            removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
+            nextDeadline.atZone(ZONE).toLocalDate()));
         rental.setInventoryReturnExtensionCount(nextCount);
         rental.setInventoryReturnWindowDays(nextWindowDays);
         rental.setInventoryRemovalDeadlineAt(nextDeadline);
@@ -112,7 +115,7 @@ public final class InventoryTimelinePolicy {
                 removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
                 rental.getInventoryRemovalDeadlineAt().atZone(ZONE).toLocalDate()
             );
-            return days > 0 ? (int) days : 7;
+            return days > 0 ? Math.toIntExact(days) : null;
         }
         return null;
     }

@@ -25,6 +25,7 @@ public interface AccessCredentialRepository extends JpaRepository<AccessCredenti
     );
 
     boolean existsByReservation_IdAndStatus(UUID reservationId, AccessCredentialStatus status);
+    boolean existsByRental_IdAndStatus(UUID rentalId, AccessCredentialStatus status);
 
     boolean existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
         UUID facilityId, AccessCredentialStatus status, String reference, UUID id

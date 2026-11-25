@@ -3,6 +3,7 @@ package com.storagehub.service;
 import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.repo.CheckInRepository;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -26,8 +27,10 @@ public class CustomerReceiptConfirmationDeadlineService {
     public int notifyDueConfirmations() {
         Instant now = Instant.now();
         int notified = 0;
-        for (CheckIn checkIn : checkInRepository
-            .findTop100ByStatusAndCheckedInAtIsNotNullOrderByCheckedInAtAsc(CheckInStatus.handover_pending_receipt)) {
+        for (var id : checkInRepository.findPendingReceiptIds(CheckInStatus.handover_pending_receipt)) {
+            CheckIn checkIn = checkInRepository.findByIdForUpdate(id).orElse(null);
+            if (checkIn == null || checkIn.getStatus() != CheckInStatus.handover_pending_receipt
+                || checkIn.getReservation().getStatus() != ReservationStatus.AWAITING_CUSTOMER_RECEIPT) continue;
             Instant handoverAt = checkIn.getCheckedInAt();
             Instant dueAt = ReservationCheckInPolicy.customerReceiptConfirmationDueAt(handoverAt);
             Instant reminderAt = ReservationCheckInPolicy.customerReceiptConfirmationReminderAt(handoverAt);

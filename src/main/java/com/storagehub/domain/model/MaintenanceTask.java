@@ -20,6 +20,9 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class MaintenanceTask extends BaseEntity {
+    @org.hibernate.annotations.Formula("(select c.display_code from business_record_codes c where c.resource_key = concat('NV:', lower(bin_to_uuid({alias}.id))))")
+    private String displayCode;
+
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "facility_id", nullable = false)
