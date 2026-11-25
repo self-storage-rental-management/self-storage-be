@@ -936,18 +936,24 @@ public class CustomerReservationService {
                 com.storagehub.service.ledger.FinancialContractSpecifications.validateInitial(snapshot);
             }
             Instant startedAt = Instant.now();
-            java.time.ZoneId zone = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
-            // Free setup ends after the package free-setup HOURS from the moment the
-            // customer confirms receipt. It is never rounded to 00:00. The paid period
-            // start stays the date already agreed on the reservation, so confirming
-            // receipt (or finishing setup early) never moves the paid period forward.
-            Instant setupEndsAt = startedAt.plus(
-                java.time.Duration.ofHours(Math.multiplyExact((long) setupDays, 24L))
-            );
-            java.time.LocalDate paidRentalStart = reservation.getStartDate();
-            if (paidRentalStart == null) {
-                paidRentalStart = startedAt.atZone(zone).toLocalDate().plusDays(setupDays);
+            Instant appointmentAt = resolveCustomerAppointment(reservation, checkIn, null, setupDays);
+            if (appointmentAt == null) {
+                throw ApiExceptions.conflict("Hồ sơ chưa có ngày nhận kho khách đã chọn.");
             }
+            // Legacy records may have the appointment only on CheckIn. Pin it
+            // back to Reservation so every subsequent calculation uses the
+            // same customer-selected date.
+            if (reservation.getAppointmentAt() == null) {
+                reservation.setAppointmentAt(appointmentAt);
+            }
+            java.time.ZoneId zone = RentalTimelinePolicy.BUSINESS_ZONE;
+            RentalTimelinePolicy.Dates timeline = RentalTimelinePolicy.fromCustomerAppointment(
+                appointmentAt, setupDays, snapshot.getRentalMonths()
+            );
+            // The customer-selected appointment is the source of truth. The
+            // actual button-click time is retained only in checkedInAt for audit.
+            Instant setupEndsAt = timeline.freeSetupEndsAt();
+            java.time.LocalDate paidRentalStart = timeline.paidRentalStart();
             Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId).orElseGet(Rental::new);
             if (rental.getId() != null) requireReceiptRentalStatus(rental);
             if (rental.getId() == null) {
@@ -958,12 +964,12 @@ public class CustomerReservationService {
                 rental.setMonthlyPrice(snapshot.getMonthlyPrice());
             }
             rental.setStatus(paidRentalStart.isAfter(startedAt.atZone(zone).toLocalDate()) ? RentalStatus.setup : RentalStatus.active);
-            rental.setSetupStartedAt(startedAt);
+            rental.setSetupStartedAt(appointmentAt);
             rental.setSetupEndsAt(setupEndsAt);
             SetupCompletionPolicy.initialize(rental);
-            rental.setTermsEffectiveAt(startedAt);
+            rental.setTermsEffectiveAt(appointmentAt);
             rental.setStartDate(paidRentalStart);
-            rental.setContractEndDate(paidRentalStart.plusMonths(snapshot.getRentalMonths()));
+            rental.setContractEndDate(timeline.contractEndDate());
             rental.setInventoryDueAt(null);
             rental.setInventoryFinalDeadlineAt(null);
             rental.setInventoryDeadlineReminderAt(null);
@@ -981,7 +987,7 @@ public class CustomerReservationService {
             Reservation saved = reservationRepository.saveAndFlush(reservation);
             checkIn.setStatus(CheckInStatus.setup_in_progress);
             checkIn.setCustomerReceiptConfirmedAt(startedAt);
-            checkIn.setSetupStartedAt(startedAt);
+            checkIn.setSetupStartedAt(appointmentAt);
             checkIn.setSetupDueAt(setupEndsAt);
             checkIn.setRental(rental);
             checkInRepository.saveAndFlush(checkIn);
@@ -1229,21 +1235,54 @@ public class CustomerReservationService {
             var now=Instant.now();var zone=com.storagehub.time.BusinessTime.ZONE;
             var paidStart=reservation.getStartDate();
             if (paidStart == null) throw new IllegalArgumentException("missing reservation paid start");
-            if(!rental.getSetupStartedAt().equals(checkIn.getSetupStartedAt())
+            var appointmentAt = resolveCustomerAppointment(reservation, checkIn, rental, setupDays);
+            if (appointmentAt == null) throw new IllegalArgumentException("missing customer appointment");
+            var expected = RentalTimelinePolicy.fromCustomerAppointment(
+                appointmentAt, setupDays, snapshot.getRentalMonths()
+            );
+            if(!rental.getSetupStartedAt().equals(appointmentAt)
+                ||!appointmentAt.equals(checkIn.getSetupStartedAt())
                 ||!rental.getSetupStartedAt().equals(rental.getTermsEffectiveAt())
                 ||!rental.getSetupEndsAt().equals(checkIn.getSetupDueAt())
                 ||!rental.getInventoryVerifiedAt().equals(checkIn.getInventoryVerifiedAt())
                 ||!rental.getStartDate().equals(paidStart)
-                ||(!rental.getSetupEndsAt().equals(paidStart.atStartOfDay(zone).toInstant())
-                    && !rental.getSetupEndsAt().equals(rental.getSetupStartedAt().plus(java.time.Duration.ofDays(snapshot.getFreeSetupDays()))))
-                ||!rental.getContractEndDate().equals(paidStart.plusMonths(snapshot.getRentalMonths()))
-                ||checkIn.getContractSignedAt().isAfter(rental.getSetupStartedAt())
-                ||checkIn.getPaymentCollectedAt().isAfter(rental.getSetupStartedAt())
+                ||!paidStart.equals(expected.paidRentalStart())
+                ||(!rental.getSetupEndsAt().equals(expected.freeSetupEndsAt())
+                    // Accept the legacy midnight representation while all new
+                    // handovers persist the exact appointment-time deadline.
+                    && !rental.getSetupEndsAt().equals(expected.paidRentalStart().atStartOfDay(zone).toInstant()))
+                ||!rental.getContractEndDate().equals(expected.contractEndDate())
+                ||(checkIn.getCheckedInAt() != null && checkIn.getContractSignedAt().isAfter(checkIn.getCheckedInAt()))
+                ||(checkIn.getCheckedInAt() != null && checkIn.getPaymentCollectedAt().isAfter(checkIn.getCheckedInAt()))
+                ||(checkIn.getCheckedInAt() != null && checkIn.getCheckedInAt().isAfter(now))
+                ||checkIn.getContractSignedAt().isAfter(now)
+                ||checkIn.getPaymentCollectedAt().isAfter(now)
                 ||rental.getSetupStartedAt().isAfter(now)
                 ||rental.getInventoryVerifiedAt().isBefore(rental.getSetupStartedAt())
                 ||rental.getInventoryVerifiedAt().isAfter(now))
                 throw ApiExceptions.conflict(missing);
         } catch(java.time.DateTimeException invalid){throw ApiExceptions.conflict(missing);}
+    }
+
+    /**
+     * Resolves the appointment anchor for both current and legacy records.
+     * New records always carry the customer's selected appointment on the
+     * reservation. Older handovers may only have it on CheckIn, on the rental
+     * timeline, or (as a last resort) an already agreed paid-start date.
+     */
+    private Instant resolveCustomerAppointment(
+        Reservation reservation, CheckIn checkIn, Rental rental, int freeSetupDays
+    ) {
+        if (reservation.getAppointmentAt() != null) return reservation.getAppointmentAt();
+        if (checkIn != null && checkIn.getScheduledAt() != null) return checkIn.getScheduledAt();
+        if (rental != null && rental.getSetupStartedAt() != null) return rental.getSetupStartedAt();
+        if (reservation.getStartDate() != null) {
+            return reservation.getStartDate()
+                .minusDays(freeSetupDays)
+                .atStartOfDay(RentalTimelinePolicy.BUSINESS_ZONE)
+                .toInstant();
+        }
+        return null;
     }
 
     @Transactional

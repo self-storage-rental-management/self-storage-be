@@ -19,23 +19,25 @@ public class ManagerCashflowService {
     private final AdminAuthorizationService authorization;
     private final FacilityScopeService scopes;
     public record Event(String id, String direction, BigDecimal amount, Instant occurredAt, String reference) {}
+    public record Day(String day, BigDecimal collected, BigDecimal refunded, BigDecimal net) {}
     public record Month(String month, BigDecimal collected, BigDecimal refunded, BigDecimal net) {}
     public record RefundLine(UUID id, String reservationCode, String customerName, String status, String reason,
         BigDecimal deposit, BigDecimal rentalCredit, BigDecimal deductions, BigDecimal refund,
         Instant paidAt, String reference, boolean payoutRecorded, String receiptCode) {}
     public record Report(UUID facilityId, LocalDate from, LocalDate to, Instant snapshotAt, String completeness,
         BigDecimal collected, BigDecimal refunded, BigDecimal netRetained, BigDecimal pendingRefund,
-        BigDecimal securityDepositHeld, List<Month> monthly, List<RefundLine> settlements, List<String> warnings) {}
+        BigDecimal pendingApprovalRefund, BigDecimal securityDepositHeld, List<Day> daily, List<Month> monthly,
+        List<RefundLine> settlements, List<String> warnings, LocalDate firstPaymentDate) {}
 
     @Transactional(readOnly = true)
     public Report read(ActorPrincipal actor, UUID facilityId, LocalDate from, LocalDate to) {
         authorization.require(actor, SystemPermission.VIEW_REPORTS);
         scopes.assertCanRead(actor, facilityId);
         LocalDate today = LocalDate.now(ZONE);
-        LocalDate first = from == null ? today.withDayOfMonth(1).minusMonths(5) : from;
-        LocalDate last = to == null ? today : to;
-        if (first.isAfter(last) || last.isAfter(today) || first.plusYears(2).isBefore(last))
-            throw ApiExceptions.validation("Chọn khoảng báo cáo không quá 2 năm và không vượt ngày hiện tại.", null);
+        if ((from != null && from.isAfter(today)) || (to != null && to.isAfter(today)))
+            throw ApiExceptions.validation("Không được chọn ngày trong tương lai.", null);
+        if (from != null && to != null && from.isAfter(to))
+            throw ApiExceptions.validation("Ngày bắt đầu không được sau ngày kết thúc.", null);
         Instant now = Instant.now();
         var warnings = new LinkedHashSet<String>();
         var payments = em.createQuery("""
@@ -45,13 +47,29 @@ public class ManagerCashflowService {
         var recorded = new HashMap<UUID, Payment>();
         var events = new ArrayList<Event>();
         for (Payment p : payments) {
-            Instant at = p.getPaidAt() != null ? p.getPaidAt() : p.getProcessedAt() != null ? p.getProcessedAt() : p.getCreatedAt();
+            Instant at = paymentTimestamp(p);
             if (!validAmount(p.getAmount()) || at == null || !"VND".equals(p.getCurrency())) {
                 warnings.add("Có giao dịch đã ghi nhận thiếu số tiền, thời gian hoặc không phải VND; cần bổ sung dữ liệu."); continue;
             }
             recorded.put(p.getId(), p);
             events.add(new Event("payment:" + p.getId(), "COLLECTION", p.getAmount(), at, p.getGatewayTransactionNo()));
         }
+        LocalDate firstPaymentDate = events.stream()
+            .filter(event -> "COLLECTION".equals(event.direction()))
+            .filter(event -> event.amount() != null && event.amount().signum() > 0)
+            .map(Event::occurredAt)
+            .filter(Objects::nonNull)
+            .map(timestamp -> timestamp.atZone(ZONE).toLocalDate())
+            .min(LocalDate::compareTo)
+            .orElse(null);
+        if (firstPaymentDate == null && (from != null || to != null))
+            throw ApiExceptions.validation("Cơ sở chưa có thanh toán đã ghi nhận để chọn khoảng báo cáo.", null);
+        if (firstPaymentDate != null && from != null && from.isBefore(firstPaymentDate))
+            throw ApiExceptions.validation("Ngày bắt đầu phải từ ngày thanh toán đầu tiên tại cơ sở.", null);
+        LocalDate first = from == null ? (firstPaymentDate == null ? today : firstPaymentDate) : from;
+        LocalDate last = to == null ? today : to;
+        if (first.isAfter(last) || last.isAfter(today))
+            throw ApiExceptions.validation("Chọn khoảng báo cáo từ ngày thanh toán đầu tiên đến ngày hiện tại.", null);
         var returns = em.createQuery("select r from ReturnCase r where r.facility.id = :facility", ReturnCase.class)
             .setParameter("facility", facilityId).getResultList();
         var requests = em.createQuery("""
@@ -65,6 +83,7 @@ public class ManagerCashflowService {
         var lines = new ArrayList<RefundLine>();
         var settledRentals = new HashSet<UUID>();
         BigDecimal pending = BigDecimal.ZERO;
+        BigDecimal pendingApproval = BigDecimal.ZERO;
         for (ReturnCase rc : returns) {
             boolean completed = rc.getStatus() == ReturnCaseStatus.completed;
             Instant at = rc.getSettlementPaidAt();
@@ -75,7 +94,11 @@ public class ManagerCashflowService {
                     events.add(new Event("return:" + rc.getId(), money(rc.getNetRefundAmount()).signum() > 0 ? "REFUND" : "COLLECTION", amount, at, rc.getSettlementPaymentId()));
                 else if (money(amount).signum() > 0) warnings.add("Có quyết toán hoàn tất chưa ghi ngày thanh toán; chưa thể phân bổ vào kỳ báo cáo.");
             }
-            if (rc.getStatus() == ReturnCaseStatus.refund_pending) pending = pending.add(money(rc.getNetRefundAmount()));
+            if (rc.getStatus() == ReturnCaseStatus.refund_pending) {
+                pending = pending.add(positiveMoney(rc.getNetRefundAmount()));
+            } else if (pendingApprovalStatus(rc.getStatus())) {
+                pendingApproval = pendingApproval.add(positiveMoney(rc.getNetRefundAmount()));
+            }
             if (money(rc.getNetRefundAmount()).signum() > 0 || money(rc.getTotalDeductions()).signum() > 0)
                 lines.add(new RefundLine(rc.getId(), rc.getRental().getReservation().getReservationCode(), rc.getCustomer().getFullName(),
                     rc.getStatus().name(), rc.getReturnType().name(), money(rc.getDepositAmount()), money(rc.getRentalRefundAmount()), money(rc.getTotalDeductions()),
@@ -85,8 +108,11 @@ public class ManagerCashflowService {
         for (RefundRequest request : requests) {
             if (request.getReturnCase() != null) continue;
             boolean completed = request.getStatus() == RefundRequestStatus.REFUNDED;
-            if (Set.of(RefundRequestStatus.APPROVED, RefundRequestStatus.PROCESSING).contains(request.getStatus()))
-                pending = pending.add(money(request.getAmount()));
+            if (Set.of(RefundRequestStatus.APPROVED, RefundRequestStatus.PROCESSING).contains(request.getStatus())) {
+                pending = pending.add(positiveMoney(request.getAmount()));
+            } else if (Set.of(RefundRequestStatus.REQUESTED, RefundRequestStatus.PENDING_ESCALATION).contains(request.getStatus())) {
+                pendingApproval = pendingApproval.add(positiveMoney(request.getAmount()));
+            }
             boolean hasExecution = refunds.stream().anyMatch(f -> f.getStatus() == RefundStatus.COMPLETED
                 && f.getPayment().getId().equals(request.getPayment().getId())
                 && sameReference(f.getGatewayRefundId(), request.getGatewayRefundId()));
@@ -109,7 +135,7 @@ public class ManagerCashflowService {
             if (completed && !linkedReturn && validAmount(refund.getAmount()) && at != null)
                 events.add(new Event("refund:" + refund.getId(), "REFUND", refund.getAmount(), at, refund.getGatewayRefundId()));
             if (!linkedRequest && !linkedReturn && Set.of(RefundStatus.PENDING, RefundStatus.PROCESSING).contains(refund.getStatus()))
-                pending = pending.add(money(refund.getAmount()));
+                pending = pending.add(positiveMoney(refund.getAmount()));
             if (!linkedRequest && !linkedReturn) {
                 var p = refund.getPayment();
                 var reservation = p.getReservation() != null ? p.getReservation() : p.getRenewal().getRental().getReservation();
@@ -137,15 +163,49 @@ public class ManagerCashflowService {
             deposit = deposit.add(pricing.getSecurityDepositAmount());
         }
         if (depositUnknown) warnings.add("Có hồ sơ chưa ghi đủ phân bổ cọc trong báo giá hoặc khoản thu nhận kho.");
+        var daily = aggregateDaily(events, first, last);
         var monthly = aggregate(events, first, last);
         BigDecimal collected = monthly.stream().map(Month::collected).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal refunded = monthly.stream().map(Month::refunded).reduce(BigDecimal.ZERO, BigDecimal::add);
         return new Report(facilityId, first, last, now, warnings.isEmpty() ? "RECORDED" : "PARTIAL", collected, refunded,
-            collected.subtract(refunded), pending, depositUnknown ? null : deposit, monthly, List.copyOf(lines), List.copyOf(warnings));
+            collected.subtract(refunded), pending, pendingApproval, depositUnknown ? null : deposit, daily, monthly,
+            List.copyOf(lines), List.copyOf(warnings), firstPaymentDate);
+    }
+    private static Instant paymentTimestamp(Payment payment) {
+        return payment.getPaidAt() != null ? payment.getPaidAt()
+            : payment.getProcessedAt() != null ? payment.getProcessedAt() : payment.getCreatedAt();
     }
     private static boolean sameReference(String a, String b) { return a != null && !a.isBlank() && a.equals(b); }
     private static boolean validAmount(BigDecimal amount) { return amount != null && amount.signum() >= 0; }
     static BigDecimal money(BigDecimal value) { return value == null ? BigDecimal.ZERO : value; }
+    private static BigDecimal positiveMoney(BigDecimal value) { return validAmount(value) && value.signum() > 0 ? value : BigDecimal.ZERO; }
+    private static boolean pendingApprovalStatus(ReturnCaseStatus status) {
+        return Set.of(
+            ReturnCaseStatus.requested,
+            ReturnCaseStatus.scheduled,
+            ReturnCaseStatus.inspected,
+            ReturnCaseStatus.awaiting_business_review,
+            ReturnCaseStatus.awaiting_customer_confirmation,
+            ReturnCaseStatus.disputed
+        ).contains(status);
+    }
+    public static List<Day> aggregateDaily(List<Event> events, LocalDate from, LocalDate to) {
+        var days = new LinkedHashMap<LocalDate, BigDecimal[]>();
+        for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1))
+            days.put(day, new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO});
+        var ids = new HashSet<String>();
+        for (Event event : events) {
+            if (event.occurredAt() == null || event.amount() == null || event.amount().signum() < 0 || !ids.add(event.id())) continue;
+            LocalDate day = event.occurredAt().atZone(ZONE).toLocalDate();
+            if (day.isBefore(from) || day.isAfter(to)) continue;
+            var sums = days.get(day);
+            int index = "REFUND".equals(event.direction()) ? 1 : 0;
+            sums[index] = sums[index].add(event.amount());
+        }
+        return days.entrySet().stream()
+            .map(e -> new Day(e.getKey().toString(), e.getValue()[0], e.getValue()[1], e.getValue()[0].subtract(e.getValue()[1])))
+            .toList();
+    }
     public static List<Month> aggregate(List<Event> events, LocalDate from, LocalDate to) {
         var months = new LinkedHashMap<YearMonth, BigDecimal[]>();
         for (YearMonth m = YearMonth.from(from); !m.isAfter(YearMonth.from(to)); m = m.plusMonths(1))

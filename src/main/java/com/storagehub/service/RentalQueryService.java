@@ -58,7 +58,7 @@ public class RentalQueryService {
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
             financial(r), access(actor, r), s.dateSemantics(), bookingEvidence(actor,r,manager),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), s.setupStartedAt(), s.setupEndsAt(), r.getInventoryFinalDeadlineAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart(), inventory(r),
             contracts == null ? null : contracts.findAllByRentalIdOrderByCreatedAtDesc(id).stream()
                 .filter(contract -> contract.getStatus() == ContractStatus.SIGNED).map(Contract::getContractNumber)
@@ -163,6 +163,7 @@ public class RentalQueryService {
                 var reservation = root.fetch("reservation", JoinType.LEFT);
                 reservation.fetch("facility", JoinType.LEFT);
                 reservation.fetch("customer", JoinType.LEFT);
+                reservation.fetch("sourceQuote", JoinType.LEFT);
             }
             return manager ? root.get("facility").get("id").in(facilities)
                 : cb.equal(root.get("customer").get("id"), actor.userId());
@@ -194,19 +195,65 @@ public class RentalQueryService {
     private RentalSummaryResponse summary(Rental r, String displayCode, boolean inventoryMismatchReturn) {
         integrity(r);
         var unit = r.getStorageUnit(); var type = unit.getUnitType();
-        var period=verifiedDates(r);
+        var timeline = projectedTimeline(r);
+        var period = timeline == null ? verifiedDates(r) : timeline.period(r);
         var warnings = period.isPresent() ? List.<RentalSummaryResponse.Warning>of() : List.of(new RentalSummaryResponse.Warning("contractEndDate",
             "Chưa đủ thông tin để xác minh ngày cuối sử dụng của hồ sơ thuê."));
+        var startDate = timeline == null ? r.getStartDate() : timeline.paidRentalStart();
+        var contractEndDate = timeline == null ? r.getContractEndDate() : timeline.contractEndDate();
+        var setupStartedAt = timeline == null ? r.getSetupStartedAt() : timeline.appointmentAt();
+        var setupEndsAt = timeline == null ? r.getSetupEndsAt() : timeline.freeSetupEndsAt();
         return new RentalSummaryResponse(r.getId(), displayCode, new RentalSummaryResponse.Customer(r.getCustomer().getId(), r.getCustomer().getFullName()),
             new RentalSummaryResponse.Facility(r.getFacility().getId(), r.getFacility().getCode(), r.getFacility().getName()),
             new RentalSummaryResponse.Unit(unit.getId(), unit.getCode()),
             new RentalSummaryResponse.UnitType(type.getId(), type.getCode(), type.getName()),
-            r.getStatus(), r.getStartDate(), r.getContractEndDate(), r.getMonthlyPrice(), "VND", warnings,
+            r.getStatus(), startDate, contractEndDate, r.getMonthlyPrice(), "VND", warnings,
             period.map(p -> new RentalSummaryResponse.DateSemantics("COMPLETE",p.convention().name(),p.lastPermittedDate(),p.endExclusive()))
                 .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), setupStartedAt, setupEndsAt,
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(),
             RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()), inventoryMismatchReturn);
+    }
+
+    /**
+     * Read-time compatibility projection for records created before the
+     * appointment-based timeline repair was applied. It deliberately does not
+     * mutate the entity: the Flyway repair remains responsible for persistence,
+     * while the customer/manager API cannot display mixed old and new dates in
+     * the meantime.
+     */
+    private TimelineProjection projectedTimeline(Rental rental) {
+        if (rental == null || rental.getReservation() == null) return null;
+        var reservation = rental.getReservation();
+        var quote = reservation.getSourceQuote();
+        int freeSetupDays = reservation.getSetupDaysSnapshot();
+        if (freeSetupDays == 0 && quote != null && quote.getFreeSetupDays() > 0) {
+            freeSetupDays = quote.getFreeSetupDays();
+        }
+        if (freeSetupDays < 0) return null;
+        int rentalMonths = quote == null ? 0 : quote.getRentalMonths();
+        if (rentalMonths < 1) return null;
+
+        java.time.Instant appointmentAt = reservation.getAppointmentAt();
+        if (appointmentAt == null && checkIns != null) {
+            appointmentAt = checkIns.findByReservation_Id(reservation.getId())
+                .map(com.storagehub.domain.model.CheckIn::getScheduledAt)
+                .orElse(null);
+        }
+        if (appointmentAt == null) appointmentAt = rental.getSetupStartedAt();
+        if (appointmentAt == null) return null;
+
+        var dates = RentalTimelinePolicy.fromCustomerAppointment(appointmentAt, freeSetupDays, rentalMonths);
+        return new TimelineProjection(appointmentAt, dates.freeSetupEndsAt(), dates.paidRentalStart(), dates.contractEndDate());
+    }
+
+    private record TimelineProjection(java.time.Instant appointmentAt, java.time.Instant freeSetupEndsAt,
+        java.time.LocalDate paidRentalStart, java.time.LocalDate contractEndDate) {
+        private Optional<com.storagehub.service.rental.period.RentalPeriod> period(Rental rental) {
+            return com.storagehub.service.rental.period.RentalPeriod.verified(rental.getId(), paidRentalStart,
+                contractEndDate, com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE,
+                "customer-appointment-timeline:" + rental.getReservation().getId());
+        }
     }
     private void integrity(Rental r) {
         boolean valid = r.getCustomer() != null && r.getFacility() != null && r.getStorageUnit() != null
