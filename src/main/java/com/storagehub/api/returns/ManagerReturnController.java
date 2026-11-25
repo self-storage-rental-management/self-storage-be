@@ -51,7 +51,7 @@ public class ManagerReturnController {
 
     @PostMapping("/{returnId}/arrival-review")
     public ApiResponse<ReturnCaseResponse> reviewArrival(@PathVariable UUID returnId, @Valid @RequestBody ArrivalReviewRequest request) {
-        return new ApiResponse<>(returnSettlementService.reviewMismatchArrival(actorContext.required(), returnId,
+        return new ApiResponse<>(returnSettlementService.reviewReturnArrival(actorContext.required(), returnId,
             request.accepted(), request.reason()), CorrelationIdContext.current());
     }
 

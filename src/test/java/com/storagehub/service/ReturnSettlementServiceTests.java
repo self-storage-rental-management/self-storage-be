@@ -472,10 +472,12 @@ class ReturnSettlementServiceTests {
         assertThat(record.getStatus()).isEqualTo(ReturnCaseStatus.scheduled);
     }
 
-    @Test
-    void noShowScanDoesNotTakeOverAnExpiredTimelySessionAwaitingReview() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ReturnType.class, names = {"NORMAL", "INVENTORY_MISMATCH"})
+    void noShowScanDoesNotTakeOverAnExpiredTimelySessionAwaitingReview(ReturnType type) {
         var rc = setupReturn(ReturnCaseStatus.scheduled);
-        rc.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        rc.setSetupExitRequested(type == ReturnType.INVENTORY_MISMATCH);
+        rc.setReturnType(type);
         Instant due = Instant.now().minusSeconds(3600);
         rental.setInventoryRemovalDeadlineAt(due);
         rc.setReturnArrivedAt(due.minusSeconds(60));
@@ -725,6 +727,7 @@ class ReturnSettlementServiceTests {
     @Test
     void performInspection_withNetRefund_calculatesCorrectly() {
         ReturnCase returnCase = new ReturnCase();
+        setVerifiedReturnAttendance(returnCase);
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
         returnCase.setRental(rental);
         returnCase.setFacility(facility);
@@ -764,6 +767,7 @@ class ReturnSettlementServiceTests {
     @Test
     void performInspection_withAmountDue_calculatesCorrectly() {
         ReturnCase returnCase = new ReturnCase();
+        setVerifiedReturnAttendance(returnCase);
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
         returnCase.setRental(rental);
         returnCase.setFacility(facility);
@@ -1297,27 +1301,29 @@ class ReturnSettlementServiceTests {
         return rc;
     }
 
-    @Test
-    void mismatchAttendanceCountsEachAttemptOnceAndRequiresManagerAfterTwoFailures() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ReturnType.class, names = {"NORMAL", "INVENTORY_MISMATCH"})
+    void returnAttendanceCountsEachAttemptOnceAndRequiresManagerAfterTwoFailures(ReturnType type) {
         var rc = setupReturn(ReturnCaseStatus.scheduled);
-        rc.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        rc.setSetupExitRequested(type == ReturnType.INVENTORY_MISMATCH);
+        rc.setReturnType(type);
         rental.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(60));
         rental.getReservation().setIdentityDocumentNumber("TEST99999");
         rc.setReturnArrivedAt(Instant.now());
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
 
         UUID first = UUID.randomUUID();
-        assertThat(service.verifyMismatchIdentity(staffActor, rc.getId(), first, "TEST11111").attendance().attempts()).isOne();
-        assertThat(service.verifyMismatchIdentity(staffActor, rc.getId(), first, "TEST99999").attendance().verifiedAt()).isNull();
-        var failed = service.verifyMismatchIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST22222").attendance();
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), first, "TEST11111").attendance().attempts()).isOne();
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), first, "TEST99999").attendance().verifiedAt()).isNull();
+        var failed = service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST22222").attendance();
         assertThat(failed.attempts()).isEqualTo(2);
         assertThat(failed.reviewStartsAt()).isNotNull();
-        assertThatThrownBy(() -> service.verifyMismatchIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))
+        assertThatThrownBy(() -> service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))
             .hasMessageContaining("đã kết thúc");
-        assertThatThrownBy(() -> service.reviewMismatchArrival(managerActor, rc.getId(), true, "Đã đối soát"))
+        assertThatThrownBy(() -> service.reviewReturnArrival(managerActor, rc.getId(), true, "Đã đối soát"))
             .hasMessageContaining("danh tính");
-        service.reviewMismatchArrival(managerActor, rc.getId(), false, "Giấy tờ không khớp");
-        assertThat(MismatchReturnAttendance.protectsFromRecovery(rc)).isFalse();
+        service.reviewReturnArrival(managerActor, rc.getId(), false, "Giấy tờ không khớp");
+        assertThat(ReturnAttendancePolicy.protectsFromRecovery(rc)).isFalse();
     }
 
     @Test
@@ -1330,12 +1336,12 @@ class ReturnSettlementServiceTests {
         rc.setReturnArrivedAt(deadline.minusSeconds(60));
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
 
-        assertThat(service.verifyMismatchIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999")
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999")
             .attendance().verifiedAt()).isAfter(deadline);
-        assertThat(MismatchReturnAttendance.canInspect(rc, Instant.now())).isTrue();
-        Instant expiry = MismatchReturnAttendance.expiresAt(rc);
-        assertThat(MismatchReturnAttendance.canInspect(rc, expiry)).isFalse();
-        assertThat(MismatchReturnAttendance.protectsFromRecovery(rc)).isTrue();
+        assertThat(ReturnAttendancePolicy.canInspect(rc, Instant.now())).isTrue();
+        Instant expiry = ReturnAttendancePolicy.expiresAt(rc);
+        assertThat(ReturnAttendancePolicy.canInspect(rc, expiry)).isFalse();
+        assertThat(ReturnAttendancePolicy.protectsFromRecovery(rc)).isTrue();
         assertThat(rental.getInventoryRemovalDeadlineAt()).isEqualTo(deadline);
     }
 
@@ -1371,6 +1377,15 @@ class ReturnSettlementServiceTests {
         rc.setSetupExitRequested(false);
         rc.setCustomerClearedAt(cleared ? Instant.now() : null);
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(false)))
+            .hasMessageContaining("xác minh danh tính");
+        UUID arrivalPhoto = UUID.fromString(inspectionPhoto(rc).getFirst());
+        settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, arrivalPhoto).setUploadedBy(staff);
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        assertThat(service.recordReturnArrival(staffActor, rc.getId(), arrivalPhoto).attendance().evidenceId())
+            .isEqualTo(arrivalPhoto);
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999")
+            .attendance().verifiedAt()).isNotNull();
         assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(false)))
             .hasMessageContaining("kho trống");
         assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(true)))
@@ -1438,6 +1453,8 @@ class ReturnSettlementServiceTests {
     void verifiedEarlyReturnRefundsUnusedMonths() {
         var rc = setupReturn(ReturnCaseStatus.requested);
         rc.setSetupExitRequested(false);
+        rc.setReturnType(ReturnType.EARLY_RETURN);
+        setVerifiedReturnAttendance(rc);
         rc.setRequestedBy(customer);
         rc.setRequestedAt(Instant.parse("2026-01-01T00:00:00Z"));
         rc.setScheduledDate(LocalDate.of(2026, 1, 10));
@@ -1456,6 +1473,12 @@ class ReturnSettlementServiceTests {
         assertThat(result.returnType()).isEqualTo(ReturnType.EARLY_RETURN);
         assertThat(result.activeReturnPolicy().rentalRefundAmount()).isEqualByComparingTo("4000000");
         assertThat(result.netRefundAmount()).isEqualByComparingTo("6000000");
+    }
+
+    private void setVerifiedReturnAttendance(ReturnCase record) {
+        Instant now = Instant.now();
+        record.setReturnArrivedAt(now);
+        record.setReturnIdentityVerifiedAt(now);
     }
 
     private List<String> inspectionPhoto(ReturnCase rc) {

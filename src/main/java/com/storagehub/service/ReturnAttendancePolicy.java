@@ -6,12 +6,27 @@ import com.storagehub.domain.model.ReturnType;
 import java.time.Duration;
 import java.time.Instant;
 
-final class MismatchReturnAttendance {
-    private MismatchReturnAttendance() {}
+final class ReturnAttendancePolicy {
+    private ReturnAttendancePolicy() {}
 
-    static boolean applies(ReturnCase record) {
+    static boolean isScheduledRentalReturn(ReturnCase record) {
+        return !record.isSetupExitRequested()
+            && (record.getReturnType() == ReturnType.NORMAL || record.getReturnType() == ReturnType.EARLY_RETURN);
+    }
+
+    static boolean isDeadlineMismatchReturn(ReturnCase record) {
         return record.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && record.getRental().getInventoryRemovalDeadlineAt() != null;
+    }
+
+    static boolean applies(ReturnCase record) {
+        return isScheduledRentalReturn(record) || isDeadlineMismatchReturn(record);
+    }
+
+    static boolean canRecordArrivalAt(ReturnCase record, Instant time) {
+        Instant deadline = isDeadlineMismatchReturn(record) ? record.getRental().getInventoryRemovalDeadlineAt()
+            : record.getRecoveryEligibleAt();
+        return deadline == null || time.isBefore(deadline);
     }
 
     static boolean isOpen(ReturnCase record) {
@@ -33,7 +48,7 @@ final class MismatchReturnAttendance {
 
     static boolean protectsFromRecovery(ReturnCase record) {
         return applies(record) && isOpen(record) && record.getReturnArrivedAt() != null
-            && record.getReturnArrivedAt().isBefore(record.getRental().getInventoryRemovalDeadlineAt())
+            && canRecordArrivalAt(record, record.getReturnArrivedAt())
             && !Boolean.FALSE.equals(record.getReturnArrivalReviewAccepted());
     }
 
