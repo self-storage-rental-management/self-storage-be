@@ -47,6 +47,12 @@ public class ReturnCase extends BaseEntity {
     @Column private Instant returnArrivalReviewedAt;
     @Column private Boolean returnArrivalReviewAccepted;
 
+    @Column
+    private Integer missingPalletCount;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal palletLossFee;
+
     @Column(nullable = false)
     private boolean setupExitRequested;
 

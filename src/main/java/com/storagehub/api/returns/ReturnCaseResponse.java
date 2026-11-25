@@ -110,7 +110,9 @@ public record ReturnCaseResponse(
     long settlementVersion,
     Instant settlementPublishedAt,
     Instant settlementPaymentDueAt,
-    List<SettlementReceipt> settlementReceipts
+    List<SettlementReceipt> settlementReceipts,
+    Integer missingPalletCount,
+    BigDecimal palletLossFee
 ) {
     public record Attendance(Instant arrivedAt, UUID evidenceId, Instant expiresAt, int attempts, Instant verifiedAt,
         Instant reviewStartsAt, Boolean reviewAccepted) {}
@@ -184,17 +186,8 @@ public record ReturnCaseResponse(
         OverdueSettlement overdueSettlement,
         String settlementBlocker
     ) {
-        this(
-            id, rentalId, facilityId, facilityName, storageUnitId, unitNumber, customerId, customerName,
-            customerEmail, customerPhone, status, null, null, requestedAt, scheduledDate, customerNotes,
-            inspectedById, inspectedByName, inspectedAt, inventoryMatch, damageClassification, inspectionNotes,
-            evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, depositAmount,
-            damageFee, cleaningFee, lostItemFee, overdueFee, outstandingFee, totalDeductions, netRefundAmount,
-            amountDueFromCustomer, overdueDays, customerConfirmed, customerConfirmedAt, customerDecision,
-            customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
-            settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
-            recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, 0, null, null, List.of()
+            settlementReceipt, overdueSettlement, settlementBlocker,
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, 0, null, null, List.of(), null, null
         );
     }
 
