@@ -31,6 +31,18 @@ class ManagerCashflowServiceTests {
         assertThat(months.getFirst().refunded()).isEqualByComparingTo("10");
     }
 
+    @Test void aggregatesDailyValuesForShortReportingRanges() {
+        var days = ManagerCashflowService.aggregateDaily(List.of(
+            event("a", "COLLECTION", 100, "2026-11-24T16:59:59Z"),
+            event("b", "REFUND", 20, "2026-11-24T17:00:00Z")
+        ), LocalDate.parse("2026-11-24"), LocalDate.parse("2026-11-25"));
+
+        assertThat(days).hasSize(2);
+        assertThat(days.getFirst().collected()).isEqualByComparingTo("100");
+        assertThat(days.getFirst().refunded()).isZero();
+        assertThat(days.get(1).refunded()).isEqualByComparingTo("20");
+    }
+
     @Test void usesRecordedTransactionsIncludingSandboxAndKeepsPendingOutOfNet() {
         var em = mock(EntityManager.class);
         var scopes = mock(FacilityScopeService.class);
@@ -40,8 +52,9 @@ class ManagerCashflowServiceTests {
         var rental = id(new Rental()); rental.setReservation(reservation);
         var payment = paidPayment(reservation, "1000"); payment.setGatewayProvider("VNPAY_SANDBOX");
         var pending = returnCase(rental, ReturnCaseStatus.refund_pending, "200", null, null);
+        var awaitingApproval = returnCase(rental, ReturnCaseStatus.awaiting_business_review, "400", null, null);
         var paid = returnCase(rental, ReturnCaseStatus.completed, "300", Instant.now(), "TX1");
-        query(em, Payment.class, List.of(payment)); query(em, ReturnCase.class, List.of(pending, paid));
+        query(em, Payment.class, List.of(payment)); query(em, ReturnCase.class, List.of(pending, awaitingApproval, paid));
         var request = id(new RefundRequest()); request.setPayment(payment); request.setReturnCase(pending);
         request.setAmount(new BigDecimal("200")); request.setStatus(RefundRequestStatus.APPROVED);
         query(em, RefundRequest.class, List.of(request)); query(em, Refund.class, List.of()); query(em, Rental.class, List.of());
@@ -52,6 +65,7 @@ class ManagerCashflowServiceTests {
         assertThat(report.refunded()).isEqualByComparingTo("300");
         assertThat(report.netRetained()).isEqualByComparingTo("700");
         assertThat(report.pendingRefund()).isEqualByComparingTo("200");
+        assertThat(report.pendingApprovalRefund()).isEqualByComparingTo("400");
         assertThat(report.completeness()).isEqualTo("RECORDED");
         assertThat(report.warnings()).noneMatch(w -> w.toLowerCase().contains("sandbox"));
         verify(scopes).assertCanRead(null, facility);
@@ -102,6 +116,27 @@ class ManagerCashflowServiceTests {
         assertThat(report.collected()).isEqualByComparingTo("1000");
     }
 
+    @Test void rejectsStartDateBeforeFirstRecordedPayment() {
+        var em = mock(EntityManager.class);
+        var service = new ManagerCashflowService(em, mock(AdminAuthorizationService.class), mock(FacilityScopeService.class));
+        var payment = paidPayment(reservation("RSV-BOUNDARY", "Khách giới hạn"), "1000");
+        query(em, Payment.class, List.of(payment));
+
+        var firstPaymentDate = payment.getPaidAt().atZone(ManagerCashflowService.ZONE).toLocalDate();
+        assertThatThrownBy(() -> service.read(null, UUID.randomUUID(), firstPaymentDate.minusDays(1), firstPaymentDate))
+            .hasMessage("Ngày bắt đầu phải từ ngày thanh toán đầu tiên tại cơ sở.");
+    }
+
+    @Test void rejectsFutureCashflowDate() {
+        var em = mock(EntityManager.class);
+        var service = new ManagerCashflowService(em, mock(AdminAuthorizationService.class), mock(FacilityScopeService.class));
+        var tomorrow = LocalDate.now(ManagerCashflowService.ZONE).plusDays(1);
+
+        assertThatThrownBy(() -> service.read(null, UUID.randomUUID(), tomorrow, tomorrow))
+            .hasMessage("Không được chọn ngày trong tương lai.");
+        verifyNoInteractions(em);
+    }
+
     private static Reservation reservation(String code, String customerName) {
         var reservation = id(new Reservation()); reservation.setReservationCode(code);
         var customer = id(new User()); customer.setFullName(customerName); reservation.setCustomer(customer);
@@ -111,7 +146,7 @@ class ManagerCashflowServiceTests {
     private static Payment paidPayment(Reservation reservation, String amount) {
         var payment = id(new Payment()); payment.setReservation(reservation); payment.setPurpose(PaymentType.RESERVATION_DEPOSIT);
         payment.setStatus(PaymentStatus.PAID); payment.setAmount(new BigDecimal(amount)); payment.setCurrency("VND");
-        payment.setPaidAt(Instant.now().minusSeconds(60)); return payment;
+        payment.setPaidAt(Instant.now().minusSeconds(86_400)); return payment;
     }
 
     private static ReturnCase returnCase(Rental rental, ReturnCaseStatus status, String refund, Instant paidAt, String reference) {

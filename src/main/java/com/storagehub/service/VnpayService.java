@@ -1211,7 +1211,7 @@ public class VnpayService {
             resolveActiveComplaint(reservation, paidAt);
             ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
                 .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), paidAt);
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), snapshot.getFreeSetupDays(), paidAt);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(paidAt);
             reservation.setConfirmedAt(paidAt);
