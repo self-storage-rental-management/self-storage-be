@@ -47,7 +47,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Slf4j
 public class AuthService {
 
-    private static final int MAX_LOGIN_FAILURES = 5;
     private static final long LOGIN_LOCK_MINUTES = 15;
 
     private final UserRepository userRepository;
@@ -66,6 +65,7 @@ public class AuthService {
     private final com.storagehub.service.email.EmailService transactionalEmailService;
     private final com.storagehub.domain.repo.LoginHistoryRepository loginHistoryRepository;
     private final com.storagehub.domain.repo.ActivityLogRepository activityLogRepository;
+    private final SecurityPolicyService securityPolicyService;
 
     @Value("${app.security.alert-cooldown-hours:6}")
     private int alertCooldownHours;
@@ -345,7 +345,8 @@ public class AuthService {
         if (user == null || user.getStatus() != UserStatus.ACTIVE) return;
         int failures = user.getFailedLoginAttempts() + 1;
         user.setFailedLoginAttempts(failures);
-        if (failures >= MAX_LOGIN_FAILURES) {
+        int lockoutAttempts = securityPolicyService.lockoutAttempts();
+        if (failures >= lockoutAttempts) {
             Instant now = Instant.now();
             user.setStatus(UserStatus.LOCKED);
             user.setLockedUntil(now.plus(LOGIN_LOCK_MINUTES, ChronoUnit.MINUTES));
@@ -355,7 +356,7 @@ public class AuthService {
             sessionRepository.revokeActiveByUserId(user.getId(), now);
             auditLogService.recordMutation("ACCOUNT_LOCKED_LOGIN_FAILURE", "User", user.getId(), null,
                 Map.of("status", UserStatus.ACTIVE),
-                Map.of("status", UserStatus.LOCKED, "lockedUntil", user.getLockedUntil(), "reason", "5 lần đăng nhập sai"));
+                Map.of("status", UserStatus.LOCKED, "lockedUntil", user.getLockedUntil(), "reason", lockoutAttempts + " lần đăng nhập sai"));
         } else {
             userRepository.saveAndFlush(user);
         }
@@ -418,10 +419,6 @@ public class AuthService {
         ActorPrincipal actor = actorContext.required();
         User user = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
-        boolean isCustomer = user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.CUSTOMER);
-        if (!isCustomer && !user.isMustChangePassword()) {
-            throw ApiExceptions.forbidden("Only customer accounts can change their password");
-        }
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
             throw ApiExceptions.unauthorized("The current password is incorrect");
         }

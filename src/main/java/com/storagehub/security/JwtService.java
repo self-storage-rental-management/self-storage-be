@@ -24,6 +24,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.storagehub.service.SecurityPolicyService;
 
 @Service
 public class JwtService {
@@ -31,16 +32,19 @@ public class JwtService {
     private final JwtEncoder jwtEncoder;
     private final JwtProperties properties;
     private final UserFacilityScopeRepository scopeRepository;
+    private final SecurityPolicyService securityPolicyService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public JwtService(
         JwtEncoder jwtEncoder,
         JwtProperties properties,
-        UserFacilityScopeRepository scopeRepository
+        UserFacilityScopeRepository scopeRepository,
+        SecurityPolicyService securityPolicyService
     ) {
         this.jwtEncoder = jwtEncoder;
         this.properties = properties;
         this.scopeRepository = scopeRepository;
+        this.securityPolicyService = securityPolicyService;
     }
 
     @Transactional(readOnly = true)
@@ -48,7 +52,7 @@ public class JwtService {
         Map<java.util.UUID, FacilityScopeLevel> scopes = scopeRepository.findByUserId(user.getId()).stream()
             .collect(Collectors.toMap(scope -> scope.getFacility().getId(), scope -> scope.getScopeLevel()));
         Instant now = Instant.now();
-        Instant expiresAt = now.plus(properties.getExpiration(), ChronoUnit.SECONDS);
+        Instant expiresAt = now.plus(securityPolicyService.sessionTimeoutSeconds(), ChronoUnit.SECONDS);
         List<String> roles = user.getRoles().stream().map(role -> role.getCode().name()).sorted().toList();
         List<String> permissions = user.getRoles().stream()
             .flatMap(role -> role.getEffectivePermissions().stream())
@@ -91,7 +95,7 @@ public class JwtService {
     }
 
     public long expirationSeconds() {
-        return properties.getExpiration();
+        return securityPolicyService.sessionTimeoutSeconds();
     }
 
     public long refreshExpirationSeconds() {
