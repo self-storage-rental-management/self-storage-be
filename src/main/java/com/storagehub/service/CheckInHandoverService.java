@@ -411,6 +411,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RESERVATION)
     public CheckInResponse schedule(
         ActorPrincipal actor,
         UUID reservationId,
@@ -633,6 +634,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse verifyIdentity(
         ActorPrincipal actor,
         UUID checkInId,
@@ -705,6 +707,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse correctIdentity(ActorPrincipal actor, UUID checkInId, VerifyCheckInIdentityRequest request) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
@@ -749,6 +752,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse signContract(
         ActorPrincipal actor,
         UUID checkInId,
@@ -778,6 +782,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse confirmNoRemainingPayment(
         ActorPrincipal actor,
         UUID checkInId,
@@ -803,6 +808,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse startSetup(
         ActorPrincipal actor,
         UUID checkInId,
@@ -912,6 +918,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse completeSetup(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1471,6 +1478,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse complete(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1704,6 +1712,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInPaymentResponse recordRemainingPayment(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1761,22 +1770,6 @@ public class CheckInHandoverService {
         return toPaymentResponse(saved);
     }
 
-    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
-    public void processAttendanceDeadline(UUID reservationId) {
-        // Match the operator lock order. An assigned unit may not have a check-in yet.
-        CheckIn checkIn = checkInRepository.attendanceCheckInId(reservationId)
-            .flatMap(checkInRepository::findByIdForUpdate).orElse(null);
-        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId).orElse(null);
-        if (reservation == null
-            || (reservation.getStatus() != ReservationStatus.UNIT_RESERVED && reservation.getStatus() != ReservationStatus.READY_FOR_CHECKIN)
-            || reservation.getAssignedUnit() == null) return;
-        if (checkIn == null) checkIn = checkInRepository.findByReservation_Id(reservationId).orElse(null);
-        Instant completion = ReservationCheckInPolicy.completionDeadline(reservation);
-        if (completion != null) {
-            if (Instant.now().isAfter(completion) && checkIn != null && java.util.EnumSet.of(CheckInStatus.scheduled,
-                CheckInStatus.identity_verified, CheckInStatus.contract_signed, CheckInStatus.payment_collected).contains(checkIn.getStatus())) {
-                cancelUnfinishedHandover(reservation, checkIn, completion);
-            }
             return;
         }
         if (reservation.getArrivalReviewOpenedAt() != null || reservation.getHandoverArrivedAt() != null || !ReservationCheckInPolicy.hasAttendanceTerms(reservation)
@@ -1886,6 +1879,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse reject(
         ActorPrincipal actor,
         UUID checkInId,
@@ -2376,50 +2370,6 @@ public class CheckInHandoverService {
                     item.getCatalogCategoryId(), item.getCatalogMaterialId(), item.getCategory(), item.isFragile(), item.isStackable(),
                     item.isAllowHorizontalPlacement(), item.getMaxStackLayers()))
                 .toList(),
-            intakeAction(actor, reservation, checkIn, assignment),
-            rental == null ? null : rental.getInventoryFinalDeadlineAt(),
-            checkIn == null ? null : checkIn.getInventoryResolutionStatus(),
-            checkIn == null || checkIn.getInventoryConfirmation() == null
-                || checkIn.getInventoryConfirmation().getInventoryRefusalSubmittedAt() == null ? null
-                : checkIn.hasPendingInventoryRefusal() ? "PENDING"
-                    : Boolean.TRUE.equals(checkIn.getInventoryConfirmation().getInventoryRefusalApproved()) ? "APPROVED" : "REJECTED",
-            checkIn != null && checkIn.isInventoryFullFit(),
-            checkIn != null && checkIn.isInventoryPartialFitAvailable(),
-            checkIn == null ? null : checkIn.getInventorySuggestedPackageCount(),
-            checkIn == null ? null : checkIn.getInventoryMismatchSummary(),
-            checkIn == null ? null : checkIn.getInventoryAcceptedQuantitiesJson(),
-            rental == null ? null : rental.getInventoryRemainderDeadlineAt(),
-            checkIn == null ? null : checkIn.getInventoryRemainderRemovedAt(),
-            checkIn == null ? null : checkIn.getInventoryRemainderRemovalNote(),
-            checkIn == null ? null : checkIn.getInventoryActualJson(),
-            checkIn == null ? null : checkIn.getInventoryMismatchJson(),
-            checkIn == null ? null : checkIn.getInventorySuggestedQuantitiesJson(),
-            checkIn == null ? 0L : inventoryResultVersion(checkIn),
-            checkIn == null || inventoryConfirmation(checkIn) == null ? null : inventoryConfirmation(checkIn).getConfirmedBy(),
-            atSiteConfirmerName(checkIn),
-            checkIn == null || inventoryConfirmation(checkIn) == null ? null : inventoryConfirmation(checkIn).getConfirmedAt(),
-            checkIn != null && checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_CUSTOMER,
-            receiptConfirmationDueAt,
-            receiptConfirmationOverdue,
-            receiptConfirmationReleaseAt,
-            receiptReleaseEligible,
-            reservation.getGoodsCondition(),
-            paymentEvidenceReference,
-            inventoryVisit,
-            checkInDeadline(reservation),
-            storageCapacity,
-            inventoryDecisions == null ? null : inventoryDecisions.read(checkIn),
-            readHandoverRecord(checkIn),
-            checkIn == null ? null : (checkIn.getCustomerReceiptConfirmedAt() != null
-                ? checkIn.getCustomerReceiptConfirmedAt()
-                : checkIn.getSetupStartedAt()),
-            reservation.getFacility().getAddress(),
-            resolveInventoryReturnWindowDays(reservation, rental),
-            rental == null ? null : rental.getInventoryRemovalPublishedAt(),
-            rental == null ? null : rental.getInventoryRemovalDeadlineAt(),
-            rental == null ? null : rental.getInventoryReturnLastReminderAt(),
-            palletInventory == null ? null : palletInventory.equipment(unit),
-            ReservationCheckInPolicy.attendance(reservation),
             checkIn == null ? null : checkIn.getDeclaredIdentityMasked(),
             checkIn != null && Boolean.TRUE.equals(checkIn.getIdentityCorrected())
         );
