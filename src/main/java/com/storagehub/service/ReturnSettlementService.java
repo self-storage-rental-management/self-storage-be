@@ -73,6 +73,8 @@ public class ReturnSettlementService {
     private static final String NO_SHOW_RECOVERY_TASK_TITLE = "Thu hồi hàng do khách không đến ngày trả kho";
     @org.springframework.beans.factory.annotation.Value("${app.refund.processing-days:7}")
     private int refundProcessingDays = 7;
+    @org.springframework.beans.factory.annotation.Value("${app.return.pallet-unit-price:300000}")
+    private BigDecimal palletUnitPrice = BigDecimal.valueOf(300_000);
 
     private void markRefundPending(ReturnCase returnCase) {
         returnCase.setStatus(ReturnCaseStatus.refund_pending);
@@ -2025,7 +2027,9 @@ public class ReturnSettlementService {
         int rackCount = handoverRacks != null ? handoverRacks : (unitEquipment != null ? unitEquipment.rackCount() : 0);
         int frameCount = unitEquipment != null ? unitEquipment.frameCount() : rackCount;
         Integer palletCount = handoverPallets != null ? handoverPallets : (unitEquipment != null ? unitEquipment.palletCount() : null);
-        return new ReturnCaseResponse.Equipment(rackCount, frameCount, palletCount, null);
+        BigDecimal unitPrice = palletUnitPrice != null && palletUnitPrice.signum() > 0
+            ? palletUnitPrice : BigDecimal.valueOf(300_000);
+        return new ReturnCaseResponse.Equipment(rackCount, frameCount, palletCount, unitPrice);
     }
 
     private MaintenanceTask findNoShowRecoveryTask(ReturnCase returnCase) {
