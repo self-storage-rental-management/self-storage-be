@@ -65,7 +65,8 @@ public record ReturnInspectionRequest(
      */
     List<DamageItem> damageItems,
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    LockInspectionResult lockInspectionResult
+    LockInspectionResult lockInspectionResult,
+    Integer missingPalletCount
 ) {
     public record DamageItem(String code, BigDecimal quantity) {}
 
@@ -89,12 +90,13 @@ public record ReturnInspectionRequest(
         @JsonProperty("customerPresent") Boolean customerPresent,
         @JsonProperty("recoveryWitnessStaffId") UUID recoveryWitnessStaffId,
         @JsonProperty("damageItems") List<DamageItem> damageItems,
-        @JsonProperty("lockInspectionResult") LockInspectionResult lockInspectionResult
+        @JsonProperty("lockInspectionResult") LockInspectionResult lockInspectionResult,
+        @JsonProperty("missingPalletCount") Integer missingPalletCount
     ) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock,
             proposedUnitStatus, unitVacated, recoveryHandoverLocation,
-            customerPresent == null || customerPresent, recoveryWitnessStaffId, damageItems, lockInspectionResult);
+            customerPresent == null || customerPresent, recoveryWitnessStaffId, damageItems, lockInspectionResult, missingPalletCount);
     }
 
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
@@ -104,7 +106,7 @@ public record ReturnInspectionRequest(
         String recoveryHandoverLocation, boolean customerPresent, UUID recoveryWitnessStaffId, List<DamageItem> damageItems) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus,
-            unitVacated, recoveryHandoverLocation, customerPresent, recoveryWitnessStaffId, damageItems, null);
+            unitVacated, recoveryHandoverLocation, customerPresent, recoveryWitnessStaffId, damageItems, null, null);
     }
 
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
