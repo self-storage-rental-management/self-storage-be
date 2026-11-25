@@ -395,7 +395,7 @@ public class AdminUserService {
     public AdminUserResponse resetPassword(ActorPrincipal actor, UUID id, AdminPasswordResetRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
-        assertEditableTarget(actor, user);
+        assertPasswordResetTarget(actor, user);
         boolean wasRequiredToChangePassword = user.isMustChangePassword();
 
         String temporaryPassword;
@@ -440,6 +440,14 @@ public class AdminUserService {
             && (!actor.hasRole(RoleCode.ADMIN) || actor.userId().equals(user.getId()))) {
             throw ApiExceptions.forbidden("An Admin account requires a different Admin actor for this operation");
         }
+    }
+
+    private void assertPasswordResetTarget(ActorPrincipal actor, User user) {
+        if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
+            && !actor.userId().equals(user.getId())) {
+            throw ApiExceptions.forbidden("Một Admin không được đặt lại mật khẩu của Admin khác");
+        }
+        assertEditableTarget(actor, user);
     }
 
     private Set<RoleCode> normalizeRoles(Set<RoleCode> roles) {

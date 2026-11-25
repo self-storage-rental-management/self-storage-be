@@ -164,10 +164,13 @@ public class ProcessingLeaseService {
 
     @Transactional
     public View forceRelease(ActorPrincipal actor, Target type, UUID id) {
-        Resource resource = lockedResource(actor, type, id);
         if (!actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
             throw ApiExceptions.forbidden("Chỉ Manager, Business Owner hoặc Admin được gỡ khóa cưỡng chế.");
         }
+        Resource resource = actor.hasRole(RoleCode.ADMIN)
+            ? resource(type, id)
+            : lockedResource(actor, type, id);
+        if (actor.hasRole(RoleCode.ADMIN)) lock(resource);
         ProcessingLease lease = lease(resource);
         if (active(lease)) {
             UUID oldOwner = lease.getOwnerId();
