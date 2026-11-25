@@ -119,6 +119,8 @@ public class ReturnSettlementService {
     private final ObjectMapper objectMapper;
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.returns.missing-pallet-unit-price:300000}")
+    private BigDecimal missingPalletUnitPrice = BigDecimal.valueOf(300000);
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-grace-hours:24}")
     private long noShowGraceHours = 24;
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-recovery-sla-hours:24}")
@@ -472,6 +474,7 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RETURN)
     public ReturnCaseResponse businessReviewSetupExit(
         ActorPrincipal actor,
         UUID returnId,
@@ -583,6 +586,7 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RETURN)
     public ReturnCaseResponse businessReviewLegacyPricing(
         ActorPrincipal actor,
         UUID returnId,
@@ -656,6 +660,7 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RETURN)
     public ReturnCaseResponse performInspection(
         ActorPrincipal actor,
         UUID returnId,
@@ -734,9 +739,27 @@ public class ReturnSettlementService {
         User staff = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Staff user not found"));
 
+        var equipment = returnEquipment(returnCase);
+        int missingPallets = request.missingPalletCount() == null ? 0 : request.missingPalletCount();
+        if (equipment.palletCount() == null)
+            throw ApiExceptions.validation("Thiếu cấu hình thiết bị bàn giao; cần đối soát trước khi nghiệm thu.", null);
+        if (missingPallets < 0 || missingPallets > equipment.palletCount())
+            throw ApiExceptions.validation("Số tấm kê thiếu phải nằm trong số lượng đã bàn giao.", null);
+        if (missingPallets > 0 && equipment.palletUnitPrice().signum() <= 0)
+            throw ApiExceptions.validation("Chưa cấu hình đơn giá bồi thường tấm kê.", null);
+        boolean goodsLeft = request.damageClassification() == com.storagehub.domain.model.DamageClassification.abandoned_goods;
+        if (goodsLeft && safeFee(request.cleaningFee()).compareTo(BigDecimal.valueOf(200000)) < 0)
+            throw ApiExceptions.validation("Kho còn hàng phải tính phí tổng vệ sinh tối thiểu 200.000 đ.", null);
+        boolean requiresMaintenance = goodsLeft || safeFee(request.cleaningFee()).signum() > 0
+            || request.damageClassification() != com.storagehub.domain.model.DamageClassification.no_damage || missingPallets > 0;
+        if (requiresMaintenance && request.proposedUnitStatus() != StorageUnitStatus.maintenance)
+            throw ApiExceptions.validation("Kho còn hàng, thiếu thiết bị, cần vệ sinh hoặc hư hại phải chọn bảo trì / vệ sinh.", null);
+        BigDecimal palletFee = equipment.palletUnitPrice().multiply(BigDecimal.valueOf(missingPallets));
+        returnCase.setMissingPalletCount(missingPallets);
+        returnCase.setPalletLossFee(palletFee);
         BigDecimal safeDamage = calculatedDamageFee(request);
         BigDecimal safeCleaning = safeFee(request.cleaningFee());
-        BigDecimal safeLostItem = safeFee(request.lostItemFee());
+        BigDecimal safeLostItem = (request.returnedLock() ? BigDecimal.ZERO : BigDecimal.valueOf(150000)).add(palletFee);
         BigDecimal safeOverdue = safeFee(request.overdueFee());
         Instant inspectionAt=Instant.now();
         returnCase.setInspectedAt(inspectionAt);
@@ -796,7 +819,7 @@ public class ReturnSettlementService {
 
         returnCase.setInspectedBy(staff);
         returnCase.setInspectedAt(inspectionAt);
-        returnCase.setInventoryMatch(request.inventoryMatch());
+        returnCase.setInventoryMatch(missingPallets > 0 ? com.storagehub.domain.model.InventoryMatch.missing : request.inventoryMatch());
         returnCase.setDamageClassification(request.damageClassification());
         String damageBreakdown = ReturnDamagePricing.describe(request.damageItems());
         String inspectionNotes = request.staffNotes();
@@ -805,6 +828,11 @@ public class ReturnSettlementService {
             inspectionNotes = (inspectionNotes.isBlank() ? "" : inspectionNotes + "\n\n")
                 + "Bảng giá hư hỏng tự động: " + damageBreakdown;
         }
+        inspectionNotes = (inspectionNotes == null ? "" : inspectionNotes) + "\nKiểm kê bàn giao: "
+            + equipment.rackCount() + " bộ kệ / " + equipment.frameCount() + " khung; "
+            + "thu hồi " + (equipment.palletCount() - missingPallets) + "/" + equipment.palletCount()
+            + " tấm kê; thiếu " + missingPallets + " x " + equipment.palletUnitPrice().toPlainString()
+            + " đ = " + palletFee.toPlainString() + " đ.";
         returnCase.setInspectionNotes(inspectionNotes);
         returnCase.setReturnedKey(request.returnedKey());
         returnCase.setReturnedCard(request.returnedCard());
@@ -1107,6 +1135,7 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RETURN)
     public ReturnCaseResponse staffConfirmSettlement(
         ActorPrincipal actor,
         UUID returnId,
@@ -1229,6 +1258,7 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RETURN)
     public ReturnCaseResponse managerReviewDispute(
         ActorPrincipal actor,
         UUID returnId,
@@ -1362,6 +1392,7 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RETURN)
     public ReturnCaseResponse staffCompleteRefund(
         ActorPrincipal actor,
         UUID returnId,
@@ -1469,6 +1500,7 @@ public class ReturnSettlementService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RETURN)
     public ReturnCaseResponse recordSettlement(ActorPrincipal actor,UUID returnId,com.storagehub.api.returns.StaffReturnSettlementRequest request) {
         if (actor == null || (!actor.hasRole(RoleCode.STAFF) && !actor.hasRole(RoleCode.ADMIN))) {
             throw ApiExceptions.forbidden("Only Staff can record a return settlement");
@@ -1963,8 +1995,15 @@ public class ReturnSettlementService {
             rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
                 ? (rc.getReturnPolicyVersion() != null ? rc.getReturnPolicyVersion() : rc.getRental().getInventoryReturnPolicyVersion())
                 : null,
-            resolveEquipment(rc)
+            resolveEquipment(rc),
+            rc.getMissingPalletCount(),
+            rc.getPalletLossFee()
         );
+    }
+
+    private ReturnCaseResponse.Equipment returnEquipment(ReturnCase rc) {
+        return HandoverEquipmentInventory.read(objectMapper, reservationPricingSnapshot(rc),
+            missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice);
     }
 
     private ReturnCaseResponse.Equipment resolveEquipment(ReturnCase rc) {

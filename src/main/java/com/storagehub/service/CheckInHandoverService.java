@@ -411,6 +411,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.RESERVATION)
     public CheckInResponse schedule(
         ActorPrincipal actor,
         UUID reservationId,
@@ -506,6 +507,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse verifyIdentity(
         ActorPrincipal actor,
         UUID checkInId,
@@ -553,6 +555,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse correctIdentity(ActorPrincipal actor, UUID checkInId, VerifyCheckInIdentityRequest request) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
@@ -582,6 +585,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse signContract(
         ActorPrincipal actor,
         UUID checkInId,
@@ -611,6 +615,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse confirmNoRemainingPayment(
         ActorPrincipal actor,
         UUID checkInId,
@@ -636,6 +641,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse startSetup(
         ActorPrincipal actor,
         UUID checkInId,
@@ -745,6 +751,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse completeSetup(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1081,6 +1088,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse complete(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1324,6 +1332,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInPaymentResponse recordRemainingPayment(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1382,6 +1391,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse markNoShow(
         ActorPrincipal actor,
         UUID checkInId,
@@ -1450,6 +1460,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse reject(
         ActorPrincipal actor,
         UUID checkInId,

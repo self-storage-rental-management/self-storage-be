@@ -98,7 +98,9 @@ public record ReturnCaseResponse(
     LockInspectionResult lockInspectionResult,
     Integer returnWindowDays,
     String returnPolicyVersion,
-    Equipment equipment
+    Equipment equipment,
+    Integer missingPalletCount,
+    BigDecimal palletLossFee
 ) {
     public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
     public boolean isManagerApprovalRequired() {
@@ -180,7 +182,7 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
