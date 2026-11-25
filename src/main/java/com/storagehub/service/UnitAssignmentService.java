@@ -111,6 +111,7 @@ public class UnitAssignmentService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
+    @ProcessingGuard(ProcessingLeaseService.Target.ASSIGNMENT)
     public UnitAssignmentResponse change(
         ActorPrincipal actor,
         UUID reservationId,
@@ -196,6 +197,7 @@ public class UnitAssignmentService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
+    @ProcessingGuard(ProcessingLeaseService.Target.ASSIGNMENT)
     public UnitAssignmentResponse assign(
         ActorPrincipal actor,
         UUID reservationId,

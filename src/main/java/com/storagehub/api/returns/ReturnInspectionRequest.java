@@ -1,7 +1,5 @@
 package com.storagehub.api.returns;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.InventoryMatch;
 import com.storagehub.domain.model.StorageUnitStatus;
@@ -51,51 +49,26 @@ public record ReturnInspectionRequest(
     boolean unitVacated,
 
     /** Hạng mục hư hỏng lấy từ bảng giá chuẩn; damageFee không còn là nguồn nhập tự do. */
-    List<DamageItem> damageItems
+    List<DamageItem> damageItems,
+    Integer missingPalletCount
 ) {
     public record DamageItem(String code, BigDecimal quantity) {}
-
-    @JsonCreator
-    public ReturnInspectionRequest(
-        @JsonProperty("inventoryMatch") InventoryMatch inventoryMatch,
-        @JsonProperty("damageClassification") DamageClassification damageClassification,
-        @JsonProperty("damageFee") BigDecimal damageFee,
-        @JsonProperty("cleaningFee") BigDecimal cleaningFee,
-        @JsonProperty("lostItemFee") BigDecimal lostItemFee,
-        @JsonProperty("overdueFee") BigDecimal overdueFee,
-        @JsonProperty("outstandingFee") BigDecimal outstandingFee,
-        @JsonProperty("staffNotes") String staffNotes,
-        @JsonProperty("evidencePhotos") List<String> evidencePhotos,
-        @JsonProperty("returnedKey") boolean returnedKey,
-        @JsonProperty("returnedCard") boolean returnedCard,
-        @JsonProperty("returnedLock") boolean returnedLock,
-        @JsonProperty("proposedUnitStatus") StorageUnitStatus proposedUnitStatus,
-        @JsonProperty("unitVacated") boolean unitVacated,
-        @JsonProperty("damageItems") List<DamageItem> damageItems
-    ) {
-        this.inventoryMatch = inventoryMatch;
-        this.damageClassification = damageClassification;
-        this.damageFee = damageFee;
-        this.cleaningFee = cleaningFee;
-        this.lostItemFee = lostItemFee;
-        this.overdueFee = overdueFee;
-        this.outstandingFee = outstandingFee;
-        this.staffNotes = staffNotes;
-        this.evidencePhotos = evidencePhotos;
-        this.returnedKey = returnedKey;
-        this.returnedCard = returnedCard;
-        this.returnedLock = returnedLock;
-        this.proposedUnitStatus = proposedUnitStatus;
-        this.unitVacated = unitVacated;
-        this.damageItems = damageItems;
-    }
 
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
         BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
         BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
         boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
-            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, false, null);
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, false, null, null);
+    }
+
+    public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
+        BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
+        BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
+        boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus, boolean unitVacated,
+        List<DamageItem> damageItems) {
+        this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, unitVacated, damageItems, null);
     }
 
     /** Backward-compatible constructor used by existing tests and recovery flows. */
@@ -104,6 +77,6 @@ public record ReturnInspectionRequest(
         BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
         boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus, boolean unitVacated) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
-            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, unitVacated, null);
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus, unitVacated, null, null);
     }
 }

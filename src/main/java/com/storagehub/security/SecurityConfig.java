@@ -103,8 +103,8 @@ public class SecurityConfig {
             .filter(origin -> !origin.isBlank())
             .toList());
         configuration.setAllowedMethods(List.of("GET", "HEAD", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key", "X-Correlation-Id", "X-Signature"));
-        configuration.setExposedHeaders(List.of("X-Correlation-Id", "Content-Disposition"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key", "X-Correlation-Id", "X-Signature", "X-Processing-Token", "X-Processing-Version", "X-Processing-Stamp"));
+        configuration.setExposedHeaders(List.of("X-Correlation-Id", "Content-Disposition", "X-Processing-Version", "X-Processing-Stamp", "X-Processing-Expires-At"));
         configuration.setAllowCredentials(false);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
