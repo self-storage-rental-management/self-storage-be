@@ -112,6 +112,18 @@ public record ReturnInspectionRequest(
     public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
         BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
         BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
+        boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus, boolean unitVacated,
+        String recoveryHandoverLocation, boolean customerPresent, UUID recoveryWitnessStaffId,
+        List<DamageItem> damageItems, LockInspectionResult lockInspectionResult) {
+        this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
+            outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus,
+            unitVacated, recoveryHandoverLocation, customerPresent, recoveryWitnessStaffId, damageItems,
+            lockInspectionResult, null);
+    }
+
+    public ReturnInspectionRequest(InventoryMatch inventoryMatch, DamageClassification damageClassification,
+        BigDecimal damageFee, BigDecimal cleaningFee, BigDecimal lostItemFee, BigDecimal overdueFee,
+        BigDecimal outstandingFee, String staffNotes, List<String> evidencePhotos, boolean returnedKey,
         boolean returnedCard, boolean returnedLock, StorageUnitStatus proposedUnitStatus) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock, proposedUnitStatus,
