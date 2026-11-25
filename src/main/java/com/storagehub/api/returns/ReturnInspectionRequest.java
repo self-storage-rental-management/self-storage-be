@@ -53,6 +53,13 @@ public record ReturnInspectionRequest(
     StorageUnitStatus proposedUnitStatus,
     boolean unitVacated,
 
+    @Size(max = 500, message = "recoveryHandoverLocation cannot exceed 500 characters")
+    String recoveryHandoverLocation,
+
+    boolean customerPresent,
+
+    UUID recoveryWitnessStaffId,
+
     List<DamageItem> damageItems,
     @JsonInclude(JsonInclude.Include.NON_NULL)
     LockInspectionResult lockInspectionResult,

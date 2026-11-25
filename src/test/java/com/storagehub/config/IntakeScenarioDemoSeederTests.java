@@ -24,6 +24,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.util.LinkedMultiValueMap;
@@ -38,7 +39,7 @@ import org.springframework.util.LinkedMultiValueMap;
     }
 )
 @ActiveProfiles("test")
-class IntakeScenarioDemoSeederTests {
+public class IntakeScenarioDemoSeederTests {
 
     @MockitoBean private com.storagehub.service.support.ai.GeminiSupportAiProvider geminiSupportAiProvider;
     @MockitoBean private com.storagehub.service.BusinessRecordCodes businessRecordCodes;
@@ -51,9 +52,31 @@ class IntakeScenarioDemoSeederTests {
     @Autowired private RentalRepository rentalRepository;
     @Autowired private CustomerReservationService customerReservationService;
     @Autowired private RentalQueryService rentalQueryService;
+    @Autowired private JdbcTemplate jdbcTemplate;
+
+    public static String binToUuid(UUID val) {
+        return val == null ? "" : val.toString();
+    }
 
     @Test
     void seedsAllNineScenariosVisibleInBothCustomerReservationsAndRentals() throws Exception {
+        jdbcTemplate.execute("""
+            CREATE TABLE IF NOT EXISTS business_record_codes (
+                resource_key VARCHAR(120) PRIMARY KEY,
+                type_code CHAR(2) NOT NULL,
+                period CHAR(4) NOT NULL,
+                display_code VARCHAR(16) NOT NULL UNIQUE,
+                recorded_at TIMESTAMP(6) NOT NULL
+            )
+            """);
+        jdbcTemplate.execute("""
+            CREATE TABLE IF NOT EXISTS money_receipt_codes (
+                receipt_code VARCHAR(32) NOT NULL,
+                source_type VARCHAR(32) NOT NULL,
+                source_id BINARY(16) NOT NULL
+            )
+            """);
+        jdbcTemplate.execute("CREATE ALIAS IF NOT EXISTS BIN_TO_UUID FOR \"com.storagehub.config.IntakeScenarioDemoSeederTests.binToUuid\"");
         if (facilityRepository.findByCodeIgnoreCase("HCM-Q1-F01").isEmpty()) {
             Facility facility = new Facility();
             facility.setCode("HCM-Q1-F01");
