@@ -54,7 +54,7 @@ public class RentalQueryService {
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
             financial(r), access(actor, r), s.dateSemantics(), bookingEvidence(actor,r,manager),
-            r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), r.getSetupStartedAt(), r.getSetupEndsAt(),
+            r.isInventoryPending(), r.getInventoryDueAt(), s.setupStartedAt(), s.setupEndsAt(), r.getInventoryFinalDeadlineAt(),
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart(), inventory(r));
     }
 
