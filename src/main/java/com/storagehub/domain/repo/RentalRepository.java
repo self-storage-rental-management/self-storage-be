@@ -12,6 +12,24 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecificationExecutor<Rental> {
+    @Query("""
+        select (count(r) > 0) from Rental r where r.storageUnit.id = :unitId and r.id <> :rentalId
+          and r.actualReturnedAt is null and r.status <> com.storagehub.domain.model.RentalStatus.completed
+        """)
+    boolean existsOtherUnreturnedRental(@Param("unitId") UUID unitId, @Param("rentalId") UUID rentalId);
+
+    @Query("""
+        select r.id from Rental r where r.id in :ids and (
+          exists (select rc.id from ReturnCase rc where rc.rental = r
+            and rc.returnType = com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH)
+          or exists (select c.id from CheckIn c where c.reservation = r.reservation and (
+            c.inventoryResolutionStatus = com.storagehub.domain.model.InventoryResolutionStatus.RETURN_REQUESTED
+            or (c.inventoryResolutionStatus in (com.storagehub.domain.model.InventoryResolutionStatus.PENDING_CUSTOMER,
+                                               com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION)
+              and r.inventoryRemovalDeadlineAt is not null and c.inventoryFullFit = false
+              and c.inventoryPartialFitAvailable = false))))
+        """)
+    java.util.Set<UUID> findInventoryMismatchReturnIds(@Param("ids") java.util.Collection<UUID> ids);
 
     @Query("""
         select (count(r) > 0) from Rental r

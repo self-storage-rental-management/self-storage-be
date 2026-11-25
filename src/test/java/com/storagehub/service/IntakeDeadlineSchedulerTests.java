@@ -82,6 +82,31 @@ class IntakeDeadlineSchedulerTests {
         scheduler.process();
         verify(tasks,never()).saveAndFlush(any());
     }
+    @Test void missedScansRecoverMismatchWithoutAppointmentOnlyOnce() {
+        var r = rental();
+        r.setMoveInCompletedAt(Instant.now().minusSeconds(10 * 86400L));
+        r.setInventoryRemovalPublishedAt(Instant.now().minusSeconds(8 * 86400L));
+        r.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(2 * 86400L));
+        scheduler.process();
+        scheduler.process();
+        var capture = ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(tasks).saveAndFlush(capture.capture());
+        assertThat(capture.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.MISMATCH_REMOVAL);
+        assertThat(r.getActualReturnedAt()).isNull();
+    }
+    @Test void rechecksDeadlineAfterTakingRentalLock() {
+        var r = rental();
+        r.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(1));
+        var em = mock(jakarta.persistence.EntityManager.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "entityManager", em);
+        doAnswer(call -> {
+            r.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(3600));
+            return null;
+        }).when(em).refresh(r, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        scheduler.process();
+        verify(em).refresh(r, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        verify(tasks, never()).saveAndFlush(any());
+    }
     @Test void emptyUnitBeforeRemovalDeadlineAlsoCreatesNoTask() {
         var r=rental();
         r.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(3600));

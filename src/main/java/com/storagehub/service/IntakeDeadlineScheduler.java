@@ -24,6 +24,9 @@ public class IntakeDeadlineScheduler {
     private final IntakePolicyProperties policy;
     private final IntakeTimelineCalculator timeline;
 
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
     /** Legacy-compatible constructor for unit tests. */
     public IntakeDeadlineScheduler(
         RentalRepository rentals,
@@ -80,9 +83,8 @@ public class IntakeDeadlineScheduler {
             }
             if (r.getInventoryRemovalDeadlineAt() != null && r.getInventoryEscalatedAt() == null
                 && r.getActualReturnedAt() == null
-                && !now.isBefore(r.getInventoryRemovalDeadlineAt())
-                && r.getStatus() != RentalStatus.return_inspection && r.getStatus() != RentalStatus.closing)
-                recovery(r, now, "Quá hạn trả hàng do kiểm kê sai lệch");
+                && !now.isBefore(r.getInventoryRemovalDeadlineAt()))
+                recoverMismatchWithoutReturn(r, now);
         }
         processReturnAndTaskSlas(now);
     }
@@ -302,7 +304,7 @@ public class IntakeDeadlineScheduler {
             }
         }
         for (ReturnCase rc : returns.findByStatusIn(List.of(ReturnCaseStatus.awaiting_customer_confirmation))) {
-            if (!rc.isSetupExitRequested() || rc.isCustomerConfirmed()) continue;
+            if (!rc.isSetupExitRequested() || rc.isCustomerConfirmed() || rc.getReturnType() == ReturnType.INVENTORY_MISMATCH) continue;
             Instant published = rc.getReviewedAt() != null ? rc.getReviewedAt() : rc.getInspectedAt();
             if (published == null || now.isBefore(published.plus(48, ChronoUnit.HOURS))) continue;
             String title = now.isBefore(published.plus(72, ChronoUnit.HOURS)) ? "Nhắc xác nhận quyết toán" : "Quá hạn xác nhận quyết toán";
@@ -311,7 +313,7 @@ public class IntakeDeadlineScheduler {
             notifications.createFacilityOperationsNotificationsOnce(rc.getFacility().getId(), NotificationType.RETURN, title, content, rc.getId());
         }
         for (ReturnCase rc : returns.findByStatusIn(List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled))) {
-            if (rc.getReadyForInspectionAt() == null) continue;
+            if (rc.getReadyForInspectionAt() == null || rc.getReturnType() == ReturnType.INVENTORY_MISMATCH) continue;
             var due = com.storagehub.service.calendar.ServiceCalendarPolicy.addWorkingHours(rc.getReadyForInspectionAt(), 4);
             if (!now.isBefore(due.minus(2, ChronoUnit.HOURS)))
                 notifications.createFacilityOperationsNotificationsOnce(rc.getFacility().getId(), NotificationType.RETURN,
@@ -319,6 +321,8 @@ public class IntakeDeadlineScheduler {
                     "Khách đã bàn giao đủ điều kiện. Vui lòng kiểm tra và hoàn tất biên bản nghiệm thu.", rc.getId());
         }
         for (MaintenanceTask t : tasks.findAll()) {
+            if (t.getRecoveryType() == MaintenanceRecoveryType.MISMATCH_REMOVAL
+                || t.getReturnCase() != null && t.getReturnCase().getReturnType() == ReturnType.INVENTORY_MISMATCH) continue;
             if (t.getRecoveryType() == null || t.getRecoveryType() == MaintenanceRecoveryType.NONE
                 || t.getDeadlineAt() == null || !List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress).contains(t.getStatus())) continue;
             if (!now.isBefore(t.getDeadlineAt().minus(12, ChronoUnit.HOURS)))
@@ -332,6 +336,18 @@ public class IntakeDeadlineScheduler {
         }
     }
 
+    private void recoverMismatchWithoutReturn(Rental rental, Instant now) {
+        // Reload under the same rental lock used by publication, extensions and return inspection.
+        if (entityManager != null) entityManager.refresh(rental, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (rental.getInventoryEscalatedAt() != null || rental.getActualReturnedAt() != null
+            || rental.getCompletedAt() != null || rental.getInventoryRemovalDeadlineAt() == null
+            || now.isBefore(rental.getInventoryRemovalDeadlineAt())
+            || !List.of(RentalStatus.setup, RentalStatus.active).contains(rental.getStatus())
+            || returns.findByRental_Id(rental.getId()).stream().anyMatch(rc -> rc.getReturnType() == ReturnType.INVENTORY_MISMATCH))
+            return;
+        recovery(rental, now, "Quá hạn trả hàng do kiểm kê sai lệch");
+    }
+
     private void notify(Rental r, String title, String content) {
         notifications.createNotificationOnce(r.getCustomer().getId(), NotificationType.CHECKIN, title, content, r.getReservation().getId());
         notifications.createFacilityOperationsNotificationsOnce(r.getFacility().getId(), NotificationType.CHECKIN, title, content, r.getReservation().getId());
@@ -341,7 +357,9 @@ public class IntakeDeadlineScheduler {
         String title = "Thu hồi · " + reason;
         MaintenanceTaskType taskType = MaintenanceTaskType.maintenance;
         boolean existing = tasks.findByRental_IdAndTaskTypeAndStatusIn(r.getId(), taskType,
-            List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)).stream().anyMatch(t -> title.equals(t.getTitle()));
+            List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)).stream().anyMatch(t ->
+                title.equals(t.getTitle()) || (r.getInventoryRemovalDeadlineAt() != null
+                    && t.getRecoveryType() != null && t.getRecoveryType() != MaintenanceRecoveryType.NONE));
         if (existing) return;
         MaintenanceTask t = new MaintenanceTask();
         t.setRental(r); t.setFacility(r.getFacility()); t.setStorageUnit(r.getStorageUnit());

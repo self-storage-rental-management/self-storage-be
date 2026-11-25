@@ -32,6 +32,7 @@ public class ReservationDetailResponse {
     private List<ReservationGoodsItemResponse> goodsItems;
     private List<CustomerPaymentReceiptResponse> payments;
     private String checkInStatus;
+    private boolean identityCorrectedAtHandover;
     private Instant handoverCompletedAt;
     private String lockReference;
     private Instant receiptConfirmationDueAt;
@@ -104,6 +105,9 @@ public class ReservationDetailResponse {
     public void setConfirmedAt(Instant confirmedAt) { this.confirmedAt = confirmedAt; }
     public Instant getCancelledAt() { return cancelledAt; }
     public void setCancelledAt(Instant cancelledAt) { this.cancelledAt = cancelledAt; }
+    private com.storagehub.api.checkin.CheckInResponse.Attendance attendance;
+    public com.storagehub.api.checkin.CheckInResponse.Attendance getAttendance() { return attendance; }
+    public void setAttendance(com.storagehub.api.checkin.CheckInResponse.Attendance value) { attendance = value; }
     public String getCancelReason() { return cancelReason; }
     public void setCancelReason(String cancelReason) { this.cancelReason = cancelReason; }
     public ReservationCancellationType getCancellationType() { return cancellationType; }
@@ -118,6 +122,8 @@ public class ReservationDetailResponse {
     public void setPayments(List<CustomerPaymentReceiptResponse> payments) { this.payments = payments; }
     public String getCheckInStatus() { return checkInStatus; }
     public void setCheckInStatus(String checkInStatus) { this.checkInStatus = checkInStatus; }
+    public boolean isIdentityCorrectedAtHandover() { return identityCorrectedAtHandover; }
+    public void setIdentityCorrectedAtHandover(boolean value) { identityCorrectedAtHandover = value; }
     public Instant getHandoverCompletedAt() { return handoverCompletedAt; }
     public void setHandoverCompletedAt(Instant value) { handoverCompletedAt = value; }
     public String getLockReference() { return lockReference; }

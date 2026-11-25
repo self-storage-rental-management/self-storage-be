@@ -7,6 +7,9 @@ import java.util.UUID;
 
 public record RefundRequestResponse(
     UUID id,
+    String displayCode,
+    String paymentReceiptCode,
+    String requestedByName,
     UUID paymentId,
     UUID returnCaseId,
     UUID requestedBy,

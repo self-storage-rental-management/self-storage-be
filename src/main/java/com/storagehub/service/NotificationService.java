@@ -318,11 +318,13 @@ public class NotificationService {
     private NotificationResponse toResponse(Notification notification) {
         String content=notification.getContent();
         content = displayContent(content, notification.getTitle());
+        if (displayCodes != null) content = displayCodes.noticeText(content);
         UUID related=notification.getRelatedEntityId();
         if(related!=null){
             String key=switch(notification.getType()){
                 case RENEWAL -> null;
                 case SUPPORT -> "HT:"+related;
+                case RETURN -> "TK:"+related;
                 case OVERDUE -> "RENTAL_TERM:"+related;
                 default -> null;
             };

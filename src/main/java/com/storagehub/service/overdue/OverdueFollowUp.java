@@ -16,6 +16,8 @@ public class OverdueFollowUp extends BaseEntity {
     @Column(nullable=false,updatable=false,length=2000) private String content;
     /** Null identifies a scheduled system handoff; user actions retain their actor. */
     @Column(updatable=false) private UUID actorId;
+    @org.hibernate.annotations.Formula("(select u.full_name from users u where u.id = {alias}.actor_id)")
+    private String actorName;
     @Column(name="recorded_at",nullable=false,updatable=false) private Instant recordedAt;
     @Column(updatable=false) private UUID externalRef;
     @Column(updatable=false,length=200) private String policyRef;

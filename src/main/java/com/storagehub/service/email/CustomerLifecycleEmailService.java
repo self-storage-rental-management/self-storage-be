@@ -17,6 +17,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CustomerLifecycleEmailService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.BusinessRecordCodes displayCodes;
     private final EntityManager em;
     private final TransactionalEmailService mail;
     private final EmailProperties properties;
@@ -77,7 +79,7 @@ public class CustomerLifecycleEmailService {
         if (rental != null) reservation = rental.getReservation();
         if (reservation != null && !reservation.getCustomer().getId().equals(user.getId())) reservation = null;
         Map<String, String> details = reservation == null ? new LinkedHashMap<>() : reservationDetails(reservation);
-        if (reservation == null && resource != null) details.put("Mã hồ sơ liên quan", resource.toString());
+        if (rental != null && rental.getDisplayCode() != null) details.put("Mã hồ sơ thuê", rental.getDisplayCode());
         if (rental != null) {
             details.put("Ngày bắt đầu thuê", rental.getStartDate().toString());
             periods.read(rental).ifPresent(period -> details.put("Ngày cuối được sử dụng", period.lastPermittedDate().toString()));
@@ -88,6 +90,7 @@ public class CustomerLifecycleEmailService {
             if (rental.getInspectionCompletionDeadlineAt() != null) details.put("Hạn hoàn tất kiểm kê (72 giờ)", TIME.format(rental.getInspectionCompletionDeadlineAt()));
         }
         if (returned != null && returned.getCustomer().getId().equals(user.getId())) {
+            if (returned.getDisplayCode() != null) details.put("Mã hồ sơ trả kho", returned.getDisplayCode());
             details.put("Lịch kiểm tra/trả kho dự kiến", returned.getScheduledDate().toString());
             if (returned.getInspectedAt() != null || returned.getReviewedAt() != null || returned.getSettlementPaidAt() != null) {
                 details.put("Tổng khấu trừ theo bảng kê", money(returned.getTotalDeductions()));
@@ -242,7 +245,7 @@ public class CustomerLifecycleEmailService {
 
     private String safeSummary(String value) {
         if (value == null) return "Vui lòng mở hồ sơ trên web để xem chi tiết.";
-        return value.replaceAll("(?iu)(mật khẩu|mã (?:ra vào|truy cập|ổ khóa)|số (?:tài khoản|thẻ)|CCCD|CMND)[^\\n.]*", "Thông tin bảo mật được cung cấp trong tài khoản StorageHub");
+        return displayCodes.noticeText(value).replaceAll("(?iu)(mật khẩu|mã (?:ra vào|truy cập|ổ khóa)|số (?:tài khoản|thẻ)|CCCD|CMND)[^\\n.]*", "Thông tin bảo mật được cung cấp trong tài khoản StorageHub");
     }
 
     private String money(java.math.BigDecimal value) {

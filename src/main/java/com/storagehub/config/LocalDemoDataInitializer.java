@@ -283,20 +283,6 @@ public class LocalDemoDataInitializer {
         return unitTypeDefinitions().stream().filter(d -> d.code().equals("S")).findFirst().orElse(null);
     }
 
-    private boolean matchesDemoType(UnitType type, UnitTypeDefinition definition) {
-        return type.getStatus() == UnitTypeStatus.active && definition.name().equals(type.getName())
-            && decimal(definition.lengthM()).compareTo(type.getLengthM()) == 0
-            && decimal(definition.widthM()).compareTo(type.getWidthM()) == 0
-            && decimal(definition.heightM()).compareTo(type.getHeightM()) == 0
-            && decimal(definition.maxLoadKg()).compareTo(type.getMaxLoadKg()) == 0
-            && type.getMaxStoredLoadKg() != null
-            && decimal(definition.maxStoredLoadKg()).compareTo(type.getMaxStoredLoadKg()) == 0
-            && type.getRackCount() == definition.rackCount()
-            && decimal(4).compareTo(type.getRackLengthM()) == 0
-            && decimal(2).compareTo(type.getRackWidthM()) == 0
-            && decimal(4.5).compareTo(type.getRackHeightM()) == 0;
-    }
-
     private boolean isSeedDemoType(UnitType type, UnitTypeDefinition definition) {
         return type.getStatus() == UnitTypeStatus.active && definition.name().equals(type.getName())
             && type.getRackCount() == definition.rackCount()
@@ -539,15 +525,6 @@ public class LocalDemoDataInitializer {
         );
     }
 
-    private List<RentalPackageDefinition> rentalPackageDefinitions() {
-        return List.of(
-            new RentalPackageDefinition("DEMO_3M", "Gói thuê 3 tháng", 3, BigDecimal.ZERO),
-            new RentalPackageDefinition("DEMO_6M", "Gói thuê 6 tháng", 6, new BigDecimal("0.05")),
-            new RentalPackageDefinition("DEMO_12M", "Gói thuê 12 tháng", 12, new BigDecimal("0.10")),
-            new RentalPackageDefinition("DEMO_24M", "Gói thuê 24 tháng", 24, new BigDecimal("0.15"))
-        );
-    }
-
     private String unitTypeKey(String facilityCode, String unitTypeCode) {
         return facilityCode + ":" + unitTypeCode;
     }
@@ -555,13 +532,6 @@ public class LocalDemoDataInitializer {
     private static BigDecimal decimal(double value) {
         return BigDecimal.valueOf(value);
     }
-
-    private record RentalPackageDefinition(
-        String code,
-        String name,
-        int rentalMonths,
-        BigDecimal discountRate
-    ) {}
 
     private record UnitTypeDefinition(
         String code,
