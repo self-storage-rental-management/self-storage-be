@@ -46,13 +46,37 @@ public class StaffReturnController {
         );
     }
 
+    public record ArrivalRequest(@jakarta.validation.constraints.NotNull UUID evidenceId) {}
+    public record IdentityRequest(@jakarta.validation.constraints.NotNull UUID attemptId,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 32) String documentNumber) {}
+
+    @PostMapping("/{returnId}/arrival")
+    public ApiResponse<ReturnCaseResponse> recordArrival(@PathVariable UUID returnId, @Valid @RequestBody ArrivalRequest request) {
+        return new ApiResponse<>(returnSettlementService.recordMismatchArrival(actorContext.required(), returnId, request.evidenceId()),
+            CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{returnId}/identity")
+    public ApiResponse<ReturnCaseResponse> verifyIdentity(@PathVariable UUID returnId, @Valid @RequestBody IdentityRequest request) {
+        return new ApiResponse<>(returnSettlementService.verifyMismatchIdentity(actorContext.required(), returnId,
+            request.attemptId(), request.documentNumber()), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{returnId}/property-check")
+    public ApiResponse<ReturnCaseResponse> savePropertyCheck(@PathVariable UUID returnId,
+        @Valid @RequestBody ReturnPropertyCheckRequest request) {
+        return new ApiResponse<>(returnSettlementService.savePropertyCheck(actorContext.required(), returnId, request),
+            CorrelationIdContext.current());
+    }
+
     @PostMapping("/{returnId}/inspection")
     public ApiResponse<ReturnCaseResponse> performInspection(
         @PathVariable UUID returnId,
+        @RequestParam(defaultValue = "0") long clearanceRevision,
         @Valid @RequestBody ReturnInspectionRequest request
     ) {
         return new ApiResponse<>(
-            returnSettlementService.performInspection(actorContext.required(), returnId, request),
+            returnSettlementService.performInspection(actorContext.required(), returnId, request, clearanceRevision),
             CorrelationIdContext.current()
         );
     }

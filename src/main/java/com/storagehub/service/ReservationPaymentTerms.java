@@ -13,9 +13,27 @@ final class ReservationPaymentTerms {
     }
 
     static void apply(Reservation reservation, int rentalMonths, Instant paidAt) {
+        apply(reservation, rentalMonths, reservation.getSetupDaysSnapshot(), paidAt);
+    }
+
+    static void apply(Reservation reservation, int rentalMonths, int freeSetupDays, Instant paidAt) {
         if (rentalMonths < 1) {
             throw new IllegalArgumentException("rentalMonths must be at least 1");
         }
+        if (freeSetupDays < 0) {
+            throw new IllegalArgumentException("freeSetupDays cannot be negative");
+        }
+
+        Instant appointmentAt = reservation.getAppointmentAt();
+        if (appointmentAt != null) {
+            java.time.LocalDate startDate = appointmentAt.atZone(BUSINESS_ZONE)
+                .toLocalDate()
+                .plusDays(freeSetupDays);
+            reservation.setStartDate(startDate);
+            reservation.setEndDate(startDate.plusMonths(rentalMonths));
+            return;
+        }
+
         ReservationCheckInPolicy.Window window = ReservationCheckInPolicy.plannedWindow(
             reservation.getCreatedAt() != null ? reservation.getCreatedAt() : paidAt,
             reservation.getGoodsReviewStatus() != com.storagehub.domain.model.GoodsReviewStatus.NOT_REQUIRED
@@ -23,10 +41,5 @@ final class ReservationPaymentTerms {
         java.time.LocalDate startDate = window.availableAt().atZone(BUSINESS_ZONE).toLocalDate();
         reservation.setStartDate(startDate);
         reservation.setEndDate(startDate.plusMonths(rentalMonths));
-
-        Instant appointmentAt = reservation.getAppointmentAt();
-        if (appointmentAt != null && !window.contains(appointmentAt)) {
-            reservation.setAppointmentAt(null);
-        }
     }
 }

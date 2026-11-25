@@ -44,6 +44,15 @@ public class CustomerReturnController {
         return new ApiResponse<>(returnSettlementService.updateCustomerReturnRequest(actorContext.required(), returnId, request), CorrelationIdContext.current());
     }
 
+    public record ClearanceRequest(@jakarta.validation.constraints.NotNull Boolean cleared, long clearanceRevision) {}
+
+    @PostMapping("/returns/{returnId}/clearance")
+    public ApiResponse<ReturnCaseResponse> setClearance(@PathVariable UUID returnId,
+        @Valid @RequestBody ClearanceRequest request) {
+        return new ApiResponse<>(returnSettlementService.setCustomerClearance(actorContext.required(), returnId,
+            request.cleared(), request.clearanceRevision()), CorrelationIdContext.current());
+    }
+
     @GetMapping("/returns")
     public PageResponse<ReturnCaseResponse> listReturns(
         @RequestParam(defaultValue = "0") int page,

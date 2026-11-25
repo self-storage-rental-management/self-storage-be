@@ -51,6 +51,28 @@ class RentalQueryServiceTests {
         assertThat(dto.access().status()).isNull();
         verify(repo,never()).save(any());
     }
+    @Test void detailUsesCustomerAppointmentTimelineAndKeepsDeadlineInItsOwnField() {
+        var r = rental();
+        var quote = new ReservationQuote();
+        quote.setRentalMonths(6);
+        quote.setFreeSetupDays(3);
+        r.getReservation().setSourceQuote(quote);
+        r.getReservation().setSetupDaysSnapshot(3);
+        Instant appointment = Instant.parse("2026-11-25T21:39:00Z");
+        Instant inventoryDeadline = Instant.parse("2026-12-03T00:00:00Z");
+        r.getReservation().setAppointmentAt(appointment);
+        r.setSetupStartedAt(Instant.parse("2026-12-03T00:00:00Z"));
+        r.setSetupEndsAt(appointment);
+        r.setInventoryFinalDeadlineAt(inventoryDeadline);
+        when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));
+
+        var dto = service.detail(actor(RoleCode.CUSTOMER,false,Map.of()),r.getId(),false);
+
+        assertThat(dto.setupStartedAt()).isEqualTo(appointment);
+        assertThat(dto.setupEndsAt()).isEqualTo(appointment.plus(java.time.Duration.ofDays(3)));
+        assertThat(dto.inventoryFinalDeadlineAt()).isEqualTo(inventoryDeadline);
+        assertThat(dto.startDate()).isEqualTo(LocalDate.of(2026, 11, 29));
+    }
     @Test void brokenRelationshipFailsClosedWithoutForeignIds() {
         var r = rental(); r.getStorageUnit().setFacility(entity(new Facility(),UUID.randomUUID()));
         when(repo.findOne(any(org.springframework.data.jpa.domain.Specification.class))).thenReturn(Optional.of(r));

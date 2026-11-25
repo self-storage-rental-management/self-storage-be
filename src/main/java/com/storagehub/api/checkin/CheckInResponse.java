@@ -71,6 +71,7 @@ public record CheckInResponse(
     IntakeAction intakeAction,
     Instant inventoryFinalDeadlineAt,
     InventoryResolutionStatus inventoryResolutionStatus,
+    String inventoryRefusalStatus,
     boolean inventoryFullFit,
     boolean inventoryPartialFitAvailable,
     Integer inventorySuggestedPackageCount,
@@ -104,8 +105,13 @@ public record CheckInResponse(
     Instant inventoryRemovalPublishedAt,
     Instant inventoryRemovalDeadlineAt,
     Instant inventoryReturnLastReminderAt,
-    Equipment equipment
+    Equipment equipment,
+    Attendance attendance,
+    String declaredIdentityMasked,
+    boolean identityCorrected
 ) {
+    public record Attendance(Instant deadline, Instant arrivedAt, String termsVersion, Instant completionDeadline, boolean arrivalUnderReview) {}
+
     public record Equipment(int rackCount, int frameCount, Integer palletCount) {}
 
     public record InventoryVisit(
@@ -207,11 +213,12 @@ public record CheckInResponse(
             declaredGoodsWeightKg, declaredGoodsVolumeM3, declaredGoodsLengthCm,
             declaredGoodsWidthCm, declaredGoodsHeightCm, dueAtCheckIn, handover,
             null, null, List.of(), IntakeAction.NONE,
-            null, null, false, false,
+            null, null, null, false, false,
             null, null, null, null, null, null, null, null,
             null, 0L, null, null, null, false,
             null, false, null, false,
-            null, null, null, null, null, null, null, null, null, null, null, null, null, null
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            null, false
         );
     }
 

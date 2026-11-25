@@ -172,6 +172,17 @@ public class VnpayService {
         String idempotencyKey,
         String clientIp
     ) {
+        return createPaymentUrl(actor, reservationId, idempotencyKey, clientIp, null);
+    }
+
+    @Transactional
+    public VnpayPaymentUrlResponse createPaymentUrl(
+        ActorPrincipal actor,
+        UUID reservationId,
+        String idempotencyKey,
+        String clientIp,
+        String acceptedHandoverTermsVersion
+    ) {
         requireConfigured();
         String key = requiredKey(idempotencyKey);
         Payment existing = paymentRepository.findByIdempotencyKey(key).orElse(null);
@@ -180,6 +191,7 @@ public class VnpayService {
                 || !existing.getReservation().getId().equals(reservationId)) {
                 throw ApiExceptions.conflict("Idempotency-Key is already used for another payment");
             }
+            requirePaymentTerms(existing.getReservation(), acceptedHandoverTermsVersion);
             requirePayable(existing.getReservation());
             ReservationSnapshotView.requireSetupDays(existing.getReservation(),snapshotRepository.findByReservation_Id(reservationId).orElse(null));
             return paymentUrl(existing, clientIp);
@@ -187,6 +199,7 @@ public class VnpayService {
 
         Reservation reservation = reservationRepository.findOwnedByIdForUpdate(reservationId, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        requirePaymentTerms(reservation, acceptedHandoverTermsVersion);
         requirePayable(reservation);
         ReservationSnapshotView.requireSetupDays(reservation,snapshotRepository.findByReservation_Id(reservationId).orElse(null));
         Payment latestPayment = paymentRepository
@@ -227,10 +240,16 @@ public class VnpayService {
         payment.setGatewayIntentId("SH" + UUID.randomUUID().toString().replace("-", ""));
         payment.setGatewayProvider("VNPAY");
         Payment saved = paymentRepository.saveAndFlush(payment);
+        var paymentData = new java.util.LinkedHashMap<String, Object>();
+        paymentData.put("gateway", "VNPAY");
+        paymentData.put("transactionReference", saved.getGatewayIntentId());
+        paymentData.put("amount", saved.getAmount());
+        if (ReservationCheckInPolicy.hasCurrentAttendanceTerms(reservation)) {
+            paymentData.put("acceptedHandoverTermsVersion", acceptedHandoverTermsVersion);
+        }
         auditLogService.recordMutation(
             initiator, "VNPAY_PAYMENT_CREATED", "Payment", saved.getId(),
-            reservation.getFacility().getId(), null,
-            Map.of("gateway", "VNPAY", "transactionReference", saved.getGatewayIntentId(), "amount", saved.getAmount())
+            reservation.getFacility().getId(), null, paymentData
         );
         return paymentUrl(saved, clientIp);
     }
@@ -845,7 +864,9 @@ public class VnpayService {
 
     private com.storagehub.api.payment.RefundRequestResponse refundRequestResponse(RefundRequest request) {
         return new com.storagehub.api.payment.RefundRequestResponse(
-            request.getId(),
+            request.getId(), request.getDisplayCode(),
+            request.getPayment() == null ? null : request.getPayment().getReceiptCode(),
+            request.getRequestedBy() == null ? null : request.getRequestedBy().getFullName(),
             request.getPayment() == null ? null : request.getPayment().getId(),
             request.getReturnCase() == null ? null : request.getReturnCase().getId(),
             request.getRequestedBy() == null ? null : request.getRequestedBy().getId(),
@@ -1153,6 +1174,13 @@ public class VnpayService {
         if(!"SANDBOX".equals(PaymentProvenance.environment(properties.getPayUrl(),properties.getApiUrl())))
             throw ApiExceptions.conflict("Renewal payment is currently limited to VNPay Sandbox");
     }
+    private void requirePaymentTerms(Reservation reservation, String acceptedVersion) {
+        if (ReservationCheckInPolicy.hasCurrentAttendanceTerms(reservation)
+            && !reservation.getHandoverTermsVersion().equals(acceptedVersion)) {
+            throw ApiExceptions.validation("Vui lòng xác nhận điều khoản nhận kho của đơn trước khi thanh toán giữ chỗ.", null);
+        }
+    }
+
     private void requirePayable(Reservation reservation) {
         CustomerProfilePolicy.validate(reservation.getCustomer(), true);
         if (reservation.getStatus() != ReservationStatus.AWAITING_PAYMENT) throw ApiExceptions.conflict("Reservation is not awaiting payment");
@@ -1183,7 +1211,7 @@ public class VnpayService {
             resolveActiveComplaint(reservation, paidAt);
             ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
                 .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), paidAt);
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), snapshot.getFreeSetupDays(), paidAt);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(paidAt);
             reservation.setConfirmedAt(paidAt);

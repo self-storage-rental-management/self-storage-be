@@ -64,6 +64,9 @@ class BusinessRecordCodesMySqlTests {
     }
 
     void sourceTables() {
+        for (String table : java.util.List.of("return_cases", "maintenance_tasks", "refund_requests")) {
+            jdbc.execute("CREATE TABLE " + table + "(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
+        }
         jdbc.execute("CREATE TABLE renewals(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE support_tickets(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE overdue_follow_ups(case_ref VARCHAR(120),recorded_at TIMESTAMP(6))");
