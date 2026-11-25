@@ -1373,7 +1373,17 @@ public class CustomerReservationService {
             }
         }
 
-        if (checkIn.getStatus() == CheckInStatus.completed && clean(checkIn.getChecklistJson()) != null) {
+        if (clean(checkIn.getHandoverRecordJson()) != null) {
+            try {
+                tagCheckInDocument(kinds, objectMapper.readTree(checkIn.getHandoverRecordJson()).path("signedRecordReference").asText(null), Kind.SIGNED_HANDOVER_RECORD);
+            } catch (JsonProcessingException ignored) {
+            }
+        }
+        if (checkIn.getInventoryIdentityPhotoId() != null) {
+            tagCheckInDocument(kinds, checkIn.getInventoryIdentityPhotoId().toString(), Kind.IDENTITY_VERIFICATION_PHOTO);
+        }
+
+        if (clean(checkIn.getChecklistJson()) != null) {
             try {
                 var references = objectMapper.readTree(checkIn.getChecklistJson()).path("evidenceReferences");
                 if (references.isArray()) {

@@ -17,6 +17,13 @@ public record CheckInDocumentResponse(
     Kind kind
 ) {
     public enum Kind {
-        SIGNED_CONTRACT, PAYMENT_RECEIPT, HANDOVER_EVIDENCE, INVENTORY_EVIDENCE, OTHER
+        SIGNED_CONTRACT,
+        SIGNED_HANDOVER_RECORD,
+        PAYMENT_RECEIPT,
+        HANDOVER_EVIDENCE,
+        INVENTORY_EVIDENCE,
+        INVENTORY_DECISION_EVIDENCE,
+        IDENTITY_VERIFICATION_PHOTO,
+        OTHER
     }
 }
