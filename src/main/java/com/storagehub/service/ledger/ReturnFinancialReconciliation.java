@@ -56,8 +56,10 @@ public class ReturnFinancialReconciliation {
         Payment checkIn=null;BigDecimal paid=BigDecimal.ZERO;
         for(var p:payments) {
             if(!Set.of(PaymentType.RESERVATION_DEPOSIT,PaymentType.RENTAL_BALANCE).contains(p.getPurpose()))throw unknownDeposit();
-            if(!Set.of(PaymentProvenance.Classification.VERIFIED,PaymentProvenance.Classification.SANDBOX).contains(provenance.classify(p))
-                ||p.getAmount()==null||p.getPaidAt()==null||p.getPaidAt().isAfter(Instant.now())||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0)throw unknownDeposit();
+            if(p.getPurpose()==PaymentType.RENTAL_BALANCE
+                && (!Set.of(PaymentProvenance.Classification.VERIFIED,PaymentProvenance.Classification.SANDBOX).contains(provenance.classify(p))
+                    ||p.getPaidAt()==null||p.getPaidAt().isAfter(Instant.now())))throw unknownDeposit();
+            if(p.getAmount()==null||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0)throw unknownDeposit();
             paid=paid.add(p.getAmount());
             if(p.getPurpose()==PaymentType.RENTAL_BALANCE) {
                 if(checkIn!=null||p.getAmount().compareTo(pricing.getDueAtCheckIn())!=0)throw unknownDeposit();
