@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Locale;
 import java.util.UUID;
 import java.time.Instant;
+import java.time.LocalDate;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -78,6 +79,13 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
         String q,
         Pageable pageable
     ) {
+        return searchReturnCases(facilityId, status, allowedFacilityIds, q, pageable, null);
+    }
+
+    default Page<ReturnCase> searchReturnCases(
+        UUID facilityId, ReturnCaseStatus status, Collection<UUID> allowedFacilityIds,
+        String q, Pageable pageable, LocalDate staffQueueDate
+    ) {
         return findAll((root, query, cb) -> {
             var predicates = new ArrayList<Predicate>();
             if (facilityId != null) predicates.add(cb.equal(root.get("facility").get("id"), facilityId));
@@ -88,11 +96,28 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
             if (q != null && !q.isBlank()) {
                 String pattern = "%" + q.trim().toLowerCase(Locale.ROOT) + "%";
                 predicates.add(cb.or(
+                    cb.like(cb.lower(root.get("displayCode")), pattern),
+                    cb.like(cb.lower(root.get("rental").get("displayCode")), pattern),
                     cb.like(cb.lower(root.get("customer").get("fullName")), pattern),
                     cb.like(cb.lower(root.get("customer").get("email")), pattern),
                     cb.like(cb.lower(root.get("customer").get("phone")), pattern),
                     cb.like(cb.lower(root.get("storageUnit").get("code")), pattern),
                     cb.like(cb.lower(root.get("facility").get("name")), pattern)));
+            }
+            if (staffQueueDate != null && query != null && !Long.class.equals(query.getResultType())) {
+                var state = root.<ReturnCaseStatus>get("status");
+                var completed = cb.equal(state, ReturnCaseStatus.completed);
+                var actionable = state.in(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled,
+                    ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending, ReturnCaseStatus.recovery_required);
+                var group = cb.<Integer>selectCase().when(actionable, 0).when(completed, 2).otherwise(1);
+                var date = root.<LocalDate>get("scheduledDate");
+                var urgency = cb.<Integer>selectCase().when(cb.not(actionable), 0)
+                    .when(cb.lessThan(date, staffQueueDate), 0).when(cb.equal(date, staffQueueDate), 1)
+                    .when(cb.isNotNull(date), 2).otherwise(3);
+                var created = root.<Instant>get("createdAt");
+                var recent = cb.<Instant>selectCase()
+                    .when(completed, cb.coalesce(root.<Instant>get("completedAt"), created)).otherwise(created);
+                query.orderBy(cb.asc(group), cb.asc(urgency), cb.desc(recent), cb.asc(root.get("id")));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         }, pageable);

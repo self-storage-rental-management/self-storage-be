@@ -10,6 +10,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 import java.time.LocalDate;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -21,7 +22,30 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class ReturnCase extends BaseEntity {
+    @org.hibernate.annotations.Formula("(select c.display_code from business_record_codes c where c.resource_key = concat('TK:', lower(bin_to_uuid({alias}.id))))")
+    private String displayCode;
+
+    @org.hibernate.annotations.Formula("(select m.receipt_code from money_receipt_codes m where m.source_type = 'RETURN' and m.source_id = {alias}.id)")
+    private String settlementReceiptCode;
+
     @Column private Instant readyForInspectionAt;
+    @Column private Instant customerClearedAt;
+    @Column private Boolean warehouseEmptyVerified;
+    @Column private Instant warehouseEmptyVerifiedAt;
+    @Column(columnDefinition = "BINARY(16)") private java.util.UUID warehouseEmptyVerifiedBy;
+    @Column(nullable = false) private long clearanceRevision;
+    @Column(nullable = false) private long settlementVersion;
+    @Column private Instant settlementPublishedAt;
+    @Column private Instant settlementPaymentDueAt;
+    @Column private Long settlementLedgerRevision;
+    @Column private Instant returnArrivedAt;
+    @Column private UUID returnArrivalEvidenceId;
+    @Column private UUID returnFirstAttemptId;
+    @Column private UUID returnSecondAttemptId;
+    @Column private Instant returnSecondAttemptAt;
+    @Column private Instant returnIdentityVerifiedAt;
+    @Column private Instant returnArrivalReviewedAt;
+    @Column private Boolean returnArrivalReviewAccepted;
 
     @Column(nullable = false)
     private boolean setupExitRequested;

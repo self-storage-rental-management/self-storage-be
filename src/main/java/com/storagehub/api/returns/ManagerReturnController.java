@@ -46,6 +46,15 @@ public class ManagerReturnController {
         );
     }
 
+    public record ArrivalReviewRequest(@jakarta.validation.constraints.NotNull Boolean accepted,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1000) String reason) {}
+
+    @PostMapping("/{returnId}/arrival-review")
+    public ApiResponse<ReturnCaseResponse> reviewArrival(@PathVariable UUID returnId, @Valid @RequestBody ArrivalReviewRequest request) {
+        return new ApiResponse<>(returnSettlementService.reviewMismatchArrival(actorContext.required(), returnId,
+            request.accepted(), request.reason()), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{returnId}/review-dispute")
     public ApiResponse<ReturnCaseResponse> reviewDispute(
         @PathVariable UUID returnId,

@@ -19,6 +19,9 @@ import lombok.Setter;
 @Getter
 @Setter
 public class Rental extends BaseEntity {
+    @org.hibernate.annotations.Formula("(select c.display_code from business_record_codes c where c.resource_key = concat('TH:', lower(bin_to_uuid({alias}.id))))")
+    private String displayCode;
+
 
     public Rental() {
         super();

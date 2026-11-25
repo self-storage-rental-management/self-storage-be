@@ -9,5 +9,10 @@ public record CustomerConfirmSettlementRequest(
     CustomerDecision decision,
 
     @Size(max = 2000, message = "note cannot exceed 2000 characters")
-    String note
-) {}
+    String note,
+    @jakarta.validation.constraints.PositiveOrZero Long settlementVersion
+) {
+    public CustomerConfirmSettlementRequest(CustomerDecision decision, String note) {
+        this(decision, note, null);
+    }
+}

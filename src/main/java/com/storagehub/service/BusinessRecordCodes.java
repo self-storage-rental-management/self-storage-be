@@ -20,6 +20,21 @@ public class BusinessRecordCodes {
     private static final int MAX_ATTEMPTS=25;
     private static final DateTimeFormatter PERIOD=DateTimeFormatter.ofPattern("yyMM").withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
     private static final SecureRandom SECURE_RANDOM=new SecureRandom();
+    // Old notices retain their original text for idempotency. Resolve only dossier references.
+    private static final java.util.regex.Pattern NOTICE_RECORD = java.util.regex.Pattern.compile(
+        "(?iu)(Hợp đồng thuê|Hồ sơ thuê|Hồ sơ trả kho|Hồ sơ) ([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})");
+
+    public String noticeText(String content) {
+        if (content == null) return null;
+        return NOTICE_RECORD.matcher(content).replaceAll(match -> {
+            String label = match.group(1);
+            String type = label.endsWith("thuê") ? "TH" : "TK";
+            String id = match.group(2).toLowerCase(Locale.ROOT);
+            String code = find(type + ":" + id);
+            return label + " " + (code == null ? "HS-" + id.substring(0, 8).toUpperCase(Locale.ROOT) : code);
+        });
+    }
+
     @Transactional(readOnly=true)
     public String find(String key) {
         return jdbc.query("select display_code from business_record_codes where resource_key=?",(rs,i)->rs.getString(1),key)
@@ -44,7 +59,7 @@ public class BusinessRecordCodes {
     }
     @Transactional(propagation=Propagation.MANDATORY)
     public String assign(String type,String key,Instant recordedAt) {
-        if(!Set.of("GH","HT","QH","TH").contains(type)||key==null||key.isBlank()||key.length()>120||recordedAt==null)
+        if(!Set.of("GH","HT","QH","TH","TK","NV","HP").contains(type)||key==null||key.isBlank()||key.length()>120||recordedAt==null)
             throw ApiExceptions.conflict("Thông tin cấp mã hồ sơ không hợp lệ.");
         String old=find(key);if(old!=null)return old;
         String period=PERIOD.format(recordedAt);

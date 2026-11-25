@@ -98,8 +98,22 @@ public record ReturnCaseResponse(
     LockInspectionResult lockInspectionResult,
     Integer returnWindowDays,
     String returnPolicyVersion,
-    Equipment equipment
+    Equipment equipment,
+    Instant customerClearedAt,
+    Boolean warehouseEmptyVerified,
+    Instant warehouseEmptyVerifiedAt,
+    UUID warehouseEmptyVerifiedBy,
+    long clearanceRevision,
+    String displayCode,
+    String rentalDisplayCode,
+    Attendance attendance,
+    long settlementVersion,
+    Instant settlementPublishedAt,
+    Instant settlementPaymentDueAt,
+    List<SettlementReceipt> settlementReceipts
 ) {
+    public record Attendance(Instant arrivedAt, UUID evidenceId, Instant expiresAt, int attempts, Instant verifiedAt,
+        Instant reviewStartsAt, Boolean reviewAccepted) {}
     public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
@@ -180,7 +194,7 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, 0, null, null, List.of()
         );
     }
 

@@ -137,7 +137,7 @@ public class IntakeWorkflowService {
                         .filter(rc -> List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled).contains(rc.getStatus()))
                         .forEach(rc -> { rc.setRecoveryEligibleAt(command.at()); returns.save(rc); });
                 } else if (r.getInventoryRemainderDeadlineAt() != null) {
-                    before = r.getInventoryRemainderDeadlineAt(); r.setInventoryRemainderDeadlineAt(command.at());
+                    throw ApiExceptions.conflict("Hồ sơ dùng phương án cũ. Vui lòng xử lý kết quả kiểm kê trước khi dời hạn.");
                 } else {
                     before = r.getInventoryFinalDeadlineAt();
                     r.setInventoryFinalDeadlineAt(command.at());
