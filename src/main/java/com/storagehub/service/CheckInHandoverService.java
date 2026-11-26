@@ -2323,6 +2323,13 @@ public class CheckInHandoverService {
         return assigned;
     }
 
+    private CheckInResponse.InventoryAccess inventoryAccess(Rental rental) {
+        if (rental == null) return null;
+        var restriction = InventoryDeadlinePolicy.restriction(rental, Instant.now());
+        return new CheckInResponse.InventoryAccess(InventoryDeadlinePolicy.completionDeadline(rental),
+            restriction == null, restriction == null ? null : restriction.message);
+    }
+
     private CheckInResponse toResponse(
         ActorPrincipal actor,
         Reservation reservation,
@@ -2373,7 +2380,7 @@ public class CheckInHandoverService {
             checkIn.getInventoryArrivedAt(),
             checkIn.getInventoryIdentityVerifiedAt(),
             checkIn.getInventoryIdentityVerifiedBy() == null ? null : checkIn.getInventoryIdentityVerifiedBy().getFullName(),
-            checkIn.getInventoryIdentityPhotoId()
+            checkIn.getInventoryIdentityPhotoId(), inventoryAccess(rental)
         );
         return new CheckInResponse(
             checkIn == null ? null : checkIn.getId(),

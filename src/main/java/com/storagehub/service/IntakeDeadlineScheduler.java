@@ -237,7 +237,17 @@ public class IntakeDeadlineScheduler {
         if (!hasEvidence) {
             r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
             r.setInspectionFailureReason("Quá hạn đến kiểm kê và không có bằng chứng đến đúng hạn.");
-            recovery(r, now, "Quá hạn đến kiểm kê");
+            if (violationRecovery != null) {
+                var reason = r.getMoveInCompletedAt() == null
+                    ? ViolationRecovery.Reason.SETUP_OVERDUE
+                    : ViolationRecovery.Reason.INVENTORY_NO_SHOW;
+                if (violationRecovery.detect(r, null, reason, d, now, false)) {
+                    r.setInventoryEscalatedAt(now);
+                    rentals.save(r);
+                }
+            } else {
+                recovery(r, now, "Quá hạn đến kiểm kê");
+            }
             return;
         }
         notifications.createFacilityOperationsNotificationsOnce(
@@ -277,33 +287,42 @@ public class IntakeDeadlineScheduler {
             return;
         }
 
-        // now > F: expired 72h completion window.
-        if (r.getExceptionReason() != null && policy.isProtectFromAutoRecoveryOnFacilityException()) {
-            notifications.createFacilityOperationsNotificationsOnce(
-                r.getFacility().getId(), NotificationType.CHECKIN,
-                "Quá hạn 72h đang xử lý ngoại lệ cơ sở",
-                withOrderCode(r, "Hồ sơ quá hạn 72 giờ do sự cố/ngoại lệ cơ sở. Không tự động thu hồi."),
-                r.getReservation().getId()
-            );
-            return;
-        }
+        // now > F: expired 72h completion window -> always create recovery.
         r.setInspectionFailureReason("Quá hạn hoàn tất kiểm kê 72 giờ.");
-        recovery(r, now, "Quá hạn hoàn tất kiểm kê 72 giờ");
+        if (violationRecovery != null) {
+            if (violationRecovery.detect(r, null, ViolationRecovery.Reason.INVENTORY_TIMEOUT, f, now, false)) {
+                r.setInventoryEscalatedAt(now);
+                rentals.save(r);
+            }
+        } else {
+            recovery(r, now, "Quá hạn hoàn tất kiểm kê 72 giờ");
+        }
     }
 
     private void processLegacyRental(Rental r, Instant now) {
         if (r.getMoveInCompletedAt() == null && r.getSetupCompletionDeadlineAt() != null
             && List.of(RentalStatus.setup, RentalStatus.active).contains(r.getStatus())) {
-            if (!now.isBefore(r.getSetupCompletionDeadlineAt())) recovery(r, now, "Quá hạn hoàn tất setup");
-            else if (!now.plus(24, ChronoUnit.HOURS).isBefore(r.getSetupCompletionDeadlineAt()))
+            if (!now.isBefore(r.getSetupCompletionDeadlineAt())) {
+                if (violationRecovery == null) recovery(r, now, "Quá hạn hoàn tất setup");
+                else detect(r, ViolationRecovery.Reason.SETUP_OVERDUE, r.getSetupCompletionDeadlineAt(), now, true);
+            } else if (!now.plus(24, ChronoUnit.HOURS).isBefore(r.getSetupCompletionDeadlineAt())) {
                 notify(r, "Sắp hết hạn setup", "Vui lòng báo setup xong hoặc dời hạn trong số lượt cho phép.");
+            }
         }
+        // Customer never arrived for the inventory visit: escalate once the final
+        // deadline passes, as long as nothing else already owns the case.
         if (r.getMoveInCompletedAt() != null && r.isInventoryPending()
-            && r.getInventoryArrivedAt() == null && r.getInventoryResultPublishedAt() == null
+            && (violationRecovery != null || r.getInventoryArrivedAt() == null) && r.getInventoryResultPublishedAt() == null
             && r.getInventoryRemovalPublishedAt() == null && r.getInventoryEscalatedAt() == null
             && r.getInventoryFinalDeadlineAt() != null && !now.isBefore(r.getInventoryFinalDeadlineAt())
             && List.of(RentalStatus.setup, RentalStatus.active).contains(r.getStatus())) {
-            recovery(r, now, "Quá hạn đến kiểm kê");
+            if (violationRecovery == null) recovery(r, now, "Quá hạn đến kiểm kê");
+            else {
+                var reason = r.getInventoryArrivedAt() == null ? ViolationRecovery.Reason.INVENTORY_NO_SHOW
+                    : r.getInventoryIdentityVerifiedAt() == null ? ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED
+                    : ViolationRecovery.Reason.INVENTORY_TIMEOUT;
+                detect(r, reason, r.getInventoryFinalDeadlineAt(), now, true);
+            }
         }
     }
 

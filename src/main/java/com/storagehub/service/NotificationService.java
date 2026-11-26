@@ -318,6 +318,8 @@ public class NotificationService {
     /** Resolves a notification's related reservation id to the order code shown to operators. */
     @org.springframework.beans.factory.annotation.Autowired(required=false)
     private com.storagehub.domain.repo.ReservationRepository reservations;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.storagehub.domain.repo.ViolationRecoveryRepository violationRecoveries;
 
     /**
      * The staff bell is a queue across every reservation in a facility, so a notification that
@@ -337,6 +339,9 @@ public class NotificationService {
         content = displayContent(content, notification.getTitle());
         if (displayCodes != null) content = displayCodes.noticeText(content);
         UUID related=notification.getRelatedEntityId();
+        String relatedEntityType = null;
+        if (related != null && notification.getType() == NotificationType.RETURN && violationRecoveries != null
+            && violationRecoveries.existsById(related)) relatedEntityType = "VIOLATION_RECOVERY";
         if(related!=null){
             String key=switch(notification.getType()){
                 case RENEWAL -> null;
@@ -362,7 +367,8 @@ public class NotificationService {
             content,
             notification.getRelatedEntityId(),
             notification.isRead(),
-            notification.getCreatedAt()
+            notification.getCreatedAt(),
+            relatedEntityType
         );
     }
 

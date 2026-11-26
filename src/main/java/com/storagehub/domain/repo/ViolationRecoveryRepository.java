@@ -21,6 +21,10 @@ public interface ViolationRecoveryRepository extends JpaRepository<ViolationReco
     List<ViolationRecovery> findByTask_AssignedTo_IdOrderByCreatedAtDesc(UUID staffId, Pageable page);
     List<ViolationRecovery> findByRental_Facility_IdInOrderByCreatedAtDesc(java.util.Collection<UUID> facilities, Pageable page);
     List<ViolationRecovery> findAllByOrderByCreatedAtDesc(Pageable page);
+    List<ViolationRecovery> findByStageNotInOrderByCreatedAtDesc(java.util.Collection<ViolationRecovery.Stage> stages, Pageable page);
+    List<ViolationRecovery> findByRental_Facility_IdInAndStageNotInOrderByCreatedAtDesc(
+        java.util.Collection<UUID> facilities, java.util.Collection<ViolationRecovery.Stage> stages, Pageable page);
+    List<ViolationRecovery> findByStageOrderByCreatedAtAsc(ViolationRecovery.Stage stage, Pageable page);
 
     @Query("""
         select v.id from ViolationRecovery v

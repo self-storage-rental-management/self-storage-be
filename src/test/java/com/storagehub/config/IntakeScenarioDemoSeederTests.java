@@ -1,6 +1,8 @@
 package com.storagehub.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
@@ -28,6 +30,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.transaction.PlatformTransactionManager;
 
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
@@ -53,13 +56,14 @@ public class IntakeScenarioDemoSeederTests {
     @Autowired private CustomerReservationService customerReservationService;
     @Autowired private RentalQueryService rentalQueryService;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private PlatformTransactionManager transactionManager;
 
     public static String binToUuid(UUID val) {
         return val == null ? "" : val.toString();
     }
 
     @Test
-    void seedsAllNineScenariosVisibleInBothCustomerReservationsAndRentals() throws Exception {
+    void runnerSeedsScenariosIncludingRecoveryWithoutAnExistingTransaction() throws Exception {
         jdbcTemplate.execute("""
             CREATE TABLE IF NOT EXISTS business_record_codes (
                 resource_key VARCHAR(120) PRIMARY KEY,
@@ -102,9 +106,10 @@ public class IntakeScenarioDemoSeederTests {
             return userRepository.saveAndFlush(u);
         });
 
-        intakeScenarioDemoSeeder.seedAll();
+        when(businessRecordCodes.noticeText(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
+        intakeScenarioDemoSeeder.seedIntakeScenarios(transactionManager).run();
 
-        for (int i = 1; i <= 9; i++) {
+        for (int i = 1; i <= 21; i++) {
             String code = String.format("RSV-TEST-%02d", i);
             assertThat(reservationRepository.existsByReservationCode(code))
                 .as("Reservation %s should exist", code)
@@ -118,10 +123,10 @@ public class IntakeScenarioDemoSeederTests {
             Set.of(),
             Map.of()
         );
-        var reservations = customerReservationService.list(actor, null, 0, 20, "corr-1");
+        var reservations = customerReservationService.list(actor, null, 0, 50, "corr-1");
         assertThat(reservations.data())
             .extracting(r -> r.getReservationCode())
-            .contains("RSV-TEST-01", "RSV-TEST-02", "RSV-TEST-09");
+            .contains("RSV-TEST-01", "RSV-TEST-02", "RSV-TEST-09", "RSV-TEST-17", "RSV-TEST-21");
 
         var rentals = rentalQueryService.list(actor, RentalQuery.parse(new LinkedMultiValueMap<>(), false), false, "corr-2");
         assertThat(rentals.data()).hasSizeGreaterThanOrEqualTo(9);
