@@ -23,11 +23,12 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 @RequiredArgsConstructor
 public class ProcessingLeaseService {
     public enum Target { RESERVATION, ASSIGNMENT, CHECK_IN, RENTAL, RETURN }
-    public record View(UUID reservationId, UUID ownerId, String ownerName, Instant expiresAt,
+    public record View(UUID reservationId, UUID ownerId, String ownerName, Instant expiresAt, Instant maxExpiresAt,
                        long revision, String sourceStamp, boolean owned, boolean occupied) {}
     private record Resource(Reservation reservation, BaseEntity entity) {}
     @FunctionalInterface public interface Command { Object run() throws Throwable; }
     private static final long LEASE_SECONDS = 120;
+    private static final long MAX_LEASE_MINUTES = 15;
     private final ThreadLocal<java.util.Set<UUID>> executing = ThreadLocal.withInitial(java.util.HashSet::new);
     private final ProcessingLeaseRepository leases;
     private final ReservationRepository reservations;
@@ -35,6 +36,7 @@ public class ProcessingLeaseService {
     private final RentalRepository rentals;
     private final ReturnCaseRepository returns;
     private final UserRepository users;
+    private final AuditLogService auditLogService;
     private final FacilityScopeService scope;
     private final EntityManager entities;
     private final org.springframework.transaction.PlatformTransactionManager transactions;
@@ -51,11 +53,22 @@ public class ProcessingLeaseService {
         Resource resource = lockedResource(actor, type, id);
         ProcessingLease lease = lease(resource);
         if (active(lease) && !owns(actor, token, lease)) return view(actor, token, resource, lease);
+        if (lease.getOwnerId() != null && !active(lease)) {
+            auditLogService.recordMutation("PROCESSING_LEASE_EXPIRED", "ProcessingLease",
+                resource.reservation().getId(), resource.reservation().getFacility().getId(),
+                Map.of("ownerId", lease.getOwnerId()), Map.of("reason", "Hết hạn tự động"));
+        }
         lease.setOwnerId(actor.userId());
         lease.setSessionId(actor.sessionId());
         lease.setToken(token);
-        lease.setExpiresAt(Instant.now().plusSeconds(LEASE_SECONDS));
+        Instant now = Instant.now();
+        lease.setAcquiredAt(now);
+        lease.setMaxExpiresAt(now.plus(MAX_LEASE_MINUTES, ChronoUnit.MINUTES));
+        lease.setExpiresAt(now.plusSeconds(LEASE_SECONDS));
         leases.saveAndFlush(lease);
+        auditLogService.recordMutation("PROCESSING_LEASE_ACQUIRED", "ProcessingLease",
+            resource.reservation().getId(), resource.reservation().getFacility().getId(), null,
+            Map.of("ownerId", actor.userId(), "expiresAt", lease.getExpiresAt()));
         return view(actor, token, resource, lease);
     }
 
@@ -64,7 +77,17 @@ public class ProcessingLeaseService {
         Resource resource = lockedResource(actor, type, id);
         ProcessingLease lease = lease(resource);
         requireOwner(actor, token, lease);
-        lease.setExpiresAt(Instant.now().plusSeconds(LEASE_SECONDS));
+        Instant now = Instant.now();
+        if (lease.getMaxExpiresAt() == null || !lease.getMaxExpiresAt().isAfter(now)) {
+            clear(lease);
+            leases.saveAndFlush(lease);
+            auditLogService.recordMutation("PROCESSING_LEASE_EXPIRED", "ProcessingLease",
+                resource.reservation().getId(), resource.reservation().getFacility().getId(), null,
+                Map.of("releasedBy", actor.userId(), "reason", "Vượt thời gian tối đa"));
+            throw conflict("Quyền xử lý đã hết thời gian tối đa. Hãy nhận lại hồ sơ.");
+        }
+        lease.setExpiresAt(now.plusSeconds(LEASE_SECONDS).isBefore(lease.getMaxExpiresAt())
+            ? now.plusSeconds(LEASE_SECONDS) : lease.getMaxExpiresAt());
         leases.saveAndFlush(lease);
         return view(actor, token, resource, lease);
     }
@@ -75,11 +98,11 @@ public class ProcessingLeaseService {
         ProcessingLease lease = lease(resource);
         // Delayed cleanup from an old tab must never release another tab's lease.
         if (owns(actor, token, lease)) {
-            lease.setOwnerId(null);
-            lease.setSessionId(null);
-            lease.setToken(null);
-            lease.setExpiresAt(null);
+            clear(lease);
             leases.saveAndFlush(lease);
+            auditLogService.recordMutation("PROCESSING_LEASE_RELEASED", "ProcessingLease",
+                resource.reservation().getId(), resource.reservation().getFacility().getId(), null,
+                Map.of("releasedBy", actor.userId(), "reason", "Người xử lý tự nhường"));
         }
         return view(actor, token, resource, lease);
     }
@@ -114,7 +137,15 @@ public class ProcessingLeaseService {
                 Object result = command.run();
                 entities.flush();
                 lease.setRevision(lease.getRevision() + 1);
-                if (!customer) lease.setExpiresAt(Instant.now().plusSeconds(LEASE_SECONDS));
+                if (!customer) {
+                    Instant now = Instant.now();
+                    if (lease.getMaxExpiresAt() == null || !lease.getMaxExpiresAt().isAfter(now)) {
+                        clear(lease);
+                        throw conflict("Quyền xử lý đã hết thời gian tối đa. Hãy nhận lại hồ sơ.");
+                    }
+                    lease.setExpiresAt(now.plusSeconds(LEASE_SECONDS).isBefore(lease.getMaxExpiresAt())
+                        ? now.plusSeconds(LEASE_SECONDS) : lease.getMaxExpiresAt());
+                }
                 leases.saveAndFlush(lease);
                 if (attributes.getResponse() != null) {
                     attributes.getResponse().setHeader("X-Processing-Version", Long.toString(lease.getRevision()));
@@ -129,6 +160,27 @@ public class ProcessingLeaseService {
                 if (executing.get().isEmpty()) executing.remove();
             }
         });
+    }
+
+    @Transactional
+    public View forceRelease(ActorPrincipal actor, Target type, UUID id) {
+        if (!actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
+            throw ApiExceptions.forbidden("Chỉ Manager, Business Owner hoặc Admin được gỡ khóa cưỡng chế.");
+        }
+        Resource resource = actor.hasRole(RoleCode.ADMIN)
+            ? resource(type, id)
+            : lockedResource(actor, type, id);
+        if (actor.hasRole(RoleCode.ADMIN)) lock(resource);
+        ProcessingLease lease = lease(resource);
+        if (active(lease)) {
+            UUID oldOwner = lease.getOwnerId();
+            clear(lease);
+            leases.saveAndFlush(lease);
+            auditLogService.recordMutation("PROCESSING_LEASE_FORCE_RELEASED", "ProcessingLease",
+                resource.reservation().getId(), resource.reservation().getFacility().getId(),
+                Map.of("ownerId", oldOwner), Map.of("releasedBy", actor.userId(), "reason", "Gỡ khóa cưỡng chế"));
+        }
+        return view(actor, null, resource, lease);
     }
 
     private Resource lockedResource(ActorPrincipal actor, Target type, UUID id) {
@@ -190,7 +242,19 @@ public class ProcessingLeaseService {
     }
 
     private boolean active(ProcessingLease lease) {
-        return lease != null && lease.getToken() != null && lease.getExpiresAt() != null && lease.getExpiresAt().isAfter(Instant.now());
+        Instant now = Instant.now();
+        return lease != null && lease.getToken() != null && lease.getExpiresAt() != null
+            && lease.getExpiresAt().isAfter(now)
+            && (lease.getMaxExpiresAt() == null || lease.getMaxExpiresAt().isAfter(now));
+    }
+
+    private void clear(ProcessingLease lease) {
+        lease.setOwnerId(null);
+        lease.setSessionId(null);
+        lease.setToken(null);
+        lease.setExpiresAt(null);
+        lease.setAcquiredAt(null);
+        lease.setMaxExpiresAt(null);
     }
     private boolean owns(ActorPrincipal actor, UUID token, ProcessingLease lease) {
         return lease != null && token != null && token.equals(lease.getToken())
@@ -207,7 +271,8 @@ public class ProcessingLeaseService {
         boolean occupied = active(lease);
         String name = occupied ? users.findById(lease.getOwnerId()).map(User::getFullName).orElse("Nhân sự vận hành") : null;
         return new View(resource.reservation().getId(), occupied ? lease.getOwnerId() : null, name,
-            occupied ? lease.getExpiresAt() : null, lease == null ? 0 : lease.getRevision(), stamp(resource),
+            occupied ? lease.getExpiresAt() : null, occupied ? lease.getMaxExpiresAt() : null,
+            lease == null ? 0 : lease.getRevision(), stamp(resource),
             occupied && owns(actor, token, lease), occupied);
     }
     private String stamp(Resource resource) {
