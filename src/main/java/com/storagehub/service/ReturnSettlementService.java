@@ -139,6 +139,8 @@ public class ReturnSettlementService {
     private long noShowGraceHours = 24;
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-recovery-sla-hours:24}")
     private long noShowRecoverySlaHours = 24;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.return.auto-settlement.sla-hours:72}")
+    private long autoSettlementSlaHours = 72;
 
     @Transactional
     public ReturnCaseResponse createCustomerReturnRequest(
@@ -2436,6 +2438,8 @@ public class ReturnSettlementService {
     }
 
     private ReturnCaseResponse.Equipment returnEquipment(ReturnCase rc) {
+        ReturnCaseResponse.Equipment resolved = resolveEquipment(rc);
+        if (resolved != null) return resolved;
         return HandoverEquipmentInventory.read(objectMapper, reservationPricingSnapshot(rc),
             missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice);
     }
