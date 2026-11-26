@@ -184,7 +184,7 @@ public class ReturnSettlementService {
         var activeReturn = existingReturns.stream().filter(r -> r.getStatus() != ReturnCaseStatus.completed).findFirst();
         if (activeReturn.isPresent()) return toResponse(activeReturn.get());
         boolean inventoryMismatchReturn = request.returnType() == ReturnType.INVENTORY_MISMATCH;
-        if (inventoryMismatchReturn && rental.getInventoryRemovalPublishedAt() != null)
+        if (inventoryMismatchReturn && request.scheduledDate() != null && rental.getInventoryRemovalPublishedAt() != null)
             validateRemovalDate(rental, request.scheduledDate());
         if (rental.isInventoryPending() && rental.getInventoryEscalatedAt() != null) {
             throw ApiExceptions.conflict("Hồ sơ đã chuyển sang chờ thu hồi. Vui lòng liên hệ cơ sở.");
@@ -239,8 +239,8 @@ public class ReturnSettlementService {
         returnCase.setRequestedBy(staff == null ? customer : staff);
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setRequestedAt(now);
-        returnCase.setScheduledDate(request.scheduledDate() != null ? request.scheduledDate() : today);
-        returnCase.setRecoveryEligibleAt(inventoryMismatchReturn && rental.getInventoryRemovalDeadlineAt() != null
+        returnCase.setScheduledDate(inventoryMismatchReturn || request.scheduledDate() != null ? request.scheduledDate() : today);
+        returnCase.setRecoveryEligibleAt(inventoryMismatchReturn
             ? rental.getInventoryRemovalDeadlineAt() : noShowRecoveryEligibleAt(returnCase.getScheduledDate()));
         returnCase.setCustomerNotes(request.notes());
         returnCase.setDepositAmount(depositAmount);
@@ -574,6 +574,7 @@ public class ReturnSettlementService {
             rc.setReturnSecondAttemptAt(now);
         }
         if (matched) rc.setReturnIdentityVerifiedAt(now);
+        else if (rc.getReturnSecondAttemptAt() != null) notificationService.notifyManagersOfReturnIdentityReview(rc);
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
             ? "RETURN_IDENTITY_ATTEMPT" : "MISMATCH_RETURN_IDENTITY_ATTEMPT", "return", id, rc.getFacility().getId(),
             null, Map.of("attemptId", attemptId, "staffId", actor.userId(), "matched", matched, "attemptedAt", now));
@@ -2634,6 +2635,7 @@ public class ReturnSettlementService {
             : rental.getSetupStartedAt().atZone(BusinessTime.ZONE).toLocalDate();
         LocalDate requestedAt = returnCase.getRequestedAt().atZone(BusinessTime.ZONE).toLocalDate();
         LocalDate returnDate = returnCase.getScheduledDate();
+        if (returnDate == null) return null;
         long noticeGivenDays = Math.max(0, ChronoUnit.DAYS.between(requestedAt, returnDate));
         return EarlyTerminationPolicy.activeReturn(
             paidStart,

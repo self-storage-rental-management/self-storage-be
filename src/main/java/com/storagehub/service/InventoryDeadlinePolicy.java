@@ -67,7 +67,7 @@ final class InventoryDeadlinePolicy {
         if (expired(deadline, now)) {
             throw ApiExceptions.conflict("Đã hết hạn đưa hàng ra khỏi kho. Vui lòng liên hệ cơ sở.");
         }
-        if (scheduledDate == null || !scheduledDate.atStartOfDay(BusinessTime.ZONE).toInstant().isBefore(deadline)) {
+        if (scheduledDate != null && !scheduledDate.atStartOfDay(BusinessTime.ZONE).toInstant().isBefore(deadline)) {
             throw ApiExceptions.validation("Ngày trả kho phải nằm trong thời hạn đưa hàng ra khỏi kho.", null);
         }
     }

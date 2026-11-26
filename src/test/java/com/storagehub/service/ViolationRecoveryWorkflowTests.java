@@ -378,14 +378,13 @@ class ViolationRecoveryWorkflowTests {
 
     @Test
     void activeOperationsQueueNamesTheOrderAndFiltersByTheManagersFacility() {
-        var closed = List.of(Stage.COMPLETED, Stage.CANCELLED);
-        when(cases.findByRental_Facility_IdInAndStageNotInOrderByCreatedAtDesc(anyCollection(), eq(closed), any()))
+        when(cases.operationsQueue(eq(false), anyCollection(), eq(true), eq(false), any()))
             .thenReturn(List.of(recovery));
         var queue = workflow.listActiveOperations(manager(), 0);
         assertThat(queue).hasSize(1);
         assertThat(queue.getFirst().reservationCode()).isEqualTo("RSV-TEST-10");
         assertThat(queue.getFirst().customerName()).isEqualTo("Khách thử nghiệm");
-        verify(cases).findByRental_Facility_IdInAndStageNotInOrderByCreatedAtDesc(eq(Set.of(facility.getId())), eq(closed), any());
+        verify(cases).operationsQueue(eq(false), eq(Set.of(facility.getId())), eq(true), eq(false), any());
         assertThatThrownBy(() -> workflow.listActiveOperations(staff(), 0)).isInstanceOf(ApiException.class);
         assertThatThrownBy(() -> workflow.get(actor(identified(new User()), RoleCode.MANAGER, null, null), recovery.getId()))
             .isInstanceOf(ApiException.class);

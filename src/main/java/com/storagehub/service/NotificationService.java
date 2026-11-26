@@ -279,6 +279,20 @@ public class NotificationService {
     }
 
     @Transactional
+    public void notifyManagersOfReturnIdentityReview(com.storagehub.domain.model.ReturnCase returned) {
+        UUID facilityId = returned.getFacility().getId();
+        Instant sessionStart = returned.getReturnReverificationStartedAt() == null
+            ? returned.getReturnArrivedAt() : returned.getReturnReverificationStartedAt();
+        String unit = returned.getStorageUnit().getCode();
+        userRepository.findEligibleStaff(UserStatus.ACTIVE, RoleCode.MANAGER, facilityId,
+            List.of(FacilityScopeLevel.MANAGE)).forEach(manager ->
+                createNotificationIfNotSentSince(manager.getId(), NotificationType.RETURN,
+                    "Cần đối soát danh tính trả kho",
+                    "Phiên xác minh của gian kho " + unit + " đã kết thúc. Mở hồ sơ trả kho để đối soát.",
+                    returned.getId(), sessionStart));
+    }
+
+    @Transactional
     public void createBusinessNotifications(
         NotificationType type, String title, String content, UUID relatedEntityId
     ) {

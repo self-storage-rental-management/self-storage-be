@@ -624,6 +624,10 @@ public class WorkflowSlaScheduler {
     }
 
     private void deliver(Deadline deadline, Instant now) {
+        if (deadline.resource() instanceof ReturnCase returned && returned.getReturnArrivalReviewedAt() == null
+            && (deadline.workflow().equals("RETURN_ARRIVAL_REVIEW") || deadline.workflow().equals("MISMATCH_RETURN_ARRIVAL_REVIEW"))) {
+            notifications.notifyManagersOfReturnIdentityReview(returned);
+        }
         if (now.isBefore(deadline.dueAt().minus(deadline.warningLead()))) return;
         boolean overdue = !now.isBefore(deadline.dueAt());
         String milestone = overdue ? "OVERDUE" : "WARNING";

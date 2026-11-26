@@ -95,7 +95,8 @@ public class CustomerLifecycleEmailService {
         }
         if (returned != null && returned.getCustomer().getId().equals(user.getId())) {
             if (returned.getDisplayCode() != null) details.put("Mã hồ sơ trả kho", returned.getDisplayCode());
-            details.put("Lịch kiểm tra/trả kho dự kiến", returned.getScheduledDate().toString());
+            if (returned.getScheduledDate() != null)
+                details.put("Lịch kiểm tra/trả kho dự kiến", returned.getScheduledDate().toString());
             if (returned.getInspectedAt() != null || returned.getReviewedAt() != null || returned.getSettlementPaidAt() != null) {
                 details.put("Tổng khấu trừ theo bảng kê", money(returned.getTotalDeductions()));
                 details.put("Tiền hoàn theo bảng kê", money(returned.getNetRefundAmount()));

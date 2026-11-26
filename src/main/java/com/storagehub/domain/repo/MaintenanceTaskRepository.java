@@ -54,6 +54,11 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
             or lower(t.storageUnit.code) like lower(concat('%', :q, '%'))
             or lower(t.facility.name) like lower(concat('%', :q, '%'))
           )
+        order by case when t.status in (completed, cancelled) then 1 else 0 end,
+          case when t.priority = high then 0 else 1 end,
+          coalesce(t.deadlineAt, cast(t.dueAt as LocalDateTime) + 1 day - 7 hour) asc nulls last,
+          case when t.status in (completed, cancelled) then t.completedAt end desc,
+          t.createdAt asc, t.id asc
         """)
     Page<MaintenanceTask> searchTasks(
         @Param("facilityId") UUID facilityId,
