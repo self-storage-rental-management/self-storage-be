@@ -135,9 +135,7 @@ public class ViolationRecoveryWorkflow {
         if (actor.hasRole(RoleCode.CUSTOMER)) rows = recoveries.findByRental_Customer_IdOrderByCreatedAtDesc(actor.userId(), paging);
         else if (actor.hasRole(RoleCode.STAFF)) rows = recoveries.findByTask_AssignedTo_IdOrderByCreatedAtDesc(actor.userId(), paging);
         else if (actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
-            rows = scopes.hasGlobalScope(actor) ? recoveries.findAllByOrderByCreatedAtDesc(paging)
-                : actor.facilityScopes().isEmpty() ? List.of()
-                : recoveries.findByRental_Facility_IdInOrderByCreatedAtDesc(actor.facilityScopes().keySet(), paging);
+            rows = operationsQueue(actor, false, paging);
         } else throw ApiExceptions.forbidden("Vai trò không có quyền xem thu hồi.");
         return rows.stream().filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
     }
@@ -156,11 +154,15 @@ public class ViolationRecoveryWorkflow {
         if (!actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN))
             throw ApiExceptions.forbidden("Vai trò không có quyền điều phối thu hồi.");
         var paging = PageRequest.of(Math.max(0, page), 30);
-        var closed = List.of(Stage.COMPLETED, Stage.CANCELLED);
-        var rows = scopes.hasGlobalScope(actor) ? recoveries.findByStageNotInOrderByCreatedAtDesc(closed, paging)
-            : actor.facilityScopes().isEmpty() ? List.<ViolationRecovery>of()
-            : recoveries.findByRental_Facility_IdInAndStageNotInOrderByCreatedAtDesc(actor.facilityScopes().keySet(), closed, paging);
+        var rows = operationsQueue(actor, true, paging);
         return rows.stream().filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
+    }
+
+    private List<ViolationRecovery> operationsQueue(ActorPrincipal actor, boolean active, org.springframework.data.domain.Pageable page) {
+        boolean global = scopes.hasGlobalScope(actor);
+        if (!global && actor.facilityScopes().isEmpty()) return List.of();
+        var facilities = actor.facilityScopes().isEmpty() ? List.of(new UUID(0, 0)) : actor.facilityScopes().keySet();
+        return recoveries.operationsQueue(global, facilities, active, actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN), page);
     }
 
     @Transactional(readOnly = true)
@@ -308,6 +310,12 @@ public class ViolationRecoveryWorkflow {
             case SETUP_OVERDUE -> r.getMoveInCompletedAt() == null ? r.getSetupCompletionDeadlineAt() : null;
             case INVENTORY_NO_SHOW, INVENTORY_IDENTITY_FAILED, INVENTORY_TIMEOUT ->
                 r.isInventoryPending() && r.getInventoryResultPublishedAt() == null ? r.getInventoryFinalDeadlineAt() : null;
+            case INVENTORY_CONFIRMATION_OVERDUE -> {
+                var checkIn = em.createQuery("select c from CheckIn c where c.reservation.id = :reservationId", CheckIn.class)
+                    .setParameter("reservationId", r.getReservation().getId()).getResultStream().findFirst().orElse(null);
+                yield checkIn != null && checkIn.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_CUSTOMER
+                    && r.getInventoryResultPublishedAt() != null ? r.getInventoryResultPublishedAt().plus(Duration.ofHours(48)) : null;
+            }
             case REMOVAL_OVERDUE, HANDOVER_FOLLOW_UP -> r.getInventoryRemovalDeadlineAt();
         };
         if (current == null || now.isBefore(current))
@@ -911,6 +919,7 @@ public class ViolationRecoveryWorkflow {
             case INVENTORY_NO_SHOW -> "Không đến kiểm kê theo lịch hẹn";
             case INVENTORY_IDENTITY_FAILED -> "Xác minh kiểm kê chưa thành công";
             case INVENTORY_TIMEOUT -> "Quá hạn hoàn tất kiểm kê";
+            case INVENTORY_CONFIRMATION_OVERDUE -> "Quá hạn 48 giờ phản hồi kết quả kiểm kê";
             case REMOVAL_OVERDUE -> "Quá hạn dọn hàng sau kiểm kê sai lệch";
             case HANDOVER_FOLLOW_UP -> "Bàn giao sau đối soát cần xử lý";
         };

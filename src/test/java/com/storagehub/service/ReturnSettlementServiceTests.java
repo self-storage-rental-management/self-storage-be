@@ -1317,6 +1317,7 @@ class ReturnSettlementServiceTests {
         assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), first, "TEST11111").attendance().attempts()).isOne();
         assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), first, "TEST99999").attendance().verifiedAt()).isNull();
         var failed = service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST22222").attendance();
+        verify(notificationService).notifyManagersOfReturnIdentityReview(rc);
         assertThat(failed.attempts()).isEqualTo(2);
         assertThat(failed.reviewStartsAt()).isNotNull();
         assertThatThrownBy(() -> service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))

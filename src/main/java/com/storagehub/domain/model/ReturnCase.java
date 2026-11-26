@@ -111,7 +111,6 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false)
     private Instant requestedAt;
 
-    @Column(nullable = false)
     private LocalDate scheduledDate;
 
     /** The time after the scheduled return date and grace period when no-show recovery may start. */

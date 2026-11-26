@@ -48,6 +48,11 @@ public class UnitType extends BaseEntity {
     @Column(name = "width_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal widthM;
 
+    // Hibernate uses this expression when paginating unit types by floor area.
+    @org.hibernate.annotations.Formula("length_m * width_m")
+    @Setter(lombok.AccessLevel.NONE)
+    private BigDecimal areaM2;
+
     @Column(name = "height_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal heightM;
 

@@ -294,7 +294,7 @@ public class CustomerReservationService {
         int size,
         String correlationId
     ) {
-        PageRequest pageable = createPageRequest(page, size);
+        PageRequest pageable = createPageRequest(page, size).withSort(Sort.unsorted());
         Page<Reservation> reservations;
         if (status == null) {
             reservations = reservationRepository.findCustomerVisibleReservations(actor.userId(), pageable);
@@ -676,13 +676,15 @@ public class CustomerReservationService {
             .orElseThrow(() -> ApiExceptions.conflict("Hồ sơ kiểm kê chưa được tạo."));
         if (checkIn.getStatus() != CheckInStatus.setup_completed
             || checkIn.isInventoryFullFit()
-            || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER) {
-            throw ApiExceptions.conflict("Đơn đã có yêu cầu buộc trả kho hoặc không còn ở trạng thái được phép gia hạn.");
+            || (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
+                && checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.RETURN_REQUESTED)) {
+            throw ApiExceptions.conflict("Hồ sơ kiểm kê không còn ở trạng thái được phép gia hạn trả kho.");
         }
         Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê của thời gian chuẩn bị."));
-        if (rental.getStatus() == RentalStatus.return_requested) {
-            throw ApiExceptions.conflict("Đơn đã chuyển sang trả kho, không thể gia hạn thêm.");
+        if (rental.getStatus() == RentalStatus.completed || rental.getStatus() == RentalStatus.return_inspection
+            || rental.getStatus() == RentalStatus.closing) {
+            throw ApiExceptions.conflict("Hồ sơ đã nghiệm thu hoặc chuyển sang thu hồi, không thể gia hạn thêm.");
         }
         Instant now = Instant.now();
         Instant nextDeadline = InventoryTimelinePolicy.extendRemovalWindow(rental, now);
@@ -734,6 +736,10 @@ public class CustomerReservationService {
         Rental rental = rentalRepository.findByReservationIdForUpdate(reservationId)
             .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê của thời gian chuẩn bị."));
         Instant now = Instant.now();
+        if (staff == null && rental.getInventoryResultPublishedAt() != null
+            && !now.isBefore(rental.getInventoryResultPublishedAt().plus(48, java.time.temporal.ChronoUnit.HOURS))) {
+            throw ApiExceptions.conflict("Đã hết 48 giờ phản hồi kết quả kiểm kê. Hồ sơ chuyển sang thu hồi.");
+        }
         if (rental.getInventoryRemovalDeadlineAt() == null
             || request.decision() != InventoryResolutionRequest.Decision.CANCEL_AND_RETURN) {
             InventoryDeadlinePolicy.requireInventoryOpen(rental, now);
@@ -759,9 +765,6 @@ public class CustomerReservationService {
             if (staff != null && note == null) throw ApiExceptions.validation("Cần ghi lý do từ chối tiếp nhận.", null);
             if (checkIn.isInventoryFullFit() && !otherGoods)
                 throw ApiExceptions.conflict("Hàng hóa được tiếp nhận đầy đủ. Nếu muốn trả kho, vui lòng gửi yêu cầu trả kho thông thường.");
-            if (staff == null && request.scheduledDate() == null) {
-                throw ApiExceptions.validation("Vui lòng chọn ngày trả kho dự kiến.", null);
-            }
             checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.RETURN_REQUESTED);
             checkIn.setInventoryDecisionAt(Instant.now());
             checkIn.setInventoryDecisionNote(note == null ? "Khách yêu cầu trả kho do kết quả kiểm kê không phù hợp." : note);
@@ -782,7 +785,7 @@ public class CustomerReservationService {
             if (service == null) throw ApiExceptions.conflict("Chưa có luồng trả kho để tiếp nhận yêu cầu này.");
             LocalDate effectiveScheduledDate = request.scheduledDate() != null
                 ? request.scheduledDate()
-                : InventoryTimelinePolicy.removalEffectiveAt(
+                : staff == null ? null : InventoryTimelinePolicy.removalEffectiveAt(
                     rental.getInventoryRemovalPublishedAt() != null ? rental.getInventoryRemovalPublishedAt() : now
                 ).atZone(BusinessTime.ZONE).toLocalDate();
             var returnRequest = new CustomerCreateReturnRequest(effectiveScheduledDate, checkIn.getInventoryDecisionNote(),
@@ -1793,8 +1796,8 @@ public class CustomerReservationService {
                 response.setInventoryReturnExtensionDays(rental.getInventoryReturnExtensionDays());
                 response.setInventoryReturnExtensionCount(rental.getInventoryReturnExtensionCount());
                 response.setInventoryReturnCanExtend(
-                    rental.getStatus() != RentalStatus.return_requested
-                        && InventoryTimelinePolicy.canExtendRemovalWindow(rental, Instant.now())
+                    rental.getStatus() != RentalStatus.completed && rental.getStatus() != RentalStatus.return_inspection
+                        && rental.getStatus() != RentalStatus.closing && InventoryTimelinePolicy.canExtendRemovalWindow(rental, Instant.now())
                 );
                 response.setInventoryReturnPolicyVersion(rental.getInventoryReturnPolicyVersion());
                 response.setSetupStartedAt(rental.getSetupStartedAt());
@@ -1807,7 +1810,9 @@ public class CustomerReservationService {
             response.setInventoryArrivedAt(checkIn.getInventoryArrivedAt());
             response.setInventoryIdentityVerifiedAt(checkIn.getInventoryIdentityVerifiedAt());
             response.setInventoryResolutionStatus(checkIn.getInventoryResolutionStatus());
-            if (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER) {
+            if (checkIn.getStatus() != CheckInStatus.setup_completed || checkIn.isInventoryFullFit()
+                || (checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
+                    && checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.RETURN_REQUESTED)) {
                 response.setInventoryReturnCanExtend(false);
             }
             response.setInventoryDecision(inventoryDecisions == null ? null : inventoryDecisions.read(checkIn));

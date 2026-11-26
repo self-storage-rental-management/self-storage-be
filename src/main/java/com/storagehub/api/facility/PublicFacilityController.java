@@ -20,7 +20,7 @@ public class PublicFacilityController {
 
     @GetMapping
     public PageResponse<PublicFacilityResponse> list(
-        @PageableDefault(size = 50, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+        @PageableDefault(size = 50, sort = {"name", "code", "id"}, direction = Sort.Direction.ASC) Pageable pageable
     ) {
         return facilityQueryService.searchPublicFacilities(pageable, CorrelationIdContext.current());
     }
