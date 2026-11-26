@@ -406,8 +406,60 @@ public class TransactionalEmailService {
         return "••••" + value.substring(value.length() - 3);
     }
 
+    /**
+     * When mail sending is off, still write the rendered message to disk so it can be read
+     * without an SMTP account. The sender's Gmail quota is easily exhausted (550-5.4.5 daily
+     * sending limit), which used to leave no way to see a verification code or a receipt.
+     * Files land in {@code app.mail.outbox-dir} (default {@code .local/outbox}) and are ignored by git.
+     */
     private void logDevPreview(String recipient, String templateName, Map<String, Object> variables) {
         log.info("[DEV EMAIL PREVIEW] Template: {}. Open the local development screen for verification codes.", templateName);
+        writeOutbox(recipient, templateName, variables);
+    }
+
+    /**
+     * Renders a queued message into the local outbox. Used when mail is deliberately disabled so
+     * the operator can still read verification codes and receipts without an SMTP account.
+     */
+    public void savePreview(String recipient, String subject, String templateName, Map<String, Object> variables) {
+        writeOutbox(recipient, templateName == null ? "email" : templateName, variables, subject);
+    }
+
+    private void writeOutbox(String recipient, String templateName, Map<String, Object> variables) {
+        writeOutbox(recipient, templateName, variables, null);
+    }
+
+    private void writeOutbox(String recipient, String templateName, Map<String, Object> variables, String subject) {
+        try {
+            String dir = environment.getProperty("app.mail.outbox-dir", ".local/outbox");
+            java.nio.file.Path folder = java.nio.file.Paths.get(dir).toAbsolutePath().normalize();
+            java.nio.file.Files.createDirectories(folder);
+            String stamp = java.time.format.DateTimeFormatter
+                .ofPattern("yyyyMMdd-HHmmss-SSS").withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"))
+                .format(java.time.Instant.now());
+            String safeRecipient = recipient == null ? "unknown"
+                : recipient.replaceAll("[^A-Za-z0-9.@_-]", "_");
+            java.nio.file.Path file = folder.resolve(stamp + "-" + templateName + "-" + safeRecipient + ".html");
+            String html = templateRenderer.render(templateName, variables);
+            // Record the codes the templates hide behind their buttons so they are easy to copy.
+            StringBuilder details = new StringBuilder();
+            for (String key : new String[] {"otp", "verifyUrl", "resetUrl"}) {
+                Object value = variables.get(key);
+                if (value != null && !String.valueOf(value).isBlank())
+                    details.append("<p><b>").append(key).append(":</b> ")
+                        .append(java.util.regex.Pattern.compile("<[^>]*>").matcher(String.valueOf(value)).replaceAll(""))
+                        .append("</p>");
+            }
+            java.nio.file.Files.writeString(file,
+                "<!doctype html><meta charset=\"utf-8\"><title>" + templateName + "</title>"
+                    + "<p><b>To:</b> " + recipient + "<br><b>Subject:</b> "
+                    + (subject == null ? "" : subject) + "<br><b>Template:</b> " + templateName + "</p>"
+                    + details + "<hr>" + html,
+                StandardCharsets.UTF_8);
+            log.info("[DEV EMAIL SAVED] {} -> {}", templateName, file);
+        } catch (Exception failure) {
+            log.warn("Could not write the local email preview for template={}: {}", templateName, failure.toString());
+        }
     }
 
     private void recordAuditSafely(UUID userId, String action, String recipient, String subject, String deliveryStatus) {

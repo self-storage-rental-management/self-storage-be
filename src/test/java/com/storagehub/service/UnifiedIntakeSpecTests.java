@@ -217,6 +217,21 @@ class UnifiedIntakeSpecTests {
     }
 
     @Test
+    void setupCompleteAndArrivalAllowedBeforeScheduledHandoverDateWhenReceiptAlreadyConfirmed() {
+        Instant scheduledHandover = t0.plus(48, ChronoUnit.HOURS);
+        rental.setSetupStartedAt(scheduledHandover);
+
+        Instant earlyNow = t0.plus(5, ChronoUnit.MINUTES);
+        clock.set(earlyNow);
+
+        assertThat(calculator.canDeclareSetupComplete(rental, earlyNow)).isTrue();
+        workflow.change(customer, reservationId,
+            new IntakeWorkflowService.Command("COMPLETE_SETUP", null, null, null, null));
+        assertThat(rental.getMoveInCompletedAt()).isEqualTo(earlyNow);
+        assertThat(calculator.isArrivalOnTime(rental, earlyNow.plus(10, ChronoUnit.MINUTES))).isTrue();
+    }
+
+    @Test
     void b06_to_b17_appointmentLeadTimeBoundsAndSlotCapacity() {
         Instant d = calculator.arrivalDeadline(rental);
         // B11: < 6h from now when setup not complete -> rejected
