@@ -8,14 +8,15 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.checkin.CheckInChecklist;
 import com.storagehub.api.checkin.CheckInMeasurements;
 import com.storagehub.api.checkin.CompleteCheckInRequest;
-import com.storagehub.api.checkin.MarkNoShowRequest;
 import com.storagehub.api.checkin.RejectCheckInRequest;
 import com.storagehub.api.checkin.ScheduleCheckInRequest;
 import com.storagehub.api.checkin.VerifyCheckInIdentityRequest;
@@ -224,6 +225,31 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void listProjectsRecoveryTransferEvenWhenLegacyCheckInHasNoRentalLink() {
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        var rental = entityWithId(new Rental());
+        rental.setInventoryEscalatedAt(Instant.now());
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+        var row = mock(ReservationRepository.CheckInWorkRow.class);
+        when(row.getReservation()).thenReturn(reservation);
+        when(row.getCheckIn()).thenReturn(checkIn);
+        when(row.getAssignment()).thenReturn(assignment);
+        when(reservationRepository.findCheckInWork(eq("PROCESSED"), any(), any(), any(), any(),
+            isNull(), isNull(), eq(true), eq(false), eq(true), isNull(), isNull(), isNull(),
+            eq(false), any(), any())).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(row)));
+
+        var result = service.list(actor, null, null, "RECOVERY_TRANSFERRED",
+            CheckInHandoverService.WorkGroup.PROCESSED, null, null, 0, 20, "test");
+
+        assertThat(result.data()).singleElement().satisfies(response -> {
+            assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.setup_completed);
+            assertThat(response.inventoryVisit().access().recoveryTransferred()).isTrue();
+            assertThat(response.inventoryVisit().access().writable()).isFalse();
+            assertThat(response.intakeAction().name()).isEqualTo("NONE");
+        });
+    }
+
+    @Test
     void inventoryDraftOpensEmptyAndRejectsStaleSavesAndPublication() {
         mockCompletionChecks(false);
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
@@ -400,7 +426,7 @@ class CheckInHandoverServiceTests {
             .thenReturn(Optional.of(assignment));
 
         var response = service.verifyIdentity(
-            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("0792 0300 9988", "Đã xem giấy tờ gốc")
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("0792 0300 9988", "Đã xem giấy tờ gốc", false, true)
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
@@ -412,7 +438,7 @@ class CheckInHandoverServiceTests {
     @Test
     void allowsStaffToUpdateAndVerifyIdentityWhenMismatchedWithDeclared() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
-        reservation.setIdentityDocumentNumber("074204005211");
+        reservation.setIdentityDocumentNumber("074204005899");
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
@@ -422,13 +448,13 @@ class CheckInHandoverServiceTests {
             .thenReturn(Optional.of(assignment));
 
         var response = service.verifyIdentity(
-            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("074204005212", "Khách hàng đổi CCCD mới")
+            actor, checkIn.getId(), new VerifyCheckInIdentityRequest("074204005212", "Đã đối chiếu giấy tờ gốc", false, true, true)
         );
 
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
         assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("074204005212");
         assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("074204005212");
-        assertThat(checkIn.getIdentityVerificationNote()).contains("Khách hàng đổi CCCD mới");
+        assertThat(checkIn.getIdentityVerificationNote()).contains("Đã đối chiếu giấy tờ gốc");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
     }
 
@@ -524,80 +550,32 @@ class CheckInHandoverServiceTests {
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = {"MISSING", "FUTURE", "EXPIRED", "REFUNDED", "UNIT_MISMATCH", "STARTED"})
-    void ineligibleNoShowLeavesReservationAndUnitUntouched(String scenario) {
-        switch (scenario) {
-            case "MISSING" -> checkIn.setScheduledAt(null);
-            case "FUTURE" -> reservation.setAppointmentAt(Instant.now().plusSeconds(3600));
-            case "EXPIRED" -> reservation.setAppointmentAt(Instant.now().minusSeconds(8 * 86400));
-            case "REFUNDED" -> depositPayment.setRefundedAmount(BigDecimal.ONE);
-            case "UNIT_MISMATCH" -> reservation.setAssignedUnit(null);
-            case "STARTED" -> checkIn.setStatus(CheckInStatus.identity_verified);
-        }
+    @Test
+    void recordsArrivalOnceAndProtectsACustomerWaitingForVerificationPastDeadline() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        reservation.setHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
+        reservation.setAppointmentAt(Instant.now().minusSeconds(13 * 3600));
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
-        assertThatThrownBy(() -> service.markNoShow(actor, checkIn.getId(), new MarkNoShowRequest("Vắng")))
-            .isInstanceOf(ApiException.class);
-        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.UNIT_RESERVED);
-        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
-        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.reserved);
-        verify(checkInRepository, never()).saveAndFlush(any());
-    }
-
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
-    void marksPastAppointmentAsNoShowAndReleasesAssignedUnit(boolean legacySchedule) {
-        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
-        reservation.setAssignedUnit(unit);
-        unit.setStatus(StorageUnitStatus.reserved);
-        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
-        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
-        when(assignmentRepository.findByReservation_IdAndStatus(reservation.getId(), UnitAssignmentStatus.ACTIVE))
-            .thenReturn(Optional.of(assignment));
         when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
         when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
             .thenReturn(Optional.of(assignment));
 
-        Instant appointment = Instant.now();
-        reservation.setAppointmentAt(legacySchedule ? null : appointment);
-        checkIn.setScheduledAt(legacySchedule ? appointment : null);
+        var first = service.recordArrival(actor, checkIn.getId()).attendance().arrivedAt();
+        assertThat(first).isNotNull();
+        assertThat(service.recordArrival(actor, checkIn.getId()).attendance().arrivedAt()).isEqualTo(first);
+
+        Instant afterDeadline = ReservationCheckInPolicy.attendanceDeadline(reservation.getAppointmentAt()).plusSeconds(1);
         try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
-            clock.when(Instant::now).thenReturn(appointment);
-            var response = service.markNoShow(actor, checkIn.getId(), new MarkNoShowRequest("Khách không đến"));
-            assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.no_show);
-            assertThat(response.intakeAction().name()).isEqualTo("NONE");
+            clock.when(Instant::now).thenReturn(afterDeadline);
+            service.processAttendanceDeadline(reservation.getId());
         }
-        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
-        assertThat(reservation.getAssignedUnit()).isNull();
-        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
-        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
-        verify(notificationService).createNotification(
-            any(), eq(NotificationType.CHECKIN), eq("Ghi nhận không đến nhận kho"), any(), eq(reservation.getId())
-        );
-    }
-
-    @Test
-    void doesNotAllowNoShowBeforeAppointmentStarts() {
-        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
-        checkIn.setScheduledAt(Instant.now().plusSeconds(3600));
-        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
-        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
-
-        assertThatThrownBy(() -> service.markNoShow(
-            actor, checkIn.getId(), new MarkNoShowRequest("Khách chưa đến trong thời gian hẹn")
-        ))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("giờ hẹn nhận kho");
-
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.scheduled);
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
         assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
         verify(notificationService, never()).createNotification(any(), any(), any(), any(), any());
     }
+
 
     @Test
     void requiresAcceptedAndExplainedVariance() {
@@ -697,6 +675,7 @@ class CheckInHandoverServiceTests {
 
     @Test
     void rejectsCheckInAndReleasesUnitWithoutCreatingRental() {
+        reservation.setHandoverArrivedAt(Instant.now());
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         mockCompletionChecks(false);
         checkIn.setStatus(CheckInStatus.scheduled);
@@ -970,14 +949,119 @@ class CheckInHandoverServiceTests {
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         var request = new com.storagehub.api.checkin.StartCheckInSetupRequest(
             "TEST-LOCK", null, "Kho trống và sạch", List.of(UUID.randomUUID().toString()));
-        var cutoff = Instant.parse("2026-11-27T17:00:00Z");
-        assertThat(ReservationCheckInPolicy.handoverExpired(reservation.getAppointmentAt(), cutoff.minusNanos(1))).isFalse();
+        var cutoff = Instant.parse("2026-11-27T17:30:00Z").plusNanos(1000);
+        assertThat(ReservationCheckInPolicy.handoverExpired(reservation.getAppointmentAt(), cutoff.minusNanos(1000))).isFalse();
         try (var time = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
             time.when(Instant::now).thenReturn(cutoff);
             assertThatThrownBy(() -> service.startSetup(actor, checkIn.getId(), request))
                 .hasMessageContaining("Đã hết hạn nhận kho");
         }
         assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.payment_collected);
+    }
+
+    @Test
+    void deadlineStartsOnFirstComparisonIncludingMismatchAndDoesNotRestart() {
+        reservation.setHandoverArrivedAt(Instant.now().minusSeconds(86400));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
+        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isNull();
+        assertThatThrownBy(() -> service.compareIdentity(actor, checkIn.getId(), "079203009989", false))
+            .hasMessageContaining("xác nhận đúng người đặt kho");
+        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isNull();
+        assertThat(service.compareIdentity(actor, checkIn.getId(), "079203009989", true))
+            .isEqualTo(CheckInHandoverService.IdentityComparison.CORRECTABLE);
+        Instant first = reservation.getFirstHandoverComparisonAt();
+        service.compareIdentity(actor, checkIn.getId(), "079203009988", true);
+        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isEqualTo(first.plusSeconds(72 * 3600));
+    }
+
+    @Test
+    void schedulerCancelsUnfinishedPaidHandoverOnlyAfterDeadline() {
+        Instant start = Instant.parse("2026-11-25T03:29:00Z");
+        reservation.setFirstHandoverComparisonAt(start);
+        reservation.setHandoverArrivedAt(start.minusSeconds(120));
+        checkIn.setStatus(CheckInStatus.payment_collected);
+        when(checkInRepository.attendanceCheckInId(reservation.getId())).thenReturn(Optional.of(checkIn.getId()));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        Instant cutoff = start.plusSeconds(72 * 3600);
+        Instant expired = cutoff.plusNanos(1000);
+        try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(cutoff);
+            service.processAttendanceDeadline(reservation.getId());
+            assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.payment_collected);
+            clock.when(Instant::now).thenReturn(expired);
+            service.processAttendanceDeadline(reservation.getId());
+            service.processAttendanceDeadline(reservation.getId());
+        }
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.cancelled);
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.maintenance);
+        assertThat(reservation.getCancellationChargeAmount()).isZero();
+    }
+
+    @Test
+    void lateRecordingRequiresEvidenceAndTimelyArrivalEvenAtFinalReviewInstant() {
+        reservation.setHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
+        reservation.setAppointmentAt(Instant.parse("2026-11-21T03:30:00Z"));
+        Instant deadline = ReservationCheckInPolicy.attendanceDeadline(reservation.getAppointmentAt());
+        Instant recorded = deadline.plusSeconds(1800);
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId()))
+            .thenReturn(Optional.of(assignment));
+        var review = new com.storagehub.api.checkin.CheckInController.ArrivalReview(deadline.minusSeconds(1), "Sổ quầy, dòng 12");
+        try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(recorded);
+            service.processAttendanceDeadline(reservation.getId());
+            assertThatThrownBy(() -> service.recordArrival(actor, checkIn.getId())).hasMessageContaining("căn cứ");
+            service.recordArrival(actor, checkIn.getId(), review);
+        }
+        assertThat(reservation.getHandoverArrivedAt()).isEqualTo(review.actualArrivedAt());
+        assertThat(reservation.getFirstHandoverComparisonAt()).isNull();
+    }
+
+    @Test
+    void disputedArrivalSurvivesCutoffUntilManagerConfirms() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        reservation.setHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
+        reservation.setAppointmentAt(Instant.now().minusSeconds(12 * 86400));
+        Instant actual = ReservationCheckInPolicy.attendanceDeadline(reservation.getAppointmentAt()).minusSeconds(60);
+        reservation.setDisputedArrivalAt(actual);
+        reservation.setArrivalReviewOpenedAt(actual.plusSeconds(120));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(managerActor.userId())).thenReturn(Optional.of(manager));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        service.processAttendanceDeadline(reservation.getId());
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.READY_FOR_CHECKIN);
+        service.resolveArrival(managerActor, checkIn.getId(), true, "Đã kiểm tra sổ quầy");
+        assertThat(reservation.getHandoverArrivedAt()).isEqualTo(actual);
+        assertThat(reservation.getFirstHandoverComparisonAt()).isNull();
+    }
+
+    @Test
+    void remindsEveryTwoHoursInFinalDayWithoutRepeatingAnAlreadySentReminder() {
+        reservation.setHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
+        reservation.setAppointmentAt(Instant.parse("2026-11-21T03:30:00Z"));
+        reservation.setAttendanceReminderHours(12); // Already reminded 12 hours after the appointment.
+        Instant deadline = ReservationCheckInPolicy.attendanceDeadline(reservation.getAppointmentAt());
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        for (int hours = 24; hours >= 2; hours -= 2) {
+            Instant due = deadline.minusSeconds(hours * 3600L);
+            Instant after = due.plusSeconds(3599);
+            try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+                clock.when(Instant::now).thenReturn(due);
+                service.processAttendanceDeadline(reservation.getId());
+                clock.when(Instant::now).thenReturn(after);
+                service.processAttendanceDeadline(reservation.getId());
+            }
+            verify(notificationService).createNotification(eq(reservation.getCustomer().getId()), any(),
+                eq("Nhắc hạn nhận kho (" + hours + " giờ)"), any(), eq(reservation.getId()));
+        }
+        verifyNoMoreInteractions(notificationService);
     }
 
     private void paidReservationFixture() {
@@ -1181,6 +1265,31 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void expired72HoursPreventsSavingDraftBeforeAnyEvidenceOrRecordIsChanged() {
+        prepareDraft();
+        var rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElseThrow();
+        rental.setInspectionClockStartedAt(Instant.now().minus(java.time.Duration.ofHours(73)));
+        rental.setInspectionCompletionDeadlineAt(Instant.now().minusSeconds(3600));
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, checkIn.getId(),
+            new com.storagehub.api.checkin.SaveInventoryDraftRequest(validCompletionRequest(), 0)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("72 giờ");
+        assertThat(checkIn.getInventoryDraftJson()).isNull();
+        verify(checkInRepository, never()).saveAndFlush(any());
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void recoveryPreventsSavingDraftWhileTheOriginalCheckInStillLooksOpen() {
+        prepareDraft();
+        var rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElseThrow();
+        rental.setInventoryEscalatedAt(Instant.now());
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, checkIn.getId(),
+            new com.storagehub.api.checkin.SaveInventoryDraftRequest(validCompletionRequest(), 0)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("thu hồi");
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void rejectsDraftSaveAfterResultWasSentToCustomer() {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
@@ -1228,13 +1337,69 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void onsiteResolutionRejectsPartialIntakeWithoutPackingPlan() {
+    void signatureRefusalApprovalStartsDeadlineAtPublicationAndIsOneTime() throws Exception {
+        var rental = prepareSignatureRefusalReview();
+        var type = new com.storagehub.domain.model.UnitType();
+        type.setCode("S");
+        type.setLengthM(BigDecimal.ONE);
+        type.setWidthM(BigDecimal.ONE);
+        type.setHeightM(BigDecimal.ONE);
+        unit.setUnitType(type);
+        rental.setStorageUnit(unit);
+        var confirmation = checkIn.getInventoryConfirmation();
+        var report = new ObjectMapper().readValue(confirmation.getInventoryRefusalReport(), CheckInHandoverService.RefusalReport.class);
+        var evidence = new FileAsset();
+        evidence.setEntityType("CHECK_IN");
+        evidence.setEntityId(checkIn.getId());
+        evidence.setStatus(FileAssetStatus.ACTIVE);
+        when(fileAssetRepository.findAllById(List.of(report.evidenceId()))).thenReturn(List.of(evidence));
+        var settlement = mock(ReturnSettlementService.class);
+        var response = mock(com.storagehub.api.returns.ReturnCaseResponse.class);
+        when(response.returnType()).thenReturn(com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        when(response.id()).thenReturn(UUID.randomUUID());
+        when(settlement.createInventoryReturn(eq(rental), any(), eq(manager))).thenReturn(response);
+        var beans = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("settlement", settlement);
+        ReflectionTestUtils.setField(service, "inventoryReturnServices", beans.getBeanProvider(ReturnSettlementService.class));
+        ReflectionTestUtils.setField(service, "inventoryDecisions", mock(InventoryDecisionService.class));
+        assertThat(rental.getInventoryRemovalDeadlineAt()).isNull();
+
+        service.reviewInventoryRefusal(managerActor, checkIn.getId(), confirmation.getInventoryRefusalSubmittedAt(), true, "Đủ căn cứ");
+
+        assertThat(rental.getInventoryRemovalPublishedAt()).isAfter(confirmation.getInventoryRefusalSubmittedAt());
+        assertThat(rental.getInventoryRemovalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.removalDeadline(rental.getInventoryRemovalPublishedAt(), 3));
+        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.RETURN_REQUESTED);
+        assertThatThrownBy(() -> service.reviewInventoryRefusal(managerActor, checkIn.getId(),
+            confirmation.getInventoryRefusalSubmittedAt(), true, "Gửi lại")).hasMessageContaining("đã được xử lý");
+        verify(settlement).createInventoryReturn(eq(rental), any(), eq(manager));
+    }
+
+    @Test
+    void signatureRefusalReturnedForCorrectionDoesNotOpenRemovalWindow() throws Exception {
+        var rental = prepareSignatureRefusalReview();
+        service.reviewInventoryRefusal(managerActor, checkIn.getId(),
+            checkIn.getInventoryConfirmation().getInventoryRefusalSubmittedAt(), false, "Thiếu căn cứ");
+        assertThat(rental.getInventoryRemovalDeadlineAt()).isNull();
+        assertThat(checkIn.hasPendingInventoryRefusal()).isFalse();
+        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+    }
+
+    private Rental prepareSignatureRefusalReview() throws Exception {
         prepareDraft();
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElseThrow();
+        rental.setStatus(RentalStatus.setup);
+        rental.setInventoryPending(true);
+        checkIn.setInventoryFullFit(false);
         checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
-        checkIn.setInventoryPartialFitAvailable(false);
-        assertThatThrownBy(() -> service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
-            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL, true, null, null)))
-            .isInstanceOf(ApiException.class).hasMessageContaining("Không có phương án nhận một phần");
+        var confirmation = new com.storagehub.domain.model.CheckInInventoryConfirmation();
+        confirmation.setInventoryRefusalSubmittedAt(Instant.now().minusSeconds(3600));
+        confirmation.setInventoryRefusalReport(new ObjectMapper().writeValueAsString(new CheckInHandoverService.RefusalReport(
+            staff.getId(), "Staff", new CheckInHandoverService.RefusalWitness(UUID.randomUUID(), "Witness"),
+            UUID.randomUUID(), "Không vừa gian", "Đã trao đổi trực tiếp", null, 0)));
+        checkIn.setInventoryConfirmation(confirmation);
+        when(userRepository.findById(managerActor.userId())).thenReturn(Optional.of(manager));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        return rental;
     }
 
     @Test
@@ -1259,6 +1424,41 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void onsiteForcedReturnCreatesLinkedCaseEvenBeforeCustomerSchedules() {
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryFullFit(false);
+        var rental = entityWithId(new Rental());
+        unit.getUnitType().setCode("S");
+        rental.setStorageUnit(unit);
+        rental.setInventoryFinalDeadlineAt(Instant.now().plusSeconds(86_400));
+        when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        var settlement = mock(ReturnSettlementService.class);
+        var response = mock(com.storagehub.api.returns.ReturnCaseResponse.class);
+        when(response.returnType()).thenReturn(com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        when(settlement.createInventoryReturnAtSite(eq(actor), eq(rental.getId()), any())).thenReturn(response);
+        var beans = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("settlement", settlement);
+        ReflectionTestUtils.setField(service, "inventoryReturnServices", beans.getBeanProvider(ReturnSettlementService.class));
+        var decisions = mock(InventoryDecisionService.class);
+        ReflectionTestUtils.setField(service, "inventoryDecisions", decisions);
+        String consent = onsiteConsentEvidence();
+        var decision = com.storagehub.api.reservation.InventoryResolutionRequest.Decision.CANCEL_AND_RETURN;
+
+        service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            decision, true, "Hàng không vừa gian", null, List.of(consent)));
+
+        var sent = org.mockito.ArgumentCaptor.forClass(com.storagehub.api.returns.CustomerCreateReturnRequest.class);
+        verify(settlement).createInventoryReturnAtSite(eq(actor), eq(rental.getId()), sent.capture());
+        assertThat(sent.getValue().scheduledDate()).isEqualTo(InventoryTimelinePolicy.removalEffectiveAt(rental.getInventoryRemovalPublishedAt())
+            .atZone(InventoryTimelinePolicy.ZONE).toLocalDate());
+        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.RETURN_REQUESTED);
+        verify(decisions).record(checkIn, decision, staff, true, List.of(UUID.fromString(consent)));
+    }
+
+    @Test
     void onsiteFullAcceptanceCompletesIntakeWithoutWaitingForCustomerAccount() {
         prepareDraft();
         checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
@@ -1277,20 +1477,13 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void onsitePartialAcceptanceKeepsRemovalEvidenceStepOpen() {
-        prepareDraft();
-        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
-        checkIn.setInventoryPartialFitAvailable(true);
-        checkIn.setInventorySuggestedQuantitiesJson("{}");
-        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
-        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
-        String consent = onsiteConsentEvidence();
-        service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
-            com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_PARTIAL, true, null, null,
-            List.of(consent)));
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
-        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.PARTIAL_ACCEPTED);
-        assertThat(checkIn.getInventoryRemainderRemovedAt()).isNull();
+    void retiredPartialIntakeCannotBeSubmittedByStaffOrCustomer() {
+        String payload = "{\"decision\":\"ACCEPT_PARTIAL\"}";
+        for (Class<?> request : List.of(com.storagehub.api.checkin.ResolveInventoryAtSiteRequest.class,
+            com.storagehub.api.reservation.InventoryResolutionRequest.class)) {
+            assertThatThrownBy(() -> new ObjectMapper().readValue(payload, request))
+                .isInstanceOf(com.fasterxml.jackson.databind.exc.InvalidFormatException.class);
+        }
     }
 
     /**

@@ -32,11 +32,11 @@ public class RecoveryTaskReadService {
         scope(actor,role,facilityId);
         if(page<0||size<1||size>100||(long)page*size>Integer.MAX_VALUE)
             throw ApiExceptions.validation("Invalid pagination",null);
-        var rows=jdbc.query(SELECT+"where t.facility_id=? order by t.received_at desc,t.id desc limit ? offset ?",
+        var rows=jdbc.query(SELECT+"where t.facility_id=? order by case when t.status='CLOSED' then 1 else 0 end,t.received_at asc,t.id asc limit ? offset ?",
             (rs,i)->view(rs),bytes(facilityId),size,page*size);
         long total=jdbc.queryForObject("select count(*) from recovery_tasks where facility_id=?",Long.class,bytes(facilityId));
         return new PageResponse<>(rows,new PageResponse.Pagination(page,size,total,
-            (int)((total+size-1)/size),"receivedAt,desc"),correlation);
+            (int)((total+size-1)/size),"priority,asc"),correlation);
     }
 
     public View detail(ActorPrincipal actor,RoleCode role,UUID id) {

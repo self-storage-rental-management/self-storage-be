@@ -12,6 +12,7 @@ import java.util.UUID;
 
 public record MaintenanceTaskResponse(
     UUID id,
+    String displayCode,
     UUID facilityId,
     String facilityName,
     UUID storageUnitId,
@@ -41,5 +42,6 @@ public record MaintenanceTaskResponse(
     String resultReport,
     List<String> evidencePhotos,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    boolean unitReadinessCheck
 ) {}

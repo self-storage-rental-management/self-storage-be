@@ -8,6 +8,10 @@ public record PageResponse<T>(
     Pagination pagination,
     String correlationId
 ) {
+    public PageResponse<T> withSort(String sort) {
+        var p = pagination;
+        return new PageResponse<>(data, new Pagination(p.page(), p.pageSize(), p.totalItems(), p.totalPages(), sort), correlationId);
+    }
     public static <T> PageResponse<T> from(Page<T> page, String correlationId) {
         return new PageResponse<>(
             page.getContent(),

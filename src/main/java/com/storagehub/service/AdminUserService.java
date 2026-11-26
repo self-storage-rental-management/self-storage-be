@@ -103,7 +103,7 @@ public class AdminUserService {
         if (page < 0 || size < 1 || size > 100) {
             throw ApiExceptions.validation("page must be >= 0 and size must be between 1 and 100", null);
         }
-        PageRequest pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        PageRequest pageable = PageRequest.of(page, size, Sort.by("fullName", "id"));
         Page<AdminUserResponse> result = userRepository.search(
             clean(search), role, status, facilityId, pageable
         ).map(this::toResponse);

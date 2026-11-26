@@ -32,6 +32,30 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 class InventoryDeadlineExtensionTests {
     @Test
+    void managerCannotSetAnArbitraryMismatchRemovalDeadline() {
+        var facility = new Facility();
+        var rental = new Rental();
+        UUID facilityId = UUID.randomUUID();
+        UUID rentalId = UUID.randomUUID();
+        ReflectionTestUtils.setField(facility, "id", facilityId);
+        rental.setFacility(facility);
+        Instant due = Instant.now().plus(Duration.ofDays(1));
+        rental.setInventoryRemovalDeadlineAt(due);
+        var entityManager = mock(EntityManager.class);
+        when(entityManager.find(Rental.class, rentalId, LockModeType.PESSIMISTIC_WRITE)).thenReturn(rental);
+        var notifications = mock(NotificationService.class);
+        var audit = mock(AuditLogService.class);
+        var workflow = new WorkflowSlaScheduler(entityManager, null, null, null, notifications, audit, null, null, null, null);
+        var manager = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.MANAGER), Set.of(),
+            Map.of(facilityId, FacilityScopeLevel.MANAGE));
+
+        assertThatThrownBy(() -> workflow.extendInventoryDeadline(manager, rentalId, "INVENTORY_REMOVAL", due,
+            due.plus(Duration.ofDays(100)), "Cơ sở xử lý chậm")).hasMessageContaining("chính sách cỡ kho");
+        assertThat(rental.getInventoryRemovalDeadlineAt()).isEqualTo(due);
+        org.mockito.Mockito.verifyNoInteractions(audit, notifications);
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void scopedManagerExtendsDeadlineAndPendingTaskButCannotReuseStaleDeadline() {
         var facility = new Facility();

@@ -279,6 +279,20 @@ public class NotificationService {
     }
 
     @Transactional
+    public void notifyManagersOfReturnIdentityReview(com.storagehub.domain.model.ReturnCase returned) {
+        UUID facilityId = returned.getFacility().getId();
+        Instant sessionStart = returned.getReturnReverificationStartedAt() == null
+            ? returned.getReturnArrivedAt() : returned.getReturnReverificationStartedAt();
+        String unit = returned.getStorageUnit().getCode();
+        userRepository.findEligibleStaff(UserStatus.ACTIVE, RoleCode.MANAGER, facilityId,
+            List.of(FacilityScopeLevel.MANAGE)).forEach(manager ->
+                createNotificationIfNotSentSince(manager.getId(), NotificationType.RETURN,
+                    "Cần đối soát danh tính trả kho",
+                    "Phiên xác minh của gian kho " + unit + " đã kết thúc. Mở hồ sơ trả kho để đối soát.",
+                    returned.getId(), sessionStart));
+    }
+
+    @Transactional
     public void createBusinessNotifications(
         NotificationType type, String title, String content, UUID relatedEntityId
     ) {
@@ -315,20 +329,48 @@ public class NotificationService {
         return PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
     }
 
+    /** Resolves a notification's related reservation id to the order code shown to operators. */
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.storagehub.domain.repo.ReservationRepository reservations;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.storagehub.domain.repo.ViolationRecoveryRepository violationRecoveries;
+
+    /**
+     * The staff bell is a queue across every reservation in a facility, so a notification that
+     * does not name its order leaves the operator unable to tell which case to open. Check-in
+     * and reservation notifications carry the reservation id, so resolve it to the order code.
+     */
+    private String reservationCodeFor(UUID reservationId) {
+        if (reservationId == null || reservations == null) return null;
+        return reservations.findById(reservationId)
+            .map(Reservation::getReservationCode)
+            .filter(code -> !code.isBlank())
+            .orElse(null);
+    }
+
     private NotificationResponse toResponse(Notification notification) {
         String content=notification.getContent();
         content = displayContent(content, notification.getTitle());
+        if (displayCodes != null) content = displayCodes.noticeText(content);
         UUID related=notification.getRelatedEntityId();
+        String relatedEntityType = null;
+        if (related != null && notification.getType() == NotificationType.RETURN && violationRecoveries != null
+            && violationRecoveries.existsById(related)) relatedEntityType = "VIOLATION_RECOVERY";
         if(related!=null){
             String key=switch(notification.getType()){
                 case RENEWAL -> null;
                 case SUPPORT -> "HT:"+related;
+                case RETURN -> "TK:"+related;
                 case OVERDUE -> "RENTAL_TERM:"+related;
                 default -> null;
             };
             String code=notification.getType()==NotificationType.RENEWAL&&renewalDisplayIdentity!=null
                 ?renewalDisplayIdentity.find(related).map(com.storagehub.service.renewal.RenewalDisplayIdentity.Identity::label).orElse(null)
                 :key==null||displayCodes==null?null:displayCodes.find(key);
+            if(code==null&&(notification.getType()==NotificationType.CHECKIN
+                ||notification.getType()==NotificationType.RESERVATION)){
+                code=reservationCodeFor(related);
+            }
             if(code!=null&&(content==null||!content.contains(code)))content=code+" · "+(content==null?"":content);
         }
         return new NotificationResponse(
@@ -339,7 +381,8 @@ public class NotificationService {
             content,
             notification.getRelatedEntityId(),
             notification.isRead(),
-            notification.getCreatedAt()
+            notification.getCreatedAt(),
+            relatedEntityType
         );
     }
 

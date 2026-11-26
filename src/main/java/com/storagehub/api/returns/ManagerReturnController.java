@@ -46,6 +46,29 @@ public class ManagerReturnController {
         );
     }
 
+    public record ArrivalReviewRequest(@jakarta.validation.constraints.NotNull Boolean accepted,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1000) String reason,
+        UUID staffId, java.time.Instant appointmentAt, String decision) {
+        public ArrivalReviewRequest(Boolean accepted, String reason, UUID staffId, java.time.Instant appointmentAt) {
+            this(accepted, reason, staffId, appointmentAt, null);
+        }
+    }
+
+    @PostMapping("/{returnId}/arrival-review")
+    public ApiResponse<ReturnCaseResponse> reviewArrival(@PathVariable UUID returnId, @Valid @RequestBody ArrivalReviewRequest request) {
+        return new ApiResponse<>(returnSettlementService.reviewReturnArrival(actorContext.required(), returnId,
+            request.accepted(), request.reason(), request.staffId(), request.appointmentAt(), request.decision()), CorrelationIdContext.current());
+    }
+
+    public record ReopenIdentityRequest(@jakarta.validation.constraints.NotNull UUID staffId,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1000) String reason) {}
+
+    @PostMapping("/{returnId}/identity-reopen")
+    public ApiResponse<ReturnCaseResponse> reopenIdentity(@PathVariable UUID returnId, @Valid @RequestBody ReopenIdentityRequest request) {
+        return new ApiResponse<>(returnSettlementService.reopenReturnVerification(actorContext.required(), returnId,
+            request.staffId(), request.reason()), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{returnId}/review-dispute")
     public ApiResponse<ReturnCaseResponse> reviewDispute(
         @PathVariable UUID returnId,

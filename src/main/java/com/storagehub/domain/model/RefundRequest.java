@@ -21,6 +21,9 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class RefundRequest extends BaseEntity {
+    @org.hibernate.annotations.Formula("(select c.display_code from business_record_codes c where c.resource_key = concat('HP:', lower(bin_to_uuid({alias}.id))))")
+    private String displayCode;
+
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "payment_id", nullable = false)
