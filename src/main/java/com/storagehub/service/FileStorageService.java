@@ -337,6 +337,12 @@ public class FileStorageService {
             var task = maintenanceTaskRepository.findById(entityId)
                 .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
             facilityScopeService.assertCanOperate(actor, task.getFacility().getId());
+            if (task.getRecoveryType() == com.storagehub.domain.model.MaintenanceRecoveryType.VIOLATION) {
+                if (!actor.hasRole(RoleCode.STAFF) || !actor.hasPermission(com.storagehub.domain.model.SystemPermission.PROCESS_RETURNS)
+                    || task.getAssignedTo() == null || !actor.userId().equals(task.getAssignedTo().getId()))
+                    throw ApiExceptions.forbidden("Chỉ nhân viên phụ trách được tải chứng cứ thu hồi.");
+                return;
+            }
             if (task.getStatus() == MaintenanceTaskStatus.completed || task.getStatus() == MaintenanceTaskStatus.cancelled) {
                 throw ApiExceptions.conflict("Evidence can only be uploaded while the maintenance task is active");
             }

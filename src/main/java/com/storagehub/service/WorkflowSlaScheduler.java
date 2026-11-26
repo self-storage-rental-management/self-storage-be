@@ -6,6 +6,8 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.config.EmailProperties;
 import com.storagehub.security.ActorPrincipal;
 import com.storagehub.service.email.TransactionalEmailService;
+import com.storagehub.service.renewal.operations.RenewalOperationState;
+import com.storagehub.service.renewal.persistence.RenewalWorkflow;
 import com.storagehub.time.BusinessTime;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
@@ -65,6 +67,7 @@ public class WorkflowSlaScheduler {
         fixedDelayString = "${app.workflow-sla.delay-ms:60000}")
     public void scan() {
         Instant now = Instant.now();
+        deliverCustomerReminders(now);
         visitDeadlines(now, true, deadline -> deliver(deadline, now));
         transactions.executeWithoutResult(transaction -> {
             metrics.lockScan();
@@ -77,6 +80,150 @@ public class WorkflowSlaScheduler {
             });
             metrics.observe(active, now);
         });
+    }
+
+    private void deliverCustomerReminders(Instant now) {
+        var removalIds = em.createQuery("""
+            select r.id from Rental r where r.inventoryRemovalDeadlineAt > :now
+              and r.inventoryRemovalDeadlineAt <= :windowEnd and r.inventoryPending = true
+              and r.inventoryEscalatedAt is null and r.actualReturnedAt is null
+            """, UUID.class).setParameter("now", now).setParameter("windowEnd", now.plus(Duration.ofHours(48)))
+            .getResultList();
+        process(removalIds, Rental.class, rental -> {
+            if (rental.getActualReturnedAt() != null || rental.getCompletedAt() != null) return null;
+            boolean handedBack = em.createQuery("""
+                select count(r) from ReturnCase r where r.rental.id = :id and r.returnType = :type
+                  and r.readyForInspectionAt is not null
+                """, Long.class).setParameter("id", rental.getId())
+                .setParameter("type", ReturnType.INVENTORY_MISMATCH).getSingleResult() > 0;
+            if (handedBack) return null;
+            var deadline = inventoryDeadline(rental);
+            return deadline != null && deadline.workflow().equals("INVENTORY_REMOVAL") ? deadline : null;
+        }, true, deadline -> {
+            Instant due = deadline.dueAt();
+            if (!now.isBefore(due) || now.isBefore(due.minus(Duration.ofHours(48)))) return;
+            boolean finalDay = !now.isBefore(due.minus(Duration.ofHours(24)));
+            var rental = (Rental) deadline.resource();
+            if (deliverCustomerReminder(deadline, finalDay ? "REMINDER_24H" : "REMINDER_48H", now,
+                "Nhắc hạn trả kho do kiểm kê sai lệch",
+                "Hạn đưa hàng ra khỏi kho là " + LOCAL_TIME.format(due)
+                    + " (giờ Việt Nam). Vui lòng kiểm tra lịch trả kho hoặc liên hệ cơ sở để được hỗ trợ.",
+                rental.getReservation().getId())) {
+                rental.setInventoryReturnLastReminderAt(now);
+            }
+        });
+
+        var renewalIds = em.createQuery("""
+            select w.renewal.id from RenewalWorkflow w where w.paymentDeadline > :now
+              and w.paymentDeadline <= :windowEnd and w.renewal.status in :statuses
+            """, UUID.class).setParameter("now", now).setParameter("windowEnd", now.plus(Duration.ofMinutes(5)))
+            .setParameter("statuses", List.of(RenewalStatus.accepted, RenewalStatus.approved)).getResultList();
+        process(renewalIds, Renewal.class, renewal -> renewalPaymentReminder(renewal, now), true,
+            deadline -> deliverCustomerReminder(deadline, "REMINDER_5M", now, "Sắp hết hạn thanh toán gia hạn",
+                "Vui lòng hoàn tất thanh toán trước " + LOCAL_TIME.format(deadline.dueAt())
+                    + " (giờ Việt Nam) để tiếp tục hồ sơ gia hạn.", deadline.resource().getId()));
+
+        process(mismatchFinancialIds(), ReturnCase.class, this::mismatchFinancialDeadline, true, deadline -> {
+            if (deadline.owner() != RoleCode.CUSTOMER || !now.isBefore(deadline.dueAt())) return;
+            boolean payment = deadline.workflow().equals("MISMATCH_RETURN_PAYMENT");
+            Instant first = payment ? InventoryTimelinePolicy.dayStart(deadline.startedAt(), 3)
+                : deadline.startedAt().plus(Duration.ofHours(24));
+            Instant second = payment ? InventoryTimelinePolicy.dayStart(deadline.startedAt(), 6)
+                : deadline.startedAt().plus(Duration.ofHours(48));
+            if (now.isBefore(first)) return;
+            deliverCustomerReminder(deadline, now.isBefore(second) ? "REMINDER_1" : "REMINDER_2", now,
+                payment ? "Nhắc thanh toán quyết toán trả kho" : "Nhắc xem bảng kê trả kho",
+                "Vui lòng " + deadline.description() + " trước " + LOCAL_TIME.format(deadline.dueAt())
+                    + " (giờ Việt Nam).", deadline.resource().getId());
+        });
+    }
+
+    private List<UUID> mismatchFinancialIds() {
+        return em.createQuery("""
+            select r.id from ReturnCase r where r.returnType = :type and r.status in :statuses
+            """, UUID.class).setParameter("type", ReturnType.INVENTORY_MISMATCH)
+            .setParameter("statuses", List.of(ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
+                ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending)).getResultList();
+    }
+
+    private Deadline mismatchFinancialDeadline(ReturnCase rc) {
+        if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) return null;
+        Instant reviewed = rc.getReviewedAt() == null ? rc.getInspectedAt() : rc.getReviewedAt();
+        Instant start;
+        Instant due;
+        String workflow;
+        String description;
+        RoleCode owner;
+        RoleCode escalation = RoleCode.BUSINESS;
+        switch (rc.getStatus()) {
+            case awaiting_customer_confirmation -> {
+                if (rc.isCustomerConfirmed()) return null;
+                start = rc.getSettlementPublishedAt() == null ? reviewed : rc.getSettlementPublishedAt();
+                if (start == null) return null;
+                due = start.plus(Duration.ofHours(72));
+                workflow = "MISMATCH_RETURN_CONFIRMATION";
+                description = "phản hồi bảng kê trả kho";
+                owner = RoleCode.CUSTOMER;
+            }
+            case disputed -> {
+                start = rc.getCustomerConfirmedAt();
+                if (start == null) return null;
+                due = start.plus(Duration.ofHours(48));
+                workflow = "MISMATCH_RETURN_DISPUTE";
+                description = "đối soát khiếu nại trả kho";
+                owner = RoleCode.MANAGER;
+            }
+            case payment_due -> {
+                start = rc.getCustomerConfirmedAt() == null || reviewed != null && reviewed.isAfter(rc.getCustomerConfirmedAt())
+                    ? reviewed : rc.getCustomerConfirmedAt();
+                if (start == null) return null;
+                due = rc.getSettlementPaymentDueAt() == null ? InventoryTimelinePolicy.dayStart(start, 8) : rc.getSettlementPaymentDueAt();
+                workflow = "MISMATCH_RETURN_PAYMENT";
+                description = "thanh toán công nợ trả kho";
+                owner = RoleCode.CUSTOMER;
+            }
+            case refund_pending -> {
+                due = rc.getRefundExpectedAt();
+                if (due == null) return null;
+                start = due.minus(Duration.ofDays(7));
+                workflow = "MISMATCH_RETURN_REFUND";
+                description = "hoàn tiền quyết toán trả kho";
+                owner = RoleCode.BUSINESS;
+                escalation = RoleCode.ADMIN;
+            }
+            default -> { return null; }
+        }
+        return new Deadline(workflow, rc, rc.getFacility().getId(), start, due,
+            owner == RoleCode.CUSTOMER ? Duration.ZERO : TWO_HOURS,
+            owner, escalation, rc.getCustomer().getId(), NotificationType.RETURN, description);
+    }
+
+    private Deadline renewalPaymentReminder(Renewal renewal, Instant now) {
+        if (renewal.getStatus() != RenewalStatus.accepted && renewal.getStatus() != RenewalStatus.approved) return null;
+        var workflow = em.find(RenewalWorkflow.class, renewal.getId());
+        if (workflow == null || workflow.getCancellationReason() != null) return null;
+        Instant due = workflow.getPaymentDeadline();
+        if (due == null || !now.isBefore(due) || due.isAfter(now.plus(Duration.ofMinutes(5)))) return null;
+        var state = em.find(RenewalOperationState.class, renewal.getId());
+        if (state != null && (state.hasVerifiedPayment()
+            || state.getPhase() != RenewalOperationState.Phase.AWAITING_PAYMENT_INTENT)) return null;
+        boolean paidOrReconciling = em.createQuery("""
+            select count(p) from Payment p where p.renewal.id = :id and p.status in :statuses
+            """, Long.class).setParameter("id", renewal.getId())
+            .setParameter("statuses", List.of(PaymentStatus.PAID, PaymentStatus.PROCESSING, PaymentStatus.NOT_RECEIVED))
+            .getSingleResult() > 0;
+        if (paidOrReconciling) return null;
+        var rental = renewal.getRental();
+        return new Deadline("RENEWAL_PAYMENT_REMINDER", renewal, rental.getFacility().getId(), renewal.getCreatedAt(),
+            due, Duration.ofMinutes(5), RoleCode.CUSTOMER, RoleCode.MANAGER, rental.getCustomer().getId(),
+            NotificationType.RENEWAL, "thanh toán gia hạn");
+    }
+
+    private boolean deliverCustomerReminder(Deadline deadline, String milestone, Instant now, String title,
+        String content, UUID relatedId) {
+        if (!claim(deadline, milestone, deadline.customer(), now)) return false;
+        notifications.createNotification(deadline.customer(), deadline.type(), title, content, relatedId);
+        return true;
     }
 
     @Transactional(readOnly = true)
@@ -93,7 +240,7 @@ public class WorkflowSlaScheduler {
             String facility = em.getReference(Facility.class, deadline.facility()).getName();
             rows.add(new WorkItem(deadline.workflow(), deadline.resource().getId(), facility, deadline.description(),
                 deadline.dueAt(), overdue ? "OVERDUE" : warning ? "WARNING" : "OPEN", deadline.owner(),
-                (deadline.workflow().equals("CHECKIN_REJECTION")
+                !deadline.workflow().equals("INVENTORY_REMOVAL") && (deadline.workflow().equals("CHECKIN_REJECTION")
                     || deadline.resource() instanceof Rental rental && rental.getInventoryEscalatedAt() == null)
                     && canResolve(actor, deadline.facility())));
         });
@@ -125,6 +272,9 @@ public class WorkflowSlaScheduler {
         if (rental == null || !canResolve(actor, rental.getFacility().getId())) {
             throw ApiExceptions.notFound("Không tìm thấy hồ sơ trong phạm vi quản lý.");
         }
+        if (rental.getInventoryRemovalDeadlineAt() != null) {
+            throw ApiExceptions.conflict("Hạn trả kho do sai lệch chỉ được gia hạn theo chính sách cỡ kho. Trường hợp ngoại lệ cần đối soát.");
+        }
         Deadline deadline = inventoryDeadline(rental);
         String reason = note == null ? "" : note.trim();
         if (reason.isEmpty() || reason.length() > 1000) {
@@ -139,22 +289,7 @@ public class WorkflowSlaScheduler {
         if (newDeadline == null || !newDeadline.isAfter(deadline.dueAt()) || !newDeadline.isAfter(Instant.now())) {
             throw ApiExceptions.validation("Hạn mới phải sau hạn hiện tại và thời điểm hiện tại.", null);
         }
-        if (rental.getInventoryRemovalDeadlineAt() != null) {
-            if (rental.getStatus() == RentalStatus.return_requested) {
-                List<ReturnCase> returns = em.createQuery("""
-                    select r from ReturnCase r where r.rental.id = :id and r.returnType = :type
-                      and r.status in :statuses and r.inspectedAt is null
-                    """, ReturnCase.class).setParameter("id", id)
-                    .setParameter("type", ReturnType.INVENTORY_MISMATCH)
-                    .setParameter("statuses", List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled))
-                    .setLockMode(LockModeType.PESSIMISTIC_WRITE).getResultList();
-                if (returns.size() != 1) {
-                    throw ApiExceptions.conflict("Hồ sơ trả kho đã chuyển sang thu hồi hoặc nghiệm thu.");
-                }
-                returns.getFirst().setRecoveryEligibleAt(newDeadline);
-            }
-            rental.setInventoryRemovalDeadlineAt(newDeadline);
-        } else {
+        {
             rental.setInventoryFinalDeadlineAt(newDeadline);
             for (MaintenanceTask task : em.createQuery("""
                 select t from MaintenanceTask t where t.rental.id = :id
@@ -207,7 +342,23 @@ public class WorkflowSlaScheduler {
             .getResultList();
         process(reservations, Reservation.class, this::reservationDeadline, lock, visitor);
         process(ids("select r.id from ReturnCase r where r.status in :statuses",
-            List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled)), ReturnCase.class, item -> returnDeadline(item, schedule), lock, visitor);
+            List.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled)), ReturnCase.class, item -> returnDeadline(item, schedule, now), lock, visitor);
+        process(mismatchFinancialIds(), ReturnCase.class, this::mismatchFinancialDeadline, lock, visitor);
+        process(ids("select r.id from ReturnCase r where r.status in :statuses and r.returnType = com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH",
+            List.of(ReturnCaseStatus.awaiting_business_review)), ReturnCase.class, rc -> {
+                if (rc.getStatus() != ReturnCaseStatus.awaiting_business_review || rc.getInspectedAt() == null) return null;
+                Instant start = rc.getInspectedAt();
+                return new Deadline("MISMATCH_RETURN_FINANCIAL_REVIEW", rc, rc.getFacility().getId(), start,
+                    schedule.afterWorkingHours(start, 6), TWO_HOURS, RoleCode.BUSINESS, RoleCode.ADMIN, null,
+                    NotificationType.RETURN, "duyệt bảng kê trả kho cần đối soát");
+            }, lock, visitor);
+        process(ids("""
+            select t.id from MaintenanceTask t left join t.returnCase rc where t.status in :statuses and t.deadlineAt is not null
+              and (rc.returnType = com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH
+                or t.recoveryType in (com.storagehub.domain.model.MaintenanceRecoveryType.MISMATCH_REMOVAL,
+                    com.storagehub.domain.model.MaintenanceRecoveryType.VIOLATION_UNIT_READINESS))
+            """, List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)),
+            MaintenanceTask.class, this::mismatchMaintenanceDeadline, lock, visitor);
         if (!lock) {
             process(ids("""
                 select r.id from Rental r where r.status in :statuses and r.inventoryPending = true
@@ -228,8 +379,20 @@ public class WorkflowSlaScheduler {
         process(ids("""
             select c.id from CheckIn c where c.status in :statuses
               and (c.rejectionResolvedAt is null)
-            """, List.of(CheckInStatus.scheduled, CheckInStatus.rejected, CheckInStatus.handover_pending_receipt)),
+            """, List.of(CheckInStatus.scheduled, CheckInStatus.identity_verified, CheckInStatus.contract_signed, CheckInStatus.payment_collected, CheckInStatus.rejected, CheckInStatus.handover_pending_receipt)),
             CheckIn.class, checkIn -> checkInDeadline(checkIn, now, schedule), lock, visitor);
+        var pendingRefusals = em.createQuery("""
+            select c.id from CheckIn c join c.inventoryConfirmation confirmation
+            where confirmation.inventoryRefusalSubmittedAt is not null and confirmation.inventoryRefusalApproved is null
+            """, UUID.class).getResultList();
+        process(pendingRefusals, CheckIn.class, checkIn -> {
+            if (!checkIn.hasPendingInventoryRefusal()) return null;
+            Instant start = checkIn.getInventoryConfirmation().getInventoryRefusalSubmittedAt();
+            Instant due = schedule.afterWorkingHours(start, 4);
+            return new Deadline("INVENTORY_SIGNATURE_REFUSAL", checkIn, checkIn.getReservation().getFacility().getId(),
+                start, due, Duration.between(start, due), RoleCode.MANAGER, RoleCode.BUSINESS, null,
+                NotificationType.CHECKIN, "duyệt biên bản khách từ chối ký");
+        }, lock, visitor);
         var reviews = em.createQuery("""
             select p.id from Payment p where p.renewal.status=:closed and p.purpose=:purpose
               and p.paymentDeadline is not null
@@ -289,7 +452,27 @@ public class WorkflowSlaScheduler {
         var reservation = checkIn.getReservation();
         UUID facility = reservation.getFacility().getId();
         String order = " của đơn " + reservation.getReservationCode();
+        if (reservation.getStatus() == ReservationStatus.READY_FOR_CHECKIN && reservation.getFirstHandoverComparisonAt() == null
+            && checkIn.getIdentityVerifiedAt() != null && java.util.EnumSet.of(CheckInStatus.identity_verified,
+                CheckInStatus.contract_signed, CheckInStatus.payment_collected).contains(checkIn.getStatus())) {
+            Instant verified = checkIn.getIdentityVerifiedAt();
+            return new Deadline("CHECKIN_LEGACY_HANDOVER_REVIEW", checkIn, facility, verified, schedule.after(verified, 1),
+                FOUR_HOURS, RoleCode.MANAGER, RoleCode.BUSINESS, null, NotificationType.CHECKIN,
+                "rà soát hồ sơ bàn giao cũ chưa có mốc đối chiếu đầu tiên" + order);
+        }
         if (checkIn.getStatus() == CheckInStatus.scheduled && reservation.getStatus() == ReservationStatus.READY_FOR_CHECKIN) {
+            if (reservation.getArrivalReviewOpenedAt() != null) {
+                Instant opened = reservation.getArrivalReviewOpenedAt();
+                return new Deadline("CHECKIN_DISPUTED_ARRIVAL", checkIn, facility, opened, schedule.after(opened, 1),
+                    FOUR_HOURS, RoleCode.MANAGER, RoleCode.BUSINESS, null, NotificationType.CHECKIN, "đối soát giờ đến" + order);
+            }
+            if (reservation.getHandoverArrivedAt() != null) {
+                if (reservation.getFirstHandoverComparisonAt() != null) return null;
+                Instant arrived = reservation.getHandoverArrivedAt();
+                return new Deadline("CHECKIN_PENDING_COMPARISON", checkIn, facility, arrived, schedule.after(arrived, 1),
+                    FOUR_HOURS, RoleCode.STAFF, RoleCode.MANAGER, null, NotificationType.CHECKIN,
+                    "tiếp nhận và đối chiếu CCCD lần đầu" + order);
+            }
             Instant appointment = reservation.getAppointmentAt() != null ? reservation.getAppointmentAt() : checkIn.getScheduledAt();
             if (appointment == null || now.isBefore(appointment)) return null;
             return new Deadline("CHECKIN_ATTENDANCE", checkIn, facility, appointment, schedule.after(appointment, 1),
@@ -328,10 +511,25 @@ public class WorkflowSlaScheduler {
             "phân gian kho cho đơn " + reservation.getReservationCode());
     }
 
-    private Deadline returnDeadline(ReturnCase returned, WorkflowBusinessCalendar.Schedule schedule) {
+    private Deadline returnDeadline(ReturnCase returned, WorkflowBusinessCalendar.Schedule schedule, Instant now) {
         if (!Set.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled).contains(returned.getStatus())
             || returned.getInspectedAt() != null) return null;
+        Instant review = ReturnAttendancePolicy.reviewStartsAt(returned);
+        if (review != null && !now.isBefore(review)) {
+            Instant due = schedule.afterWorkingHours(review, 4);
+            boolean mismatch = ReturnAttendancePolicy.isDeadlineMismatchReturn(returned);
+            return new Deadline(mismatch ? "MISMATCH_RETURN_ARRIVAL_REVIEW" : "RETURN_ARRIVAL_REVIEW",
+                returned, returned.getFacility().getId(), review,
+                due, Duration.between(review, due), RoleCode.MANAGER, RoleCode.BUSINESS, null,
+                NotificationType.RETURN, mismatch ? "đối soát phiên xác minh trả kho do sai lệch" : "đối soát phiên xác minh trả kho");
+        }
         Instant start = returned.getRequestedAt();
+        if (returned.getReturnType() == ReturnType.INVENTORY_MISMATCH && returned.getReadyForInspectionAt() != null) {
+            start = returned.getReadyForInspectionAt();
+            return new Deadline("RETURN_INSPECTION", returned, returned.getFacility().getId(), start,
+                schedule.afterWorkingHours(start, 4), TWO_HOURS, RoleCode.STAFF, RoleCode.MANAGER, null,
+                NotificationType.RETURN, "nghiệm thu gian đã bàn giao");
+        }
         if (returned.getScheduledDate() != null) {
             Instant appointmentDay = returned.getScheduledDate().atStartOfDay(BusinessTime.ZONE).toInstant();
             if (appointmentDay.isAfter(start)) start = appointmentDay;
@@ -339,6 +537,19 @@ public class WorkflowSlaScheduler {
         return new Deadline("RETURN_INSPECTION", returned, returned.getFacility().getId(), start,
             schedule.after(start, 1), FOUR_HOURS, RoleCode.STAFF, RoleCode.MANAGER, null,
             NotificationType.RETURN, "kiểm tra yêu cầu trả kho");
+    }
+
+    private Deadline mismatchMaintenanceDeadline(MaintenanceTask task) {
+        if (!List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress).contains(task.getStatus())
+            || task.getDeadlineAt() == null) return null;
+        boolean release = MismatchUnitRelease.isReleaseTask(task);
+        if (!release && task.getRecoveryType() != com.storagehub.domain.model.MaintenanceRecoveryType.RETURN_NO_SHOW
+            && task.getRecoveryType() != com.storagehub.domain.model.MaintenanceRecoveryType.MISMATCH_REMOVAL) return null;
+        boolean assigned = task.getAssignedTo() != null;
+        return new Deadline(release ? "MISMATCH_UNIT_READINESS" : "MISMATCH_GOODS_RECOVERY", task,
+            task.getFacility().getId(), task.getCreatedAt(), task.getDeadlineAt(), TWO_HOURS,
+            assigned ? RoleCode.STAFF : RoleCode.MANAGER, assigned ? RoleCode.MANAGER : RoleCode.BUSINESS,
+            null, NotificationType.RETURN, release ? "kiểm tra gian để mở lại" : "thu hồi hàng do sai lệch");
     }
 
     private Deadline inventoryDeadline(Rental rental) {
@@ -418,6 +629,10 @@ public class WorkflowSlaScheduler {
         String milestone = overdue ? "OVERDUE" : "WARNING";
         boolean receipt = deadline.workflow().equals("CUSTOMER_RECEIPT");
         Set<UUID> recipients = new LinkedHashSet<>(recipients(receipt ? RoleCode.MANAGER : deadline.owner(), deadline.facility()));
+        if (deadline.resource() instanceof MaintenanceTask task && task.getAssignedTo() != null) {
+            recipients.retainAll(Set.of(task.getAssignedTo().getId()));
+            if (recipients.isEmpty()) recipients.addAll(recipients(RoleCode.MANAGER, deadline.facility()));
+        }
         if (overdue) {
             recipients.addAll(recipients(deadline.escalation(), deadline.facility()));
             if (!receipt && deadline.customer() != null) recipients.add(deadline.customer());

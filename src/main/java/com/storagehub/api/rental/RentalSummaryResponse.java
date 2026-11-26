@@ -15,7 +15,7 @@ public record RentalSummaryResponse(UUID id, String displayCode, Customer custom
     DateSemantics dateSemantics, boolean inventoryPending, Instant inventoryDueAt,
     Instant inventoryFinalDeadlineAt,
     Instant setupStartedAt, Instant setupEndsAt, Instant moveInCompletedAt, Instant inventoryVerifiedAt,
-    boolean setupExitReviewRequired, boolean canConfirmRentalStart) {
+    boolean setupExitReviewRequired, boolean canConfirmRentalStart, boolean inventoryMismatchReturn) {
     public record Customer(UUID id, String fullName) {}
     public record Facility(UUID id, String code, String name) {}
     public record Unit(UUID id, String code) {}

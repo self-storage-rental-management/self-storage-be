@@ -22,6 +22,8 @@ public class RentalQueryService {
     private final RentalRepository repository;
     private final BusinessRecordCodes codes;
     @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.domain.repo.ContractRepository contracts;
+    @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.domain.repo.CheckInRepository checkIns;
     @org.springframework.beans.factory.annotation.Autowired
     private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
@@ -42,20 +44,25 @@ public class RentalQueryService {
         Set<UUID> facilities = authorize(actor, manager, query.facilityId());
         var page = repository.findAll(scoped(actor, manager, facilities).and(filters(query, manager)), query.pageable());
         var displayCodes = codes.findAll(page.getContent().stream().map(r -> "TH:" + r.getId()).toList());
-        return PageResponse.from(page.map(r -> summary(r, displayCodes.get("TH:" + r.getId()))), correlationId);
+        Set<UUID> mismatchReturns = page.isEmpty() ? Set.of()
+            : repository.findInventoryMismatchReturnIds(page.getContent().stream().map(Rental::getId).toList());
+        return PageResponse.from(page.map(r -> summary(r, displayCodes.get("TH:" + r.getId()), mismatchReturns.contains(r.getId()))), correlationId);
     }
 
     public RentalDetailResponse detail(ActorPrincipal actor, UUID id, boolean manager) {
         Set<UUID> facilities = authorize(actor, manager, null);
         Rental r = repository.findOne(scoped(actor, manager, facilities).and((root, q, cb) -> cb.equal(root.get("id"), id)))
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
-        var s = summary(r, codes.find("TH:" + r.getId()));
+        var s = summary(r, codes.find("TH:" + r.getId()), repository.findInventoryMismatchReturnIds(Set.of(id)).contains(id));
         return new RentalDetailResponse(s.id(), s.displayCode(), s.customer(), s.facility(), s.storageUnit(), s.unitType(), s.status(),
             s.startDate(), s.contractEndDate(), s.monthlyPrice(), s.currency(), s.dataWarnings(), r.getReservation().getId(),
             r.getActualReturnedAt(), r.getCompletedAt(),
             financial(r), access(actor, r), s.dateSemantics(), bookingEvidence(actor,r,manager),
             r.isInventoryPending(), r.getInventoryDueAt(), s.setupStartedAt(), s.setupEndsAt(), r.getInventoryFinalDeadlineAt(),
-            r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart(), inventory(r));
+            r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart(), inventory(r),
+            contracts == null ? null : contracts.findAllByRentalIdOrderByCreatedAtDesc(id).stream()
+                .filter(contract -> contract.getStatus() == ContractStatus.SIGNED).map(Contract::getContractNumber)
+                .findFirst().orElse(null), ReturnSettlementService.inSetupReturnWindow(r), s.inventoryMismatchReturn());
     }
 
     private RentalDetailResponse.Inventory inventory(Rental rental) {
@@ -185,7 +192,7 @@ public class RentalQueryService {
         };
     }
 
-    private RentalSummaryResponse summary(Rental r, String displayCode) {
+    private RentalSummaryResponse summary(Rental r, String displayCode, boolean inventoryMismatchReturn) {
         integrity(r);
         var unit = r.getStorageUnit(); var type = unit.getUnitType();
         var timeline = projectedTimeline(r);
@@ -205,7 +212,7 @@ public class RentalQueryService {
                 .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
             r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), setupStartedAt, setupEndsAt,
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(),
-            RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()));
+            RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()), inventoryMismatchReturn);
     }
 
     /**

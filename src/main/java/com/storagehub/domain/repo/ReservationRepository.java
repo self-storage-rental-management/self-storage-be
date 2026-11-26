@@ -18,6 +18,29 @@ import org.springframework.data.repository.query.Param;
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
     long countByCustomer_IdAndStatusIn(UUID customerId, java.util.Collection<ReservationStatus> statuses);
     long countByFacility_IdAndStatusIn(UUID facilityId, java.util.Collection<ReservationStatus> statuses);
+    @Query("""
+        select r.id from Reservation r left join CheckIn c on c.reservation = r
+        where r.handoverTermsVersion in :versions and r.status in (UNIT_RESERVED, READY_FOR_CHECKIN)
+          and r.assignedUnit is not null
+          and r.handoverArrivedAt is null and r.arrivalReviewOpenedAt is null
+          and (c.id is null or c.status = scheduled)
+          and (r.appointmentAt < :expired or (r.appointmentAt >= :currentWindow and r.appointmentAt < :oneDay
+                   and r.attendanceReminderHours <> :currentMarker and r.attendanceReminderHours <> 2)
+               or (r.handoverTermsVersion = :currentVersion and r.appointmentAt <= :firstReminder and r.attendanceReminderHours = 0))
+        order by r.appointmentAt, r.id
+        """)
+    List<UUID> findAttendanceDue(@Param("versions") List<String> versions,
+        @Param("currentVersion") String currentVersion, @Param("expired") Instant expired,
+        @Param("currentWindow") Instant currentWindow, @Param("currentMarker") int currentMarker, @Param("oneDay") Instant oneDay,
+        @Param("firstReminder") Instant firstReminder);
+
+    @Query("""
+        select r.id from Reservation r join CheckIn c on c.reservation = r
+        where r.status in (UNIT_RESERVED, READY_FOR_CHECKIN) and r.firstHandoverComparisonAt < :startedBefore
+          and c.status in (scheduled, identity_verified, contract_signed, payment_collected)
+        """)
+    List<UUID> findUnfinishedHandovers(@Param("startedBefore") Instant startedBefore);
+
     boolean existsByReservationCode(String reservationCode);
     boolean existsByFacility_Id(UUID facilityId);
     boolean existsByUnitType_Id(UUID unitTypeId);
@@ -159,6 +182,9 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and reservation.goodsReviewStatus = com.storagehub.domain.model.GoodsReviewStatus.PENDING
           and (:facilityId is null or reservation.facility.id = :facilityId)
           and (:scoped = false or reservation.facility.id in :facilityIds)
+        order by case when reservation.goodsReviewDueAt <= instant then 0
+                      when reservation.goodsReviewDueAt <= instant + 2 hour then 1 else 2 end,
+                 reservation.createdAt desc, reservation.id asc
         """)
     Page<Reservation> findPendingGoodsReviews(
         @Param("facilityId") UUID facilityId,
@@ -174,6 +200,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             or r.status <> com.storagehub.domain.model.ReservationStatus.AWAITING_REVIEW)
           and (:facilityId is null or r.facility.id = :facilityId)
           and (:scoped = false or r.facility.id in :facilityIds)
+        order by coalesce(r.goodsReviewedAt, r.cancelledAt, r.expiredAt, r.createdAt) desc, r.id asc
         """)
     Page<Reservation> findCompletedGoodsReviews(
         @Param("facilityId") UUID facilityId,
@@ -195,9 +222,12 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
                or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
                or lower(coalesce(assignedUnit.code, '')) like lower(concat('%', :q, '%')))
-        order by case when reservation.appointmentAt is null then 1 else 0 end,
-                 reservation.appointmentAt asc,
-                 reservation.createdAt asc
+        order by case
+                   when reservation.status in (AWAITING_REVIEW, PAYMENT_REVIEW, PAYMENT_GRACE) then 0
+                   when reservation.status = AWAITING_PAYMENT and reservation.paymentExpiresAt <= instant + 2 hour then 0
+                   when reservation.status = COMPLETED then 2
+                   else 1 end,
+                 reservation.createdAt desc, reservation.id asc
         """)
     Page<Reservation> findStaffActiveReservations(
         @Param("activeStatuses") java.util.Collection<ReservationStatus> activeStatuses,
@@ -250,10 +280,11 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             (r.status in (UNIT_RESERVED, READY_FOR_CHECKIN, AWAITING_CUSTOMER_RECEIPT, PREPARING, COMPLETED)
               and r.assignedUnit is not null and a.status in (ACTIVE, COMPLETED))
             or c.inventoryDecisionJson is not null
+            or r.cancellationType in (HANDOVER_ATTENDANCE_TIMEOUT, HANDOVER_COMPLETION_TIMEOUT)
             or (:workGroup = 'PROCESSED' and c.status in (completed, rejected, no_show, cancelled))
           )
           and (:workGroup = 'ALL' or :workGroup = case
-            when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED
+            when r.cancellationType = HANDOVER_ATTENDANCE_TIMEOUT or c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED
               or (c.inventoryDecisionJson is not null and c.inventoryResolutionStatus in (RETURN_REQUESTED, TRANSFER_REQUESTED, ACCEPTED)) then 'PROCESSED'
             else 'ONGOING' end)
           and (:facilityId is null or r.facility.id = :facilityId)
@@ -270,20 +301,23 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 
     @Query(value = "select r as reservation, c as checkIn, a as assignment " + CHECK_IN_WORK_FROM + """
         order by case
+          when :workGroup = 'PROCESSED' then 0
           when c.status = handover_pending_receipt
             and c.checkedInAt <= :receiptConfirmationDueCutoff then 0
           when c.status = handover_pending_receipt
             and c.checkedInAt <= :receiptConfirmationReminderCutoff then 1
-          when c.status = handover_pending_receipt then 2
-          when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED then 5
+          when c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED then 7
           when coalesce(r.appointmentAt, c.scheduledAt) < :firstValidAppointment
+            and r.handoverArrivedAt is null and c.identityVerifiedAt is null
             and (c.id is null or c.status in (scheduled, identity_verified, contract_signed, payment_collected)) then 6
-          when c.status in (identity_verified, contract_signed, payment_collected, handover_pending_receipt,
-                            setup_in_progress, setup_completed) then 3
-          when coalesce(r.appointmentAt, c.scheduledAt) <= :now then 4
-          when coalesce(r.appointmentAt, c.scheduledAt) is not null then 5
+          when c.status in (handover_pending_receipt, setup_in_progress, setup_completed) then 5
+          when coalesce(r.appointmentAt, c.scheduledAt) <= :now then 2
+          when coalesce(r.appointmentAt, c.scheduledAt) is not null then 3
           else 6 end,
-          coalesce(r.appointmentAt, c.scheduledAt) asc nulls last, r.reservationCode asc, r.id asc
+          case when :workGroup = 'PROCESSED' then coalesce(r.cancelledAt, c.inventoryVerifiedAt,
+               c.inventoryDecisionAt, c.rejectionResolvedAt, c.checkedInAt, r.createdAt) end desc,
+          case when :workGroup <> 'PROCESSED' then coalesce(r.appointmentAt, c.scheduledAt) end asc nulls last,
+          r.createdAt desc, r.id asc
         """, countQuery = "select count(r.id) " + CHECK_IN_WORK_FROM)
     Page<CheckInWorkRow> findCheckInWork(
         @Param("workGroup") String workGroup,

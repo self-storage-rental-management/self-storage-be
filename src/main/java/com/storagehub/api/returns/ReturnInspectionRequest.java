@@ -85,7 +85,7 @@ public record ReturnInspectionRequest(
         @JsonProperty("returnedCard") boolean returnedCard,
         @JsonProperty("returnedLock") boolean returnedLock,
         @JsonProperty("proposedUnitStatus") StorageUnitStatus proposedUnitStatus,
-        @JsonProperty("unitVacated") boolean unitVacated,
+        @JsonProperty("unitVacated") Boolean unitVacated,
         @JsonProperty("recoveryHandoverLocation") String recoveryHandoverLocation,
         @JsonProperty("customerPresent") Boolean customerPresent,
         @JsonProperty("recoveryWitnessStaffId") UUID recoveryWitnessStaffId,
@@ -95,7 +95,7 @@ public record ReturnInspectionRequest(
     ) {
         this(inventoryMatch, damageClassification, damageFee, cleaningFee, lostItemFee, overdueFee,
             outstandingFee, staffNotes, evidencePhotos, returnedKey, returnedCard, returnedLock,
-            proposedUnitStatus, unitVacated, recoveryHandoverLocation,
+            proposedUnitStatus, Boolean.TRUE.equals(unitVacated), recoveryHandoverLocation,
             customerPresent == null || customerPresent, recoveryWitnessStaffId, damageItems, lockInspectionResult, missingPalletCount);
     }
 

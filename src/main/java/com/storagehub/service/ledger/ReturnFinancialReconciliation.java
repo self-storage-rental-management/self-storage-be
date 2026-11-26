@@ -197,6 +197,28 @@ public class ReturnFinancialReconciliation {
                 rc.getId().toString(),method,reference,file.toString())==1;
     }
 
+    public boolean hasCollectionReceipt(ReturnCase rc) {
+        return jdbc.queryForObject("select count(*) from return_settlement_receipts where return_id=? and direction='COLLECTION' and amount=?",
+            Long.class, rc.getId().toString(), rc.getAmountDueFromCustomer()) == 1;
+    }
+
+    public boolean matchesMismatchReceipt(ReturnCase rc, String method, String reference, UUID file, BigDecimal amount) {
+        return file != null && amount != null && reference != null && jdbc.queryForObject("""
+            select count(*) from return_settlement_receipts
+            where return_id=? and payment_method=? and transaction_reference=? and receipt_file_id=? and amount=?
+            """, Long.class, rc.getId().toString(), method, reference, file.toString(), amount) == 1;
+    }
+
+    public List<com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt> mismatchReceipts(ReturnCase rc) {
+        return jdbc.query("""
+            select direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_at_ms
+            from return_settlement_receipts where return_id=? order by recorded_at_ms, direction
+            """, (row, index) -> new com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt(
+                row.getString("direction"), row.getBigDecimal("amount"), row.getString("payment_method"),
+                row.getString("transaction_reference"), UUID.fromString(row.getString("receipt_file_id")),
+                Instant.ofEpochMilli(row.getLong("recorded_at_ms"))), rc.getId().toString());
+    }
+
     public com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt settledReceipt(ReturnCase rc, boolean recovery) {
         if (rc.getSettlementPaidAt() == null || rc.getSettlementPaymentId() == null) {
             if(rc.getStatus()!=ReturnCaseStatus.completed||rc.getTotalDeductions().signum()<=0
@@ -231,8 +253,11 @@ public class ReturnFinancialReconciliation {
 
     public void receipt(ActorPrincipal actor,ReturnCase rc,String method,String reference,UUID file) {
         requireCurrent(rc);
-        if(!Set.of("CASH","BANK_TRANSFER").contains(method==null?"":method)||reference==null||reference.isBlank()||reference.length()>120||file==null)
-            throw ApiExceptions.validation("Cần phương thức thu/hoàn, mã giao dịch và biên lai đã lưu.",null);
+        if(!Set.of("CASH","BANK_TRANSFER").contains(method==null?"":method)||file==null)
+            throw ApiExceptions.validation("Cần phương thức thu hoặc hoàn tiền và biên lai đã lưu.",null);
+        if(reference==null||reference.isBlank()||reference.length()>120)
+            throw ApiExceptions.validation("CASH".equals(method) ? "Không tạo được mã biên nhận tiền mặt."
+                : "Vui lòng nhập mã giao dịch chuyển khoản hợp lệ.",null);
         var asset=em.find(FileAsset.class,file,LockModeType.PESSIMISTIC_READ);
         if(asset==null||asset.getStatus()!=FileAssetStatus.ACTIVE||!"RETURN_CASE".equals(asset.getEntityType())
             ||!rc.getId().equals(asset.getEntityId())||asset.getUploadedBy()==null||!actor.userId().equals(asset.getUploadedBy().getId()))
@@ -248,7 +273,8 @@ public class ReturnFinancialReconciliation {
         catch(org.springframework.dao.DuplicateKeyException duplicate){
             String msg = duplicate.getMessage();
             if (msg != null && msg.contains("transaction_reference")) {
-                throw ApiExceptions.conflict("Mã giao dịch hoặc số biên nhận này đã được sử dụng trên hệ thống. Vui lòng nhập mã giao dịch khác.");
+                throw ApiExceptions.conflict("CASH".equals(method) ? "Biên nhận tiền mặt đã được lưu. Vui lòng tải lại hồ sơ."
+                    : "Mã giao dịch chuyển khoản đã được sử dụng. Vui lòng đối chiếu biên lai và kiểm tra lại mã.");
             } else if (msg != null && msg.contains("receipt_file_id")) {
                 throw ApiExceptions.conflict("Tệp biên lai này đã được sử dụng cho một quyết toán khác. Vui lòng chọn tệp biên lai hợp lệ.");
             } else if (msg != null && msg.contains("PRIMARY")) {
@@ -263,6 +289,13 @@ public class ReturnFinancialReconciliation {
         requireCurrent(rc);
         if((rc.getAmountDueFromCustomer().signum()>0||rc.getNetRefundAmount().signum()>0)&&!transferVerified)
             throw ApiExceptions.conflict("Cần xác nhận thu hoặc hoàn tiền bằng chứng từ trước khi hoàn tất.");
+        if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            && rc.getAmountDueFromCustomer().signum() > 0 && rc.getNetRefundAmount().signum() > 0
+            && jdbc.queryForObject("""
+                select count(*) from return_settlement_receipts where return_id=?
+                  and ((direction='COLLECTION' and amount=?) or (direction='REFUND' and amount=?))
+                """, Long.class, rc.getId().toString(), rc.getAmountDueFromCustomer(), rc.getNetRefundAmount()) != 2)
+            throw ApiExceptions.conflict("Cần đủ biên lai thực thu và thực hoàn trước khi đóng quyết toán.");
         var row=jdbc.queryForList("select * from return_financial_snapshots where return_id=?",rc.getId().toString()).getFirst();
         final Map<UUID,BigDecimal> allocations;
         try{allocations=mapper.readValue(row.get("allocations_json").toString(),new TypeReference<LinkedHashMap<UUID,BigDecimal>>(){});}

@@ -677,8 +677,8 @@ public class CustomerReservationService {
 
     void applyInventoryDecision(ActorPrincipal actor, Reservation reservation, CheckIn checkIn,
         InventoryResolutionRequest request, User staff) {
-        if (request.decision() == InventoryResolutionRequest.Decision.ACCEPT_PARTIAL)
-            throw ApiExceptions.validation("Phương án nhận một phần hàng hóa đã ngừng áp dụng. Vui lòng chọn chuyển hàng hoặc trả kho.", null);
+        if (checkIn.hasPendingInventoryRefusal())
+            throw ApiExceptions.conflict("Biên bản từ chối ký đang chờ quản lý xem xét.");
         UUID reservationId = reservation.getId();
         if ((checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
             && checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PARTIAL_ACCEPTED)
@@ -1313,6 +1313,14 @@ public class CustomerReservationService {
             );
         }
         Instant previousAppointmentAt = reservation.getAppointmentAt();
+        if (reservation.getHandoverArrivedAt() != null) {
+            throw ApiExceptions.conflict("Cơ sở đã ghi nhận khách đến nhận kho.");
+        }
+        if (ReservationCheckInPolicy.hasAttendanceTerms(reservation)
+            && previousAppointmentAt != null && !Instant.now().isBefore(previousAppointmentAt)) {
+            throw ApiExceptions.conflict("Đã đến lịch nhận kho. Vui lòng đến cơ sở theo lịch đã xác nhận.");
+        }
+        reservation.setAttendanceReminderHours(0);
         LocalDate previousStartDate = reservation.getStartDate();
         LocalDate previousEndDate = reservation.getEndDate();
         reservation.setAppointmentAt(request.appointmentAt());
@@ -1632,7 +1640,10 @@ public class CustomerReservationService {
         if (rentalRepository != null) {
             rentalRepository.findByReservation_Id(reservation.getId()).ifPresent(rental -> {
                 response.setSetupExitReviewRequired(rental.isSetupExitReviewRequired());
-                if (rental.getSetupStartedAt() != null && rental.getStatus() != RentalStatus.completed) {
+                boolean violationRecovery = rental.getStatus() == RentalStatus.closing && rental.getInventoryEscalatedAt() != null
+                    || rental.getEndReason() == com.storagehub.domain.model.RentalEndReason.VIOLATION_RECOVERY;
+                response.setViolationRecovery(violationRecovery);
+                if (!violationRecovery && rental.getSetupStartedAt() != null && rental.getStatus() != RentalStatus.completed) {
                     response.setSetupReturnRentalId(rental.getId());
                     if (setupReturns != null) setupReturns.findByRental_Id(rental.getId()).stream()
                         .filter(rc -> rc.getStatus() != com.storagehub.domain.model.ReturnCaseStatus.completed).findFirst()
@@ -1687,6 +1698,7 @@ public class CustomerReservationService {
         response.setConfirmedAt(reservation.getConfirmedAt());
         response.setCancelledAt(reservation.getCancelledAt());
         response.setCancelReason(reservation.getCancelReason());
+        response.setAttendance(ReservationCheckInPolicy.attendance(reservation));
         response.setCancellationType(reservation.getCancellationType());
         response.setCancellationRefundAmount(reservation.getCancellationRefundAmount());
         response.setCancellationChargeAmount(reservation.getCancellationChargeAmount());
@@ -1698,6 +1710,7 @@ public class CustomerReservationService {
             .toList());
         checkInRepository.findByReservation_Id(reservation.getId()).ifPresent(checkIn -> {
             response.setCheckInStatus(checkIn.getStatus().name());
+            response.setIdentityCorrectedAtHandover(Boolean.TRUE.equals(checkIn.getIdentityCorrected()));
             response.setHandoverCompletedAt(checkIn.getCheckedInAt());
             response.setLockReference(checkIn.getCheckedInAt() == null ? null : checkIn.getLockReference());
             Instant receiptDueAt = checkIn.getStatus() == CheckInStatus.handover_pending_receipt

@@ -54,6 +54,26 @@ public class WorkflowBusinessCalendar {
 
     public record Schedule(Set<DayOfWeek> days, LocalTime opens, LocalTime closes, boolean midnightClose,
         Set<LocalDate> holidays) {
+        public Instant afterWorkingHours(Instant start, long hours) {
+            var date = start.atZone(BusinessTime.ZONE).toLocalDate();
+            var remaining = java.time.Duration.ofHours(hours);
+            while (!remaining.isZero()) {
+                if (days.contains(date.getDayOfWeek()) && !holidays.contains(date)) {
+                    Instant open = date.atTime(opens).atZone(BusinessTime.ZONE).toInstant();
+                    Instant close = (midnightClose ? date.plusDays(1).atStartOfDay() : date.atTime(closes))
+                        .atZone(BusinessTime.ZONE).toInstant();
+                    Instant cursor = start.isAfter(open) ? start : open;
+                    if (cursor.isBefore(close)) {
+                        var available = java.time.Duration.between(cursor, close);
+                        if (remaining.compareTo(available) <= 0) return cursor.plus(remaining);
+                        remaining = remaining.minus(available);
+                    }
+                }
+                date = date.plusDays(1);
+            }
+            return start;
+        }
+
         public Instant after(Instant start, int daysToCount) {
             var local = start.atZone(BusinessTime.ZONE);
             var date = local.toLocalDate();

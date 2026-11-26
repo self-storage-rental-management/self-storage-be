@@ -298,17 +298,21 @@ public class CustomerReservationController {
     public ApiResponse<VnpayPaymentUrlResponse> createVnpayPaymentUrl(
         @PathVariable UUID reservationId,
         @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+        @RequestBody(required = false) ReservationPaymentTerms confirmation,
         HttpServletRequest request
     ) {
         return new ApiResponse<>(
             vnpayService.createPaymentUrl(
                 actorContext.required(), reservationId, idempotencyKey,
                 request.getHeader("X-Forwarded-For") != null
-                    ? request.getHeader("X-Forwarded-For") : request.getRemoteAddr()
+                    ? request.getHeader("X-Forwarded-For") : request.getRemoteAddr(),
+                confirmation == null ? null : confirmation.acceptedHandoverTermsVersion()
             ),
             CorrelationIdContext.current()
         );
     }
+
+    public record ReservationPaymentTerms(String acceptedHandoverTermsVersion) {}
 
     @PostMapping("/{reservationId}/payment-complaints")
     public ApiResponse<PaymentComplaintResponse> submitPaymentComplaint(

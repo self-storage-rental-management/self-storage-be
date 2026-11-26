@@ -10,5 +10,6 @@ public enum ReturnCaseStatus {
     payment_due,
     refund_pending,
     recovery_required,
-    completed
+    completed,
+    withdrawn_for_recovery
 }
