@@ -58,6 +58,10 @@ public class CustomerLifecycleEmailService {
             if (notice.getType() == NotificationType.RETURN) {
                 returned = em.find(ReturnCase.class, resource);
                 if (returned != null) rental = returned.getRental();
+                else {
+                    ViolationRecovery recovery = em.find(ViolationRecovery.class, resource);
+                    if (recovery != null) rental = recovery.getRental();
+                }
             } else if (rental == null && (notice.getType() == NotificationType.RENEWAL || notice.getType() == NotificationType.PAYMENT)) {
                 Renewal renewal = em.find(Renewal.class, resource);
                 if (renewal != null) rental = renewal.getRental();

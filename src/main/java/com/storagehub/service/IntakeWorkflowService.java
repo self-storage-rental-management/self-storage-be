@@ -36,6 +36,8 @@ public class IntakeWorkflowService {
     private final IntakeVerificationAttemptRepository verificationAttempts;
     private final IntakeIdempotencyRecordRepository idempotencyRecords;
     private final MaintenanceTaskRepository maintenanceTasks;
+    @Autowired(required = false)
+    private ViolationRecoveryWorkflow violationRecovery;
 
     /** Legacy-compatible constructor for unit tests without new Spring beans. */
     public IntakeWorkflowService(
@@ -370,7 +372,12 @@ public class IntakeWorkflowService {
                         if (policy.isImmediateFailOnSecondVerificationFailure()) {
                             r.setInspectionFailureReason(clean(command.reason()) != null
                                 ? clean(command.reason()) : "Xác minh danh tính thất bại 2 lần.");
-                            createRecoveryTaskIfMissing(r, now, "Kiểm kê không thành công: thất bại xác minh danh tính 2 lần");
+                            createRecoveryTaskIfMissing(
+                                r, now,
+                                "Kiểm kê không thành công: thất bại xác minh danh tính 2 lần",
+                                ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED,
+                                r.getInspectionCompletionDeadlineAt() != null ? r.getInspectionCompletionDeadlineAt() : now
+                            );
                         }
                         notificationTitle = "Xác minh danh tính thất bại lần 2";
                         notificationContent = "Đơn " + code(r) + " đã hết 2 lượt xác minh danh tính.";
@@ -414,7 +421,7 @@ public class IntakeWorkflowService {
                 if ("APPROVED_ON_TIME".equals(resolution)) {
                     if (r.getMoveInCompletedAt() == null) {
                         throw ApiExceptions.setupCutoffExceeded(
-                            "Khách hàng chưa hoàn tất báo setup trước hạn; không thể duyệt đến đúng hạn (chỉ có thể chốt vắng mặt hoặc chuyển ngoại lệ cơ sở nếu có sự cố kỹ thuật/cơ sở)."
+                            "Khách hàng chưa hoàn tất báo setup trước hạn; không thể duyệt đến đúng hạn (chỉ có thể chốt vắng mặt)."
                         );
                     }
                     if (clean(command.reason()) == null) {
@@ -429,27 +436,20 @@ public class IntakeWorkflowService {
                     }
                     notificationTitle = "Đã duyệt đối soát đến đúng hạn";
                     notificationContent = "Đơn " + code(r) + " được xác nhận đến đúng hạn. Có thể tiếp tục xác minh danh tính.";
-                } else if ("CONFIRMED_ABSENT".equals(resolution)) {
+                } else {
                     r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
                     r.setInspectionFailureReason(clean(command.reason()) != null
                         ? clean(command.reason()) : "Không đến kiểm kê trong hạn.");
-                    createRecoveryTaskIfMissing(r, now, "Quá hạn đến kiểm kê (đã đối soát vắng mặt)");
+                    createRecoveryTaskIfMissing(
+                        r, now,
+                        "Quá hạn đến kiểm kê (đã đối soát vắng mặt)",
+                        r.getMoveInCompletedAt() == null
+                            ? ViolationRecovery.Reason.SETUP_OVERDUE
+                            : ViolationRecovery.Reason.INVENTORY_NO_SHOW,
+                        timeline.arrivalDeadline(r) != null ? timeline.arrivalDeadline(r) : now
+                    );
                     notificationTitle = "Đã chốt đối soát: khách không đến";
                     notificationContent = "Đơn " + code(r) + " đã chuyển sang nhiệm vụ thu hồi chờ xác nhận.";
-                } else {
-                    if (clean(command.reason()) == null) {
-                        throw ApiExceptions.validation("Vui lòng nhập lý do ngoại lệ cơ sở.", null);
-                    }
-                    r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_FACILITY_EXCEPTION);
-                    r.setExceptionOwnerId(actor.userId());
-                    r.setExceptionReason(clean(command.reason()));
-                    if (command.at() != null && command.at().isAfter(now)) {
-                        r.setExceptionDueAt(command.at());
-                        r.setInventoryFinalDeadlineAt(command.at());
-                        r.setSetupCompletionDeadlineAt(command.at());
-                    }
-                    notificationTitle = "Chuyển ngoại lệ do cơ sở";
-                    notificationContent = "Đơn " + code(r) + " đã chuyển Manager xử lý ngoại lệ cơ sở.";
                 }
                 after = now;
             }
@@ -602,7 +602,19 @@ public class IntakeWorkflowService {
             r.getReservation().getId());
     }
 
-    private void createRecoveryTaskIfMissing(Rental r, Instant now, String reason) {
+    private void createRecoveryTaskIfMissing(
+        Rental r,
+        Instant now,
+        String reason,
+        ViolationRecovery.Reason violationReason,
+        Instant sourceDeadline
+    ) {
+        if (violationRecovery != null) {
+            Instant deadline = sourceDeadline != null && !now.isBefore(sourceDeadline) ? sourceDeadline : now;
+            violationRecovery.detect(r, null, violationReason, deadline, now, false);
+            r.setInventoryEscalatedAt(now);
+            return;
+        }
         if (maintenanceTasks == null || r.getStorageUnit() == null) {
             r.setInventoryEscalatedAt(now);
             return;
@@ -663,7 +675,7 @@ public class IntakeWorkflowService {
             throw ApiExceptions.validation("Vui lòng chọn kết luận đối soát.", null);
         }
         String upper = outcome.trim().toUpperCase(Locale.ROOT);
-        if (!List.of("APPROVED_ON_TIME", "CONFIRMED_ABSENT", "FACILITY_EXCEPTION").contains(upper)) {
+        if (!List.of("APPROVED_ON_TIME", "CONFIRMED_ABSENT").contains(upper)) {
             throw ApiExceptions.validation("Kết luận đối soát không hợp lệ.", null);
         }
         return upper;
