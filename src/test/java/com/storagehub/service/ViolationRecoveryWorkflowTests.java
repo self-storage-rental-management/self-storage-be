@@ -734,6 +734,94 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
+    void customerCannotRepeatSameAttendanceReplyUnlessToggledBetweenAttendAndCannotAttend() throws Exception {
+        activateRecovery();
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+
+        var afterAttend = execute(customerActor, ViolationRecoveryWorkflow.Action.WILL_ATTEND, "Tôi sẽ đến đúng giờ", null);
+        assertThat(afterAttend.reply()).isEqualTo(Reply.WILL_ATTEND);
+        assertThat(afterAttend.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.WILL_ATTEND)
+            .contains(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND);
+        assertThatThrownBy(() -> execute(customerActor, ViolationRecoveryWorkflow.Action.WILL_ATTEND, null, null))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("Thao tác chưa đủ điều kiện");
+
+        var afterCannotAttend = execute(customerActor, ViolationRecoveryWorkflow.Action.CANNOT_ATTEND, "Có việc đột xuất", null);
+        assertThat(afterCannotAttend.reply()).isEqualTo(Reply.CANNOT_ATTEND);
+        assertThat(afterCannotAttend.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND)
+            .contains(ViolationRecoveryWorkflow.Action.WILL_ATTEND);
+        assertThatThrownBy(() -> execute(customerActor, ViolationRecoveryWorkflow.Action.CANNOT_ATTEND, null, null))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("Thao tác chưa đủ điều kiện");
+
+        var toggledBack = execute(customerActor, ViolationRecoveryWorkflow.Action.WILL_ATTEND, "Đã sắp xếp lại được", null);
+        assertThat(toggledBack.reply()).isEqualTo(Reply.WILL_ATTEND);
+        assertThat(toggledBack.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.WILL_ATTEND)
+            .contains(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND);
+    }
+
+    @Test
+    void customerDisputeAndManagerResumePreserveMultipleAttachmentsAndNotifyCustomer() throws Exception {
+        activateRecovery();
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+        var managerActor = manager();
+
+        var customerFile1 = UUID.randomUUID();
+        var customerFile2 = UUID.randomUUID();
+        for (var fileId : List.of(customerFile1, customerFile2)) {
+            var asset = new FileAsset();
+            ReflectionTestUtils.setField(asset, "id", fileId);
+            asset.setStatus(FileAssetStatus.ACTIVE);
+            asset.setEntityType("VIOLATION_RECOVERY");
+            asset.setEntityId(recovery.getId());
+            asset.setUploadedBy(customer);
+            when(files.findById(fileId)).thenReturn(Optional.of(asset));
+        }
+
+        var disputed = workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.DISPUTE, null, null, null, null, null,
+            "Tôi đã báo chuẩn bị xong trước hạn", null, null, null, null, null, null, null, null,
+            List.of(customerFile1, customerFile2)
+        ));
+        assertThat(disputed.customerAttachmentIds()).containsExactly(customerFile1, customerFile2);
+
+        var managerFile1 = UUID.randomUUID();
+        var managerFile2 = UUID.randomUUID();
+        for (var fileId : List.of(managerFile1, managerFile2)) {
+            var asset = new FileAsset();
+            ReflectionTestUtils.setField(asset, "id", fileId);
+            asset.setStatus(FileAssetStatus.ACTIVE);
+            asset.setEntityType("VIOLATION_RECOVERY");
+            asset.setEntityId(recovery.getId());
+            asset.setUploadedBy(manager);
+            when(files.findById(fileId)).thenReturn(Optional.of(asset));
+        }
+
+        workflow.execute(managerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.RESUME, null, null, null, null, null,
+            "Đã kiểm tra camera, vẫn tiếp tục thu hồi theo lịch", null, null, null, null, null, null, null, null,
+            List.of(managerFile1, managerFile2)
+        ));
+
+        var customerView = workflow.get(customerActor, recovery.getId());
+        assertThat(customerView.managerResponseNote()).isEqualTo("Đã kiểm tra camera, vẫn tiếp tục thu hồi theo lịch");
+        assertThat(customerView.managerRespondedAt()).isNotNull();
+        assertThat(customerView.customerAttachmentIds()).containsExactly(customerFile1, customerFile2);
+        assertThat(customerView.managerAttachmentIds()).containsExactly(managerFile1, managerFile2);
+        verify(notifications).createNotification(eq(customer.getId()), eq(NotificationType.RETURN),
+            contains("Quản lý đã phản hồi"), contains("Đã kiểm tra camera"), eq(recovery.getId()));
+
+        var secondDispute = workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.DISPUTE, null, null, null, null, null,
+            "Khiếu nại lần 2: tôi có biên nhận bàn giao", null, null, null, null, null, null, null, null, null
+        ));
+        assertThat(secondDispute.communications()).hasSize(3);
+        assertThat(secondDispute.communications().get(0).note()).isEqualTo("Tôi đã báo chuẩn bị xong trước hạn");
+        assertThat(secondDispute.communications().get(1).note()).isEqualTo("Đã kiểm tra camera, vẫn tiếp tục thu hồi theo lịch");
+        assertThat(secondDispute.communications().get(2).note()).isEqualTo("Khiếu nại lần 2: tôi có biên nhận bàn giao");
+    }
+
+    @Test
     void schedulerDoesNotUnassignOrPauseStaffWhenTheOldAcceptanceOrAttendanceDeadlineExpires() throws Exception {
         readyForAbsentHandover();
         recovery.setActionDueAt(Instant.now().minusSeconds(1));

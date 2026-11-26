@@ -57,12 +57,19 @@ public class ViolationRecoveryWorkflow {
         @Size(max = 80) String itemCode, @Size(max = 240) String itemName, @Size(max = 240) String condition,
         @Size(max = 240) String location, @Size(max = 40) String disposition,
         @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(1000) Integer quantity,
-        @Size(min = 1, max = 1000) List<@Size(max = 80) String> itemCodes) {
+        @Size(min = 1, max = 1000) List<@Size(max = 80) String> itemCodes,
+        @Size(max = 10) List<UUID> attachmentIds) {
         public Command(Action action, UUID staffId, UUID witnessId, UUID evidenceId, UUID attemptId,
             Instant appointmentAt, String note, String document, String itemCode, String itemName,
             String condition, String location, String disposition) {
             this(action, staffId, witnessId, evidenceId, attemptId, appointmentAt, note, document,
-                itemCode, itemName, condition, location, disposition, null, null);
+                itemCode, itemName, condition, location, disposition, null, null, null);
+        }
+        public Command(Action action, UUID staffId, UUID witnessId, UUID evidenceId, UUID attemptId,
+            Instant appointmentAt, String note, String document, String itemCode, String itemName,
+            String condition, String location, String disposition, Integer quantity, List<String> itemCodes) {
+            this(action, staffId, witnessId, evidenceId, attemptId, appointmentAt, note, document,
+                itemCode, itemName, condition, location, disposition, quantity, itemCodes, null);
         }
     }
 
@@ -74,6 +81,9 @@ public class ViolationRecoveryWorkflow {
     public record StaffOption(UUID id, String name) {}
 
     public record HistoryEvent(String action, String actorName, Instant time, Stage stage, String note) {}
+
+    public record CommunicationEntry(String role, String actorName, String action, Instant time, String note,
+        List<UUID> attachmentIds) {}
 
     public record Verification(int used, int limit, int remaining, boolean matched, boolean canReceiveItems, String message) {}
 
@@ -106,7 +116,9 @@ public class ViolationRecoveryWorkflow {
         String report, List<Item> items, List<HistoryEvent> history, List<Action> actions,
         Instant detectedAt, Instant reviewDueAt, Instant businessReviewDueAt, RecoveryReviewService.Review review,
         Verification verification, Verification pickupVerification, boolean canViewSourceGoods,
-        Instant pickupAppointmentAt) {}
+        Instant pickupAppointmentAt, String managerResponseNote, Instant managerRespondedAt,
+        List<UUID> customerAttachmentIds, List<UUID> managerAttachmentIds,
+        List<CommunicationEntry> communications) {}
 
     public static final class Details {
         public Instant notifiedAt, responseDueAt, arrivedAt, verifiedAt, acceptedAt, startedAt, pickupOpenedAt, pickupVerifiedAt, pickupAppointmentAt;
@@ -116,7 +128,11 @@ public class ViolationRecoveryWorkflow {
         public UUID beforeEvidenceId, afterEvidenceId, attendanceEvidenceId, approvedBy, pickupStaffId, pickupAssignedStaffId;
         public Instant approvedAt;
         public Instant reviewDueAt, reviewEscalatedAt, businessReviewDueAt;
-        public String reasonNote, customerNote, report, plannedHandover;
+        public String reasonNote, customerNote, report, plannedHandover, managerResponseNote;
+        public Instant managerRespondedAt;
+        public List<UUID> customerAttachmentIds = new ArrayList<>();
+        public List<UUID> managerAttachmentIds = new ArrayList<>();
+        public List<CommunicationEntry> communications = new ArrayList<>();
         public List<UUID> attempts = new ArrayList<>();
         public List<UUID> pickupAttempts = new ArrayList<>();
         public Map<String, Item> items = new LinkedHashMap<>();
@@ -266,6 +282,7 @@ public class ViolationRecoveryWorkflow {
             : command.action() == Action.VERIFY || command.action() == Action.VERIFY_PICKUP
                 ? verification(v, d, command.action() == Action.VERIFY_PICKUP, now).message() : clean(command.note());
         d.history.add(new HistoryEvent(command.action().name(), actorName, now, v.getStage(), historyNote));
+        recordCommunication(actor, actorName, d, command, now);
         save(v, d);
         var after = view(actor, v, d, now);
         audit.recordMutation("RECOVERY_" + command.action(), "violation_recovery", id, v.getRental().getFacility().getId(),
@@ -279,12 +296,22 @@ public class ViolationRecoveryWorkflow {
             case RESCHEDULE -> throw ApiExceptions.conflict("Thời gian thu hồi do hệ thống ấn định, không thể đổi lịch thủ công.");
             case ASSIGN -> assign(actor, v, d, c, now);
             case WILL_ATTEND, CANNOT_ATTEND -> {
-                d.reply = Reply.valueOf(c.action().name());
+                Reply target = Reply.valueOf(c.action().name());
+                if (d.reply == target) {
+                    throw ApiExceptions.conflict(target == Reply.WILL_ATTEND
+                        ? "Bạn đã xác nhận sẽ có mặt. Chỉ có thể chọn lại sau khi chuyển sang không thể có mặt."
+                        : "Bạn đã báo không thể có mặt. Chỉ có thể chọn lại sau khi chuyển sang sẽ có mặt.");
+                }
+                d.reply = target;
                 d.customerNote = clean(c.note());
+                var uploaded = attachments(v, actor, c.attachmentIds());
+                if (!uploaded.isEmpty()) d.customerAttachmentIds.addAll(uploaded);
             }
             case DISPUTE -> {
                 d.customerNote = required(c.note(), "nội dung phản đối");
                 d.reply = Reply.DISPUTED;
+                var uploaded = attachments(v, actor, c.attachmentIds());
+                if (!uploaded.isEmpty()) d.customerAttachmentIds.addAll(uploaded);
                 if (terminal(v)) {
                     v.setFinancePending(true);
                     notifyBusiness(v, "Khách gửi khiếu nại sau thu hồi");
@@ -298,10 +325,14 @@ public class ViolationRecoveryWorkflow {
             case VERIFY, VERIFY_PICKUP -> verify(v, d, c, now);
             case START -> start(actor, v, d, c, now);
             case SAVE_ITEM -> saveItem(actor, v, d, c, now);
-            case BLOCK -> block(v, d, required(c.note(), "lý do tạm dừng"), now);
-            case RESUME -> resume(v, d, c, now);
-            case CANCEL -> cancel(v, d, c, now);
-            case CLOSE_REMEDIATION -> closeRemediation(v, d, c, now);
+            case BLOCK -> {
+                block(v, d, required(c.note(), "lý do tạm dừng"), now);
+                var uploaded = attachments(v, actor, c.attachmentIds());
+                if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
+            }
+            case RESUME -> resume(actor, v, d, c, now);
+            case CANCEL -> cancel(actor, v, d, c, now);
+            case CLOSE_REMEDIATION -> closeRemediation(actor, v, d, c, now);
             case COMPLETE -> complete(actor, v, d, c, now);
             case SCHEDULE_PICKUP -> {
                 if (c.appointmentAt() == null) {
@@ -578,8 +609,13 @@ public class ViolationRecoveryWorkflow {
         if (c.attemptId() != null) d.itemBatches.put(c.attemptId(), codes);
     }
 
-    private void resume(ViolationRecovery v, Details d, Command c, Instant now) {
+    private void resume(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
+        boolean wasDispute = d.disputeOpen;
         d.reasonNote = required(c.note(), "kết luận xử lý ngoại lệ");
+        d.managerResponseNote = d.reasonNote;
+        d.managerRespondedAt = now;
+        var uploaded = attachments(v, actor, c.attachmentIds());
+        if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         if (v.getTask() != null && v.getTask().getAssignedTo() != null) {
             var participants = new ArrayList<UUID>();
             participants.add(v.getTask().getAssignedTo().getId());
@@ -596,9 +632,16 @@ public class ViolationRecoveryWorkflow {
         if (d.attendance == Attendance.PRESENT && !within(d.arrivedAt, now, d.verifiedAt)) {
             d.verifiedAt = null;
         }
+        if (v.getRequiredAt() != null) {
+            notifyCustomerWithDetail(
+                v,
+                wasDispute ? "Quản lý đã phản hồi phản đối và tiếp tục thu hồi" : "Hồ sơ thu hồi được tiếp tục xử lý",
+                d.managerResponseNote
+            );
+        }
     }
 
-    private void cancel(ViolationRecovery v, Details d, Command c, Instant now) {
+    private void cancel(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         if (d.startedAt != null) {
             throw ApiExceptions.invalidState("Không thể hủy thu hồi khi đã bắt đầu thu hồi thực tế.");
         }
@@ -606,6 +649,10 @@ public class ViolationRecoveryWorkflow {
             throw ApiExceptions.deadlineExpired("Chỉ có thể hủy thu hồi trong 12 giờ đầu kể từ khi phát sinh yêu cầu.");
         }
         d.reasonNote = required(c.note(), "căn cứ hủy thu hồi");
+        d.managerResponseNote = d.reasonNote;
+        d.managerRespondedAt = now;
+        var uploaded = attachments(v, actor, c.attachmentIds());
+        if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         if (v.getRequiredAt() != null) {
             var rental = v.getRental();
             var unit = rental.getStorageUnit();
@@ -620,11 +667,17 @@ public class ViolationRecoveryWorkflow {
         if (v.getTask() != null) v.getTask().setStatus(MaintenanceTaskStatus.cancelled);
         advance(v, Stage.CANCELLED, null);
         v.setResponseCheckAt(null);
-        if (v.getRequiredAt() != null) notifyCustomer(v, "Yêu cầu thu hồi đã được hủy");
+        if (v.getRequiredAt() != null) {
+            notifyCustomerWithDetail(v, "Yêu cầu thu hồi đã được hủy", d.managerResponseNote);
+        }
     }
 
-    private void closeRemediation(ViolationRecovery v, Details d, Command c, Instant now) {
+    private void closeRemediation(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         d.reasonNote = required(c.note(), "kết luận khắc phục, tình trạng gian và tài sản");
+        d.managerResponseNote = d.reasonNote;
+        d.managerRespondedAt = now;
+        var uploaded = attachments(v, actor, c.attachmentIds());
+        if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         var rental = v.getRental();
         var unit = rental.getStorageUnit();
         em.refresh(unit, LockModeType.PESSIMISTIC_WRITE);
@@ -793,7 +846,10 @@ public class ViolationRecoveryWorkflow {
         if (actor.hasRole(RoleCode.CUSTOMER)) {
             if (v.getRequiredAt() == null) return actions;
             if (!terminal(v) && d.responseDueAt != null && now.isBefore(d.responseDueAt)) {
-                if (!d.disputeOpen) actions.addAll(List.of(Action.WILL_ATTEND, Action.CANNOT_ATTEND));
+                if (!d.disputeOpen) {
+                    if (d.reply != Reply.WILL_ATTEND) actions.add(Action.WILL_ATTEND);
+                    if (d.reply != Reply.CANNOT_ATTEND) actions.add(Action.CANNOT_ATTEND);
+                }
                 actions.add(Action.DISPUTE);
             }
             if (terminal(v) && hasStoredItems(d) && v.getPickupDueAt() != null && now.isBefore(v.getPickupDueAt())) {
@@ -866,6 +922,22 @@ public class ViolationRecoveryWorkflow {
             case AWAITING_ACCEPTANCE, AWAITING_ATTENDANCE, APPROVED, IN_PROGRESS -> v.isEscalated() ? "BO" : "Nhân viên";
             case COMPLETED, CANCELLED -> v.isFinancePending() || v.isPickupEscalated() ? "BO" : hasStoredItems(d) ? "Cơ sở" : null;
         };
+        var communications = new ArrayList<CommunicationEntry>();
+        if (d.communications != null && !d.communications.isEmpty()) {
+            communications.addAll(d.communications);
+        } else {
+            if (d.customerNote != null && !d.customerNote.isBlank()) {
+                communications.add(new CommunicationEntry("CUSTOMER", rental.getCustomer().getFullName(),
+                    d.reply == Reply.DISPUTED ? Action.DISPUTE.name() : (d.reply != null ? d.reply.name() : "DISPUTE"),
+                    d.notifiedAt != null ? d.notifiedAt : v.getRequiredAt(), d.customerNote,
+                    d.customerAttachmentIds == null ? List.of() : List.copyOf(d.customerAttachmentIds)));
+            }
+            if (d.managerResponseNote != null && !d.managerResponseNote.isBlank()) {
+                communications.add(new CommunicationEntry("MANAGER", "Quản lý cơ sở", "RESUME",
+                    d.managerRespondedAt != null ? d.managerRespondedAt : now, d.managerResponseNote,
+                    d.managerAttachmentIds == null ? List.of() : List.copyOf(d.managerAttachmentIds)));
+            }
+        }
         return new Entry(v.getId(), rental.getId(), rental.getReservation().getId(), rental.getReservation().getReservationCode(),
             rental.getCustomer().getFullName(), rental.getFacility().getId(),
             rental.getStorageUnit().getCode(), task == null ? null : task.getId(), staff == null ? null : staff.getFullName(),
@@ -884,7 +956,10 @@ public class ViolationRecoveryWorkflow {
             customer ? null : businessReviewDeadline(v, d),
             !customer && v.getStage() == Stage.REVIEW_REQUIRED ? reviewEvidence.read(v, now) : null,
             verification(v, d, false, now), verification(v, d, true, now), true,
-            d.pickupAppointmentAt);
+            d.pickupAppointmentAt, d.managerResponseNote, d.managerRespondedAt,
+            d.customerAttachmentIds == null ? List.of() : List.copyOf(d.customerAttachmentIds),
+            d.managerAttachmentIds == null ? List.of() : List.copyOf(d.managerAttachmentIds),
+            List.copyOf(communications));
     }
 
     private boolean needsWitness(Details d, Instant now) {
@@ -960,6 +1035,42 @@ public class ViolationRecoveryWorkflow {
             .toList();
     }
 
+    private void recordCommunication(ActorPrincipal actor, String actorName, Details d, Command c, Instant now) {
+        boolean customerReply = c.action() == Action.DISPUTE || c.action() == Action.WILL_ATTEND || c.action() == Action.CANNOT_ATTEND;
+        boolean opsResponse = c.action() == Action.RESUME || c.action() == Action.CANCEL
+            || c.action() == Action.CLOSE_REMEDIATION || c.action() == Action.BLOCK;
+        if (!customerReply && !opsResponse) return;
+        String note = clean(c.note());
+        List<UUID> files = c.attachmentIds() == null ? List.of()
+            : c.attachmentIds().stream().filter(Objects::nonNull).distinct().toList();
+        if ((c.action() == Action.WILL_ATTEND || c.action() == Action.CANNOT_ATTEND) && note.isEmpty() && files.isEmpty()) {
+            return;
+        }
+        if (d.communications == null) d.communications = new ArrayList<>();
+        String role = customerReply ? "CUSTOMER" : (actor.hasRole(RoleCode.BUSINESS) ? "BUSINESS" : "MANAGER");
+        d.communications.add(new CommunicationEntry(role, actorName, c.action().name(), now, note, files));
+    }
+
+    private List<UUID> attachments(ViolationRecovery v, ActorPrincipal actor, List<UUID> ids) {
+        if (ids == null || ids.isEmpty()) return List.of();
+        if (ids.size() > 10) throw ApiExceptions.validation("Tối đa 10 tệp đính kèm mỗi lần gửi.", null);
+        var unique = new ArrayList<UUID>();
+        for (UUID id : ids) {
+            if (id == null) throw ApiExceptions.validation("Mã tệp đính kèm không hợp lệ.", null);
+            if (unique.contains(id)) continue;
+            var file = files.findById(id).orElseThrow(() -> ApiExceptions.validation("Không tìm thấy tệp đính kèm.", null));
+            if (file.getStatus() != FileAssetStatus.ACTIVE
+                || !"VIOLATION_RECOVERY".equals(file.getEntityType())
+                || !v.getId().equals(file.getEntityId())
+                || file.getUploadedBy() == null
+                || !actor.userId().equals(file.getUploadedBy().getId())) {
+                throw ApiExceptions.validation("Tệp đính kèm phải do chính bạn tải lên cho đúng hồ sơ thu hồi.", null);
+            }
+            unique.add(id);
+        }
+        return unique;
+    }
+
     private UUID evidence(ViolationRecovery v, ActorPrincipal actor, UUID id) {
         if (id == null || v.getTask() == null) throw ApiExceptions.validation("Cần ảnh hiện trường.", null);
         var file = files.findById(id).orElseThrow(() -> ApiExceptions.validation("Không tìm thấy ảnh hiện trường.", null));
@@ -1022,6 +1133,12 @@ public class ViolationRecoveryWorkflow {
     private void notifyCustomer(ViolationRecovery v, String title) {
         notifications.createNotification(v.getRental().getCustomer().getId(), NotificationType.RETURN, title,
             customerRecoveryMessage(v) + " Mở thông báo trên web để xem hồ sơ thu hồi.", v.getId());
+    }
+
+    private void notifyCustomerWithDetail(ViolationRecovery v, String title, String detail) {
+        String noteText = detail == null || detail.isBlank() ? "" : " Phản hồi của quản lý: " + detail.strip() + ".";
+        notifications.createNotification(v.getRental().getCustomer().getId(), NotificationType.RETURN, title,
+            customerRecoveryMessage(v) + noteText + " Mở thông báo trên web để xem chi tiết và tệp đính kèm.", v.getId());
     }
 
     private void notifyCustomerSchedule(ViolationRecovery v, Details d, Instant now, String title) {
