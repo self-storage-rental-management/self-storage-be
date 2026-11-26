@@ -100,8 +100,23 @@ public record ReturnCaseResponse(
     String returnPolicyVersion,
     Equipment equipment,
     Integer missingPalletCount,
-    BigDecimal palletLossFee
+    BigDecimal palletLossFee,
+    Instant customerClearedAt,
+    Boolean warehouseEmptyVerified,
+    Instant warehouseEmptyVerifiedAt,
+    UUID warehouseEmptyVerifiedBy,
+    long clearanceRevision,
+    String displayCode,
+    String rentalDisplayCode,
+    Attendance attendance,
+    long settlementVersion,
+    Instant settlementPublishedAt,
+    Instant settlementPaymentDueAt,
+    List<SettlementReceipt> settlementReceipts
 ) {
+    public record Attendance(Instant arrivedAt, UUID evidenceId, Instant expiresAt, int attempts, Instant verifiedAt,
+        Instant reviewStartsAt, Boolean reviewAccepted, Instant handoverDueAt, UUID handoverStaffId,
+        Instant reverificationStartedAt, UUID reverificationStaffId, Instant handoverAppointmentAt) {}
     public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
@@ -182,7 +197,42 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
+            null, // earlyTerminationPolicy
+            null, // activeReturnPolicy
+            false, // legacyPricingReviewRequired
+            false, // legacyPricingSnapshotAvailable
+            null, // legacyPricingEvidenceFileId
+            false, // setupExitRequested
+            false, // setupEarlyExit
+            null, // setupReturnedAt
+            null, // setupEarlyExitPolicyVersion
+            null, // rentalRefundCredit
+            null, // earlyTerminationFee
+            null, // noShowAt
+            null, // recoveryEligibleAt
+            null, // recoveryTaskCreatedAt
+            null, // recoveryWitnessStaffId
+            null, // recoveryWitnessStaffName
+            null, // recoveryTaskDeadlineAt
+            null, // inventoryRemovalDeadlineAt
+            null, // lockInspectionResult
+            null, // returnWindowDays
+            null, // returnPolicyVersion
+            null, // equipment
+            null, // missingPalletCount
+            null, // palletLossFee
+            null, // customerClearedAt
+            null, // warehouseEmptyVerified
+            null, // warehouseEmptyVerifiedAt
+            null, // warehouseEmptyVerifiedBy
+            0L, // clearanceRevision
+            null, // displayCode
+            null, // rentalDisplayCode
+            null, // attendance
+            0L, // settlementVersion
+            null, // settlementPublishedAt
+            null, // settlementPaymentDueAt
+            List.of() // settlementReceipts
         );
     }
 

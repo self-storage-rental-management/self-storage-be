@@ -64,6 +64,9 @@ class BusinessRecordCodesMySqlTests {
     }
 
     void sourceTables() {
+        for (String table : java.util.List.of("return_cases", "maintenance_tasks", "refund_requests")) {
+            jdbc.execute("CREATE TABLE " + table + "(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
+        }
         jdbc.execute("CREATE TABLE renewals(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE support_tickets(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE overdue_follow_ups(case_ref VARCHAR(120),recorded_at TIMESTAMP(6))");
@@ -87,6 +90,12 @@ class BusinessRecordCodesMySqlTests {
         flyway.migrate();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE version='2026102006' AND success=1",Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM business_record_codes",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE version='2026112601' AND success=1",
+            Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM information_schema.statistics WHERE table_schema = database()
+                AND table_name = 'violation_recoveries' AND index_name = 'uq_violation_recovery_source' AND non_unique = 0
+            """, Integer.class)).isEqualTo(3);
     }
 
     @Test void receiptMigrationPreservesExistingCodesAndConcurrentIssuanceIsIdempotent() throws Exception {

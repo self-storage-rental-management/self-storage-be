@@ -6,23 +6,13 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.RoleCode;
-import com.storagehub.domain.model.StorageUnit;
-import com.storagehub.domain.model.StorageUnitStatus;
-import com.storagehub.domain.model.UnitType;
-import com.storagehub.domain.model.UnitTypeStatus;
-import com.storagehub.domain.model.RentalPackagePolicy;
 import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
-import com.storagehub.domain.repo.StorageUnitRepository;
-import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserFacilityScopeRepository;
 import com.storagehub.security.ActorPrincipal;
-import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
@@ -38,8 +28,6 @@ public class FacilityManagementService {
     private final JdbcTemplate jdbc;
 
     private final FacilityRepository facilityRepository;
-    private final UnitTypeRepository unitTypeRepository;
-    private final StorageUnitRepository storageUnitRepository;
     private final RentalPackagePolicyRepository rentalPackagePolicyRepository;
     private final UserFacilityScopeRepository userFacilityScopeRepository;
 
@@ -123,110 +111,4 @@ public class FacilityManagementService {
             .map(scope -> scope.getUser().getFullName()).sorted().toList();
     }
 
-    private void provisionUnitTypesAndUnits(Facility facility, List<CreateFacilityRequest.UnitSpecRequest> unitSpecs) {
-        // Thông số mặc định chuẩn
-        Map<String, DefaultSpec> defaults = Map.of(
-            "S", new DefaultSpec("Kho Nhỏ (S)", 12.0, 11.6, 5.0, 5_500_000, 600, 4, 1, "Khu A"),
-            "M", new DefaultSpec("Kho Trung (M)", 17.3, 11.8, 5.0, 9_500_000, 1_200, 6, 2, "Khu B"),
-            "L", new DefaultSpec("Kho Lớn (L)", 23.0, 12.0, 5.0, 15_000_000, 2_400, 8, 3, "Khu C"),
-            "XL", new DefaultSpec("Kho Rất Lớn (XL)", 29.1, 12.2, 5.0, 22_500_000, 3_600, 10, 4, "Khu D")
-        );
-
-        if (unitSpecs != null && !unitSpecs.isEmpty()) {
-            // Dùng danh sách cấu hình chi tiết do BO gửi lên
-            for (CreateFacilityRequest.UnitSpecRequest spec : unitSpecs) {
-                String sizeCode = spec.sizeCode() != null ? spec.sizeCode().trim().toUpperCase() : "S";
-                DefaultSpec def = defaults.getOrDefault(sizeCode, defaults.get("S"));
-
-                String name = (spec.name() != null && !spec.name().isBlank()) ? spec.name().trim() : def.name();
-                double lengthM = spec.lengthM() != null && spec.lengthM() > 0 ? spec.lengthM() : def.lengthM();
-                double widthM = spec.widthM() != null && spec.widthM() > 0 ? spec.widthM() : def.widthM();
-                double heightM = spec.heightM() != null && spec.heightM() > 0 ? spec.heightM() : def.heightM();
-                double monthlyPrice = spec.monthlyPrice() != null && spec.monthlyPrice() > 0 ? spec.monthlyPrice() : def.monthlyPrice();
-                double maxLoadKg = spec.maxLoadKg() != null && spec.maxLoadKg() > 0 ? spec.maxLoadKg() : def.maxLoadKg();
-                int count = spec.count() != null ? spec.count() : 5;
-
-                UnitType unitType = new UnitType();
-                unitType.setFacility(facility);
-                unitType.setCode(sizeCode);
-                unitType.setName(name);
-                unitType.setLengthM(BigDecimal.valueOf(lengthM));
-                unitType.setWidthM(BigDecimal.valueOf(widthM));
-                unitType.setHeightM(BigDecimal.valueOf(heightM));
-                unitType.setMonthlyPrice(BigDecimal.valueOf(monthlyPrice));
-                unitType.setSecurityDepositAmount(BigDecimal.valueOf(monthlyPrice));
-                unitType.setMaxLoadKg(BigDecimal.valueOf(maxLoadKg));
-                unitType.setRackCount(def.rackCount());
-                unitType.setRackLengthM(BigDecimal.valueOf(4.0));
-                unitType.setRackWidthM(BigDecimal.valueOf(2.0));
-                unitType.setRackHeightM(BigDecimal.valueOf(4.5));
-                unitType.setStatus(UnitTypeStatus.active);
-                UnitType savedType = unitTypeRepository.saveAndFlush(unitType);
-
-                // Sinh số lượng gian kho thực tế theo cấu hình của BO
-                for (int number = 1; number <= count; number++) {
-                    String unitCode = "%s-%s-%03d".formatted(facility.getCode(), sizeCode, number);
-                    StorageUnit unit = new StorageUnit();
-                    unit.setFacility(facility);
-                    unit.setUnitType(savedType);
-                    unit.setCode(unitCode);
-                    unit.setFloor(String.valueOf(def.floor()));
-                    unit.setZone(def.zone());
-                    unit.setStatus(StorageUnitStatus.available);
-                    storageUnitRepository.saveAndFlush(unit);
-                }
-            }
-        } else {
-            // Fallback nếu không có unitSpecs
-            for (Map.Entry<String, DefaultSpec> entry : defaults.entrySet()) {
-                String sizeCode = entry.getKey();
-                DefaultSpec def = entry.getValue();
-
-                UnitType unitType = new UnitType();
-                unitType.setFacility(facility);
-                unitType.setCode(sizeCode);
-                unitType.setName(def.name());
-                unitType.setLengthM(BigDecimal.valueOf(def.lengthM()));
-                unitType.setWidthM(BigDecimal.valueOf(def.widthM()));
-                unitType.setHeightM(BigDecimal.valueOf(def.heightM()));
-                unitType.setMonthlyPrice(BigDecimal.valueOf(def.monthlyPrice()));
-                unitType.setSecurityDepositAmount(BigDecimal.valueOf(def.monthlyPrice()));
-                unitType.setMaxLoadKg(BigDecimal.valueOf(def.maxLoadKg()));
-                unitType.setRackCount(def.rackCount());
-                unitType.setRackLengthM(BigDecimal.valueOf(4.0));
-                unitType.setRackWidthM(BigDecimal.valueOf(2.0));
-                unitType.setRackHeightM(BigDecimal.valueOf(4.5));
-                unitType.setStatus(UnitTypeStatus.active);
-                UnitType savedType = unitTypeRepository.saveAndFlush(unitType);
-
-                for (int number = 1; number <= 5; number++) {
-                    String unitCode = "%s-%s-%03d".formatted(facility.getCode(), sizeCode, number);
-                    StorageUnit unit = new StorageUnit();
-                    unit.setFacility(facility);
-                    unit.setUnitType(savedType);
-                    unit.setCode(unitCode);
-                    unit.setFloor(String.valueOf(def.floor()));
-                    unit.setZone(def.zone());
-                    unit.setStatus(StorageUnitStatus.available);
-                    storageUnitRepository.saveAndFlush(unit);
-                }
-            }
-        }
-    }
-
-    private void provisionRentalPackages(Facility facility) {
-        RentalPackagePolicyProvisioner.provisionRentalPackages(rentalPackagePolicyRepository, facility);
-    }
-
-    private record DefaultSpec(
-        String name,
-        double lengthM,
-        double widthM,
-        double heightM,
-        double monthlyPrice,
-        double maxLoadKg,
-        int rackCount,
-        int floor,
-        String zone
-    ) {}
 }

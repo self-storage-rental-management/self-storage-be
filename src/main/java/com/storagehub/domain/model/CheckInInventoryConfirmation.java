@@ -42,4 +42,9 @@ public class CheckInInventoryConfirmation {
 
     @Column(name = "result_version", nullable = false)
     private long resultVersion;
+
+    @Column(columnDefinition = "TEXT")
+    private String inventoryRefusalReport;
+    @Column private Instant inventoryRefusalSubmittedAt;
+    @Column private Boolean inventoryRefusalApproved;
 }

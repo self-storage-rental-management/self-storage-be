@@ -126,6 +126,25 @@ class InventoryTimelinePolicyTests {
         assertThat(r.getInventoryReturnWindowDays()).isEqualTo(d2);
     }
 
+    @Test void extendsFromCurrentApprovedDeadline() {
+        Instant published = Instant.parse("2026-11-25T10:00:00Z");
+        Rental rental = rentalWithSize("S");
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, published);
+        Instant approved = InventoryTimelinePolicy.removalDeadline(published, 6);
+        rental.setInventoryRemovalDeadlineAt(approved);
+        assertThat(InventoryTimelinePolicy.extendRemovalWindow(rental, published.plusSeconds(60)))
+            .isEqualTo(InventoryTimelinePolicy.dayStart(approved, 2));
+        assertThat(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null)).isEqualTo(8);
+    }
+
+    @Test void invalidLegacyWindowDoesNotBecomeSevenDays() {
+        Rental rental = rentalWithSize("S");
+        Instant published = Instant.parse("2026-11-25T10:00:00Z");
+        rental.setInventoryRemovalPublishedAt(published);
+        rental.setInventoryRemovalDeadlineAt(published);
+        assertThat(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null)).isNull();
+    }
+
     private static UnitType unitType(String code) {
         UnitType type = new UnitType();
         type.setCode(code);

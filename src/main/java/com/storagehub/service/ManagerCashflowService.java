@@ -23,7 +23,7 @@ public class ManagerCashflowService {
     public record Month(String month, BigDecimal collected, BigDecimal refunded, BigDecimal net) {}
     public record RefundLine(UUID id, String reservationCode, String customerName, String status, String reason,
         BigDecimal deposit, BigDecimal rentalCredit, BigDecimal deductions, BigDecimal refund,
-        Instant paidAt, String reference, boolean payoutRecorded) {}
+        Instant paidAt, String reference, boolean payoutRecorded, String receiptCode) {}
     public record Report(UUID facilityId, LocalDate from, LocalDate to, Instant snapshotAt, String completeness,
         BigDecimal collected, BigDecimal refunded, BigDecimal netRetained, BigDecimal pendingRefund,
         BigDecimal pendingApprovalRefund, BigDecimal securityDepositHeld, List<Day> daily, List<Month> monthly,
@@ -102,7 +102,7 @@ public class ManagerCashflowService {
             if (money(rc.getNetRefundAmount()).signum() > 0 || money(rc.getTotalDeductions()).signum() > 0)
                 lines.add(new RefundLine(rc.getId(), rc.getRental().getReservation().getReservationCode(), rc.getCustomer().getFullName(),
                     rc.getStatus().name(), rc.getReturnType().name(), money(rc.getDepositAmount()), money(rc.getRentalRefundAmount()), money(rc.getTotalDeductions()),
-                    money(rc.getNetRefundAmount()), at, rc.getSettlementPaymentId(), completed));
+                    money(rc.getNetRefundAmount()), at, rc.getSettlementPaymentId(), completed, rc.getSettlementReceiptCode()));
         }
         // ReturnCase is the canonical settlement; linked request/execution rows are not additional cash.
         for (RefundRequest request : requests) {
@@ -122,7 +122,7 @@ public class ManagerCashflowService {
             var p = request.getPayment();
             var reservation = p.getReservation() != null ? p.getReservation() : p.getRenewal().getRental().getReservation();
             lines.add(new RefundLine(request.getId(), reservation.getReservationCode(), reservation.getCustomer().getFullName(),
-                request.getStatus().name(), request.getReason(), null, null, null, request.getAmount(), completed ? at : null, request.getGatewayRefundId(), completed));
+                request.getStatus().name(), request.getReason(), null, null, null, request.getAmount(), completed ? at : null, request.getGatewayRefundId(), completed, null));
         }
         for (Refund refund : refunds) {
             boolean linkedRequest = requests.stream().anyMatch(q -> q.getPayment().getId().equals(refund.getPayment().getId())
@@ -140,7 +140,7 @@ public class ManagerCashflowService {
                 var p = refund.getPayment();
                 var reservation = p.getReservation() != null ? p.getReservation() : p.getRenewal().getRental().getReservation();
                 lines.add(new RefundLine(refund.getId(), reservation.getReservationCode(), reservation.getCustomer().getFullName(),
-                    refund.getStatus().name(), refund.getReason(), null, null, null, refund.getAmount(), completed ? at : null, refund.getGatewayRefundId(), completed));
+                    refund.getStatus().name(), refund.getReason(), null, null, null, refund.getAmount(), completed ? at : null, refund.getGatewayRefundId(), completed, null));
             }
         }
         BigDecimal deposit = BigDecimal.ZERO;

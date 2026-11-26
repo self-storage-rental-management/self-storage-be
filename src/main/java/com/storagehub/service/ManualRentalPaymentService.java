@@ -21,6 +21,8 @@ public class ManualRentalPaymentService {
     @org.springframework.beans.factory.annotation.Autowired
     private MoneyReceiptCodes receiptCodes;
     @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.renewal.RenewalDisplayIdentity renewalIdentity;
+    @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.TransactionalEmailService receiptEmails;
 
     public record Recorded(Payment payment,boolean created) {}
@@ -100,7 +102,7 @@ public class ManualRentalPaymentService {
             payment.getId(),
             reference, amount, paidAtText, unit == null ? "Chưa phân gian kho" : unit.getCode(),
             facility.getName(), facility.getAddress(),
-            reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode() : "Kỳ gia hạn: " + renewal.getId(),
+            reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode() : renewalIdentity.resolve(renewal).label(),
             reservation != null ? "Thanh toán phần còn lại khi nhận kho" : "Thanh toán phần còn lại kỳ gia hạn",
             "Biên lai ghi nhận khoản thanh toán tại cơ sở. Vui lòng lưu email này để đối chiếu khi cần.");
     }

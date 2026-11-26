@@ -19,7 +19,8 @@ public record RentalDetailResponse(UUID id, String displayCode, RentalSummaryRes
     boolean inventoryPending, Instant inventoryDueAt, Instant setupStartedAt, Instant setupEndsAt,
     Instant inventoryFinalDeadlineAt,
     Instant moveInCompletedAt, Instant inventoryVerifiedAt, boolean setupExitReviewRequired,
-    boolean canConfirmRentalStart, Inventory inventory) {
+    boolean canConfirmRentalStart, Inventory inventory, String contractNumber, boolean setupReturnWindow,
+    boolean inventoryMismatchReturn) {
     public record Inventory(String actualJson, boolean mismatch, boolean fullFit, String declaredPackaging,
         String decision, String acceptedQuantitiesJson, Instant removalDeadline, Instant removedAt,
         com.storagehub.api.checkin.CompleteCheckInRequest report, String mismatchSummary, String mismatchJson,

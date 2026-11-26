@@ -118,6 +118,16 @@ public class CheckInController {
             CorrelationIdContext.current());
     }
 
+    @PostMapping("/{checkInId}/identity-comparison")
+    public ApiResponse<CheckInHandoverService.IdentityComparison> compareIdentity(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody VerifyCheckInIdentityRequest request
+    ) {
+        return new ApiResponse<>(service.compareIdentity(actorContext.required(), checkInId, request.identityDocumentNumber(),
+            request.bookingOwnerConfirmed()),
+            CorrelationIdContext.current());
+    }
+
     @PostMapping("/{checkInId}/identity-verification")
     public ApiResponse<CheckInResponse> verifyIdentity(
         @PathVariable UUID checkInId,
@@ -204,15 +214,65 @@ public class CheckInController {
         );
     }
 
-    @PostMapping("/{checkInId}/no-show")
-    public ApiResponse<CheckInResponse> markNoShow(
-        @PathVariable UUID checkInId,
-        @Valid @RequestBody MarkNoShowRequest request
-    ) {
-        return new ApiResponse<>(
-            service.markNoShow(actorContext.required(), checkInId, request),
-            CorrelationIdContext.current()
-        );
+    public record ArrivalReview(@jakarta.validation.constraints.NotNull java.time.Instant actualArrivedAt,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 500) String evidence, boolean disputed) {
+        public ArrivalReview(java.time.Instant actualArrivedAt, String evidence) { this(actualArrivedAt, evidence, false); }
+    }
+
+    @GetMapping("/arrival-reviews")
+    public ApiResponse<java.util.List<CheckInHandoverService.PendingArrival>> arrivalReviews() {
+        return new ApiResponse<>(service.pendingArrivals(actorContext.required()), CorrelationIdContext.current());
+    }
+
+    public record ResolveArrival(@jakarta.validation.constraints.NotNull Boolean accepted,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 500) String reason) {}
+
+    public record SubmitRefusal(
+        @jakarta.validation.constraints.NotNull Boolean customerPresent,
+        @jakarta.validation.constraints.NotNull UUID witnessId,
+        @jakarta.validation.constraints.NotNull UUID evidenceId,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1500) String grounds,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1500) String discussion,
+        @jakarta.validation.constraints.Size(max = 1000) String customerReason,
+        @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PositiveOrZero Long resultVersion
+    ) {}
+
+    public record ReviewRefusal(@jakarta.validation.constraints.NotNull java.time.Instant submittedAt,
+        @jakarta.validation.constraints.NotNull Boolean approved,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1000) String reason) {}
+
+    @GetMapping("/{checkInId}/refusal-witnesses")
+    public ApiResponse<java.util.List<CheckInHandoverService.RefusalWitness>> refusalWitnesses(@PathVariable UUID checkInId) {
+        return new ApiResponse<>(service.refusalWitnesses(actorContext.required(), checkInId), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/signature-refusal")
+    public ApiResponse<CheckInResponse> signatureRefusal(@PathVariable UUID checkInId, @Valid @RequestBody SubmitRefusal request) {
+        return new ApiResponse<>(service.submitInventoryRefusal(actorContext.required(), checkInId, request), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/signature-refusal-reviews")
+    public ApiResponse<java.util.List<CheckInHandoverService.PendingRefusal>> signatureRefusalReviews() {
+        return new ApiResponse<>(service.pendingInventoryRefusals(actorContext.required()), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/signature-refusal-review")
+    public ApiResponse<CheckInResponse> signatureRefusalReview(@PathVariable UUID checkInId, @Valid @RequestBody ReviewRefusal request) {
+        return new ApiResponse<>(service.reviewInventoryRefusal(actorContext.required(), checkInId,
+            request.submittedAt(), request.approved(), request.reason()), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/arrival-review")
+    public ApiResponse<CheckInResponse> resolveArrival(@PathVariable UUID checkInId,
+        @Valid @RequestBody ResolveArrival decision) {
+        return new ApiResponse<>(service.resolveArrival(actorContext.required(), checkInId,
+            decision.accepted(), decision.reason()), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{checkInId}/arrival")
+    public ApiResponse<CheckInResponse> recordArrival(@PathVariable UUID checkInId,
+        @Valid @RequestBody(required = false) ArrivalReview review) {
+        return new ApiResponse<>(service.recordArrival(actorContext.required(), checkInId, review), CorrelationIdContext.current());
     }
 
     @PostMapping("/{checkInId}/reject")
@@ -222,17 +282,6 @@ public class CheckInController {
     ) {
         return new ApiResponse<>(
             service.reject(actorContext.required(), checkInId, request),
-            CorrelationIdContext.current()
-        );
-    }
-
-    @PostMapping("/{checkInId}/inventory-partial-removal")
-    public ApiResponse<CheckInResponse> confirmPartialInventoryRemoval(
-        @PathVariable UUID checkInId,
-        @Valid @RequestBody ConfirmInventoryPartialRemovalRequest request
-    ) {
-        return new ApiResponse<>(
-            service.confirmPartialInventoryRemoval(actorContext.required(), checkInId, request),
             CorrelationIdContext.current()
         );
     }

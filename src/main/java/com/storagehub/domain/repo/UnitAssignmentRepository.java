@@ -25,6 +25,12 @@ public interface UnitAssignmentRepository extends JpaRepository<UnitAssignment, 
 
     boolean existsByStorageUnit_IdAndStatus(UUID storageUnitId, UnitAssignmentStatus status);
 
+    @Query("""
+        select (count(a) > 0) from UnitAssignment a where a.storageUnit.id = :unitId
+          and a.reservation.id <> :reservationId and a.status = com.storagehub.domain.model.UnitAssignmentStatus.ACTIVE
+        """)
+    boolean existsOtherActiveAssignment(@Param("unitId") UUID unitId, @Param("reservationId") UUID reservationId);
+
     Optional<UnitAssignment> findByCancelledBy_IdAndCancellationIdempotencyKey(
         UUID cancelledById,
         String cancellationIdempotencyKey
