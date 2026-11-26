@@ -56,6 +56,15 @@ public class ManagerReturnController {
             request.accepted(), request.reason(), request.staffId(), request.appointmentAt()), CorrelationIdContext.current());
     }
 
+    public record ReopenIdentityRequest(@jakarta.validation.constraints.NotNull UUID staffId,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1000) String reason) {}
+
+    @PostMapping("/{returnId}/identity-reopen")
+    public ApiResponse<ReturnCaseResponse> reopenIdentity(@PathVariable UUID returnId, @Valid @RequestBody ReopenIdentityRequest request) {
+        return new ApiResponse<>(returnSettlementService.reopenReturnVerification(actorContext.required(), returnId,
+            request.staffId(), request.reason()), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{returnId}/review-dispute")
     public ApiResponse<ReturnCaseResponse> reviewDispute(
         @PathVariable UUID returnId,

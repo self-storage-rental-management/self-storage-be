@@ -46,20 +46,14 @@ public class StaffReturnController {
         );
     }
 
-    public record ArrivalRequest(@jakarta.validation.constraints.NotNull UUID evidenceId) {}
     public record IdentityRequest(@jakarta.validation.constraints.NotNull UUID attemptId,
-        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 32) String documentNumber) {}
-
-    @PostMapping("/{returnId}/arrival")
-    public ApiResponse<ReturnCaseResponse> recordArrival(@PathVariable UUID returnId, @Valid @RequestBody ArrivalRequest request) {
-        return new ApiResponse<>(returnSettlementService.recordReturnArrival(actorContext.required(), returnId, request.evidenceId()),
-            CorrelationIdContext.current());
-    }
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 32) String documentNumber,
+        java.time.Instant reverificationStartedAt, UUID evidenceId) {}
 
     @PostMapping("/{returnId}/identity")
     public ApiResponse<ReturnCaseResponse> verifyIdentity(@PathVariable UUID returnId, @Valid @RequestBody IdentityRequest request) {
         return new ApiResponse<>(returnSettlementService.verifyReturnIdentity(actorContext.required(), returnId,
-            request.attemptId(), request.documentNumber()), CorrelationIdContext.current());
+            request.attemptId(), request.documentNumber(), request.reverificationStartedAt(), request.evidenceId()), CorrelationIdContext.current());
     }
 
     @PostMapping("/{returnId}/property-check")
