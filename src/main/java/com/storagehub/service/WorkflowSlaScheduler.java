@@ -355,7 +355,8 @@ public class WorkflowSlaScheduler {
         process(ids("""
             select t.id from MaintenanceTask t left join t.returnCase rc where t.status in :statuses and t.deadlineAt is not null
               and (rc.returnType = com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH
-                or t.recoveryType = com.storagehub.domain.model.MaintenanceRecoveryType.MISMATCH_REMOVAL)
+                or t.recoveryType in (com.storagehub.domain.model.MaintenanceRecoveryType.MISMATCH_REMOVAL,
+                    com.storagehub.domain.model.MaintenanceRecoveryType.VIOLATION_UNIT_READINESS))
             """, List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)),
             MaintenanceTask.class, this::mismatchMaintenanceDeadline, lock, visitor);
         if (!lock) {
@@ -513,12 +514,14 @@ public class WorkflowSlaScheduler {
     private Deadline returnDeadline(ReturnCase returned, WorkflowBusinessCalendar.Schedule schedule, Instant now) {
         if (!Set.of(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled).contains(returned.getStatus())
             || returned.getInspectedAt() != null) return null;
-        Instant review = MismatchReturnAttendance.reviewStartsAt(returned);
+        Instant review = ReturnAttendancePolicy.reviewStartsAt(returned);
         if (review != null && !now.isBefore(review)) {
             Instant due = schedule.afterWorkingHours(review, 4);
-            return new Deadline("MISMATCH_RETURN_ARRIVAL_REVIEW", returned, returned.getFacility().getId(), review,
+            boolean mismatch = ReturnAttendancePolicy.isDeadlineMismatchReturn(returned);
+            return new Deadline(mismatch ? "MISMATCH_RETURN_ARRIVAL_REVIEW" : "RETURN_ARRIVAL_REVIEW",
+                returned, returned.getFacility().getId(), review,
                 due, Duration.between(review, due), RoleCode.MANAGER, RoleCode.BUSINESS, null,
-                NotificationType.RETURN, "đối soát phiên xác minh trả kho do sai lệch");
+                NotificationType.RETURN, mismatch ? "đối soát phiên xác minh trả kho do sai lệch" : "đối soát phiên xác minh trả kho");
         }
         Instant start = returned.getRequestedAt();
         if (returned.getReturnType() == ReturnType.INVENTORY_MISMATCH && returned.getReadyForInspectionAt() != null) {

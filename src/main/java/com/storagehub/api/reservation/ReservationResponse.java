@@ -15,6 +15,9 @@ public class ReservationResponse {
     private UUID setupReturnRentalId;
     private UUID setupReturnCaseId;
     private LocalDate setupReturnScheduledDate;
+    private boolean violationRecovery;
+    public boolean isViolationRecovery() { return violationRecovery; }
+    public void setViolationRecovery(boolean value) { violationRecovery = value; }
     public String getSetupEarlyExitPolicyVersion() { return setupEarlyExitPolicyVersion; }
     public void setSetupEarlyExitPolicyVersion(String value) { setupEarlyExitPolicyVersion = value; }
     public BigDecimal getSetupEarlyExitFee() { return setupEarlyExitFee; }
