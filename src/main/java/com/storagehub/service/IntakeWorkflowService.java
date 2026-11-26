@@ -238,13 +238,14 @@ public class IntakeWorkflowService {
                     if (r.getSetupStartedAt() != null && arrivedAt.isBefore(r.getSetupStartedAt())) {
                         throw ApiExceptions.validation("Thời điểm đến không thể trước thời điểm nhận kho.", null);
                     }
-                    if (d != null && arrivedAt.isAfter(d)) {
+                    if (d != null && arrivedAt.isAfter(d)
+                        && !IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME.equals(r.getAttendanceReviewStatus())) {
                         throw ApiExceptions.deadlineExpired("Khách đến sau hạn đến kiểm kê (" + VN_TIME.format(d) + ").");
                     }
                     if (IntakeTimelineCalculator.REVIEW_PENDING.equals(r.getAttendanceReviewStatus())
                         && r.getAttendanceReviewDeadlineAt() != null
                         && now.isAfter(r.getAttendanceReviewDeadlineAt())) {
-                        throw ApiExceptions.deadlineExpired("Đã hết thời hạn đối soát phút cuối, cần Manager kết luận.");
+                        throw ApiExceptions.deadlineExpired("Đã hết thời hạn đối soát phút cuối, cần nhân viên hoặc quản lý kết luận.");
                     }
                     if (r.getMoveInCompletedAt() == null) {
                         throw ApiExceptions.setupCutoffExceeded("Khách hàng cần báo setup xong trước khi tiếp nhận kiểm kê.");
@@ -266,6 +267,8 @@ public class IntakeWorkflowService {
                 r.setAttendanceEvidenceFileId(command.photoId());
                 r.setInventoryArrivedAt(arrivedAt);
                 r.setAppointmentStatus(IntakeTimelineCalculator.APPT_ATTENDED);
+                // The 72h completion window starts when the customer is confirmed present.
+                timeline.startInspectionClock(r, arrivedAt);
                 if (IntakeTimelineCalculator.REVIEW_PENDING.equals(r.getAttendanceReviewStatus())) {
                     r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME);
                 }
@@ -296,7 +299,7 @@ public class IntakeWorkflowService {
                     || IntakeTimelineCalculator.VERIF_FAILED_MAX_ATTEMPTS.equals(r.getVerificationStatus())) {
                     throw ApiExceptions.verificationLimit("Đã hết tối đa 2 lần xác minh danh tính.");
                 }
-                if (r.getFirstIdentityVerificationAt() != null
+                if (timeline.hasStartedInspectionClock(r)
                     && r.getInspectionCompletionDeadlineAt() != null
                     && now.isAfter(r.getInspectionCompletionDeadlineAt())) {
                     throw ApiExceptions.deadlineExpired("Đã quá hạn hoàn tất kiểm kê 72 giờ.");
@@ -319,10 +322,13 @@ public class IntakeWorkflowService {
                     }
                 }
 
-                // Atomic initialization of V and F = V + 72h on 1st substantive attempt (PASS or FAIL).
+                // Atomic initialization of V; the 72h clock normally already started on arrival.
                 if (r.getFirstIdentityVerificationAt() == null) {
                     r.setFirstIdentityVerificationAt(now);
-                    r.setInspectionCompletionDeadlineAt(timeline.completionDeadline(now));
+                    // Legacy records have no arrival anchor, so verification still starts their window.
+                    if (r.getInspectionClockStartedAt() == null) {
+                        timeline.startInspectionClock(r, now);
+                    }
                 }
                 int nextAttempt = r.getVerificationAttemptCount() + 1;
                 r.setVerificationAttemptCount(nextAttempt);
@@ -477,7 +483,7 @@ public class IntakeWorkflowService {
                 if (command.reason() == null || command.reason().isBlank() || command.at() == null || !command.at().isAfter(now))
                     throw ApiExceptions.validation("Vui lòng nhập lý do và thời hạn mới.", null);
                 if (r.getInventoryEscalatedAt() != null) throw ApiExceptions.conflict("Hồ sơ đã chuyển thu hồi, cần xử lý nhiệm vụ hiện có.");
-                if (r.getFirstIdentityVerificationAt() != null && r.getInspectionCompletionDeadlineAt() != null) {
+                if (timeline.hasStartedInspectionClock(r) && r.getInspectionCompletionDeadlineAt() != null) {
                     before = r.getInspectionCompletionDeadlineAt();
                     if (!command.at().isAfter(before)) throw ApiExceptions.validation("Hạn mới phải sau hạn hiện tại.", null);
                     r.setInspectionCompletionDeadlineAt(command.at());
@@ -784,6 +790,7 @@ public class IntakeWorkflowService {
         v.put("attendanceReviewStatus", r.getAttendanceReviewStatus());
         v.put("attendanceReviewOwnerId", r.getAttendanceReviewOwnerId());
         v.put("firstIdentityVerificationAt", r.getFirstIdentityVerificationAt());
+        v.put("inspectionClockStartedAt", timeline.inspectionClockStartedAt(r));
         v.put("inspectionCompletionDeadlineAt", r.getInspectionCompletionDeadlineAt());
         v.put("verificationAttemptCount", r.getVerificationAttemptCount());
         v.put("maxVerificationAttempts", 2);

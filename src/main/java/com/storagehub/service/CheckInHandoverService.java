@@ -957,6 +957,8 @@ public class CheckInHandoverService {
                 rental.setArrivalRecordedBy(actor.userId());
                 rental.setInventoryArrivedAt(arrivedAt);
                 rental.setAppointmentStatus(IntakeTimelineCalculator.APPT_ATTENDED);
+                // Confirming arrival starts the 72h inspection completion window.
+                intakeTimelineCalculator.startInspectionClock(rental, arrivedAt);
                 rentalRepository.saveAndFlush(rental);
             }
             checkIn.setInventoryArrivedAt(arrivedAt);
@@ -1002,11 +1004,12 @@ public class CheckInHandoverService {
         if (rental != null) {
             if (rental.getFirstIdentityVerificationAt() == null) {
                 rental.setFirstIdentityVerificationAt(verifiedAt);
-                rental.setInspectionCompletionDeadlineAt(
-                    intakeTimelineCalculator != null
-                        ? intakeTimelineCalculator.completionDeadline(verifiedAt)
-                        : verifiedAt.plus(72, java.time.temporal.ChronoUnit.HOURS)
-                );
+                // The 72h clock normally started when arrival was confirmed; legacy records start here.
+                if (intakeTimelineCalculator != null && rental.getInspectionClockStartedAt() == null) {
+                    intakeTimelineCalculator.startInspectionClock(rental, verifiedAt);
+                } else if (intakeTimelineCalculator == null && rental.getInspectionCompletionDeadlineAt() == null) {
+                    rental.setInspectionCompletionDeadlineAt(verifiedAt.plus(72, java.time.temporal.ChronoUnit.HOURS));
+                }
             } else if (rental.getInspectionCompletionDeadlineAt() != null
                 && verifiedAt.isAfter(rental.getInspectionCompletionDeadlineAt())) {
                 throw ApiExceptions.deadlineExpired("Đã quá hạn hoàn tất kiểm kê 72 giờ.");

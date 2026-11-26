@@ -80,7 +80,8 @@ class PaymentReceiptInvoiceTests {
     @Test void newlyCommittedReceiptsAreDueWithoutWaitingForTimestampRounding() {
         for (int i=0; i<16; i++) queue.enqueue(customer, "receipt@example.test", Map.of("paymentId", UUID.randomUUID().toString(), "transactionNo", "BANK-001"));
         var sender=mock(TransactionalEmailService.class);
-        when(sender.deliverEmail(eq(customer),eq("receipt@example.test"),anyString(),eq("payment-bill"),anyMap(),eq("PAYMENT_BILL_EMAIL_SENT"))).thenReturn(true);
+        when(sender.deliver(eq(customer),eq("receipt@example.test"),anyString(),eq("payment-bill"),anyMap(),eq("PAYMENT_BILL_EMAIL_SENT")))
+            .thenReturn(TransactionalEmailService.DeliveryOutcome.SENT);
         queue.deliverPending(sender);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM payment_receipt_emails WHERE delivery_status='SENT'",Integer.class)).isEqualTo(16);
     }
@@ -91,6 +92,27 @@ class PaymentReceiptInvoiceTests {
         queue.enqueue(customer, "receipt@example.test", "payment-bill", "Biên lai", "PAYMENT_BILL_EMAIL_SENT", "old-key",
             Map.of("transactionNo", "BANK-001", "invoiceNumber", "INV-TWO"));
         assertThat(deliveredPayload()).containsEntry("invoiceNumber", "INV-TWO");
+    }
+
+    @Test void externalSmtpSkipsNonRoutableDemoDomainsAndCapsRetries() {
+        org.springframework.test.util.ReflectionTestUtils.setField(queue, "mailHost", "smtp.gmail.com");
+        org.springframework.test.util.ReflectionTestUtils.setField(queue, "maxAttempts", 2);
+
+        queue.enqueue(customer, "manager@storagehub.demo", "customer-lifecycle", "Demo", "TEST", "k-demo", Map.of("title", "Demo"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM payment_receipt_emails", Integer.class)).isZero();
+
+        queue.enqueue(customer, "real@gmail.com", "customer-lifecycle", "Real", "TEST", "k-real", Map.of("title", "Real"));
+        var sender = mock(TransactionalEmailService.class);
+        when(sender.deliver(any(), eq("real@gmail.com"), anyString(), anyString(), anyMap(), anyString()))
+            .thenReturn(TransactionalEmailService.DeliveryOutcome.RETRYABLE_FAILURE);
+
+        queue.deliverPending(sender);
+        assertThat(jdbc.queryForObject("SELECT delivery_status FROM payment_receipt_emails WHERE recipient='real@gmail.com'", String.class))
+            .isEqualTo("PENDING");
+        jdbc.update("UPDATE payment_receipt_emails SET next_attempt_at = CURRENT_TIMESTAMP WHERE recipient='real@gmail.com'");
+        queue.deliverPending(sender);
+        assertThat(jdbc.queryForObject("SELECT delivery_status FROM payment_receipt_emails WHERE recipient='real@gmail.com'", String.class))
+            .isEqualTo("FAILED");
     }
 
     private void bookingWithReference(UUID owner, String invoice) {
@@ -108,10 +130,10 @@ class PaymentReceiptInvoiceTests {
     private Map<String,Object> deliveredPayload() {
         var sender = mock(TransactionalEmailService.class);
         var delivered = new HashMap<String,Object>();
-        when(sender.deliverEmail(eq(customer), eq("receipt@example.test"), anyString(), eq("payment-bill"),
+        when(sender.deliver(eq(customer), eq("receipt@example.test"), anyString(), eq("payment-bill"),
             anyMap(), eq("PAYMENT_BILL_EMAIL_SENT"))).thenAnswer(call -> {
                 delivered.putAll(call.getArgument(4));
-                return true;
+                return TransactionalEmailService.DeliveryOutcome.SENT;
             });
         queue.deliverPending(sender);
         assertThat(jdbc.queryForObject("SELECT delivery_status FROM payment_receipt_emails", String.class)).isEqualTo("SENT");

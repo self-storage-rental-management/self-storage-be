@@ -374,32 +374,86 @@ class UnifiedIntakeSpecTests {
     }
 
     @Test
-    void e01_to_e18_twoAttemptVerificationStarts72hClockOnFirstSubstantiveAttemptAndProtectsTechError() {
+    void confirmingArrivalStartsThe72hClockBeforeAnyIdentityVerificationHappens() {
         clock.set(t0.plus(12, ChronoUnit.HOURS));
         workflow.change(customer, reservationId,
             new IntakeWorkflowService.Command("COMPLETE_SETUP", null, null, null, null));
 
-        // Staff records arrival at T0 + 24h
+        assertThat(rental.getInspectionClockStartedAt()).isNull();
+        assertThat(rental.getInspectionCompletionDeadlineAt()).isNull();
+
         Instant arriveTime = t0.plus(24, ChronoUnit.HOURS);
         clock.set(arriveTime);
         workflow.change(staff, reservationId,
             new IntakeWorkflowService.Command("ARRIVAL", null, null, null, null));
 
-        // E13: TECH_ERROR does NOT initialize V/F or consume attempt
+        // The clock runs from the arrival confirmation, with no verification involved yet.
+        assertThat(rental.getInspectionClockStartedAt()).isEqualTo(arriveTime);
+        assertThat(rental.getInspectionCompletionDeadlineAt()).isEqualTo(arriveTime.plus(72, ChronoUnit.HOURS));
+        assertThat(rental.getFirstIdentityVerificationAt()).isNull();
+        assertThat(rental.getVerificationAttemptCount()).isZero();
+
+        // A repeated arrival confirmation must never restart or extend the window.
+        clock.set(t0.plus(30, ChronoUnit.HOURS));
+        workflow.change(staff, reservationId,
+            new IntakeWorkflowService.Command("ARRIVAL", null, null, null, null));
+        assertThat(rental.getInspectionClockStartedAt()).isEqualTo(arriveTime);
+        assertThat(rental.getInspectionCompletionDeadlineAt()).isEqualTo(arriveTime.plus(72, ChronoUnit.HOURS));
+    }
+
+    @Test
+    void expiredArrivalAnchoredWindowBlocksVerificationAndInspectionCompletion() {
+        clock.set(t0.plus(12, ChronoUnit.HOURS));
+        workflow.change(customer, reservationId,
+            new IntakeWorkflowService.Command("COMPLETE_SETUP", null, null, null, null));
+        Instant arriveTime = t0.plus(24, ChronoUnit.HOURS);
+        clock.set(arriveTime);
+        workflow.change(staff, reservationId,
+            new IntakeWorkflowService.Command("ARRIVAL", null, null, null, null));
+        Instant f = arriveTime.plus(72, ChronoUnit.HOURS);
+
+        // Past F the verification window is closed even though nothing was verified yet.
+        clock.set(f.plus(1, ChronoUnit.MINUTES));
+        assertThatThrownBy(() -> workflow.change(staff, reservationId, new IntakeWorkflowService.Command(
+            "VERIFY", null, null, "079200012345", validPhotoAt(arriveTime), null, "idem-late", null, null, null, null, "PASS", null
+        ))).isInstanceOf(ApiException.class)
+            .extracting(e -> ((ApiException) e).getCode())
+            .isEqualTo(ErrorCode.DEADLINE_EXPIRED);
+    }
+
+    @Test
+    void e01_to_e18_confirmingArrivalStarts72hClockAndProtectsTechError() {
+        clock.set(t0.plus(12, ChronoUnit.HOURS));
+        workflow.change(customer, reservationId,
+            new IntakeWorkflowService.Command("COMPLETE_SETUP", null, null, null, null));
+
+        // Staff confirms the customer arrived at T0 + 24h; the 72h clock starts there.
+        Instant arriveTime = t0.plus(24, ChronoUnit.HOURS);
+        clock.set(arriveTime);
+        workflow.change(staff, reservationId,
+            new IntakeWorkflowService.Command("ARRIVAL", null, null, null, null));
+        assertThat(rental.getInspectionClockStartedAt()).isEqualTo(arriveTime);
+        Instant arrivalAnchorF = arriveTime.plus(72, ChronoUnit.HOURS);
+        assertThat(rental.getInspectionCompletionDeadlineAt()).isEqualTo(arrivalAnchorF);
+        assertThat(rental.getFirstIdentityVerificationAt()).isNull();
+
+        // E13: TECH_ERROR does NOT initialize V or consume attempt, and never moves the clock.
         workflow.change(staff, reservationId, new IntakeWorkflowService.Command(
             "VERIFY", null, "Camera mất kết nối", null, null, null, "idem-tech-1", null, null, null, null, "TECH_ERROR", null
         ));
         assertThat(rental.getFirstIdentityVerificationAt()).isNull();
         assertThat(rental.getVerificationAttemptCount()).isZero();
+        assertThat(rental.getInspectionCompletionDeadlineAt()).isEqualTo(arrivalAnchorF);
 
-        // E02: 1st substantive FAIL initializes V & F = V + 72h and leaves 1 attempt
+        // E02: 1st substantive FAIL records V and leaves 1 attempt, but keeps the arrival anchor.
         Instant vTime = arriveTime.plus(5, ChronoUnit.MINUTES);
         clock.set(vTime);
         workflow.change(staff, reservationId, new IntakeWorkflowService.Command(
             "VERIFY", null, "CCCD mờ, chờ mang bản gốc", "079200012345", null, null, "idem-fail-1", null, null, null, null, "FAIL", null
         ));
         assertThat(rental.getFirstIdentityVerificationAt()).isEqualTo(vTime);
-        Instant expectedF = vTime.plus(72, ChronoUnit.HOURS);
+        assertThat(rental.getInspectionClockStartedAt()).isEqualTo(arriveTime);
+        Instant expectedF = arrivalAnchorF;
         assertThat(rental.getInspectionCompletionDeadlineAt()).isEqualTo(expectedF);
         assertThat(rental.getVerificationAttemptCount()).isEqualTo(1);
         assertThat(rental.getVerificationStatus()).isEqualTo(IntakeTimelineCalculator.VERIF_IN_PROGRESS);

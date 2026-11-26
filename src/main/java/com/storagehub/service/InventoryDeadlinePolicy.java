@@ -17,7 +17,7 @@ final class InventoryDeadlinePolicy {
         if (IntakeTimelineCalculator.VERIF_FAILED_MAX_ATTEMPTS.equals(rental.getVerificationStatus())) {
             throw ApiExceptions.verificationLimit("Đã hết 2 lượt xác minh danh tính.");
         }
-        if (rental.getFirstIdentityVerificationAt() != null) {
+        if (rental.getInspectionClockStartedAt() != null) {
             if (rental.getInspectionCompletionDeadlineAt() != null
                 && now.isAfter(rental.getInspectionCompletionDeadlineAt())) {
                 throw ApiExceptions.deadlineExpired("Đã hết hạn hoàn tất kiểm kê 72 giờ.");
