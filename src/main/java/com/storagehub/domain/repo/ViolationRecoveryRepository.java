@@ -16,6 +16,7 @@ public interface ViolationRecoveryRepository extends JpaRepository<ViolationReco
     Optional<ViolationRecovery> lock(@Param("id") UUID id);
 
     List<ViolationRecovery> findByRental_IdOrderByCreatedAtDesc(UUID rentalId);
+    List<ViolationRecovery> findBySourceReturnIdOrderByCreatedAtDesc(UUID sourceReturnId);
     List<ViolationRecovery> findByRental_Customer_IdOrderByCreatedAtDesc(UUID customerId, Pageable page);
     List<ViolationRecovery> findByTask_AssignedTo_IdOrderByCreatedAtDesc(UUID staffId, Pageable page);
     List<ViolationRecovery> findByRental_Facility_IdInOrderByCreatedAtDesc(java.util.Collection<UUID> facilities, Pageable page);
