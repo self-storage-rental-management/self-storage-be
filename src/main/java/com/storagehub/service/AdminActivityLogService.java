@@ -52,7 +52,7 @@ public class AdminActivityLogService {
         }
         return PageResponse.from(
             activityLogRepository.search(clean(search), clean(entityType), actorId, from, to, PageRequest.of(
-                page, size, Sort.by(Sort.Direction.DESC, "createdAt")
+                page, size, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id"))
             )).map(this::toResponse),
             correlationId
         );

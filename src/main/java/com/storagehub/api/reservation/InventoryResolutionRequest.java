@@ -11,7 +11,6 @@ public record InventoryResolutionRequest(
 ) {
     public enum Decision {
         ACCEPT_FULL,
-        ACCEPT_PARTIAL,
         REQUEST_TRANSFER,
         CANCEL_AND_RETURN
     }

@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Locale;
 import java.util.UUID;
 import java.time.Instant;
+import java.time.LocalDate;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -78,6 +79,13 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
         String q,
         Pageable pageable
     ) {
+        return searchReturnCases(facilityId, status, allowedFacilityIds, q, pageable, null);
+    }
+
+    default Page<ReturnCase> searchReturnCases(
+        UUID facilityId, ReturnCaseStatus status, Collection<UUID> allowedFacilityIds,
+        String q, Pageable pageable, LocalDate staffQueueDate
+    ) {
         return findAll((root, query, cb) -> {
             var predicates = new ArrayList<Predicate>();
             if (facilityId != null) predicates.add(cb.equal(root.get("facility").get("id"), facilityId));
@@ -88,11 +96,40 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
             if (q != null && !q.isBlank()) {
                 String pattern = "%" + q.trim().toLowerCase(Locale.ROOT) + "%";
                 predicates.add(cb.or(
+                    cb.like(cb.lower(root.get("displayCode")), pattern),
+                    cb.like(cb.lower(root.get("rental").get("displayCode")), pattern),
                     cb.like(cb.lower(root.get("customer").get("fullName")), pattern),
                     cb.like(cb.lower(root.get("customer").get("email")), pattern),
                     cb.like(cb.lower(root.get("customer").get("phone")), pattern),
                     cb.like(cb.lower(root.get("storageUnit").get("code")), pattern),
                     cb.like(cb.lower(root.get("facility").get("name")), pattern)));
+            }
+            if (staffQueueDate != null && query != null && !Long.class.equals(query.getResultType())) {
+                var state = root.<ReturnCaseStatus>get("status");
+                var completed = cb.equal(state, ReturnCaseStatus.completed);
+                Instant now = Instant.now();
+                var inspecting = state.in(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled);
+                var reviewed = cb.isTrue(root.get("returnArrivalReviewAccepted"));
+                var inSession = cb.greaterThan(cb.coalesce(root.<Instant>get("returnReverificationStartedAt"), root.<Instant>get("returnArrivedAt")), now.minusSeconds(30 * 60));
+                var extendedSession = cb.and(reviewed, cb.greaterThanOrEqualTo(root.<Instant>get("postReviewHandoverDueAt"), now));
+                var arrivedOrReopened = cb.or(cb.isNotNull(root.get("returnArrivedAt")), cb.isNotNull(root.get("returnReverificationStartedAt")));
+                var pendingLateReview = cb.equal(root.get("returnArrivalReviewStatus"), "PENDING");
+                var present = cb.and(inspecting, arrivedOrReopened, cb.or(inSession, extendedSession));
+                var reviewPending = cb.and(inspecting, cb.or(pendingLateReview, cb.and(arrivedOrReopened, cb.not(cb.or(inSession, extendedSession)))));
+                var actionable = cb.or(cb.and(inspecting, cb.not(reviewPending)), state.in(
+                    ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending, ReturnCaseStatus.recovery_required));
+                var group = cb.<Integer>selectCase().when(actionable, 0).when(completed, 2).otherwise(1);
+                var date = root.<LocalDate>get("scheduledDate");
+                var urgency = cb.<Integer>selectCase().when(present, 0).otherwise(1);
+                var created = root.<Instant>get("createdAt");
+                var recent = cb.<Instant>selectCase()
+                    .when(completed, cb.coalesce(root.<Instant>get("completedAt"), created)).otherwise(cb.nullLiteral(Instant.class));
+                var deadline = cb.<Instant>selectCase().when(inspecting, root.get("postReviewHandoverDueAt"))
+                    .when(cb.equal(state, ReturnCaseStatus.payment_due), root.get("settlementPaymentDueAt"))
+                    .otherwise(cb.nullLiteral(Instant.class));
+                query.orderBy(cb.asc(group), cb.asc(urgency), cb.desc(recent),
+                    cb.asc(cb.<Integer>selectCase().when(cb.isNull(deadline), 1).otherwise(0)), cb.asc(deadline),
+                    cb.asc(date), cb.asc(created), cb.asc(root.get("id")));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         }, pageable);

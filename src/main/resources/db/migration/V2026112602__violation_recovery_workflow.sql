@@ -1,0 +1,40 @@
+CREATE TABLE violation_recoveries (
+    id BINARY(16) PRIMARY KEY,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    rental_id BINARY(16) NOT NULL,
+    task_id BINARY(16) NULL,
+    source_return_id BINARY(16) NULL,
+    reason VARCHAR(64) NOT NULL,
+    stage VARCHAR(32) NOT NULL,
+    previous_rental_status VARCHAR(32) NULL,
+    previous_return_status VARCHAR(32) NULL,
+    source_deadline_at DATETIME(6) NOT NULL,
+    required_at DATETIME(6) NULL,
+    scheduled_at DATETIME(6) NULL,
+    deadline_at DATETIME(6) NULL,
+    action_due_at DATETIME(6) NULL,
+    response_check_at DATETIME(6) NULL,
+    overdue_at DATETIME(6) NULL,
+    completed_at DATETIME(6) NULL,
+    completed_by BINARY(16) NULL,
+    policy_version VARCHAR(32) NOT NULL,
+    escalated BOOLEAN NOT NULL DEFAULT FALSE,
+    finance_pending BOOLEAN NOT NULL DEFAULT FALSE,
+    finance_closed BOOLEAN NOT NULL DEFAULT FALSE,
+    pickup_due_at DATETIME(6) NULL,
+    pickup_review_at DATETIME(6) NULL,
+    pickup_escalated BOOLEAN NOT NULL DEFAULT FALSE,
+    details_json LONGTEXT NULL,
+    CONSTRAINT fk_violation_recovery_rental FOREIGN KEY (rental_id) REFERENCES rentals(id),
+    CONSTRAINT fk_violation_recovery_task FOREIGN KEY (task_id) REFERENCES maintenance_tasks(id),
+    UNIQUE KEY uq_violation_recovery_source (rental_id, reason, source_deadline_at),
+    UNIQUE KEY uq_violation_recovery_task (task_id),
+    KEY ix_violation_recovery_due (action_due_at),
+    KEY ix_violation_recovery_pickup (pickup_review_at),
+    KEY ix_violation_recovery_return (source_return_id)
+);
+
+ALTER TABLE return_cases ADD COLUMN post_review_handover_due_at DATETIME(6) NULL;
+ALTER TABLE return_cases ADD COLUMN post_review_handover_staff_id BINARY(16) NULL;
+ALTER TABLE return_cases ADD INDEX ix_return_post_review_due (post_review_handover_due_at);

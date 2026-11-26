@@ -366,10 +366,14 @@ public class AccessCredentialService {
         String accessHours = "24/7";
         Rental rental = credential.getRental();
         boolean duringSetup = rental != null && rental.getStatus() == RentalStatus.setup;
-        boolean allowed = credential.getStatus() == AccessCredentialStatus.ACTIVE;
+        boolean recoveryLocked = rental != null && rental.getStatus() == RentalStatus.closing
+            && rental.getInventoryEscalatedAt() != null;
+        boolean allowed = credential.getStatus() == AccessCredentialStatus.ACTIVE && !recoveryLocked;
         String reason;
         if (credential.getStatus() != AccessCredentialStatus.ACTIVE) {
             reason = "Credential đã bị thu hồi";
+        } else if (recoveryLocked) {
+            reason = "Gian kho đang chờ xử lý thu hồi";
         } else {
             reason = "Được phép truy cập 24/24";
         }
@@ -546,7 +550,8 @@ public class AccessCredentialService {
                     rental.getId(), returnCase.getFacility().getId(), returnCase.getFacility().getName(),
                     rental.getStorageUnit().getId(), rental.getStorageUnit().getCode(),
                     rental.getCustomer().getId(), rental.getCustomer().getFullName(), credential.getType(),
-                    credential.getReference(), returnCase.getScheduledDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC),
+                    credential.getReference(), returnCase.getScheduledDate() == null ? returnCase.getRecoveryEligibleAt()
+                        : returnCase.getScheduledDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC),
                     "Có credential đang hoạt động cần thu hồi khi nghiệm thu trả kho"
                 ));
             }

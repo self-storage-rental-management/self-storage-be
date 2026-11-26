@@ -509,7 +509,7 @@ public class RenewalOperationService {
         String from=" from Renewal n left join RenewalOperationState s on s.id=n.id";
         String pendingRefund="exists (select f.id from Refund f where f.payment.renewal.id=n.id and f.status=com.storagehub.domain.model.RefundStatus.PENDING and f.payment.failureCode='RENEWAL_SIGNING_PREPARATION_BLOCKED')";
         String filter=" where (s.appointmentRef is not null or "+pendingRefund+") and n.id in :ids and n.rental.facility.id in :facilities"+(facilityId==null?"":" and n.rental.facility.id=:facility")+(phase==null?"":" and s.phase=:phase")+(date==null?"":" and s.appointmentStart>=:start and s.appointmentStart<:end");
-        var query=em.createQuery("select n"+from+filter+" order by s.appointmentStart,n.id",Renewal.class);var count=em.createQuery("select count(n)"+from+filter,Long.class);
+        var query=em.createQuery("select n"+from+filter+" order by case when s.phase = COMPLETED then 3 when s.arrivalRef is not null then 0 when s.appointmentEnd < instant then 2 else 1 end, s.appointmentStart asc nulls last, n.createdAt asc, n.id",Renewal.class);var count=em.createQuery("select count(n)"+from+filter,Long.class);
         for(var q:List.of(query,count)){q.setParameter("ids",ids);q.setParameter("facilities",scopeIds);if(facilityId!=null)q.setParameter("facility",facilityId);if(phase!=null)q.setParameter("phase",RenewalOperationState.Phase.valueOf(phase));if(date!=null){var zone=BusinessTime.ZONE;q.setParameter("start",date.atStartOfDay(zone).toInstant());q.setParameter("end",date.plusDays(1).atStartOfDay(zone).toInstant());}}
         var rows=query.setFirstResult(page*size).setMaxResults(size).getResultList().stream().map(n->{
             auth.require(actor,n,Capability.READ);

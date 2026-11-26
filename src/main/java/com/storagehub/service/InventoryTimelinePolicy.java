@@ -34,9 +34,9 @@ public final class InventoryTimelinePolicy {
         }
         return switch (code.trim().toUpperCase(java.util.Locale.ROOT)) {
             case "S" -> new int[]{3, 2};
-            case "M" -> new int[]{5, 3};
-            case "L" -> new int[]{7, 4};
-            case "XL" -> new int[]{10, 5};
+            case "M" -> new int[]{5, 2};
+            case "L" -> new int[]{7, 2};
+            case "XL" -> new int[]{10, 2};
             default -> throw ApiExceptions.conflict(
                 "Cỡ kho \"" + code.trim() + "\" chưa được cấu hình hạn trả kho do kiểm kê sai lệch. Vui lòng cấu hình trước khi áp dụng.");
         };
@@ -92,8 +92,12 @@ public final class InventoryTimelinePolicy {
             throw ApiExceptions.conflict("Bạn đã sử dụng hết số lần gia hạn trả kho cho phép.");
         }
         int nextCount = rental.getInventoryReturnExtensionCount() + 1;
-        int nextWindowDays = rental.getInventoryReturnWindowDays() + rental.getInventoryReturnExtensionDays();
-        Instant nextDeadline = removalDeadline(rental.getInventoryRemovalPublishedAt(), nextWindowDays);
+        Instant nextDeadline = rental.getInventoryRemovalDeadlineAt().atZone(ZONE)
+            .plusDays(2).toInstant();
+        int nextWindowDays = Math.toIntExact(ChronoUnit.DAYS.between(
+            removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
+            nextDeadline.atZone(ZONE).toLocalDate()));
+        rental.setInventoryReturnExtensionDays(2);
         rental.setInventoryReturnExtensionCount(nextCount);
         rental.setInventoryReturnWindowDays(nextWindowDays);
         rental.setInventoryRemovalDeadlineAt(nextDeadline);
@@ -112,7 +116,7 @@ public final class InventoryTimelinePolicy {
                 removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
                 rental.getInventoryRemovalDeadlineAt().atZone(ZONE).toLocalDate()
             );
-            return days > 0 ? (int) days : 7;
+            return days > 0 ? Math.toIntExact(days) : null;
         }
         return null;
     }

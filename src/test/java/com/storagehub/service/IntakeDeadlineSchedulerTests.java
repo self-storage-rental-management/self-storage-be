@@ -22,6 +22,46 @@ class IntakeDeadlineSchedulerTests {
         var reservation=mock(Reservation.class);when(reservation.getId()).thenReturn(UUID.randomUUID());r.setReservation(reservation);
         r.setStorageUnit(new StorageUnit());when(rentals.findAll()).thenReturn(List.of(r));return r;
     }
+    @Test void unconfirmedInventoryOpensRecoveryAtFortyEightHours() {
+        var r = rental();
+        r.setStatus(RentalStatus.active);
+        r.setInventoryResultPublishedAt(Instant.now().minusSeconds(48 * 3600L));
+        var c = new CheckIn();
+        c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_CUSTOMER);
+        when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
+        var workflow = mock(ViolationRecoveryWorkflow.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "violationRecovery", workflow);
+        scheduler.process();
+        verify(workflow).detect(eq(r), isNull(), eq(ViolationRecovery.Reason.INVENTORY_CONFIRMATION_OVERDUE),
+            eq(r.getInventoryResultPublishedAt().plusSeconds(48 * 3600L)), any(), eq(false));
+    }
+
+    @Test void unconfirmedInventoryDoesNotRecoverBeforeFortyEightHours() {
+        var r = rental();
+        r.setStatus(RentalStatus.active);
+        r.setInventoryResultPublishedAt(Instant.now().minusSeconds(47 * 3600L));
+        var c = new CheckIn();
+        c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_CUSTOMER);
+        when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
+        var workflow = mock(ViolationRecoveryWorkflow.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "violationRecovery", workflow);
+        scheduler.process();
+        verifyNoInteractions(workflow);
+    }
+
+    @Test void submittedReturnDoesNotRecoverForMissingConfirmation() {
+        var r = rental();
+        r.setStatus(RentalStatus.return_requested);
+        r.setInventoryResultPublishedAt(Instant.now().minusSeconds(49 * 3600L));
+        var c = new CheckIn();
+        c.setInventoryResolutionStatus(InventoryResolutionStatus.RETURN_REQUESTED);
+        when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
+        var workflow = mock(ViolationRecoveryWorkflow.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "violationRecovery", workflow);
+        scheduler.process();
+        verifyNoInteractions(workflow);
+    }
+
     @Test void oldRecordsWithoutNewDeadlineAreNotReclaimed() {
         rental(); scheduler.process(); verify(tasks,never()).saveAndFlush(any());
     }
@@ -82,6 +122,31 @@ class IntakeDeadlineSchedulerTests {
         scheduler.process();
         verify(tasks,never()).saveAndFlush(any());
     }
+    @Test void missedScansRecoverMismatchWithoutAppointmentOnlyOnce() {
+        var r = rental();
+        r.setMoveInCompletedAt(Instant.now().minusSeconds(10 * 86400L));
+        r.setInventoryRemovalPublishedAt(Instant.now().minusSeconds(8 * 86400L));
+        r.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(2 * 86400L));
+        scheduler.process();
+        scheduler.process();
+        var capture = ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(tasks).saveAndFlush(capture.capture());
+        assertThat(capture.getValue().getRecoveryType()).isEqualTo(MaintenanceRecoveryType.MISMATCH_REMOVAL);
+        assertThat(r.getActualReturnedAt()).isNull();
+    }
+    @Test void rechecksDeadlineAfterTakingRentalLock() {
+        var r = rental();
+        r.setInventoryRemovalDeadlineAt(Instant.now().minusSeconds(1));
+        var em = mock(jakarta.persistence.EntityManager.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "entityManager", em);
+        doAnswer(call -> {
+            r.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(3600));
+            return null;
+        }).when(em).refresh(r, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        scheduler.process();
+        verify(em).refresh(r, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        verify(tasks, never()).saveAndFlush(any());
+    }
     @Test void emptyUnitBeforeRemovalDeadlineAlsoCreatesNoTask() {
         var r=rental();
         r.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(3600));
@@ -99,7 +164,7 @@ class IntakeDeadlineSchedulerTests {
         c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
         when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
         scheduler.process();
-        verify(notifications,never()).createNotificationOnce(any(),any(),eq("Đã quá hạn xác nhận kiểm kê"),any(),any());
+        verify(notifications,never()).createNotificationOnce(any(),any(),eq("Quá hạn 48 giờ phản hồi kết quả kiểm kê"),any(),any());
         verify(notifications,never()).createNotificationOnce(any(),any(),eq("Nhắc xác nhận kết quả kiểm kê"),any(),any());
     }
     @Test void onlineConfirmationStillGetsTheFourtyEightHourEscalation() {
@@ -109,6 +174,6 @@ class IntakeDeadlineSchedulerTests {
         c.setInventoryResolutionStatus(InventoryResolutionStatus.PENDING_CUSTOMER);
         when(checkins.findByReservation_Id(any())).thenReturn(Optional.of(c));
         scheduler.process();
-        verify(notifications).createNotificationOnce(any(),any(),eq("Đã quá hạn xác nhận kiểm kê"),any(),any());
+        verify(notifications).createNotificationOnce(any(),any(),eq("Quá hạn 48 giờ phản hồi kết quả kiểm kê"),any(),any());
     }
 }

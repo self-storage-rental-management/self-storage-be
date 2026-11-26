@@ -28,12 +28,20 @@ public class InventoryDecisionService {
             case CANCEL_AND_RETURN -> atSite ? "REFUSED" : "RETURN_REQUESTED";
             default -> throw new IllegalArgumentException("Unsupported intake decision");
         };
+        save(checkIn, operator, outcome, atSite ? "STAFF" : "CUSTOMER", evidence);
+    }
+
+    public void recordManagerRefusal(CheckIn checkIn, User manager, UUID evidenceId) {
+        save(checkIn, manager, "REFUSED", "MANAGER", List.of(evidenceId));
+    }
+
+    private void save(CheckIn checkIn, User operator, String outcome, String source, List<UUID> evidence) {
         var linked = "REFUSED".equals(outcome) || "RETURN_REQUESTED".equals(outcome)
             ? returns.findByRental_Id(checkIn.getRental().getId()).stream()
                 .max(java.util.Comparator.comparing(com.storagehub.domain.model.ReturnCase::getRequestedAt,
                     java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))).orElse(null)
             : null;
-        var snapshot = new InventoryDecisionResponse(outcome, atSite ? "STAFF" : "CUSTOMER",
+        var snapshot = new InventoryDecisionResponse(outcome, source,
             operator.getId(), operator.getFullName(), checkIn.getInventoryDecisionAt(),
             checkIn.getInventoryDecisionNote(), evidence == null ? List.of() : List.copyOf(evidence),
             linked == null ? null : linked.getId(), linked == null ? null : linked.getStatus().name(),

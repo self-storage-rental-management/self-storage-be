@@ -64,6 +64,9 @@ class BusinessRecordCodesMySqlTests {
     }
 
     void sourceTables() {
+        for (String table : java.util.List.of("return_cases", "maintenance_tasks", "refund_requests")) {
+            jdbc.execute("CREATE TABLE " + table + "(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
+        }
         jdbc.execute("CREATE TABLE renewals(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE support_tickets(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL)");
         jdbc.execute("CREATE TABLE overdue_follow_ups(case_ref VARCHAR(120),recorded_at TIMESTAMP(6))");
@@ -87,6 +90,12 @@ class BusinessRecordCodesMySqlTests {
         flyway.migrate();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE version='2026102006' AND success=1",Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM business_record_codes",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE version='2026112601' AND success=1",
+            Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM information_schema.statistics WHERE table_schema = database()
+                AND table_name = 'violation_recoveries' AND index_name = 'uq_violation_recovery_source' AND non_unique = 0
+            """, Integer.class)).isEqualTo(3);
     }
 
     @Test void receiptMigrationPreservesExistingCodesAndConcurrentIssuanceIsIdempotent() throws Exception {
@@ -115,6 +124,86 @@ class BusinessRecordCodesMySqlTests {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM money_receipt_codes", Integer.class)).isOne();
         assertThat(receipts.find("PAYMENT", source)).startsWith("PT-");
         assertThat(jdbc.queryForObject("SELECT receipt_code FROM payments WHERE id=1", String.class)).isEqualTo("legacy");
+    }
+
+    /**
+     * The recovery module is optional, so its receipt table is absent on a base install.
+     * Historical receipt reconciliation must still run instead of erroring every 30 seconds.
+     */
+    @Test void historicalReceiptsRunWhenOptionalRecoveryModuleIsNotInstalled() {
+        receiptSchema();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables"
+            + " WHERE table_schema=database() AND table_name='recovery_settlement_receipts'", Integer.class)).isZero();
+
+        var coordinator = coordinator();
+
+        // Would throw BadSqlGrammarException before the optional table was probed.
+        tx.executeWithoutResult(status -> coordinator.registerHistoricalReceipts());
+
+        var returned = UUID.randomUUID();
+        insertSettledReturn(returned, "TX-1");
+        jdbc.update("INSERT INTO return_settlement_receipts VALUES(?, 'REFUND', 50000, 'CASH', 'TX-1', ?, ?, 1)",
+            returned.toString(), UUID.randomUUID().toString(), UUID.randomUUID().toString());
+
+        tx.executeWithoutResult(status -> coordinator.registerHistoricalReceipts());
+
+        assertThat(new MoneyReceiptCodes(jdbc).find("RETURN", returned)).isNotNull();
+    }
+
+    /** When the recovery module is installed, receipts recorded only there must still be found. */
+    @Test void historicalReceiptsUseRecoveryReceiptsWhenModuleIsInstalled() {
+        receiptSchema();
+        jdbc.execute("CREATE TABLE recovery_settlement_receipts(task_id BINARY(16) PRIMARY KEY,"
+            + "return_case_id BINARY(16) NOT NULL,direction VARCHAR(16) NOT NULL,amount DECIMAL(14,2) NOT NULL,"
+            + "payment_method VARCHAR(24) NOT NULL,transaction_reference VARCHAR(64) NOT NULL,"
+            + "receipt_file_id BINARY(16) NOT NULL,recorded_by BINARY(16) NOT NULL,recorded_at TIMESTAMP(6) NOT NULL)"
+            + " ENGINE=InnoDB");
+
+        var coordinator = coordinator();
+        var returned = UUID.randomUUID();
+        insertSettledReturn(returned, "TX-2");
+        // Only the recovery table has the receipt, so the code must come from that branch.
+        jdbc.update("INSERT INTO recovery_settlement_receipts VALUES(UUID_TO_BIN(?),UUID_TO_BIN(?),'REFUND',50000,"
+                + "'CASH','TX-2',UUID_TO_BIN(?),UUID_TO_BIN(?),?)",
+            UUID.randomUUID().toString(), returned.toString(), UUID.randomUUID().toString(),
+            UUID.randomUUID().toString(), Timestamp.from(Instant.parse("2026-11-02T00:00:00Z")));
+
+        tx.executeWithoutResult(status -> coordinator.registerHistoricalReceipts());
+
+        assertThat(new MoneyReceiptCodes(jdbc).find("RETURN", returned)).isNotNull();
+    }
+
+    void receiptSchema() {
+        sourceTables();
+        migrateCodes();
+        jdbc.execute("CREATE TABLE payments(id BINARY(16) PRIMARY KEY,created_at TIMESTAMP(6) NOT NULL,status VARCHAR(16),receipt_code VARCHAR(17))");
+        jdbc.execute("CREATE TABLE money_receipt_codes(source_type VARCHAR(16) NOT NULL,source_id BINARY(16) NOT NULL,"
+            + "receipt_code CHAR(17) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,"
+            + "PRIMARY KEY(source_type,source_id),UNIQUE KEY uk_money_receipt_code(receipt_code)) ENGINE=InnoDB");
+        jdbc.execute("CREATE TABLE return_settlement_receipts(return_id VARCHAR(36) PRIMARY KEY,direction VARCHAR(16),amount DECIMAL(20,0),payment_method VARCHAR(24),transaction_reference VARCHAR(120),receipt_file_id VARCHAR(36),recorded_by VARCHAR(36),recorded_at_ms BIGINT)");
+        jdbc.execute("ALTER TABLE return_cases ADD COLUMN status VARCHAR(24), ADD COLUMN settlement_paid_at TIMESTAMP(6),"
+            + " ADD COLUMN settlement_payment_id VARCHAR(64), ADD COLUMN net_refund_amount DECIMAL(20,0),"
+            + " ADD COLUMN amount_due_from_customer DECIMAL(20,0)");
+    }
+
+    void insertSettledReturn(UUID returned, String settlementPaymentId) {
+        jdbc.update("INSERT INTO return_cases(id,created_at,status,settlement_paid_at,settlement_payment_id,"
+                + "net_refund_amount,amount_due_from_customer) VALUES(UUID_TO_BIN(?),?,'completed',?,?,50000,0)",
+            returned.toString(), Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")),
+            Timestamp.from(Instant.parse("2026-11-02T00:00:00Z")), settlementPaymentId);
+    }
+
+    BusinessRecordCodeCoordinator coordinator() {
+        var em = mock(EntityManager.class);
+        var coordinator = new BusinessRecordCodeCoordinator(jdbc, em, codes, null, null, null);
+        try {
+            var field = BusinessRecordCodeCoordinator.class.getDeclaredField("receiptCodes");
+            field.setAccessible(true);
+            field.set(coordinator, new MoneyReceiptCodes(jdbc));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+        return coordinator;
     }
 
     @Test void backfillsHistoricalCodesAndContinuesTheCorrectVietnamMonth() {

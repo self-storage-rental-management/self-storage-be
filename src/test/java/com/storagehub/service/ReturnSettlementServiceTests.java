@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -158,6 +159,9 @@ class ReturnSettlementServiceTests {
         ReflectionTestUtils.setField(service, "reservationPricingSnapshotRepository", pricingSnapshotRepository);
         ReflectionTestUtils.setField(service, "userFacilityScopeRepository", userFacilityScopeRepository);
         ReflectionTestUtils.setField(service, "settlementEntityManager", settlementEntityManager);
+        var pallets = org.mockito.Mockito.mock(PalletInventoryService.class);
+        org.mockito.Mockito.lenient().when(pallets.equipment(unit)).thenReturn(new com.storagehub.api.checkin.CheckInResponse.Equipment(1, 1, 2));
+        ReflectionTestUtils.setField(service, "palletInventoryService", pallets);
         org.mockito.Mockito.lenient().when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
         org.mockito.Mockito.lenient().when(returnFinance.deposit(rental)).thenReturn(new BigDecimal("2000000.00"));
         org.mockito.Mockito.lenient().when(returnFinance.capture(any(ReturnCase.class))).thenReturn(
@@ -235,12 +239,18 @@ class ReturnSettlementServiceTests {
     @Test
     void inventoryMismatchReturnKeepsItsWorkflowMarker() {
         rental.setStatus(RentalStatus.setup);
-        CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
+        CustomerCreateReturnRequest sameDayRequest = new CustomerCreateReturnRequest(
             LocalDate.now(BusinessTime.ZONE), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
         );
         when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
         when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
         when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(), sameDayRequest))
+            .hasMessageContaining("sau ngày tạo đơn trả kho ít nhất 1 ngày");
+
+        CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
+            LocalDate.now(BusinessTime.ZONE).plusDays(1), "Khách không tiếp nhận phương án kiểm kê", ReturnType.INVENTORY_MISMATCH
+        );
         when(returnCaseRepository.save(any(ReturnCase.class))).thenAnswer(invocation -> {
             ReturnCase rc = invocation.getArgument(0);
             ReflectionTestUtils.setField(rc, "id", UUID.randomUUID());
@@ -295,7 +305,7 @@ class ReturnSettlementServiceTests {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 "Hàng thực tế không phù hợp, khách yêu cầu trả kho",
-                List.of(),
+                inspectionPhoto(returnCase),
                 true,
                 true,
                 true,
@@ -305,7 +315,7 @@ class ReturnSettlementServiceTests {
         );
 
         assertThat(response.returnType()).isEqualTo(ReturnType.INVENTORY_MISMATCH);
-        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_business_review);
+        assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
         assertThat(response.earlyTerminationFee()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(response.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("133333");
         assertThat(response.earlyTerminationPolicy().rentalRefundAmount()).isEqualByComparingTo("5866667");
@@ -318,30 +328,32 @@ class ReturnSettlementServiceTests {
         assertThat(response.netRefundAmount()).isEqualByComparingTo(collect ? "5866667" : "7866667");
         assertThat(response.amountDueFromCustomer()).isEqualByComparingTo(collect ? "7000000" : "0");
         assertThat(rental.isInventoryPending()).isFalse();
-        when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
-        var managerDecision = service.managerReviewInventoryMismatch(
-            managerActor,
-            returnCase.getId(),
-            new com.storagehub.api.returns.ManagerInventoryMismatchDecisionRequest(
-                "Manager đã đối soát bảng kê theo ngày lịch và bằng chứng kiểm kê.",
-                StorageUnitStatus.available
-            )
-        );
-        assertThat(managerDecision.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
         when(returnCaseRepository.findByIdAndCustomer_Id(returnCase.getId(), customer.getId())).thenReturn(Optional.of(returnCase));
         var accepted = service.customerConfirmSettlement(customerActor, returnCase.getId(),
-            new CustomerConfirmSettlementRequest(CustomerDecision.accepted, "Đồng ý bảng kê"));
+            new CustomerConfirmSettlementRequest(CustomerDecision.accepted, "Đồng ý bảng kê", response.settlementVersion()));
         assertThat(accepted.status()).isEqualTo(collect ? ReturnCaseStatus.payment_due : ReturnCaseStatus.refund_pending);
         if (collect) {
+            var collection = new com.storagehub.api.returns.StaffReturnSettlementRequest(
+                "CASH", null, UUID.randomUUID(), true, new BigDecimal("7000000"));
+            var afterCollection = service.recordSettlement(staffActor, returnCase.getId(), collection);
+            assertThat(afterCollection.status()).isEqualTo(ReturnCaseStatus.refund_pending);
+            assertThat(rental.getStatus()).isNotEqualTo(RentalStatus.completed);
+            verify(returnFinance, never()).settle(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+            when(returnFinance.matchesMismatchReceipt(returnCase, "CASH", "TM-" + returnCase.getId() + "-THU",
+                collection.receiptFileId(), collection.amount())).thenReturn(true);
+            assertThat(service.recordSettlement(staffActor, returnCase.getId(), collection).status()).isEqualTo(ReturnCaseStatus.refund_pending);
+            when(returnFinance.hasCollectionReceipt(returnCase)).thenReturn(true);
+            unit.setStatus(StorageUnitStatus.occupied);
             service.recordSettlement(staffActor, returnCase.getId(), new com.storagehub.api.returns.StaffReturnSettlementRequest(
-                "CASH", null, UUID.randomUUID(), true, new BigDecimal("7000000")));
+                "BANK_TRANSFER", "REFUND-MISMATCH-SECOND-LEG", UUID.randomUUID(), true, new BigDecimal("5866667")));
+            verify(returnFinance).settle(eq(returnCase), eq(staffActor.userId()), eq("REFUND-MISMATCH-SECOND-LEG"), eq(true));
         } else {
             service.staffCompleteRefund(staffActor, returnCase.getId(), new StaffCompleteRefundRequest(
                 "REFUND-MISMATCH-TEST", "Hoàn tiền theo bảng kê", UUID.randomUUID(), "BANK_TRANSFER", true, new BigDecimal("7866667")));
         }
         assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.completed);
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.completed);
-        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.maintenance);
+        assertThat(unit.getStatus()).isEqualTo(collect ? StorageUnitStatus.occupied : StorageUnitStatus.maintenance);
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -389,6 +401,94 @@ class ReturnSettlementServiceTests {
             eq(removal ? "Cần thu hồi hàng do quá hạn đưa hàng ra" : "Cần xử lý khách không đến trả kho"),
             any(String.class), eq(returnCase.getId())
         );
+    }
+
+    @Test
+    void outdatedMismatchStatementCannotBeAcceptedOrDisputed() {
+        var rc = setupReturn(ReturnCaseStatus.awaiting_customer_confirmation);
+        rc.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        rc.setSettlementVersion(2);
+        when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
+        for (var decision : List.of(CustomerDecision.accepted, CustomerDecision.disputed)) {
+            assertThatThrownBy(() -> service.customerConfirmSettlement(customerActor, rc.getId(),
+                new CustomerConfirmSettlementRequest(decision, "Đã xem", 1L))).hasMessageContaining("Bảng kê đã thay đổi");
+        }
+        verify(returnFinance, never()).requireCurrent(any());
+        assertThat(rc.isCustomerConfirmed()).isFalse();
+    }
+
+    @Test
+    void mismatchReviewRepublishesStatementWhenFeeBreakdownChangesButTotalStaysEqual() {
+        var rc = setupReturn(ReturnCaseStatus.disputed);
+        rc.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        rc.setSettlementVersion(3);
+        rc.setSettlementLedgerRevision(1L);
+        rc.setDamageFee(new BigDecimal("200000"));
+        rc.setOutstandingFee(BigDecimal.ZERO);
+        rc.setRentalRefundCredit(new BigDecimal("1000000"));
+        rc.setRentalRefundAmount(new BigDecimal("1000000"));
+        rc.setTotalDeductions(new BigDecimal("300000"));
+        rc.setNetRefundAmount(new BigDecimal("2700000"));
+        rc.setAmountDueFromCustomer(BigDecimal.ZERO);
+        rc.setEarlyTerminationCharge(new BigDecimal("100000"));
+        rc.setCustomerConfirmed(true);
+        Instant now = Instant.now();
+        rc.setSetupReturnedAt(now);
+        rental.setSetupStartedAt(now.minusSeconds(60));
+        rental.setMoveInCompletedAt(now);
+        rental.setSetupExitReviewRequired(true);
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setMonthlyPrice(new BigDecimal("3000000"));
+        pricing.setNetRentalAmount(new BigDecimal("1000000"));
+        when(pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId())).thenReturn(Optional.of(pricing));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findById(manager.getId())).thenReturn(Optional.of(manager));
+        when(returnCaseRepository.save(rc)).thenReturn(rc);
+        when(returnFinance.capture(rc)).thenReturn(new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
+            new BigDecimal("2000000"), new BigDecimal("100000"), BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+        var updated = service.managerReviewDispute(managerActor, rc.getId(), new ManagerReviewDisputeRequest(
+            "Đối soát lại khoản phí", new BigDecimal("100000"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, StorageUnitStatus.available));
+        assertThat(updated.totalDeductions()).isEqualByComparingTo("300000");
+        assertThat(updated.netRefundAmount()).isEqualByComparingTo("2700000");
+        assertThat(updated.settlementVersion()).isEqualTo(4);
+        assertThat(updated.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(updated.customerConfirmed()).isFalse();
+    }
+
+    @Test
+    void mismatchWithVerifiedHandoverCannotCreateRecovery() {
+        ReturnCase record = setupReturn(ReturnCaseStatus.scheduled);
+        record.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        Instant deadline = Instant.parse("2025-11-28T17:00:00Z");
+        rental.setInventoryRemovalDeadlineAt(deadline);
+        record.setRecoveryEligibleAt(deadline);
+        rental.setActualReturnedAt(deadline.minusSeconds(1));
+        when(returnCaseRepository.findByStatusInAndRecoveryEligibleAtLessThanEqualAndRecoveryTaskCreatedAtIsNull(
+            any(), any(Instant.class))).thenReturn(List.of(record));
+        when(returnCaseRepository.findByIdForUpdate(record.getId())).thenReturn(Optional.of(record));
+        service.escalateNoShowReturns();
+        verify(maintenanceTaskRepository, org.mockito.Mockito.never()).save(any(MaintenanceTask.class));
+        assertThat(record.getStatus()).isEqualTo(ReturnCaseStatus.scheduled);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ReturnType.class, names = {"NORMAL", "INVENTORY_MISMATCH"})
+    void noShowScanDoesNotTakeOverAnExpiredTimelySessionAwaitingReview(ReturnType type) {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setSetupExitRequested(type == ReturnType.INVENTORY_MISMATCH);
+        rc.setReturnType(type);
+        Instant due = Instant.now().minusSeconds(3600);
+        rental.setInventoryRemovalDeadlineAt(due);
+        rc.setReturnArrivedAt(due.minusSeconds(60));
+        rc.setRecoveryEligibleAt(due);
+        when(returnCaseRepository.findByStatusInAndRecoveryEligibleAtLessThanEqualAndRecoveryTaskCreatedAtIsNull(
+            any(), any(Instant.class))).thenReturn(List.of(rc));
+        when(returnCaseRepository.findByIdForUpdate(rc.getId())).thenReturn(Optional.of(rc));
+
+        assertThat(service.escalateNoShowReturns()).isZero();
+        assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.scheduled);
+        verify(maintenanceTaskRepository, org.mockito.Mockito.never()).save(any(MaintenanceTask.class));
     }
 
     @Test
@@ -492,7 +592,7 @@ class ReturnSettlementServiceTests {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             "Đã đưa hàng vào khu lưu tạm",
-            List.of(UUID.randomUUID().toString()),
+            inspectionPhoto(returnCase),
             false,
             false,
             true,
@@ -554,7 +654,7 @@ class ReturnSettlementServiceTests {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             "Đã kiểm kê và bàn giao hàng vào khu lưu tạm",
-            List.of(UUID.randomUUID().toString()),
+            inspectionPhoto(returnCase),
             false,
             false,
             true,
@@ -568,6 +668,7 @@ class ReturnSettlementServiceTests {
         ReturnCaseResponse response = service.performInspection(staffActor, returnCase.getId(), request);
 
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(response.warehouseEmptyVerified()).isTrue();
         assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
         assertThat(returnCase.getRental().getStatus()).isEqualTo(RentalStatus.return_inspection);
         assertThat(recoveryTask.getStatus()).isEqualTo(com.storagehub.domain.model.MaintenanceTaskStatus.completed);
@@ -627,6 +728,7 @@ class ReturnSettlementServiceTests {
     @Test
     void performInspection_withNetRefund_calculatesCorrectly() {
         ReturnCase returnCase = new ReturnCase();
+        setVerifiedReturnAttendance(returnCase);
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
         returnCase.setRental(rental);
         returnCase.setFacility(facility);
@@ -646,9 +748,9 @@ class ReturnSettlementServiceTests {
             BigDecimal.ZERO, // overdueFee
             BigDecimal.ZERO, // outstandingFee
             "Mặt sàn xước nhẹ, cần vệ sinh bụi",
-            List.of("photo1.jpg"),
+            inspectionPhoto(returnCase),
             true, true, true,
-            StorageUnitStatus.available
+            StorageUnitStatus.available, true
         );
 
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
@@ -666,6 +768,7 @@ class ReturnSettlementServiceTests {
     @Test
     void performInspection_withAmountDue_calculatesCorrectly() {
         ReturnCase returnCase = new ReturnCase();
+        setVerifiedReturnAttendance(returnCase);
         ReflectionTestUtils.setField(returnCase, "id", UUID.randomUUID());
         returnCase.setRental(rental);
         returnCase.setFacility(facility);
@@ -685,9 +788,9 @@ class ReturnSettlementServiceTests {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             "Cửa cuốn hỏng nặng",
-            List.of("damage.jpg"),
+            inspectionPhoto(returnCase),
             true, true, true,
-            StorageUnitStatus.maintenance
+            StorageUnitStatus.maintenance, true
         );
 
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
@@ -1047,7 +1150,7 @@ class ReturnSettlementServiceTests {
         });
         var fileId = UUID.randomUUID();
         var asset = new com.storagehub.domain.model.FileAsset();
-        asset.setEntityType("RETURN_CASE"); asset.setEntityId(rc.getId());
+        asset.setContentType("image/jpeg"); asset.setEntityType("RETURN_CASE"); asset.setEntityId(rc.getId());
         asset.setStatus(com.storagehub.domain.model.FileAssetStatus.ACTIVE);
         when(settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, fileId)).thenReturn(asset);
         var inspection = new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.minor_damage,
@@ -1096,9 +1199,9 @@ class ReturnSettlementServiceTests {
         var file = UUID.randomUUID();
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
         org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.conflict("Receipt proof unavailable"))
-            .when(returnFinance).receipt(staffActor, rc, "CASH", "REFUND-FAIL", file);
+            .when(returnFinance).receipt(staffActor, rc, "CASH", "TM-" + rc.getId(), file);
         assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, rc.getId(),
-            new StaffCompleteRefundRequest("REFUND-FAIL", "Refund", file, "CASH", true, new BigDecimal("5700000"))))
+            new StaffCompleteRefundRequest(null, "Refund", file, "CASH", true, new BigDecimal("5700000"))))
             .hasMessageContaining("Receipt proof unavailable");
         assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.refund_pending);
         assertThat(rc.getCompletedAt()).isNull();
@@ -1120,11 +1223,17 @@ class ReturnSettlementServiceTests {
         org.mockito.Mockito.verifyNoInteractions(returnFinance);
     }
 
-    @Test
-    void cashCollectionGeneratesOneReceiptCodeForRepeatedSubmissions() {
-        var rc = setupReturn(ReturnCaseStatus.payment_due);
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ReturnCaseStatus.class, names = {"payment_due", "refund_pending"})
+    void cashSettlementGeneratesOneReceiptCodeForRepeatedSubmissions(ReturnCaseStatus status) {
+        var rc = setupReturn(status);
         var amount = new BigDecimal("500000");
-        rc.setAmountDueFromCustomer(amount);
+        if (status == ReturnCaseStatus.payment_due) {
+            rc.setAmountDueFromCustomer(amount);
+        } else {
+            rc.setAmountDueFromCustomer(BigDecimal.ZERO);
+            rc.setNetRefundAmount(amount);
+        }
         var file = UUID.randomUUID();
         String reference = "TM-" + rc.getId();
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
@@ -1193,10 +1302,287 @@ class ReturnSettlementServiceTests {
         return rc;
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ReturnType.class, names = {"NORMAL", "INVENTORY_MISMATCH"})
+    void returnAttendanceCountsEachAttemptOnceAndRequiresManagerAfterTwoFailures(ReturnType type) {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setSetupExitRequested(type == ReturnType.INVENTORY_MISMATCH);
+        rc.setReturnType(type);
+        rental.setInventoryRemovalDeadlineAt(Instant.now().plusSeconds(60));
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        rc.setReturnArrivedAt(Instant.now());
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+
+        UUID first = UUID.randomUUID();
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), first, "TEST11111").attendance().attempts()).isOne();
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), first, "TEST99999").attendance().verifiedAt()).isNull();
+        var failed = service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST22222").attendance();
+        verify(notificationService).notifyManagersOfReturnIdentityReview(rc);
+        assertThat(failed.attempts()).isEqualTo(2);
+        assertThat(failed.reviewStartsAt()).isNotNull();
+        assertThatThrownBy(() -> service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))
+            .hasMessageContaining("đã kết thúc");
+        assertThatThrownBy(() -> service.reviewReturnArrival(managerActor, rc.getId(), true, "Đã đối soát"))
+            .hasMessageContaining("danh tính");
+        service.reviewReturnArrival(managerActor, rc.getId(), false, "Giấy tờ không khớp");
+        assertThat(ReturnAttendancePolicy.protectsFromRecovery(rc)).isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ReturnType.class, names = {"NORMAL", "INVENTORY_MISMATCH"})
+    void managerReopensOnlyOneVerificationWindowForAssignedStaff(ReturnType type) {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setReturnType(type);
+        rc.setSetupExitRequested(type == ReturnType.INVENTORY_MISMATCH);
+        Instant arrivedAt = Instant.now().minusSeconds(1801);
+        rc.setReturnArrivedAt(arrivedAt);
+        rc.setRecoveryEligibleAt(arrivedAt.plusSeconds(60));
+        rental.setInventoryRemovalDeadlineAt(arrivedAt.plusSeconds(60));
+        UUID evidence = UUID.randomUUID();
+        rc.setReturnArrivalEvidenceId(evidence);
+        rc.setReturnFirstAttemptId(UUID.randomUUID());
+        rc.setReturnSecondAttemptId(UUID.randomUUID());
+        rc.setReturnSecondAttemptAt(arrivedAt.plusSeconds(90));
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findEligibleStaff(eq(com.storagehub.domain.model.UserStatus.ACTIVE), eq(RoleCode.STAFF),
+            eq(facility.getId()), any())).thenReturn(List.of(staff));
+
+        assertThatThrownBy(() -> service.reopenReturnVerification(staffActor, rc.getId(), staff.getId(), "Khách mang giấy tờ gốc"))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+        assertThatThrownBy(() -> service.reopenReturnVerification(managerActor, rc.getId(), UUID.randomUUID(), "Khách có mặt"))
+            .hasMessageContaining("nhân viên phụ trách");
+        var reopened = service.reopenReturnVerification(managerActor, rc.getId(), staff.getId(), "Khách mang giấy tờ gốc").attendance();
+        Instant session = reopened.reverificationStartedAt();
+        assertThat(reopened.arrivedAt()).isEqualTo(arrivedAt);
+        assertThat(reopened.evidenceId()).isEqualTo(evidence);
+        assertThat(reopened.attempts()).isZero();
+        assertThat(reopened.expiresAt()).isEqualTo(session.plusSeconds(1800));
+        assertThat(ReturnAttendancePolicy.protectsFromRecovery(rc)).isTrue();
+
+        assertThatThrownBy(() -> service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))
+            .hasMessageContaining("Phiên xác minh đã thay đổi");
+        var otherStaff = new ActorPrincipal(UUID.randomUUID(), staffActor.sessionId(), staffActor.roles(),
+            staffActor.permissions(), staffActor.facilityScopes());
+        assertThatThrownBy(() -> service.verifyReturnIdentity(otherStaff, rc.getId(), UUID.randomUUID(), "TEST99999", session))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+        service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST11111", session);
+        var failed = service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST22222", session).attendance();
+        assertThat(failed.reviewStartsAt()).isNotNull();
+        assertThat(failed.attempts()).isEqualTo(2);
+        assertThatThrownBy(() -> service.reopenReturnVerification(managerActor, rc.getId(), staff.getId(), "Yêu cầu thử thêm"))
+            .hasMessageContaining("Chỉ được mở lại một lần");
+    }
+
+    @Test
+    void managerSetsHandoverTimeAndInspectionOpensOnlyAtThatTime() {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setReturnType(ReturnType.NORMAL);
+        rc.setSetupExitRequested(false);
+        rc.setReturnArrivedAt(Instant.now().minusSeconds(1900));
+        rc.setReturnArrivalEvidenceId(UUID.randomUUID());
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findEligibleStaff(eq(com.storagehub.domain.model.UserStatus.ACTIVE), eq(RoleCode.STAFF),
+            eq(facility.getId()), any())).thenReturn(List.of(staff));
+        var calendar = org.mockito.Mockito.mock(WorkflowBusinessCalendar.class);
+        var schedule = WorkflowBusinessCalendar.parse(WorkflowBusinessCalendar.DEFAULT);
+        when(calendar.current()).thenReturn(schedule);
+        ReflectionTestUtils.setField(service, "recoveryCalendar", calendar);
+
+        var session = service.reopenReturnVerification(managerActor, rc.getId(), staff.getId(), "Đối chiếu giấy tờ gốc").attendance();
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999",
+            session.reverificationStartedAt()).attendance().verifiedAt()).isNotNull();
+        assertThat(ReturnAttendancePolicy.canInspect(rc, Instant.now())).isTrue();
+        rc.setReturnReverificationStartedAt(Instant.now().minusSeconds(1900));
+
+        Instant appointment = Instant.now().plusSeconds(3600);
+        var decision = service.reviewReturnArrival(managerActor, rc.getId(), true, "Khách đổi lịch", staff.getId(), appointment).attendance();
+        assertThat(decision.handoverAppointmentAt()).isEqualTo(appointment);
+        assertThat(decision.handoverDueAt()).isEqualTo(schedule.afterWorkingHours(appointment, 4));
+        assertThat(ReturnAttendancePolicy.canInspect(rc, appointment.minusNanos(1))).isFalse();
+        assertThat(ReturnAttendancePolicy.canInspect(rc, appointment)).isTrue();
+        assertThat(ReturnAttendancePolicy.canInspect(rc, decision.handoverDueAt())).isFalse();
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(true)))
+            .hasMessageContaining("Chưa đến lịch bàn giao");
+        verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+    }
+
+    @Test
+    void timelyArrivalCanBeVerifiedAfterRemovalDeadlineWithoutChangingDeadline() {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        Instant deadline = Instant.now().minusSeconds(60);
+        rental.setInventoryRemovalDeadlineAt(deadline);
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        rc.setReturnArrivedAt(deadline.minusSeconds(60));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999")
+            .attendance().verifiedAt()).isAfter(deadline);
+        assertThat(ReturnAttendancePolicy.canInspect(rc, Instant.now())).isTrue();
+        Instant expiry = ReturnAttendancePolicy.expiresAt(rc);
+        assertThat(ReturnAttendancePolicy.canInspect(rc, expiry)).isFalse();
+        assertThat(ReturnAttendancePolicy.protectsFromRecovery(rc)).isTrue();
+        assertThat(rental.getInventoryRemovalDeadlineAt()).isEqualTo(deadline);
+    }
+
+    @Test
+    void ownerConfirmsAndRevokesIdempotentlyWithoutSettlement() {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
+        var first = service.setCustomerClearance(customerActor, rc.getId(), true, 0);
+        assertThat(first.customerClearedAt()).isNotNull();
+        assertThat(first.status()).isEqualTo(ReturnCaseStatus.scheduled);
+        assertThat(service.setCustomerClearance(customerActor, rc.getId(), true, 0).customerClearedAt()).isEqualTo(first.customerClearedAt());
+        assertThat(service.getReturnForCustomer(customerActor, rc.getId()).customerClearedAt()).isEqualTo(first.customerClearedAt());
+        assertThat(service.setCustomerClearance(customerActor, rc.getId(), false, 0).customerClearedAt()).isNull();
+        assertThat(service.setCustomerClearance(customerActor, rc.getId(), false, 0).clearanceRevision()).isOne();
+        verify(notificationService, org.mockito.Mockito.times(2)).createFacilityOperationsNotifications(any(), any(), any(), any(), any());
+        verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+    }
+
+    @Test
+    void anotherCustomerAndPostInspectionUpdatesAreRejected() {
+        var rc = setupReturn(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThatThrownBy(() -> service.setCustomerClearance(customerActor, rc.getId(), true, 0))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
+        when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.setCustomerClearance(customerActor, rc.getId(), false, 0))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void inspectionDependsOnPhysicalCheckRegardlessOfCustomerConfirmation(boolean cleared) {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setSetupExitRequested(false);
+        rc.setCustomerClearedAt(cleared ? Instant.now() : null);
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(false)))
+            .hasMessageContaining("xác minh danh tính");
+        UUID arrivalPhoto = UUID.fromString(inspectionPhoto(rc).getFirst());
+        settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, arrivalPhoto).setUploadedBy(staff);
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        assertThatThrownBy(() -> service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))
+            .hasMessageContaining("Cần ảnh hiện trường");
+        assertThat(rc.getReturnArrivedAt()).isNull();
+        var verified = service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999", null, arrivalPhoto).attendance();
+        assertThat(verified.evidenceId()).isEqualTo(arrivalPhoto);
+        assertThat(verified.arrivedAt()).isEqualTo(verified.verifiedAt()).isNotNull();
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(false)))
+            .hasMessageContaining("kho trống");
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(true)))
+            .hasMessageContaining("ảnh hiện trường");
+        assertThat(rc.getInspectedAt()).isNull();
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(returnCaseRepository.save(rc)).thenReturn(rc);
+        var result = service.performInspection(staffActor, rc.getId(), propertyInspection(true, inspectionPhoto(rc)));
+        assertThat(result.warehouseEmptyVerified()).isTrue();
+        assertThat(result.warehouseEmptyVerifiedBy()).isEqualTo(staff.getId());
+        assertThat(result.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+    }
+
+    @Test
+    void draftPreservesDeadlineAndRevocationInvalidatesPendingInspection() {
+        var rc = setupReturn(ReturnCaseStatus.requested);
+        rc.setRecoveryEligibleAt(Instant.now().plusSeconds(86400));
+        var deadline = rc.getRecoveryEligibleAt();
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
+        var photos = inspectionPhoto(rc);
+        var draft = service.savePropertyCheck(staffActor, rc.getId(),
+            new com.storagehub.api.returns.ReturnPropertyCheckRequest(false, 0, "Còn hai thùng", photos));
+        assertThat(draft.evidencePhotos()).isEqualTo(photos);
+        assertThat(draft.inspectionNotes()).isEqualTo("Còn hai thùng");
+        assertThat(draft.recoveryEligibleAt()).isEqualTo(deadline);
+        assertThat(draft.status()).isEqualTo(ReturnCaseStatus.requested);
+        assertThat(draft.inspectedAt()).isNull();
+        verify(notificationService).createNotification(eq(customer.getId()), any(), any(), any(), eq(rc.getId()));
+        service.setCustomerClearance(customerActor, rc.getId(), true, draft.clearanceRevision());
+        var verified = service.savePropertyCheck(staffActor, rc.getId(),
+            new com.storagehub.api.returns.ReturnPropertyCheckRequest(true, draft.clearanceRevision(), "Đã kiểm tra", photos));
+        var revoked = service.setCustomerClearance(customerActor, rc.getId(), false, verified.clearanceRevision());
+        assertThat(revoked.warehouseEmptyVerified()).isNull();
+        assertThat(revoked.warehouseEmptyVerifiedBy()).isNull();
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), propertyInspection(true, photos), verified.clearanceRevision()))
+            .hasMessageContaining("kiểm tra thực tế");
+        verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+    }
+
+    @Test
+    void inspectionHttpRejectsMissingSelectionOccupiedAndIncompleteData() throws Exception {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        var actors = org.mockito.Mockito.mock(com.storagehub.security.ActorContext.class);
+        when(actors.required()).thenReturn(staffActor);
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+            new com.storagehub.api.returns.StaffReturnController(actors, service))
+            .setControllerAdvice(new com.storagehub.common.api.GlobalExceptionHandler()).build();
+        String path = "/api/staff/returns/" + rc.getId() + "/inspection";
+        var body = objectMapper.valueToTree(setupInspection(false));
+        for (boolean omit : List.of(false, true)) {
+            if (omit) ((com.fasterxml.jackson.databind.node.ObjectNode) body).remove("unitVacated");
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                    .contentType("application/json").content(body.toString()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict());
+        }
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                .contentType("application/json").content("{\"unitVacated\":true}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+        verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+    }
+
+    @Test
+    void verifiedEarlyReturnRefundsUnusedMonths() {
+        var rc = setupReturn(ReturnCaseStatus.requested);
+        rc.setSetupExitRequested(false);
+        rc.setReturnType(ReturnType.EARLY_RETURN);
+        setVerifiedReturnAttendance(rc);
+        rc.setRequestedBy(customer);
+        rc.setRequestedAt(Instant.parse("2026-01-01T00:00:00Z"));
+        rc.setScheduledDate(LocalDate.of(2026, 1, 10));
+        rental.setStartDate(LocalDate.of(2026, 1, 1));
+        rental.setContractEndDate(LocalDate.of(2026, 3, 31));
+        var pricing = new com.storagehub.domain.model.ReservationPricingSnapshot();
+        pricing.setRentalMonths(3);
+        pricing.setMonthlyPrice(new BigDecimal("2000000"));
+        pricing.setNetRentalAmount(new BigDecimal("6000000"));
+        pricing.setEarlyTerminationPricingSnapshotJson("[{\"rentalMonths\":3,\"monthlyPrice\":2000000,\"freeSetupDays\":0}]");
+        when(pricingSnapshotRepository.findByReservation_Id(rental.getReservation().getId())).thenReturn(Optional.of(pricing));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(returnCaseRepository.save(rc)).thenReturn(rc);
+        var result = service.performInspection(staffActor, rc.getId(), propertyInspection(true, inspectionPhoto(rc)));
+        assertThat(result.returnType()).isEqualTo(ReturnType.EARLY_RETURN);
+        assertThat(result.activeReturnPolicy().rentalRefundAmount()).isEqualByComparingTo("4000000");
+        assertThat(result.netRefundAmount()).isEqualByComparingTo("6000000");
+    }
+
+    private void setVerifiedReturnAttendance(ReturnCase record) {
+        Instant now = Instant.now();
+        record.setReturnArrivedAt(now);
+        record.setReturnIdentityVerifiedAt(now);
+    }
+
+    private List<String> inspectionPhoto(ReturnCase rc) {
+        UUID fileId = UUID.randomUUID();
+        var asset = new com.storagehub.domain.model.FileAsset();
+        asset.setEntityType("RETURN_CASE");
+        asset.setEntityId(rc.getId());
+        asset.setContentType("image/jpeg");
+        when(settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, fileId)).thenReturn(asset);
+        return List.of(fileId.toString());
+    }
+
     private ReturnInspectionRequest setupInspection(boolean vacated) {
+        return propertyInspection(vacated, List.of());
+    }
+
+    private ReturnInspectionRequest propertyInspection(boolean vacated, List<String> photos) {
         return new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.no_damage,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            "Đã kiểm tra kho trống", List.of(), true, true, true, StorageUnitStatus.available, vacated);
+            "Đã kiểm tra kho trống", photos, true, true, true, StorageUnitStatus.available, vacated);
     }
 
     @Test
@@ -1219,7 +1605,7 @@ class ReturnSettlementServiceTests {
             return rc;
         });
 
-        // D and D+11 are rejected; D+10 succeeds for XL.
+        // D is before the window and D+11 is after it; D+10 is the final allowed day for XL.
         assertThatThrownBy(() -> service.createCustomerReturnRequest(customerActor, rental.getId(),
             new CustomerCreateReturnRequest(today, "Trước ngày hiệu lực", ReturnType.INVENTORY_MISMATCH)))
             .isInstanceOf(com.storagehub.common.api.ApiException.class);
@@ -1230,7 +1616,7 @@ class ReturnSettlementServiceTests {
         // Mutate unitType after publication: active rental snapshot must stay 10 days.
         unitType.setCode("S");
         ReturnCaseResponse created = service.createCustomerReturnRequest(customerActor, rental.getId(),
-            new CustomerCreateReturnRequest(today.plusDays(10), "Đúng ngày cuối XL", ReturnType.INVENTORY_MISMATCH));
+            new CustomerCreateReturnRequest(today.plusDays(10), "Ngày cuối XL", ReturnType.INVENTORY_MISMATCH));
         assertThat(created.returnWindowDays()).isEqualTo(10);
         assertThat(created.scheduledDate()).isEqualTo(today.plusDays(10));
     }
@@ -1285,10 +1671,10 @@ class ReturnSettlementServiceTests {
         witnessScope.setScopeLevel(com.storagehub.domain.model.FacilityScopeLevel.OPERATE);
         when(userFacilityScopeRepository.findByUser_IdAndFacility_Id(witness.getId(), facility.getId()))
             .thenReturn(Optional.of(witnessScope));
-        var recoveryInspection = new ReturnInspectionRequest(
+        java.util.function.Function<ReturnCase, ReturnInspectionRequest> recoveryInspection = rc -> new ReturnInspectionRequest(
             InventoryMatch.excess, DamageClassification.no_damage,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            "Thu hồi hàng quá hạn", List.of("evidence-1"), true, true, true, StorageUnitStatus.available, true,
+            "Thu hồi hàng quá hạn", inspectionPhoto(rc), true, true, true, StorageUnitStatus.available, true,
             "Khu vực lưu tạm A", false, witness.getId(), null, null
         );
         when(returnCaseRepository.findById(xlCase.getId())).thenReturn(Optional.of(xlCase));
@@ -1296,7 +1682,7 @@ class ReturnSettlementServiceTests {
             new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
                 new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
 
-        ReturnCaseResponse xlResponse = service.performInspection(staffActor, xlCase.getId(), recoveryInspection);
+        ReturnCaseResponse xlResponse = service.performInspection(staffActor, xlCase.getId(), recoveryInspection.apply(xlCase));
         // receiptDate to noticeDate+10 inclusive = 12 calendar days * 100,000 = 1,200,000 (not 900,000 for 7d, not 1,400,000 for 12d).
         assertThat(xlResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("1200000");
 
@@ -1319,7 +1705,7 @@ class ReturnSettlementServiceTests {
             new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
                 new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
 
-        ReturnCaseResponse smallOverdueResponse = service.performInspection(staffActor, smallOverdueCase.getId(), recoveryInspection);
+        ReturnCaseResponse smallOverdueResponse = service.performInspection(staffActor, smallOverdueCase.getId(), recoveryInspection.apply(smallOverdueCase));
         assertThat(smallOverdueResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("500000");
 
         // 3) Size S (3 days), returned early on day 1 (D+1) -> usage ends on D+1 (3 days inclusive = 300,000, not 500,000).
@@ -1328,13 +1714,15 @@ class ReturnSettlementServiceTests {
         smallEarlyCase.setReturnType(ReturnType.INVENTORY_MISMATCH);
         smallEarlyCase.setReturnWindowDays(3);
         smallEarlyCase.setScheduledDate(noticeDate.plusDays(1));
+        smallEarlyCase.setReturnArrivedAt(day1Vacate.minusSeconds(60));
+        smallEarlyCase.setReturnIdentityVerifiedAt(day1Vacate.minusSeconds(30));
         when(returnCaseRepository.findById(smallEarlyCase.getId())).thenReturn(Optional.of(smallEarlyCase));
         when(returnFinance.capture(smallEarlyCase)).thenReturn(
             new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(
                 new BigDecimal("2000000"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
         try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
             clock.when(Instant::now).thenReturn(day1Vacate);
-            ReturnCaseResponse smallEarlyResponse = service.performInspection(staffActor, smallEarlyCase.getId(), setupInspection(true));
+            ReturnCaseResponse smallEarlyResponse = service.performInspection(staffActor, smallEarlyCase.getId(), propertyInspection(true, inspectionPhoto(smallEarlyCase)));
             assertThat(smallEarlyResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("300000");
         }
     }

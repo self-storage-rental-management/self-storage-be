@@ -59,7 +59,7 @@ class UnitAssignmentQueryTests {
         var result = reservationRepository.findCheckInWork(
             "ONGOING", java.time.Instant.now(), java.time.Instant.EPOCH,
             java.time.Instant.EPOCH, java.time.Instant.EPOCH,
-            null, null, false, false, null, null, null,
+            null, null, false, false, false, null, null, null,
             false, List.of(new UUID(0, 0)), PageRequest.of(0, 20)
         );
 

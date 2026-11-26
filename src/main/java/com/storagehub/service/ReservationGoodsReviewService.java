@@ -30,7 +30,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -215,7 +214,7 @@ public class ReservationGoodsReviewService {
                 "page must be >= 0 and size must be between 1 and 100", null
             );
         }
-        return PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt"));
+        return PageRequest.of(page, size);
     }
 
     private ReservationReviewResponse toResponse(Reservation reservation) {

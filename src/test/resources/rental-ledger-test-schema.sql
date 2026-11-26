@@ -122,14 +122,15 @@ CREATE TABLE return_financial_snapshot_history (
     CONSTRAINT uk_return_financial_history UNIQUE (return_id,revision)
 );
 CREATE TABLE return_settlement_receipts (
-    return_id VARCHAR(36) NOT NULL PRIMARY KEY,
+    return_id VARCHAR(36) NOT NULL,
     direction VARCHAR(16) NOT NULL,
     amount DECIMAL(20,0) NOT NULL,
     payment_method VARCHAR(24) NOT NULL,
     transaction_reference VARCHAR(120) NOT NULL UNIQUE,
     receipt_file_id VARCHAR(36) NOT NULL UNIQUE,
     recorded_by VARCHAR(36) NOT NULL,
-    recorded_at_ms BIGINT NOT NULL
+    recorded_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (return_id, direction)
 );
 
 -- JDBC-owned tables used by real services in full Spring test contexts.
