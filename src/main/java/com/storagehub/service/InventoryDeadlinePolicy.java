@@ -24,8 +24,7 @@ final class InventoryDeadlinePolicy {
             }
             return;
         }
-        if (IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME.equals(rental.getAttendanceReviewStatus())
-            || IntakeTimelineCalculator.REVIEW_FACILITY_EXCEPTION.equals(rental.getAttendanceReviewStatus())) {
+        if (IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME.equals(rental.getAttendanceReviewStatus())) {
             return;
         }
         Instant arrivalRef = rental.getActualArrivedAt() != null

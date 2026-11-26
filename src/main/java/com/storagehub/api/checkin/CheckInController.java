@@ -274,6 +274,19 @@ public class CheckInController {
         return new ApiResponse<>(service.recordArrival(actorContext.required(), checkInId, review), CorrelationIdContext.current());
     }
 
+    public record ImmediateRecoveryRequest(@jakarta.validation.constraints.Size(max = 500) String reason) {}
+
+    @PostMapping("/{checkInId}/immediate-recovery")
+    public ApiResponse<CheckInResponse> triggerImmediateHandoverRecovery(
+        @PathVariable UUID checkInId,
+        @Valid @RequestBody(required = false) ImmediateRecoveryRequest request
+    ) {
+        return new ApiResponse<>(
+            service.triggerImmediateHandoverRecovery(actorContext.required(), checkInId, request == null ? null : request.reason()),
+            CorrelationIdContext.current()
+        );
+    }
+
     @PostMapping("/{checkInId}/reject")
     public ApiResponse<CheckInResponse> reject(
         @PathVariable UUID checkInId,

@@ -414,7 +414,7 @@ public class IntakeWorkflowService {
                 if ("APPROVED_ON_TIME".equals(resolution)) {
                     if (r.getMoveInCompletedAt() == null) {
                         throw ApiExceptions.setupCutoffExceeded(
-                            "Khách hàng chưa hoàn tất báo setup trước hạn; không thể duyệt đến đúng hạn (chỉ có thể chốt vắng mặt hoặc chuyển ngoại lệ cơ sở nếu có sự cố kỹ thuật/cơ sở)."
+                            "Khách hàng chưa hoàn tất báo setup trước hạn; không thể duyệt đến đúng hạn (chỉ có thể chốt vắng mặt)."
                         );
                     }
                     if (clean(command.reason()) == null) {
@@ -429,28 +429,50 @@ public class IntakeWorkflowService {
                     }
                     notificationTitle = "Đã duyệt đối soát đến đúng hạn";
                     notificationContent = "Đơn " + code(r) + " được xác nhận đến đúng hạn. Có thể tiếp tục xác minh danh tính.";
-                } else if ("CONFIRMED_ABSENT".equals(resolution)) {
+                } else {
                     r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
                     r.setInspectionFailureReason(clean(command.reason()) != null
                         ? clean(command.reason()) : "Không đến kiểm kê trong hạn.");
                     createRecoveryTaskIfMissing(r, now, "Quá hạn đến kiểm kê (đã đối soát vắng mặt)");
                     notificationTitle = "Đã chốt đối soát: khách không đến";
                     notificationContent = "Đơn " + code(r) + " đã chuyển sang nhiệm vụ thu hồi chờ xác nhận.";
-                } else {
-                    if (clean(command.reason()) == null) {
-                        throw ApiExceptions.validation("Vui lòng nhập lý do ngoại lệ cơ sở.", null);
-                    }
-                    r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_FACILITY_EXCEPTION);
-                    r.setExceptionOwnerId(actor.userId());
-                    r.setExceptionReason(clean(command.reason()));
-                    if (command.at() != null && command.at().isAfter(now)) {
-                        r.setExceptionDueAt(command.at());
-                        r.setInventoryFinalDeadlineAt(command.at());
-                        r.setSetupCompletionDeadlineAt(command.at());
-                    }
-                    notificationTitle = "Chuyển ngoại lệ do cơ sở";
-                    notificationContent = "Đơn " + code(r) + " đã chuyển Manager xử lý ngoại lệ cơ sở.";
                 }
+                after = now;
+            }
+            case "IMMEDIATE_RECOVERY" -> {
+                if (!actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER)) {
+                    throw ApiExceptions.forbidden("Chỉ Staff hoặc Manager mới được tạo yêu cầu thu hồi.");
+                }
+                scope.assertCanOperate(actor, r.getFacility().getId());
+                if (r.getInventoryEscalatedAt() != null) {
+                    return view(r);
+                }
+                if (r.getInspectionCompletedAt() != null || r.getInventoryVerifiedAt() != null) {
+                    throw ApiExceptions.invalidState("Hồ sơ đã hoàn tất kiểm kê, không thể tạo yêu cầu thu hồi.");
+                }
+                Instant d = timeline.arrivalDeadline(r);
+                int maxCount = r.getIntakeExtensionMaxCount() != null
+                    ? r.getIntakeExtensionMaxCount() : policy.getMaxExtensions();
+                int usedCount = r.getSetupExtensionCount() != null ? r.getSetupExtensionCount() : 0;
+                boolean cannotExtendMore = timeline.hasStartedInspectionClock(r)
+                    || (d != null && !now.isBefore(d))
+                    || usedCount >= maxCount;
+                if (!cannotExtendMore) {
+                    throw ApiExceptions.invalidState("Hồ sơ vẫn còn lượt hoặc còn hạn để dời lịch, chưa thể thu hồi ngay.");
+                }
+                String failureReason = clean(command.reason()) != null
+                    ? clean(command.reason())
+                    : "Yêu cầu thu hồi ngay khi đã đến hạn không thể dời thêm.";
+                r.setAttendanceReviewOwnerId(actor.userId());
+                if (r.getAttendanceReviewStatus() == null
+                    || IntakeTimelineCalculator.REVIEW_NONE.equals(r.getAttendanceReviewStatus())
+                    || IntakeTimelineCalculator.REVIEW_PENDING.equals(r.getAttendanceReviewStatus())) {
+                    r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
+                }
+                r.setInspectionFailureReason(failureReason);
+                createRecoveryTaskIfMissing(r, now, failureReason);
+                notificationTitle = "Đã tạo yêu cầu thu hồi ngay";
+                notificationContent = "Đơn " + code(r) + " đã được tạo nhiệm vụ thu hồi (" + failureReason + ").";
                 after = now;
             }
             case "INTERRUPT_INSPECTION" -> {
@@ -663,7 +685,7 @@ public class IntakeWorkflowService {
             throw ApiExceptions.validation("Vui lòng chọn kết luận đối soát.", null);
         }
         String upper = outcome.trim().toUpperCase(Locale.ROOT);
-        if (!List.of("APPROVED_ON_TIME", "CONFIRMED_ABSENT", "FACILITY_EXCEPTION").contains(upper)) {
+        if (!List.of("APPROVED_ON_TIME", "CONFIRMED_ABSENT").contains(upper)) {
             throw ApiExceptions.validation("Kết luận đối soát không hợp lệ.", null);
         }
         return upper;

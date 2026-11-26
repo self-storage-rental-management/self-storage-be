@@ -1878,11 +1878,52 @@ public class CheckInHandoverService {
             "Đã giải phóng gian kho", message, reservationId);
     }
 
+    @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
+    public CheckInResponse triggerImmediateHandoverRecovery(ActorPrincipal actor, UUID checkInId, String reason) {
+        requireOperator(actor);
+        authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+        CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)
+            .orElseThrow(() -> ApiExceptions.notFound("Check-in was not found"));
+        Reservation reservation = reservationRepository.findByIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        if (!java.util.EnumSet.of(CheckInStatus.scheduled, CheckInStatus.identity_verified,
+            CheckInStatus.contract_signed, CheckInStatus.payment_collected).contains(checkIn.getStatus())) {
+            throw ApiExceptions.invalidState("Đơn bàn giao không ở trạng thái có thể thu hồi ngay.");
+        }
+        Instant now = nowInstant();
+        Instant deadline = ReservationCheckInPolicy.attendanceDeadline(effectiveAppointment(reservation, checkIn));
+        boolean atOrPastDeadline = deadline != null && !now.isBefore(deadline);
+        boolean inCompletionWindow = ReservationCheckInPolicy.completionDeadline(reservation) != null;
+        if (!atOrPastDeadline && !inCompletionWindow) {
+            throw ApiExceptions.invalidState("Đơn bàn giao chưa đến hạn hoặc chưa bắt đầu cửa sổ bàn giao.");
+        }
+        String effectiveReason = clean(reason) != null
+            ? clean(reason)
+            : "Yêu cầu thu hồi ngay khi đã đến hạn bàn giao không thể dời thêm.";
+        cancelUnfinishedHandoverWithReason(reservation, checkIn, now, effectiveReason);
+        return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
+    }
+
     private void cancelUnfinishedHandover(Reservation reservation, CheckIn checkIn, Instant deadline) {
+        cancelUnfinishedHandoverWithReason(
+            reservation,
+            checkIn,
+            deadline,
+            "Quá 72 giờ từ lần đối chiếu CCCD đầu tiên, bàn giao chưa hoàn tất."
+        );
+    }
+
+    private void cancelUnfinishedHandoverWithReason(
+        Reservation reservation,
+        CheckIn checkIn,
+        Instant deadline,
+        String reason
+    ) {
         UnitAssignment assignment = activeAssignment(reservation.getId());
         StorageUnit unit = lockAssignedUnit(assignment);
         assertReservationUnitMatch(reservation, assignment, unit);
-        String reason = "Quá 72 giờ từ lần đối chiếu CCCD đầu tiên, bàn giao chưa hoàn tất.";
         Instant now = Instant.now();
         var previous = checkIn.getStatus();
         boolean reviewUnit = previous == CheckInStatus.payment_collected || checkIn.getLockReference() != null
