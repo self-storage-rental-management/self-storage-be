@@ -227,6 +227,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public ReceiptReminderResponse remindCustomerReceipt(ActorPrincipal actor, UUID checkInId) {
         requireCheckInReader(actor);
         authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
@@ -271,6 +272,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse releaseAfterCustomerReceiptTimeout(ActorPrincipal actor, UUID checkInId) {
         if (actor == null || !actor.hasRole(RoleCode.MANAGER)) {
             throw ApiExceptions.forbidden("Chỉ Manager được giải phóng gian kho sau thời hạn xác nhận.");
@@ -507,11 +509,13 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse recordArrival(ActorPrincipal actor, UUID checkInId) {
         return recordArrival(actor, checkInId, null);
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse recordArrival(ActorPrincipal actor, UUID checkInId,
         com.storagehub.api.checkin.CheckInController.ArrivalReview review) {
         CheckIn checkIn = requireWorkflowStep(actor, checkInId, CheckInStatus.scheduled);
@@ -565,6 +569,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse resolveArrival(ActorPrincipal actor, UUID id, boolean accepted, String reason) {
         requireArrivalReviewer(actor);
         CheckIn c = checkInRepository.findByIdForUpdate(id).orElseThrow(() -> ApiExceptions.notFound("Check-in not found"));
@@ -586,6 +591,7 @@ public class CheckInHandoverService {
     public enum IdentityComparison { MATCH, CORRECTABLE, REJECT }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public IdentityComparison compareIdentity(ActorPrincipal actor, UUID checkInId, String document) {
         Reservation reservation = requireWorkflowStep(actor, checkInId, CheckInStatus.scheduled).getReservation();
         requireArrivalForAttendanceTerms(reservation);
@@ -937,6 +943,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse recordInventoryArrival(ActorPrincipal actor, UUID checkInId) {
         CheckIn checkIn = requireOpenInventoryVisit(actor, checkInId);
         Reservation reservation = checkIn.getReservation();
@@ -944,7 +951,8 @@ public class CheckInHandoverService {
             Instant arrivedAt = nowInstant();
             Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElse(null);
             if (rental != null && intakeTimelineCalculator != null && intakeTimelineCalculator.isUnifiedPolicy(rental)) {
-                if (rental.getSetupStartedAt() != null && arrivedAt.isBefore(rental.getSetupStartedAt())) {
+                Instant receivedAt = intakeTimelineCalculator.intakeReceivedAt(rental);
+                if (receivedAt != null && arrivedAt.isBefore(receivedAt)) {
                     throw ApiExceptions.validation("Thời điểm đến không thể trước thời điểm nhận kho.", null);
                 }
                 Instant d = intakeTimelineCalculator.arrivalDeadline(rental);
@@ -971,6 +979,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse verifyInventoryIdentity(ActorPrincipal actor, UUID checkInId,
         com.storagehub.api.checkin.VerifyInventoryIdentityRequest request) {
         CheckIn checkIn = requireOpenInventoryVisit(actor, checkInId);
@@ -1106,12 +1115,14 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public com.storagehub.api.checkin.InventoryDraftResponse saveInventoryDraft(ActorPrincipal actor, UUID checkInId,
         CompleteCheckInRequest request, long expectedRevision) {
         return saveInventoryDraft(actor, checkInId, new com.storagehub.api.checkin.SaveInventoryDraftRequest(request, expectedRevision));
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public com.storagehub.api.checkin.InventoryDraftResponse saveInventoryDraft(ActorPrincipal actor, UUID checkInId,
         com.storagehub.api.checkin.SaveInventoryDraftRequest input) {
         requireOperator(actor);
@@ -1150,6 +1161,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse publishInventoryDraft(ActorPrincipal actor, UUID checkInId, long expectedRevision) {
         requireOperator(actor);
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
@@ -1199,6 +1211,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse submitInventoryRefusal(ActorPrincipal actor, UUID id,
         com.storagehub.api.checkin.CheckInController.SubmitRefusal request) {
         requireOperator(actor);
@@ -1277,6 +1290,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse reviewInventoryRefusal(ActorPrincipal actor, UUID id, Instant submittedAt, boolean approved, String reason) {
         requireArrivalReviewer(actor);
         var checkIn = checkInRepository.findByIdForUpdate(id).orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy biên bản kiểm kê."));
@@ -1321,6 +1335,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse resolveInventoryAtSite(ActorPrincipal actor, UUID checkInId,
         com.storagehub.api.checkin.ResolveInventoryAtSiteRequest request) {
         requireOperator(actor);
@@ -2439,6 +2454,7 @@ public class CheckInHandoverService {
     }
 
     @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public CheckInResponse sendInventoryReturnReminder(ActorPrincipal actor, UUID checkInId) {
         authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
         CheckIn checkIn = checkInRepository.findByIdForUpdate(checkInId)

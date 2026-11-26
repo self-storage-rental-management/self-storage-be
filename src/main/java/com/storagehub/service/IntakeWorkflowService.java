@@ -235,7 +235,8 @@ public class IntakeWorkflowService {
                 }
                 Instant d = timeline.arrivalDeadline(r);
                 if (timeline.isUnifiedPolicy(r)) {
-                    if (r.getSetupStartedAt() != null && arrivedAt.isBefore(r.getSetupStartedAt())) {
+                    Instant receivedAt = timeline.intakeReceivedAt(r);
+                    if (receivedAt != null && arrivedAt.isBefore(receivedAt)) {
                         throw ApiExceptions.validation("Thời điểm đến không thể trước thời điểm nhận kho.", null);
                     }
                     if (d != null && arrivedAt.isAfter(d)

@@ -43,6 +43,17 @@ public class PaymentReceiptEmailQueue {
     @org.springframework.beans.factory.annotation.Value("${app.mail.skip-demo-domains:true}")
     private boolean skipDemoDomains = true;
 
+    @org.springframework.beans.factory.annotation.Value("${app.mail.enabled:false}")
+    private boolean mailEnabled = false;
+
+    /**
+     * Renders messages to the local outbox while mail sending is disabled. Held through an
+     * ObjectProvider because TransactionalEmailService already depends on this queue, and a direct
+     * field would form a cycle Spring cannot construct.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<TransactionalEmailService> previewWriter;
+
     @Transactional
     public void enqueue(UUID userId, String recipient, Map<String, Object> payload) {
         enqueue(userId, recipient, "payment-bill", "StorageHub - Biên lai xác nhận thanh toán thành công",
@@ -72,6 +83,12 @@ public class PaymentReceiptEmailQueue {
             jdbc.update("INSERT INTO payment_receipt_emails (receipt_key,user_id,recipient,payload,template_name,subject,audit_action,expires_at,next_attempt_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE receipt_key=receipt_key",
                 key, userId == null ? null : userId.toString(), recipient, body, template, subject, auditAction,
                 expiry == null ? null : Timestamp.from(expiry), Timestamp.from(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS)));
+            // With mail switched off the queue never reaches SMTP, so render the message to the local
+            // outbox here. Otherwise the code in a verification email existed only inside a log line.
+            if (!mailEnabled && previewWriter != null) {
+                var writer = previewWriter.getIfAvailable();
+                if (writer != null) writer.savePreview(recipient, subject, template, payload);
+            }
         } catch (GeneralSecurityException | com.fasterxml.jackson.core.JsonProcessingException exception) {
             throw new IllegalStateException("Cannot queue transactional email", exception);
         }
@@ -100,6 +117,12 @@ public class PaymentReceiptEmailQueue {
                     sent = outcome == TransactionalEmailService.DeliveryOutcome.SENT;
                     permanent = outcome == TransactionalEmailService.DeliveryOutcome.PERMANENT_FAILURE;
                     if (!sent) failure = permanent ? "PERMANENT_FAILURE" : "SMTP_FAILED";
+                } else if ("MAIL_DISABLED".equals(failure)) {
+                    // Mail is switched off on purpose. Render the message to the local outbox so the
+                    // verification code or receipt is still readable, then treat it as handled
+                    // rather than retrying forever.
+                    sender.savePreview(entry.recipient(), entry.subject(), entry.template(), payload);
+                    sent = true;
                 }
             } catch (Exception exception) {
                 failure = "DELIVERY_FAILED";

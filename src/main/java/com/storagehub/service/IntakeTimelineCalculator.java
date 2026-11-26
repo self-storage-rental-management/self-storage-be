@@ -149,10 +149,25 @@ public class IntakeTimelineCalculator {
         rental.setInspectionCompletionDeadlineAt(completionDeadline(arrivedAt));
     }
 
+    /**
+     * Actual receipt timestamp T0 used as the lower bound for unified intake checks.
+     * In confirmReceipt(), rental.setupStartedAt stores the customer-selected handover
+     * date (which can be after T0), whereas D0 = T0 + intakeInitialDurationHours preserves T0.
+     */
+    public Instant intakeReceivedAt(Rental rental) {
+        if (rental == null) return null;
+        if (rental.getOriginalInspectionArrivalDeadlineAt() != null
+            && rental.getIntakeInitialDurationHours() != null) {
+            return rental.getOriginalInspectionArrivalDeadlineAt()
+                .minus(Duration.ofHours(rental.getIntakeInitialDurationHours()));
+        }
+        return rental.getSetupStartedAt();
+    }
+
     /** Setup completion allowed iff receivedAt <= now <= C. */
     public boolean canDeclareSetupComplete(Rental rental, Instant now) {
         if (rental == null || now == null) return false;
-        Instant receivedAt = rental.getSetupStartedAt();
+        Instant receivedAt = intakeReceivedAt(rental);
         Instant cutoff = setupCutoff(rental);
         if (receivedAt == null || cutoff == null) return false;
         return !now.isBefore(receivedAt) && !now.isAfter(cutoff);
@@ -253,7 +268,7 @@ public class IntakeTimelineCalculator {
     /** Arrived on time iff receivedAt <= actualArrivedAt <= D (inclusive). */
     public boolean isArrivalOnTime(Rental rental, Instant actualArrivedAt) {
         Instant d = arrivalDeadline(rental);
-        Instant t0 = rental.getSetupStartedAt();
+        Instant t0 = intakeReceivedAt(rental);
         if (d == null || t0 == null || actualArrivedAt == null) return false;
         return !actualArrivedAt.isBefore(t0) && !actualArrivedAt.isAfter(d);
     }

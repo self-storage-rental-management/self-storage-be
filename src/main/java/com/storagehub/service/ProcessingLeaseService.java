@@ -123,7 +123,10 @@ public class ProcessingLeaseService {
                 leases.saveAndFlush(lease);
                 if (attributes.getResponse() != null) {
                     attributes.getResponse().setHeader("X-Processing-Version", Long.toString(lease.getRevision()));
-                    attributes.getResponse().setHeader("X-Processing-Stamp", stamp(resource));
+                    // Read the committed values back. The instances captured before the command ran
+                    // still carry the pre-command updated-at, so handing that stamp to the client
+                    // made its very next request look stale and blocked the whole workflow.
+                    attributes.getResponse().setHeader("X-Processing-Stamp", committedStamp(type, id));
                     if (!customer) attributes.getResponse().setHeader("X-Processing-Expires-At", lease.getExpiresAt().toString());
                 }
                 return result;
@@ -237,6 +240,26 @@ public class ProcessingLeaseService {
     private String stamp(Resource resource) {
         return time(resource.reservation().getUpdatedAt()) + ":" + time(resource.entity().getUpdatedAt());
     }
+
+    /**
+     * Stamp built from freshly read rows, for use right after a command committed.
+     *
+     * The {@code Resource} passed into {@link #command} was loaded before the command ran, so its
+     * updated-at values are the in-memory ones the command produced. MySQL stores timestamp(6) by
+     * rounding to the microsecond while the captured Instant is truncated, so the in-memory value
+     * can differ from the stored one by one microsecond. Handing that stamp to the client made the
+     * record look changed on its very next request, and the workflow locked up.
+     *
+     * Only the two rows behind this record are detached; the rest of the persistence context is
+     * left intact so the caller can still serialize its result.
+     */
+    private String committedStamp(Target type, UUID id) {
+        Resource current = resource(type, id);
+        entities.detach(current.entity());
+        if (current.reservation() != current.entity()) entities.detach(current.reservation());
+        return stamp(resource(type, id));
+    }
+
     private String time(Instant value) { return value == null ? "0" : value.truncatedTo(ChronoUnit.MICROS).toString(); }
     private UUID parseToken(String token) {
         try { return UUID.fromString(token); }
