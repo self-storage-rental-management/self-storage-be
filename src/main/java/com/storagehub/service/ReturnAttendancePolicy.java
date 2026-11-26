@@ -39,8 +39,11 @@ final class ReturnAttendancePolicy {
     }
 
     static Instant reviewStartsAt(ReturnCase record) {
-        if (!applies(record) || !isOpen(record) || record.getReturnArrivalReviewedAt() != null
-            || record.getReturnArrivedAt() == null) return null;
+        if (!applies(record) || !isOpen(record) || record.getReturnArrivedAt() == null) return null;
+        if (Boolean.TRUE.equals(record.getReturnArrivalReviewAccepted())) {
+            return record.getPostReviewHandoverDueAt() == null ? record.getReturnArrivalReviewedAt() : record.getPostReviewHandoverDueAt();
+        }
+        if (record.getReturnArrivalReviewedAt() != null) return null;
         if (record.getReturnSecondAttemptAt() != null && record.getReturnIdentityVerifiedAt() == null)
             return record.getReturnSecondAttemptAt();
         return expiresAt(record);
@@ -53,7 +56,9 @@ final class ReturnAttendancePolicy {
     }
 
     static boolean canInspect(ReturnCase record, Instant now) {
+        Instant followUp = record.getPostReviewHandoverDueAt();
         return protectsFromRecovery(record) && record.getReturnIdentityVerifiedAt() != null
-            && (now.isBefore(expiresAt(record)) || Boolean.TRUE.equals(record.getReturnArrivalReviewAccepted()));
+            && (Boolean.TRUE.equals(record.getReturnArrivalReviewAccepted())
+                ? followUp == null || now.isBefore(followUp) : now.isBefore(expiresAt(record)));
     }
 }

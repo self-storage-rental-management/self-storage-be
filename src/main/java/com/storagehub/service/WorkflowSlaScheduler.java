@@ -355,7 +355,8 @@ public class WorkflowSlaScheduler {
         process(ids("""
             select t.id from MaintenanceTask t left join t.returnCase rc where t.status in :statuses and t.deadlineAt is not null
               and (rc.returnType = com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH
-                or t.recoveryType = com.storagehub.domain.model.MaintenanceRecoveryType.MISMATCH_REMOVAL)
+                or t.recoveryType in (com.storagehub.domain.model.MaintenanceRecoveryType.MISMATCH_REMOVAL,
+                    com.storagehub.domain.model.MaintenanceRecoveryType.VIOLATION_UNIT_READINESS))
             """, List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)),
             MaintenanceTask.class, this::mismatchMaintenanceDeadline, lock, visitor);
         if (!lock) {

@@ -19,6 +19,8 @@ public class IntakeDeadlineScheduler {
     private final ReturnCaseRepository returns;
     private final NotificationService notifications;
     private final UserRepository users;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ViolationRecoveryWorkflow violationRecovery;
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
@@ -30,7 +32,10 @@ public class IntakeDeadlineScheduler {
             if (r.getCompletedAt() != null || r.getActualReturnedAt() != null) continue;
             if (r.getMoveInCompletedAt() == null && r.getSetupCompletionDeadlineAt() != null
                 && List.of(RentalStatus.setup, RentalStatus.active).contains(r.getStatus())) {
-                if (!now.isBefore(r.getSetupCompletionDeadlineAt())) recovery(r, now, "Quá hạn hoàn tất setup");
+                if (!now.isBefore(r.getSetupCompletionDeadlineAt())) {
+                    if (violationRecovery == null) recovery(r, now, "Quá hạn hoàn tất setup");
+                    else detect(r, ViolationRecovery.Reason.SETUP_OVERDUE, r.getSetupCompletionDeadlineAt(), now, true);
+                }
                 else if (!now.plus(24, ChronoUnit.HOURS).isBefore(r.getSetupCompletionDeadlineAt()))
                     notify(r, "Sắp hết hạn setup", "Vui lòng báo setup xong hoặc dời hạn trong số lượt cho phép.");
             }
@@ -47,11 +52,17 @@ public class IntakeDeadlineScheduler {
             // Customer never arrived for the inventory visit: escalate once the final
             // deadline passes, as long as nothing else already owns the case.
             if (r.getMoveInCompletedAt() != null && r.isInventoryPending()
-                && r.getInventoryArrivedAt() == null && r.getInventoryResultPublishedAt() == null
+                && (violationRecovery != null || r.getInventoryArrivedAt() == null) && r.getInventoryResultPublishedAt() == null
                 && r.getInventoryRemovalPublishedAt() == null && r.getInventoryEscalatedAt() == null
                 && r.getInventoryFinalDeadlineAt() != null && !now.isBefore(r.getInventoryFinalDeadlineAt())
                 && List.of(RentalStatus.setup, RentalStatus.active).contains(r.getStatus())) {
-                recovery(r, now, "Quá hạn đến kiểm kê");
+                if (violationRecovery == null) recovery(r, now, "Quá hạn đến kiểm kê");
+                else {
+                    var reason = r.getInventoryArrivedAt() == null ? ViolationRecovery.Reason.INVENTORY_NO_SHOW
+                        : r.getInventoryIdentityVerifiedAt() == null ? ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED
+                        : ViolationRecovery.Reason.INVENTORY_TIMEOUT;
+                    detect(r, reason, r.getInventoryFinalDeadlineAt(), now, true);
+                }
             }
             // Once the unit has actually been handed back empty, no further goods-movement
             // task may be created: only the finance step remains. "Unit empty" and
@@ -93,7 +104,7 @@ public class IntakeDeadlineScheduler {
                     "Khách đã bàn giao đủ điều kiện. Vui lòng kiểm tra và hoàn tất biên bản nghiệm thu.", rc.getId());
         }
         for (MaintenanceTask t : tasks.findAll()) {
-            if (t.getRecoveryType() == MaintenanceRecoveryType.MISMATCH_REMOVAL
+            if (t.getRecoveryType() == MaintenanceRecoveryType.VIOLATION || t.getRecoveryType() == MaintenanceRecoveryType.MISMATCH_REMOVAL
                 || t.getReturnCase() != null && t.getReturnCase().getReturnType() == ReturnType.INVENTORY_MISMATCH) continue;
             if (t.getRecoveryType() == null || t.getRecoveryType() == MaintenanceRecoveryType.NONE
                 || t.getDeadlineAt() == null || !List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress).contains(t.getStatus())) continue;
@@ -116,7 +127,19 @@ public class IntakeDeadlineScheduler {
             || !List.of(RentalStatus.setup, RentalStatus.active).contains(rental.getStatus())
             || returns.findByRental_Id(rental.getId()).stream().anyMatch(rc -> rc.getReturnType() == ReturnType.INVENTORY_MISMATCH))
             return;
-        recovery(rental, now, "Quá hạn trả hàng do kiểm kê sai lệch");
+        if (violationRecovery == null) recovery(rental, now, "Quá hạn trả hàng do kiểm kê sai lệch");
+        else violationRecovery.detect(rental, null, ViolationRecovery.Reason.REMOVAL_OVERDUE,
+            rental.getInventoryRemovalDeadlineAt(), now, true);
+    }
+
+    private void detect(Rental rental, ViolationRecovery.Reason reason, Instant deadline, Instant now, boolean review) {
+        if (entityManager != null) entityManager.refresh(rental, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (!List.of(RentalStatus.setup, RentalStatus.active).contains(rental.getStatus())) return;
+        if (reason == ViolationRecovery.Reason.SETUP_OVERDUE
+            ? rental.getMoveInCompletedAt() != null || !deadline.equals(rental.getSetupCompletionDeadlineAt())
+            : !rental.isInventoryPending() || rental.getInventoryResultPublishedAt() != null
+                || rental.getInventoryRemovalPublishedAt() != null || !deadline.equals(rental.getInventoryFinalDeadlineAt())) return;
+        violationRecovery.detect(rental, null, reason, deadline, now, review);
     }
     private void notify(Rental r, String title, String content) {
         notifications.createNotificationOnce(r.getCustomer().getId(), NotificationType.CHECKIN, title, content, r.getReservation().getId());

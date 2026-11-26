@@ -37,6 +37,8 @@ import com.storagehub.domain.model.MaintenanceTaskType;
 import com.storagehub.domain.model.MaintenanceRecoveryType;
 import com.storagehub.domain.model.TaskPriority;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.UserStatus;
+import com.storagehub.domain.model.FacilityScopeLevel;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
@@ -89,6 +91,12 @@ public class ReturnSettlementService {
     private AccessCredentialService accessCredentialService;
     @Autowired
     private MismatchUnitRelease mismatchUnitRelease;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private ViolationRecoveryWorkflow violationRecovery;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private WorkflowBusinessCalendar recoveryCalendar;
     @Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.overdue.RecoverySettlementGuard> recoveryGuards;
     @Autowired
@@ -559,6 +567,11 @@ public class ReturnSettlementService {
 
     @Transactional
     public ReturnCaseResponse reviewReturnArrival(ActorPrincipal actor, UUID id, boolean accepted, String reason) {
+        return reviewReturnArrival(actor, id, accepted, reason, null, null);
+    }
+
+    @Transactional
+    public ReturnCaseResponse reviewReturnArrival(ActorPrincipal actor, UUID id, boolean accepted, String reason, UUID staffId, Instant appointmentAt) {
         ReturnCase rc = lockReturnAttendance(actor, id, true);
         Instant now = Instant.now();
         Instant reviewStart = ReturnAttendancePolicy.reviewStartsAt(rc);
@@ -566,6 +579,20 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Hồ sơ chưa đến lúc đối soát hoặc đã có kết quả.");
         if (accepted && rc.getReturnIdentityVerifiedAt() == null)
             throw ApiExceptions.conflict("Chỉ có thể tiếp tục bàn giao khi danh tính đã được xác minh.");
+        if (accepted && recoveryCalendar != null) {
+            if (staffId == null || userRepository.findEligibleStaff(UserStatus.ACTIVE, RoleCode.STAFF, rc.getFacility().getId(),
+                List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)).stream().noneMatch(staff -> staffId.equals(staff.getId())))
+                throw ApiExceptions.validation("Cần chọn nhân viên phụ trách tại cơ sở.", null);
+            if (appointmentAt != null && appointmentAt.isBefore(now))
+                throw ApiExceptions.validation("Lịch bàn giao phải nằm trong tương lai.", null);
+            rc.setPostReviewHandoverStaffId(staffId);
+            rc.setPostReviewHandoverDueAt(recoveryCalendar.current().afterWorkingHours(appointmentAt == null ? now : appointmentAt, 4));
+            notificationService.createNotification(staffId, NotificationType.RETURN, "Cần bàn giao sau đối soát",
+                "Mở hồ sơ trả kho để hoàn tất bàn giao trước hạn.", rc.getId());
+        } else {
+            rc.setPostReviewHandoverStaffId(null);
+            rc.setPostReviewHandoverDueAt(null);
+        }
         rc.setReturnArrivalReviewedAt(now);
         rc.setReturnArrivalReviewAccepted(accepted);
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
@@ -882,6 +909,10 @@ public class ReturnSettlementService {
             && returnCase.getStatus() != ReturnCaseStatus.scheduled
             && returnCase.getStatus() != ReturnCaseStatus.recovery_required)
             throw ApiExceptions.conflict("Return is not in a state awaiting inspection");
+        if (violationRecovery != null && !isRecovery(returnCase) && violationRecovery.blocksLegacyReturn(returnCase.getRental().getId()))
+            throw ApiExceptions.conflict("Mở hồ sơ Thu hồi kho để xử lý theo nhiệm vụ đã được phê duyệt.");
+        if (returnCase.getPostReviewHandoverStaffId() != null && !actor.userId().equals(returnCase.getPostReviewHandoverStaffId()))
+            throw ApiExceptions.forbidden("Chỉ nhân viên được phân công sau đối soát được nghiệm thu.");
         var lockResult = request.lockInspectionResult() == null
             ? LockInspectionResult.UNVERIFIED : request.lockInspectionResult();
         if (lockResult == LockInspectionResult.RETURNED_USABLE
@@ -1411,6 +1442,9 @@ public class ReturnSettlementService {
                 || rental.getInventoryRemovalDeadlineAt() == null || now.isBefore(rental.getInventoryRemovalDeadlineAt())) {
                 return false;
             }
+            if (violationRecovery != null) return violationRecovery.detect(rental, current,
+                com.storagehub.domain.model.ViolationRecovery.Reason.REMOVAL_OVERDUE,
+                rental.getInventoryRemovalDeadlineAt(), now, true);
         }
         if (maintenanceTaskRepository == null) {
             throw new IllegalStateException("Maintenance task repository is not available");
@@ -2301,7 +2335,7 @@ public class ReturnSettlementService {
             ReturnAttendancePolicy.applies(rc) ? new ReturnCaseResponse.Attendance(rc.getReturnArrivedAt(), rc.getReturnArrivalEvidenceId(),
                 ReturnAttendancePolicy.expiresAt(rc), rc.getReturnSecondAttemptId() != null ? 2 : rc.getReturnFirstAttemptId() != null ? 1 : 0,
                 rc.getReturnIdentityVerifiedAt(), ReturnAttendancePolicy.reviewStartsAt(rc),
-                rc.getReturnArrivalReviewAccepted()) : null,
+                rc.getReturnArrivalReviewAccepted(), rc.getPostReviewHandoverDueAt(), rc.getPostReviewHandoverStaffId()) : null,
             rc.getSettlementVersion(), rc.getSettlementPublishedAt(), rc.getSettlementPaymentDueAt(),
             hasTwoMismatchObligations(rc) && finance() != null
                 && (rc.getStatus() == ReturnCaseStatus.refund_pending || rc.getStatus() == ReturnCaseStatus.completed)

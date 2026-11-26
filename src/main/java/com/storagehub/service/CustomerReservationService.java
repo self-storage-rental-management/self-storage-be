@@ -1640,7 +1640,10 @@ public class CustomerReservationService {
         if (rentalRepository != null) {
             rentalRepository.findByReservation_Id(reservation.getId()).ifPresent(rental -> {
                 response.setSetupExitReviewRequired(rental.isSetupExitReviewRequired());
-                if (rental.getSetupStartedAt() != null && rental.getStatus() != RentalStatus.completed) {
+                boolean violationRecovery = rental.getStatus() == RentalStatus.closing && rental.getInventoryEscalatedAt() != null
+                    || rental.getEndReason() == com.storagehub.domain.model.RentalEndReason.VIOLATION_RECOVERY;
+                response.setViolationRecovery(violationRecovery);
+                if (!violationRecovery && rental.getSetupStartedAt() != null && rental.getStatus() != RentalStatus.completed) {
                     response.setSetupReturnRentalId(rental.getId());
                     if (setupReturns != null) setupReturns.findByRental_Id(rental.getId()).stream()
                         .filter(rc -> rc.getStatus() != com.storagehub.domain.model.ReturnCaseStatus.completed).findFirst()
