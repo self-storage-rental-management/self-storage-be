@@ -36,6 +36,8 @@ public class IntakeWorkflowService {
     private final IntakeVerificationAttemptRepository verificationAttempts;
     private final IntakeIdempotencyRecordRepository idempotencyRecords;
     private final MaintenanceTaskRepository maintenanceTasks;
+    @Autowired(required = false)
+    private ViolationRecoveryWorkflow violationRecovery;
 
     /** Legacy-compatible constructor for unit tests without new Spring beans. */
     public IntakeWorkflowService(
@@ -370,7 +372,12 @@ public class IntakeWorkflowService {
                         if (policy.isImmediateFailOnSecondVerificationFailure()) {
                             r.setInspectionFailureReason(clean(command.reason()) != null
                                 ? clean(command.reason()) : "Xác minh danh tính thất bại 2 lần.");
-                            createRecoveryTaskIfMissing(r, now, "Kiểm kê không thành công: thất bại xác minh danh tính 2 lần");
+                            createRecoveryTaskIfMissing(
+                                r, now,
+                                "Kiểm kê không thành công: thất bại xác minh danh tính 2 lần",
+                                ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED,
+                                r.getInspectionCompletionDeadlineAt() != null ? r.getInspectionCompletionDeadlineAt() : now
+                            );
                         }
                         notificationTitle = "Xác minh danh tính thất bại lần 2";
                         notificationContent = "Đơn " + code(r) + " đã hết 2 lượt xác minh danh tính.";
@@ -433,46 +440,17 @@ public class IntakeWorkflowService {
                     r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
                     r.setInspectionFailureReason(clean(command.reason()) != null
                         ? clean(command.reason()) : "Không đến kiểm kê trong hạn.");
-                    createRecoveryTaskIfMissing(r, now, "Quá hạn đến kiểm kê (đã đối soát vắng mặt)");
+                    createRecoveryTaskIfMissing(
+                        r, now,
+                        "Quá hạn đến kiểm kê (đã đối soát vắng mặt)",
+                        r.getMoveInCompletedAt() == null
+                            ? ViolationRecovery.Reason.SETUP_OVERDUE
+                            : ViolationRecovery.Reason.INVENTORY_NO_SHOW,
+                        timeline.arrivalDeadline(r) != null ? timeline.arrivalDeadline(r) : now
+                    );
                     notificationTitle = "Đã chốt đối soát: khách không đến";
                     notificationContent = "Đơn " + code(r) + " đã chuyển sang nhiệm vụ thu hồi chờ xác nhận.";
                 }
-                after = now;
-            }
-            case "IMMEDIATE_RECOVERY" -> {
-                if (!actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER)) {
-                    throw ApiExceptions.forbidden("Chỉ Staff hoặc Manager mới được tạo yêu cầu thu hồi.");
-                }
-                scope.assertCanOperate(actor, r.getFacility().getId());
-                if (r.getInventoryEscalatedAt() != null) {
-                    return view(r);
-                }
-                if (r.getInspectionCompletedAt() != null || r.getInventoryVerifiedAt() != null) {
-                    throw ApiExceptions.invalidState("Hồ sơ đã hoàn tất kiểm kê, không thể tạo yêu cầu thu hồi.");
-                }
-                Instant d = timeline.arrivalDeadline(r);
-                int maxCount = r.getIntakeExtensionMaxCount() != null
-                    ? r.getIntakeExtensionMaxCount() : policy.getMaxExtensions();
-                int usedCount = r.getSetupExtensionCount() != null ? r.getSetupExtensionCount() : 0;
-                boolean cannotExtendMore = timeline.hasStartedInspectionClock(r)
-                    || (d != null && !now.isBefore(d))
-                    || usedCount >= maxCount;
-                if (!cannotExtendMore) {
-                    throw ApiExceptions.invalidState("Hồ sơ vẫn còn lượt hoặc còn hạn để dời lịch, chưa thể thu hồi ngay.");
-                }
-                String failureReason = clean(command.reason()) != null
-                    ? clean(command.reason())
-                    : "Yêu cầu thu hồi ngay khi đã đến hạn không thể dời thêm.";
-                r.setAttendanceReviewOwnerId(actor.userId());
-                if (r.getAttendanceReviewStatus() == null
-                    || IntakeTimelineCalculator.REVIEW_NONE.equals(r.getAttendanceReviewStatus())
-                    || IntakeTimelineCalculator.REVIEW_PENDING.equals(r.getAttendanceReviewStatus())) {
-                    r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
-                }
-                r.setInspectionFailureReason(failureReason);
-                createRecoveryTaskIfMissing(r, now, failureReason);
-                notificationTitle = "Đã tạo yêu cầu thu hồi ngay";
-                notificationContent = "Đơn " + code(r) + " đã được tạo nhiệm vụ thu hồi (" + failureReason + ").";
                 after = now;
             }
             case "INTERRUPT_INSPECTION" -> {
@@ -624,7 +602,19 @@ public class IntakeWorkflowService {
             r.getReservation().getId());
     }
 
-    private void createRecoveryTaskIfMissing(Rental r, Instant now, String reason) {
+    private void createRecoveryTaskIfMissing(
+        Rental r,
+        Instant now,
+        String reason,
+        ViolationRecovery.Reason violationReason,
+        Instant sourceDeadline
+    ) {
+        if (violationRecovery != null) {
+            Instant deadline = sourceDeadline != null && !now.isBefore(sourceDeadline) ? sourceDeadline : now;
+            violationRecovery.detect(r, null, violationReason, deadline, now, false);
+            r.setInventoryEscalatedAt(now);
+            return;
+        }
         if (maintenanceTasks == null || r.getStorageUnit() == null) {
             r.setInventoryEscalatedAt(now);
             return;

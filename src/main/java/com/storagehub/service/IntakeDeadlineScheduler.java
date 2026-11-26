@@ -222,7 +222,17 @@ public class IntakeDeadlineScheduler {
         if (!hasEvidence) {
             r.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
             r.setInspectionFailureReason("Quá hạn đến kiểm kê và không có bằng chứng đến đúng hạn.");
-            recovery(r, now, "Quá hạn đến kiểm kê");
+            if (violationRecovery != null) {
+                var reason = r.getMoveInCompletedAt() == null
+                    ? ViolationRecovery.Reason.SETUP_OVERDUE
+                    : ViolationRecovery.Reason.INVENTORY_NO_SHOW;
+                if (violationRecovery.detect(r, null, reason, d, now, false)) {
+                    r.setInventoryEscalatedAt(now);
+                    rentals.save(r);
+                }
+            } else {
+                recovery(r, now, "Quá hạn đến kiểm kê");
+            }
             return;
         }
         notifications.createFacilityOperationsNotificationsOnce(
@@ -262,9 +272,16 @@ public class IntakeDeadlineScheduler {
             return;
         }
 
-        // now > F: expired 72h completion window -> always create recovery task.
+        // now > F: expired 72h completion window -> always create recovery.
         r.setInspectionFailureReason("Quá hạn hoàn tất kiểm kê 72 giờ.");
-        recovery(r, now, "Quá hạn hoàn tất kiểm kê 72 giờ");
+        if (violationRecovery != null) {
+            if (violationRecovery.detect(r, null, ViolationRecovery.Reason.INVENTORY_TIMEOUT, f, now, false)) {
+                r.setInventoryEscalatedAt(now);
+                rentals.save(r);
+            }
+        } else {
+            recovery(r, now, "Quá hạn hoàn tất kiểm kê 72 giờ");
+        }
     }
 
     private void processLegacyRental(Rental r, Instant now) {
