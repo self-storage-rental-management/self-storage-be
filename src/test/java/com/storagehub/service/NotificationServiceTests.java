@@ -130,6 +130,30 @@ class NotificationServiceTests {
         return service.list(actor, null, 0, 20, "corr").data().getFirst().content();
     }
 
+    @Test
+    void recoveryNotificationCarriesRoutingTypeAndDoesNotDuplicateExistingAssignmentNotice() {
+        var recoveries = org.mockito.Mockito.mock(com.storagehub.domain.repo.ViolationRecoveryRepository.class);
+        ReflectionTestUtils.setField(service, "violationRecoveries", recoveries);
+        var recoveryId = UUID.randomUUID();
+        when(recoveries.existsById(recoveryId)).thenReturn(true);
+        var notice = new Notification();
+        notice.setUser(manager);
+        notice.setType(NotificationType.RETURN);
+        notice.setTitle("Cần phân công nhân viên thu hồi");
+        notice.setContent("Đơn RSV-TEST-10 · Gian TEST-M-10. Mở Nhân viên & Nhiệm vụ để phân công.");
+        notice.setRelatedEntityId(recoveryId);
+        when(notificationRepository.search(any(), any(), any()))
+            .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(notice)));
+        var actor = new com.storagehub.security.ActorPrincipal(manager.getId(), null, java.util.Set.of(RoleCode.MANAGER),
+            java.util.Set.of(), java.util.Map.of(facilityId, FacilityScopeLevel.MANAGE));
+        var response = service.list(actor, null, 0, 20, "corr").data().getFirst();
+        assertThat(response.relatedEntityType()).isEqualTo("VIOLATION_RECOVERY");
+        assertThat(response.content()).contains("RSV-TEST-10", "Nhân viên & Nhiệm vụ");
+        when(notificationRepository.existsMilestone(manager.getId(), recoveryId, notice.getTitle())).thenReturn(true);
+        service.createNotificationOnce(manager.getId(), NotificationType.RETURN, notice.getTitle(), notice.getContent(), recoveryId);
+        verify(notificationRepository, org.mockito.Mockito.never()).save(any());
+    }
+
     private User user(RoleCode role) {
         User user = new User();
         ReflectionTestUtils.setField(user, "id", UUID.randomUUID());

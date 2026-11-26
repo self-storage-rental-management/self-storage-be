@@ -116,8 +116,15 @@ public record CheckInResponse(
 
     public record InventoryVisit(
         Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
-        String verifiedByName, UUID photoId
-    ) {}
+        String verifiedByName, UUID photoId, InventoryAccess access
+    ) {
+        public InventoryVisit(Instant appointmentAt, Instant arrivedAt, Instant identityVerifiedAt,
+            String verifiedByName, UUID photoId) {
+            this(appointmentAt, arrivedAt, identityVerifiedAt, verifiedByName, photoId, null);
+        }
+    }
+
+    public record InventoryAccess(Instant completionDeadlineAt, boolean writable, String blockedReason) {}
 
     public record StorageCapacity(
         BigDecimal volumeM3,

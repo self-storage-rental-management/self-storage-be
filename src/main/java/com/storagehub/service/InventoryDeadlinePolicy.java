@@ -10,30 +10,55 @@ final class InventoryDeadlinePolicy {
     private InventoryDeadlinePolicy() {}
 
     static void requireInventoryOpen(Rental rental, Instant now) {
+        var restriction = restriction(rental, now);
+        if (restriction == null) return;
+        switch (restriction) {
+            case RECOVERY, REMOVAL_EXPIRED -> throw ApiExceptions.conflict(restriction.message);
+            case VERIFICATION_LIMIT -> throw ApiExceptions.verificationLimit(restriction.message);
+            case COMPLETION_EXPIRED, ARRIVAL_EXPIRED -> throw ApiExceptions.deadlineExpired(restriction.message);
+        }
+    }
+
+    enum Restriction {
+        RECOVERY("Hồ sơ đã chuyển sang thu hồi. Không thể tiếp tục kiểm kê."),
+        REMOVAL_EXPIRED("Đã hết hạn kiểm kê. Vui lòng liên hệ Manager để xử lý."),
+        VERIFICATION_LIMIT("Đã hết 2 lượt xác minh danh tính."),
+        COMPLETION_EXPIRED("Đã hết hạn hoàn tất kiểm kê 72 giờ."),
+        ARRIVAL_EXPIRED("Đã hết hạn kiểm kê. Vui lòng liên hệ Manager để xử lý.");
+        final String message;
+        Restriction(String message) { this.message = message; }
+    }
+
+    static Instant completionDeadline(Rental rental) {
+        if (rental.getInspectionCompletionDeadlineAt() != null) return rental.getInspectionCompletionDeadlineAt();
+        var started = rental.getInspectionClockStartedAt() != null ? rental.getInspectionClockStartedAt()
+            : rental.getFirstIdentityVerificationAt();
+        return started == null ? null : started.plus(java.time.Duration.ofHours(72));
+    }
+
+    static Restriction restriction(Rental rental, Instant now) {
         if (rental.getInventoryEscalatedAt() != null
             || expired(rental.getInventoryRemovalDeadlineAt(), now)) {
-            throw ApiExceptions.conflict("Đã hết hạn kiểm kê. Vui lòng liên hệ Manager để xử lý.");
+            return rental.getInventoryEscalatedAt() != null ? Restriction.RECOVERY : Restriction.REMOVAL_EXPIRED;
         }
         if (IntakeTimelineCalculator.VERIF_FAILED_MAX_ATTEMPTS.equals(rental.getVerificationStatus())) {
-            throw ApiExceptions.verificationLimit("Đã hết 2 lượt xác minh danh tính.");
+            return Restriction.VERIFICATION_LIMIT;
         }
-        if (rental.getInspectionClockStartedAt() != null) {
-            if (rental.getInspectionCompletionDeadlineAt() != null
-                && now.isAfter(rental.getInspectionCompletionDeadlineAt())) {
-                throw ApiExceptions.deadlineExpired("Đã hết hạn hoàn tất kiểm kê 72 giờ.");
-            }
-            return;
+        var completionDeadline = completionDeadline(rental);
+        if (completionDeadline != null) {
+            return now.isAfter(completionDeadline) ? Restriction.COMPLETION_EXPIRED : null;
         }
         if (IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME.equals(rental.getAttendanceReviewStatus())) {
-            return;
+            return null;
         }
         Instant arrivalRef = rental.getActualArrivedAt() != null
             ? rental.getActualArrivedAt()
             : rental.getInventoryArrivedAt();
         if (expired(rental.getInventoryFinalDeadlineAt(), now)
             && (arrivalRef == null || arrivalRef.isAfter(rental.getInventoryFinalDeadlineAt()))) {
-            throw ApiExceptions.deadlineExpired("Đã hết hạn kiểm kê. Vui lòng liên hệ Manager để xử lý.");
+            return Restriction.ARRIVAL_EXPIRED;
         }
+        return null;
     }
 
     static void requireRemovalDate(Rental rental, LocalDate scheduledDate, Instant now) {

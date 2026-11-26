@@ -19,15 +19,21 @@ public class ViolationRecoveryController {
 
     @GetMapping
     public ApiResponse<List<ViolationRecoveryWorkflow.Entry>> list(@RequestParam(defaultValue = "0") int page,
-        @RequestParam(required = false) UUID sourceReturnId) {
+        @RequestParam(required = false) UUID sourceReturnId, @RequestParam(defaultValue = "false") boolean activeOnly) {
         var actor = actors.required();
-        var entries = sourceReturnId == null ? workflow.list(actor, page) : workflow.listForReturn(actor, sourceReturnId);
+        var entries = sourceReturnId != null ? workflow.listForReturn(actor, sourceReturnId)
+            : activeOnly ? workflow.listActiveOperations(actor, page) : workflow.list(actor, page);
         return new ApiResponse<>(entries, CorrelationIdContext.current());
     }
 
     @GetMapping("/{id}/staff")
     public ApiResponse<List<ViolationRecoveryWorkflow.StaffOption>> staff(@PathVariable UUID id) {
         return new ApiResponse<>(workflow.staff(actors.required(), id), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/{id}")
+    public ApiResponse<ViolationRecoveryWorkflow.Entry> get(@PathVariable UUID id) {
+        return new ApiResponse<>(workflow.get(actors.required(), id), CorrelationIdContext.current());
     }
 
     @PostMapping("/{id}/actions")

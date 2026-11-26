@@ -21,7 +21,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Seeds 9 ready-to-test Setup & Inspection cases across every key stage/boundary
@@ -54,8 +56,10 @@ public class IntakeScenarioDemoSeeder {
 
     @Bean
     @Order(30)
-    CommandLineRunner seedIntakeScenarios() {
-        return args -> seedAll();
+    CommandLineRunner seedIntakeScenarios(PlatformTransactionManager transactionManager) {
+        // The runner calls seedAll on this instance, bypassing its transactional proxy.
+        // Keep the entire seed, including pessimistic locks, in one transaction.
+        return args -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> seedAll());
     }
 
     @Transactional
@@ -144,6 +148,27 @@ public class IntakeScenarioDemoSeeder {
 
         // 16: Trường hợp hàng kiểm kê sai lệch yêu cầu buộc trả (INVENTORY_MISMATCH + RETURN_REQUESTED)
         created += createMismatchForcedReturnScenario("RSV-TEST-16", "TEST-L-16", "L", facility, customer, staff, now);
+
+        // 17-21: Bộ 5 đơn test thu hồi bổ sung (bản sao của 10-14)
+        created += createRecoveryScenario("RSV-TEST-17", "TEST-M-17", "M", facility, customer, staff, now,
+            now.minus(168, ChronoUnit.HOURS).minus(35, ChronoUnit.MINUTES), true, false, 0, null,
+            ViolationRecovery.Reason.INVENTORY_NO_SHOW, false, false);
+
+        created += createRecoveryScenario("RSV-TEST-18", "TEST-M-18", "M", facility, customer, staff, now,
+            now.minus(48, ChronoUnit.HOURS), true, true, 2, now.minus(2, ChronoUnit.HOURS),
+            ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED, false, false);
+
+        created += createRecoveryScenario("RSV-TEST-19", "TEST-M-19", "M", facility, customer, staff, now,
+            now.minus(120, ChronoUnit.HOURS), true, true, 1, now.minus(73, ChronoUnit.HOURS),
+            ViolationRecovery.Reason.INVENTORY_TIMEOUT, false, false);
+
+        created += createRecoveryScenario("RSV-TEST-20", "TEST-M-20", "M", facility, customer, staff, now,
+            now.minus(190, ChronoUnit.HOURS), true, true, 1, now.minus(160, ChronoUnit.HOURS),
+            ViolationRecovery.Reason.REMOVAL_OVERDUE, true, true);
+
+        created += createRecoveryScenario("RSV-TEST-21", "TEST-M-21", "M", facility, customer, staff, now,
+            now.minus(168, ChronoUnit.HOURS).minus(35, ChronoUnit.MINUTES), false, false, 0, null,
+            ViolationRecovery.Reason.SETUP_OVERDUE, false, false);
 
         if (created > 0) {
             log.info("Seeded {} intake test-case scenarios for customer {} at facility {}", created, customer.getEmail(), facility.getCode());
