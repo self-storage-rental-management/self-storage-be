@@ -125,6 +125,15 @@ public class ViolationRecoveryWorkflow {
         return rows.stream().filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<Entry> listForReturn(ActorPrincipal actor, UUID returnId) {
+        if (!actor.hasAnyRole(RoleCode.CUSTOMER, RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN))
+            throw ApiExceptions.forbidden("Vai trò không có quyền xem thu hồi.");
+        return recoveries.findBySourceReturnIdOrderByCreatedAtDesc(returnId).stream()
+            .filter(v -> v.getStage() != Stage.CANCELLED && canRead(actor, v))
+            .map(v -> view(actor, v, details(v), Instant.now())).toList();
+    }
+
     @Transactional
     public Entry execute(ActorPrincipal actor, UUID id, Command command) {
         var source = recoveries.findById(id).filter(v -> canRead(actor, v))

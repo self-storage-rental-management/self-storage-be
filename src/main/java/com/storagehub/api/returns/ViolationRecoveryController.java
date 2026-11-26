@@ -18,8 +18,11 @@ public class ViolationRecoveryController {
     private final ViolationRecoveryWorkflow workflow;
 
     @GetMapping
-    public ApiResponse<List<ViolationRecoveryWorkflow.Entry>> list(@RequestParam(defaultValue = "0") int page) {
-        return new ApiResponse<>(workflow.list(actors.required(), page), CorrelationIdContext.current());
+    public ApiResponse<List<ViolationRecoveryWorkflow.Entry>> list(@RequestParam(defaultValue = "0") int page,
+        @RequestParam(required = false) UUID sourceReturnId) {
+        var actor = actors.required();
+        var entries = sourceReturnId == null ? workflow.list(actor, page) : workflow.listForReturn(actor, sourceReturnId);
+        return new ApiResponse<>(entries, CorrelationIdContext.current());
     }
 
     @GetMapping("/{id}/staff")
