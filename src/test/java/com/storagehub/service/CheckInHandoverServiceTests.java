@@ -941,10 +941,13 @@ class CheckInHandoverServiceTests {
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
         assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isNull();
-        assertThat(service.compareIdentity(actor, checkIn.getId(), "079203009989"))
+        assertThatThrownBy(() -> service.compareIdentity(actor, checkIn.getId(), "079203009989", false))
+            .hasMessageContaining("xác nhận đúng người đặt kho");
+        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isNull();
+        assertThat(service.compareIdentity(actor, checkIn.getId(), "079203009989", true))
             .isEqualTo(CheckInHandoverService.IdentityComparison.CORRECTABLE);
         Instant first = reservation.getFirstHandoverComparisonAt();
-        service.compareIdentity(actor, checkIn.getId(), "079203009988");
+        service.compareIdentity(actor, checkIn.getId(), "079203009988", true);
         assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isEqualTo(first.plusSeconds(72 * 3600));
     }
 

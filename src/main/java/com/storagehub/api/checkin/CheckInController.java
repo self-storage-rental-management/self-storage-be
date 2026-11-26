@@ -123,7 +123,8 @@ public class CheckInController {
         @PathVariable UUID checkInId,
         @Valid @RequestBody VerifyCheckInIdentityRequest request
     ) {
-        return new ApiResponse<>(service.compareIdentity(actorContext.required(), checkInId, request.identityDocumentNumber()),
+        return new ApiResponse<>(service.compareIdentity(actorContext.required(), checkInId, request.identityDocumentNumber(),
+            request.bookingOwnerConfirmed()),
             CorrelationIdContext.current());
     }
 
