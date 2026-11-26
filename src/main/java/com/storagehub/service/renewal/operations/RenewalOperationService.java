@@ -182,6 +182,7 @@ public class RenewalOperationService {
         return finish(c,op,key,body,e,200);
     }
     public Result arrival(ActorPrincipal actor,UUID id,Arrival body,String key) {
+        if(!Boolean.TRUE.equals(body.identityVerified()))throw ApiExceptions.validation("Cần đối chiếu giấy tờ và xác minh đúng khách trước khi ghi nhận đã đến.",null);
         var c=context(actor,id,Audience.STAFF,Capability.ARRIVAL,key,"d3_arrival",body,body.expectedVersion());var old=replay(c,"d3_arrival",key,body);if(old.isPresent())return old.get();
         var s=signing(c,true);currentAppointment(c,s,body.appointmentRef());
         if(s.getArrivalRef()!=null)throw ApiExceptions.conflict("Arrival already recorded for this appointment");
@@ -189,6 +190,10 @@ public class RenewalOperationService {
         evidence(actor,c.renewal(),"ARRIVAL",body.evidenceFileIds());
         requireAppointmentStart(s);
         var e=event(c,"ARRIVAL",Map.of("appointmentRef",body.appointmentRef(),"evidenceFileIds",body.evidenceFileIds()));s.arrival(e.getId());
+        // Once arrival is recorded, staff have a bounded processing window, including last-minute arrivals.
+        Instant processingEnd=min(now().plus(Duration.ofMinutes(30)),s.getRecoveryCutoff());
+        safety().retain(c.renewal(),c.workflow().getExtensionHoldRef(),processingEnd);
+        s.processingDeadline(processingEnd);
         return finish(c,"d3_arrival",key,body,e,201);
     }
     public Result incident(ActorPrincipal actor,UUID id,Incident body,String key) {
@@ -229,7 +234,7 @@ public class RenewalOperationService {
     public Result complete(ActorPrincipal actor,UUID id,Completion body,String key) {
         var c=context(actor,id,Audience.STAFF,Capability.COMPLETE,key,"d3_complete",body,body.expectedVersion());var old=replay(c,"d3_complete",key,body);if(old.isPresent())return old.get();
         var s=signing(c,true);
-        if(Boolean.FALSE.equals(body.identityVerified()))throw ApiExceptions.validation("Thông tin xác minh khách hàng không hợp lệ.",null);
+        if(!Boolean.TRUE.equals(body.identityVerified()))throw ApiExceptions.validation("Phải xác minh đúng khách hàng trước khi hoàn tất ký gia hạn.",null);
         if(!Objects.equals(s.getArrivalRef(),body.arrivalRef()))throw ApiExceptions.conflict("Current server-recorded arrival required");
         var arrival=linked(c.renewal(),body.arrivalRef(),"ARRIVAL");
         if(arrival.getOccurredAt().isAfter(now())||arrival.getOccurredAt().isAfter(s.getEffectiveSigningDeadline()))throw ApiExceptions.conflict("Arrival outside deadline");
