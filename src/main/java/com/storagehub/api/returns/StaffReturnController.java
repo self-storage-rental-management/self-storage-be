@@ -46,6 +46,28 @@ public class StaffReturnController {
         );
     }
 
+    public record ArrivalRequest(
+        java.time.Instant actualArrivedAt,
+        @jakarta.validation.constraints.Size(max = 500) String evidenceNote,
+        UUID evidenceId,
+        Long expectedVersion
+    ) {}
+
+    @PostMapping("/{returnId}/arrival")
+    public ApiResponse<ReturnCaseResponse> recordArrival(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody(required = false) ArrivalRequest request
+    ) {
+        return new ApiResponse<>(returnSettlementService.recordReturnArrival(
+            actorContext.required(),
+            returnId,
+            request == null ? null : request.actualArrivedAt(),
+            request == null ? null : request.evidenceNote(),
+            request == null ? null : request.evidenceId(),
+            request == null ? null : request.expectedVersion()),
+            CorrelationIdContext.current());
+    }
+
     public record IdentityRequest(@jakarta.validation.constraints.NotNull UUID attemptId,
         @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 32) String documentNumber,
         java.time.Instant reverificationStartedAt, UUID evidenceId) {}

@@ -23,6 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ViolationRecoveryWorkflow {
     private static final Duration WINDOW = Duration.ofMinutes(30);
+    private static final int VERIFICATION_LIMIT = 2;
+    private static final List<Stage> MANAGER_STAGES = List.of(
+        Stage.REVIEW_REQUIRED, Stage.AWAITING_ASSIGNMENT, Stage.AWAITING_APPROVAL, Stage.BLOCKED);
     private final ViolationRecoveryRepository recoveries;
     private final RentalRepository rentals;
     private final ReturnCaseRepository returns;
@@ -39,18 +42,29 @@ public class ViolationRecoveryWorkflow {
     private final ObjectMapper mapper;
     private final RecoveryReviewService reviewEvidence;
     private final UserFacilityScopeRepository userFacilityScopes;
+    private final RecoveryStaffAvailability staffAvailability;
 
     public enum Action {
+        // Retired commands remain parseable so older clients receive a workflow conflict instead of performing them.
         CONFIRM_VIOLATION, ASSIGN, ACCEPT, DECLINE, WILL_ATTEND, CANNOT_ATTEND, DISPUTE,
         RESCHEDULE, RECORD_PRESENT, RECORD_ABSENT, VERIFY, APPROVE, START, SAVE_ITEM, BLOCK,
-        RESUME, CANCEL, COMPLETE, OPEN_PICKUP, VERIFY_PICKUP, RELEASE_ITEM, FOLLOW_UP_PICKUP,
+        RESUME, CANCEL, COMPLETE, SCHEDULE_PICKUP, OPEN_PICKUP, VERIFY_PICKUP, RELEASE_ITEM, FOLLOW_UP_PICKUP,
         REQUEST_FINANCE, RESOLVE_FINANCE, ASSIGN_PICKUP, CLOSE_REMEDIATION, RECORD_LIQUIDATION
     }
 
     public record Command(@jakarta.validation.constraints.NotNull Action action, UUID staffId, UUID witnessId, UUID evidenceId, UUID attemptId,
         Instant appointmentAt, @Size(max = 4000) String note, @Size(max = 32) String document,
         @Size(max = 80) String itemCode, @Size(max = 240) String itemName, @Size(max = 240) String condition,
-        @Size(max = 240) String location, @Size(max = 40) String disposition) {}
+        @Size(max = 240) String location, @Size(max = 40) String disposition,
+        @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(1000) Integer quantity,
+        @Size(min = 1, max = 1000) List<@Size(max = 80) String> itemCodes) {
+        public Command(Action action, UUID staffId, UUID witnessId, UUID evidenceId, UUID attemptId,
+            Instant appointmentAt, String note, String document, String itemCode, String itemName,
+            String condition, String location, String disposition) {
+            this(action, staffId, witnessId, evidenceId, attemptId, appointmentAt, note, document,
+                itemCode, itemName, condition, location, disposition, null, null);
+        }
+    }
 
     public record Liquidation(Instant recordedAt, UUID recordedBy, String note, UUID evidenceId) {}
 
@@ -61,11 +75,25 @@ public class ViolationRecoveryWorkflow {
 
     public record HistoryEvent(String action, String actorName, Instant time, Stage stage, String note) {}
 
+    public record Verification(int used, int limit, int remaining, boolean matched, boolean canReceiveItems, String message) {}
+
     @Transactional(readOnly = true)
-    public List<StaffOption> staff(ActorPrincipal actor, UUID id) {
+    public List<StaffOption> staff(ActorPrincipal actor, UUID id, boolean pickup, boolean witness) {
         var v = recoveries.findById(id).filter(entry -> canRead(actor, entry) && !actor.hasRole(RoleCode.CUSTOMER))
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thu hồi."));
-        return eligibleStaff(v).stream().map(user -> new StaffOption(user.getId(), user.getFullName())).toList();
+        var d = details(v);
+        Instant start = pickup ? (d.pickupAppointmentAt != null ? d.pickupAppointmentAt : Instant.now()) : v.getScheduledAt();
+        Instant end = pickup ? start.plus(WINDOW) : v.getDeadlineAt();
+        if (!pickup && end != null && !end.isAfter(Instant.now())) {
+            start = Instant.now();
+            end = start.plus(WINDOW);
+        }
+        final Instant slotStart = start, slotEnd = end;
+        return eligibleStaff(v).stream()
+            .filter(user -> !witness || v.getTask() == null || v.getTask().getAssignedTo() == null
+                || !user.getId().equals(v.getTask().getAssignedTo().getId()))
+            .filter(user -> staffAvailability.available(user.getId(), v, slotStart, slotEnd))
+            .map(user -> new StaffOption(user.getId(), user.getFullName())).toList();
     }
 
     public record Entry(UUID id, UUID rentalId, UUID reservationId, String reservationCode, String customerName, UUID facilityId, String unitCode, UUID taskId,
@@ -76,25 +104,28 @@ public class ViolationRecoveryWorkflow {
         Instant arrivedAt, Instant verifiedAt, int verificationAttempts, int pickupAttempts, boolean needsWitness,
         UUID attendanceEvidenceId, UUID beforeEvidenceId, UUID afterEvidenceId, String reasonNote, String customerNote,
         String report, List<Item> items, List<HistoryEvent> history, List<Action> actions,
-        Instant detectedAt, Instant reviewDueAt, Instant businessReviewDueAt, RecoveryReviewService.Review review) {}
+        Instant detectedAt, Instant reviewDueAt, Instant businessReviewDueAt, RecoveryReviewService.Review review,
+        Verification verification, Verification pickupVerification, boolean canViewSourceGoods,
+        Instant pickupAppointmentAt) {}
 
     public static final class Details {
-        public Instant notifiedAt, responseDueAt, arrivedAt, verifiedAt, acceptedAt, startedAt, pickupOpenedAt, pickupVerifiedAt;
+        public Instant notifiedAt, responseDueAt, arrivedAt, verifiedAt, acceptedAt, startedAt, pickupOpenedAt, pickupVerifiedAt, pickupAppointmentAt;
         public Reply reply;
         public boolean disputeOpen, needsWitness;
         public Attendance attendance;
-        public UUID beforeEvidenceId, afterEvidenceId, attendanceEvidenceId, approvedBy, pickupStaffId;
+        public UUID beforeEvidenceId, afterEvidenceId, attendanceEvidenceId, approvedBy, pickupStaffId, pickupAssignedStaffId;
         public Instant approvedAt;
         public Instant reviewDueAt, reviewEscalatedAt, businessReviewDueAt;
         public String reasonNote, customerNote, report, plannedHandover;
         public List<UUID> attempts = new ArrayList<>();
         public List<UUID> pickupAttempts = new ArrayList<>();
         public Map<String, Item> items = new LinkedHashMap<>();
+        public Map<UUID, List<String>> itemBatches = new LinkedHashMap<>();
         public List<HistoryEvent> history = new ArrayList<>();
     }
 
     /** Called with the rental locked by the originating scheduler. */
-    public boolean detect(Rental rental, ReturnCase source, Reason reason, Instant deadline, Instant now, boolean review) {
+    public boolean detect(Rental rental, ReturnCase source, Reason reason, Instant deadline, Instant now, boolean ignoredReview) {
         if (deadline == null || now.isBefore(deadline) || rental.getActualReturnedAt() != null
             || rental.getCompletedAt() != null || rental.getInventoryEscalatedAt() != null) return false;
         if (recoveries.findByRental_IdOrderByCreatedAtDesc(rental.getId()).stream().anyMatch(v ->
@@ -107,18 +138,14 @@ public class ViolationRecoveryWorkflow {
         v.setSourceReturnId(source == null ? null : source.getId());
         v.setReason(reason);
         v.setSourceDeadlineAt(deadline);
-        advance(v, Stage.REVIEW_REQUIRED, working(now, 1));
-        if (!review) activate(v, now);
+        if (!reviewEvidence.read(v, now).openingAllowed()) return false;
+        activate(v, now);
         var d = new Details();
-        if (review) d.reviewDueAt = v.getActionDueAt();
         d.history.add(new HistoryEvent("DETECT", "Hệ thống", now, v.getStage(), reason.name()));
         save(v, d);
         recoveries.saveAndFlush(v);
-        notifyOperations(v, review ? "Cần rà soát căn cứ thu hồi" : "Yêu cầu thu hồi chờ phân công");
-        if (!review) {
-            notifyCustomerSchedule(v, d, now, "Thông báo thu hồi kho");
-            save(v, d);
-        }
+        notifyCustomerSchedule(v, d, now, "Thông báo thu hồi kho");
+        save(v, d);
         notifyCoordinationRequired(v);
         return true;
     }
@@ -141,12 +168,30 @@ public class ViolationRecoveryWorkflow {
     }
 
     @Transactional(readOnly = true)
+    public com.storagehub.common.api.PageResponse<Entry> customerPage(ActorPrincipal actor, int page, int pageSize, String correlationId) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) throw ApiExceptions.forbidden("Chỉ khách hàng được xem danh sách thu hồi của mình.");
+        var now = Instant.now();
+        var result = recoveries.customerPage(actor.userId(), PageRequest.of(Math.max(0, page), Math.max(1, Math.min(100, pageSize))))
+            .map(v -> view(actor, v, details(v), now));
+        return com.storagehub.common.api.PageResponse.from(result, correlationId);
+    }
+
+    @Transactional(readOnly = true)
     public Entry get(ActorPrincipal actor, UUID id) {
         if (!actor.hasAnyRole(RoleCode.CUSTOMER, RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN))
             throw ApiExceptions.forbidden("Vai trò không có quyền xem thu hồi.");
         var v = recoveries.findById(id).filter(entry -> canRead(actor, entry))
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thu hồi."));
         return view(actor, v, details(v), Instant.now());
+    }
+
+    @Transactional(readOnly = true)
+    public RecoveryReviewService.Preparation preparation(ActorPrincipal actor, UUID id) {
+        if (!actor.hasAnyRole(RoleCode.CUSTOMER, RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN))
+            throw ApiExceptions.forbidden("Bạn không có quyền xem dữ liệu chuẩn bị thu hồi.");
+        var recovery = recoveries.findById(id).filter(entry -> canRead(actor, entry))
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thu hồi."));
+        return actor.hasRole(RoleCode.CUSTOMER) ? reviewEvidence.customerPreparation(recovery) : reviewEvidence.preparation(recovery);
     }
 
     @Transactional(readOnly = true)
@@ -166,6 +211,20 @@ public class ViolationRecoveryWorkflow {
     }
 
     @Transactional(readOnly = true)
+    public List<Entry> listEscalatedOperations(ActorPrincipal actor, int page) {
+        if (!actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN))
+            throw ApiExceptions.forbidden("Vai trò không có quyền xử lý hồ sơ chuyển lên chủ doanh nghiệp.");
+        var paging = PageRequest.of(Math.max(0, page), 30);
+        var rows = scopes.hasGlobalScope(actor)
+            ? recoveries.findByEscalatedTrueAndStageInOrderByCreatedAtDesc(MANAGER_STAGES, paging)
+            : actor.facilityScopes().isEmpty() ? List.<ViolationRecovery>of()
+            : recoveries.findByRental_Facility_IdInAndEscalatedTrueAndStageInOrderByCreatedAtDesc(
+                actor.facilityScopes().keySet(), MANAGER_STAGES, paging);
+        return rows.stream().filter(v -> canRead(actor, v))
+            .map(v -> view(actor, v, details(v), Instant.now())).toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<Entry> listForReturn(ActorPrincipal actor, UUID returnId) {
         if (!actor.hasAnyRole(RoleCode.CUSTOMER, RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN))
             throw ApiExceptions.forbidden("Vai trò không có quyền xem thu hồi.");
@@ -174,7 +233,7 @@ public class ViolationRecoveryWorkflow {
             .map(v -> view(actor, v, details(v), Instant.now())).toList();
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Entry execute(ActorPrincipal actor, UUID id, Command command) {
         var source = recoveries.findById(id).filter(v -> canRead(actor, v))
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thu hồi."));
@@ -184,6 +243,15 @@ public class ViolationRecoveryWorkflow {
         if (!canRead(actor, v)) throw ApiExceptions.forbidden("Bạn không còn được phân công hồ sơ này.");
         var d = details(v);
         var now = Instant.now();
+        upgradeLegacyFlow(v, d, now);
+        if (command.action() == Action.SAVE_ITEM && command.attemptId() != null
+            && d.itemBatches.containsKey(command.attemptId()) && actor.hasRole(RoleCode.STAFF)
+            && actor.hasPermission(SystemPermission.PROCESS_RETURNS) && isAssigned(v, actor)) return view(actor, v, d, now);
+        if ((command.action() == Action.VERIFY || command.action() == Action.VERIFY_PICKUP)
+            && actor.hasRole(RoleCode.STAFF) && actor.hasPermission(SystemPermission.PROCESS_RETURNS)
+            && isAssigned(v, actor) && command.attemptId() != null
+            && (command.action() == Action.VERIFY ? d.attempts : d.pickupAttempts).contains(command.attemptId()))
+            return view(actor, v, d, now);
         if (command.action() == Action.COMPLETE && v.getStage() == Stage.COMPLETED
             && actor.userId().equals(v.getCompletedBy())) return view(actor, v, d, now);
         if (!allowed(actor, v, d, now).contains(command.action()))
@@ -194,7 +262,9 @@ public class ViolationRecoveryWorkflow {
         String actorName = users.findById(actor.userId()).map(User::getFullName)
             .orElse(actor.roles().stream().findFirst().map(Enum::name).orElse("Hệ thống"));
         var historyNote = command.action() == Action.RECORD_LIQUIDATION
-            ? normalize(command.itemCode()) + " · " + clean(command.note()) : clean(command.note());
+            ? (command.itemCodes() == null ? normalize(command.itemCode()) : command.itemCodes().size() + " kiện") + " · " + clean(command.note())
+            : command.action() == Action.VERIFY || command.action() == Action.VERIFY_PICKUP
+                ? verification(v, d, command.action() == Action.VERIFY_PICKUP, now).message() : clean(command.note());
         d.history.add(new HistoryEvent(command.action().name(), actorName, now, v.getStage(), historyNote));
         save(v, d);
         var after = view(actor, v, d, now);
@@ -205,22 +275,9 @@ public class ViolationRecoveryWorkflow {
 
     private void apply(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         switch (c.action()) {
-            case CONFIRM_VIOLATION -> {
-                d.reasonNote = required(c.note(), "căn cứ mở thu hồi");
-                validateActivation(v, now);
-                activate(v, now);
-                notifyCustomerSchedule(v, d, now, "Thông báo thu hồi kho");
-            }
+            case CONFIRM_VIOLATION, ACCEPT, DECLINE, APPROVE -> throw ApiExceptions.conflict("Luồng thu hồi không còn bước tiếp nhận hoặc phê duyệt thủ công.");
+            case RESCHEDULE -> throw ApiExceptions.conflict("Thời gian thu hồi do hệ thống ấn định, không thể đổi lịch thủ công.");
             case ASSIGN -> assign(actor, v, d, c, now);
-            case ACCEPT -> {
-                d.acceptedAt = now;
-                advance(v, d.startedAt == null ? Stage.AWAITING_ATTENDANCE : Stage.BLOCKED, later(now, v.getScheduledAt()).plus(WINDOW));
-            }
-            case DECLINE -> {
-                d.reasonNote = required(c.note(), "lý do từ chối");
-                v.getTask().setAssignedTo(null);
-                advance(v, Stage.AWAITING_ASSIGNMENT, now.plusSeconds(3600));
-            }
             case WILL_ATTEND, CANNOT_ATTEND -> {
                 d.reply = Reply.valueOf(c.action().name());
                 d.customerNote = clean(c.note());
@@ -237,10 +294,8 @@ public class ViolationRecoveryWorkflow {
                     notifyOperations(v, "Khách phản đối. Cần tạm dừng và rà soát");
                 }
             }
-            case RESCHEDULE -> reschedule(v, d, c, now);
             case RECORD_PRESENT, RECORD_ABSENT -> attendance(actor, v, d, c, now);
             case VERIFY, VERIFY_PICKUP -> verify(v, d, c, now);
-            case APPROVE -> approve(actor, v, d, c, now);
             case START -> start(actor, v, d, c, now);
             case SAVE_ITEM -> saveItem(actor, v, d, c, now);
             case BLOCK -> block(v, d, required(c.note(), "lý do tạm dừng"), now);
@@ -248,8 +303,31 @@ public class ViolationRecoveryWorkflow {
             case CANCEL -> cancel(v, d, c, now);
             case CLOSE_REMEDIATION -> closeRemediation(v, d, c, now);
             case COMPLETE -> complete(actor, v, d, c, now);
+            case SCHEDULE_PICKUP -> {
+                if (c.appointmentAt() == null) {
+                    throw ApiExceptions.validation("Vui lòng chọn ngày giờ hẹn nhận hàng.", null);
+                }
+                if (c.appointmentAt().isBefore(now.minusSeconds(60))) {
+                    throw ApiExceptions.validation("Không thể chọn lịch hẹn nhận hàng trong quá khứ.", null);
+                }
+                if (v.getPickupDueAt() != null && c.appointmentAt().isAfter(v.getPickupDueAt())) {
+                    throw ApiExceptions.deadlineExpired("Lịch hẹn nhận hàng phải nằm trong thời hạn 7 ngày lưu tạm.");
+                }
+                d.pickupAppointmentAt = c.appointmentAt();
+                d.pickupAssignedStaffId = null;
+                d.pickupOpenedAt = null;
+                d.pickupVerifiedAt = null;
+                d.pickupAttempts.clear();
+                notifyOperations(v, "Khách đã đặt lịch hẹn nhận hàng lưu tạm");
+            }
             case ASSIGN_PICKUP -> {
-                v.getTask().setAssignedTo(staffAt(c.staffId(), v));
+                if (d.pickupAppointmentAt == null) {
+                    throw ApiExceptions.invalidState("Khách hàng chưa đặt lịch hẹn nhận hàng lưu tạm.");
+                }
+                staffAvailability.lock(Collections.singletonList(c.staffId()));
+                var pickupStaff = availableStaffAt(c.staffId(), v, d.pickupAppointmentAt, d.pickupAppointmentAt.plus(WINDOW));
+                v.getTask().setAssignedTo(pickupStaff);
+                d.pickupAssignedStaffId = pickupStaff.getId();
                 d.pickupOpenedAt = null;
                 d.pickupVerifiedAt = null;
                 d.pickupAttempts.clear();
@@ -287,9 +365,10 @@ public class ViolationRecoveryWorkflow {
 
     private void activate(ViolationRecovery v, Instant now) {
         var rental = v.getRental();
+        v.setPolicyVersion("RECOVERY_V2");
         v.setRequiredAt(now);
-        v.setScheduledAt(nextOpening(now.plus(Duration.ofHours(24))));
-        v.setDeadlineAt(now.plus(Duration.ofHours(72)));
+        v.setScheduledAt(now.plus(Duration.ofHours(24)));
+        v.setDeadlineAt(v.getScheduledAt().plus(Duration.ofHours(48)));
         v.setPreviousRentalStatus(rental.getStatus());
         if (v.getSourceReturnId() != null) {
             var source = returns.findByIdForUpdate(v.getSourceReturnId()).orElseThrow();
@@ -308,7 +387,9 @@ public class ViolationRecoveryWorkflow {
             throw ApiExceptions.conflict("Hồ sơ đã thay đổi. Cần kiểm tra lại trước khi xác định vi phạm.");
         Instant current = switch (v.getReason()) {
             case SETUP_OVERDUE -> r.getMoveInCompletedAt() == null ? r.getSetupCompletionDeadlineAt() : null;
-            case INVENTORY_NO_SHOW, INVENTORY_IDENTITY_FAILED, INVENTORY_TIMEOUT ->
+            case INVENTORY_TIMEOUT -> r.isInventoryPending() && r.getInventoryResultPublishedAt() == null
+                ? InventoryDeadlinePolicy.completionDeadline(r) : null;
+            case INVENTORY_NO_SHOW, INVENTORY_IDENTITY_FAILED ->
                 r.isInventoryPending() && r.getInventoryResultPublishedAt() == null ? r.getInventoryFinalDeadlineAt() : null;
             case INVENTORY_CONFIRMATION_OVERDUE -> {
                 var checkIn = em.createQuery("select c from CheckIn c where c.reservation.id = :reservationId", CheckIn.class)
@@ -330,7 +411,8 @@ public class ViolationRecoveryWorkflow {
     }
 
     private void assign(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
-        var staff = staffAt(c.staffId(), v);
+        staffAvailability.lock(Collections.singletonList(c.staffId()));
+        var staff = availableStaffAt(c.staffId(), v, v.getScheduledAt(), v.getDeadlineAt());
         var task = v.getTask();
         if (task == null) {
             var r = v.getRental();
@@ -340,45 +422,69 @@ public class ViolationRecoveryWorkflow {
             task.setStorageUnit(r.getStorageUnit());
             task.setReportedBy(users.findById(actor.userId()).orElseThrow());
             task.setTitle("Thu hồi kho do vi phạm");
-            task.setReason("Thực hiện qua hồ sơ thu hồi đã được phê duyệt.");
+            task.setReason("Thực hiện theo lịch thu hồi đã được hệ thống thông báo cho khách.");
             task.setPriority(TaskPriority.high);
             task.setRecoveryType(MaintenanceRecoveryType.VIOLATION);
             task.setDeadlineAt(v.getDeadlineAt());
             task.setDueAt(v.getDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate());
             v.setTask(tasks.saveAndFlush(task));
         }
+        if (task.getAssignedTo() != null && !staff.getId().equals(task.getAssignedTo().getId()))
+            task.setRecoveryWitness(null);
         task.setAssignedTo(staff);
-        d.acceptedAt = null;
-        advance(v, Stage.AWAITING_ACCEPTANCE, now.plus(Duration.ofHours(1)));
+        if (v.getStage() != Stage.BLOCKED) advance(v, Stage.AWAITING_ATTENDANCE, v.getDeadlineAt());
         notifyStaff(v, "Bạn được phân công nhiệm vụ thu hồi");
         notifyCustomer(v, "Đã phân công nhân viên thu hồi");
     }
 
-    private void reschedule(ViolationRecovery v, Details d, Command c, Instant now) {
-        Instant appointment = future(c.appointmentAt(), now);
-        if (!appointment.equals(nextOpening(appointment)))
-            throw ApiExceptions.validation("Lịch hẹn phải nằm trong ca làm việc.", null);
-        d.reasonNote = required(c.note(), "lý do đổi lịch");
-        if (!appointment.equals(v.getScheduledAt())) {
-            d.notifiedAt = null;
-            d.responseDueAt = null;
-            d.reply = null;
-            v.setResponseCheckAt(null);
+    private void upgradeLegacyFlow(ViolationRecovery v, Details d, Instant now) {
+        // Older identity failures paused recovery itself. Only remove that specific automatic pause.
+        if (v.getStage() == Stage.BLOCKED && !d.disputeOpen && d.verifiedAt == null
+            && d.attempts.size() >= VERIFICATION_LIMIT && "Đã hết số lượt xác minh danh tính.".equals(d.reasonNote)
+            && !d.history.isEmpty() && "VERIFY".equals(d.history.getLast().action())) {
+            d.needsWitness = true;
+            d.reasonNote = "Xác minh chưa thành công. Tiếp tục thu hồi và lưu tạm; chưa được bàn giao cho khách.";
+            advance(v, d.startedAt != null ? Stage.IN_PROGRESS
+                : v.getTask() == null || v.getTask().getAssignedTo() == null ? Stage.AWAITING_ASSIGNMENT
+                : Stage.AWAITING_ATTENDANCE, v.getDeadlineAt());
+            d.history.add(new HistoryEvent("IDENTITY_STORAGE", "Hệ thống", now, v.getStage(), d.reasonNote));
+            notifyStaff(v, "Tiếp tục thu hồi và lưu tạm theo lịch; chưa được giao hàng cho khách");
         }
-        v.setScheduledAt(appointment);
-        d.attendance = null;
-        d.arrivedAt = null;
-        d.verifiedAt = null;
-        d.attempts.clear();
-        advance(v, v.getTask() == null || v.getTask().getAssignedTo() == null ? Stage.AWAITING_ASSIGNMENT
-            : d.acceptedAt == null ? Stage.AWAITING_ACCEPTANCE : Stage.AWAITING_ATTENDANCE,
-            d.acceptedAt == null ? now.plus(Duration.ofHours(1)) : appointment.plus(WINDOW));
-        notifyCustomerSchedule(v, d, now, "Lịch thu hồi đã thay đổi");
-        notifyStaff(v, "Lịch thu hồi đã thay đổi");
+        if (terminal(v) || "RECOVERY_V2".equals(v.getPolicyVersion())) return;
+        if (v.getStage() == Stage.REVIEW_REQUIRED && v.getRequiredAt() == null) {
+            try {
+                validateActivation(v, now);
+            } catch (com.storagehub.common.api.ApiException changed) {
+                d.reasonNote = "Không mở thu hồi: " + changed.getMessage();
+                advance(v, Stage.CANCELLED, null);
+                v.setResponseCheckAt(null);
+                v.setPolicyVersion("RECOVERY_V2");
+                return;
+            }
+            activate(v, now);
+            notifyCustomerSchedule(v, d, now, "Thông báo thu hồi kho");
+        } else if (List.of(Stage.AWAITING_ACCEPTANCE, Stage.AWAITING_APPROVAL, Stage.APPROVED).contains(v.getStage())) {
+            advance(v, d.disputeOpen ? Stage.BLOCKED : d.startedAt != null ? Stage.IN_PROGRESS
+                : v.getTask() == null || v.getTask().getAssignedTo() == null ? Stage.AWAITING_ASSIGNMENT
+                : Stage.AWAITING_ATTENDANCE, d.disputeOpen ? working(now, 1) : v.getDeadlineAt());
+        } else if (v.getStage() == Stage.AWAITING_ATTENDANCE) {
+            v.setActionDueAt(v.getDeadlineAt());
+        }
+        v.setPolicyVersion("RECOVERY_V2");
+        d.history.add(new HistoryEvent("AUTOMATIC_FLOW", "Hệ thống", now, v.getStage(),
+            "Chuyển sang thu hồi theo lịch, không yêu cầu tiếp nhận hoặc phê duyệt thủ công."));
     }
 
     private void attendance(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         boolean present = c.action() == Action.RECORD_PRESENT;
+        if (present) {
+            if (v.getScheduledAt() != null && now.isBefore(v.getScheduledAt())) {
+                throw ApiExceptions.conflict("Chưa đến ngày giờ lịch thu hồi, chưa thể ghi nhận khách có mặt.");
+            }
+            if (d.reply == Reply.CANNOT_ATTEND) {
+                throw ApiExceptions.conflict("Khách hàng đã báo không thể có mặt, không thể ghi nhận có mặt.");
+            }
+        }
         Instant actual = c.appointmentAt() == null ? now : c.appointmentAt();
         if (actual.isAfter(now) || actual.isBefore(v.getRequiredAt()))
             throw ApiExceptions.validation("Giờ ghi nhận khách không hợp lệ.", null);
@@ -386,13 +492,12 @@ public class ViolationRecoveryWorkflow {
         d.attendance = present ? Attendance.PRESENT : Attendance.ABSENT;
         d.arrivedAt = present ? actual : null;
         d.verifiedAt = null;
-        d.attempts.clear();
         d.reasonNote = clean(c.note());
         if (d.startedAt != null || d.disputeOpen) {
             block(v, d, "Khách có mặt khi hồ sơ đang tạm dừng hoặc đã bắt đầu thu hồi.", now);
         } else {
-            advance(v, present ? Stage.AWAITING_ATTENDANCE : Stage.AWAITING_APPROVAL,
-                present ? actual.plus(WINDOW) : working(now, 1));
+            d.needsWitness |= !present;
+            advance(v, Stage.AWAITING_ATTENDANCE, v.getDeadlineAt());
         }
     }
 
@@ -403,7 +508,7 @@ public class ViolationRecoveryWorkflow {
         if (attempts.contains(c.attemptId())) return;
         String expected = normalize(v.getRental().getReservation().getIdentityDocumentNumber());
         String actual = normalize(c.document());
-        if (expected.isEmpty()) throw ApiExceptions.conflict("Hồ sơ thiếu giấy tờ đối chiếu. Cần Manager xử lý.");
+        if (expected.isEmpty()) throw ApiExceptions.conflict("Hồ sơ thiếu giấy tờ đối chiếu. Chỉ được thu hồi và lưu tạm, chưa được giao hàng cho khách.");
         if (!com.storagehub.validation.IdentityDocumentPolicy.isValid(actual)
             && !actual.matches("(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{6,20}"))
             throw ApiExceptions.validation("Giấy tờ không đúng định dạng.", null);
@@ -412,39 +517,29 @@ public class ViolationRecoveryWorkflow {
             if (pickup) d.pickupVerifiedAt = now;
             else {
                 d.verifiedAt = now;
-                if (v.getStage() != Stage.BLOCKED) advance(v, Stage.AWAITING_APPROVAL, working(now, 1));
+                if (v.getStage() != Stage.BLOCKED) advance(v, Stage.AWAITING_ATTENDANCE, v.getDeadlineAt());
             }
-        } else if (attempts.size() == 2 && !pickup) {
-            block(v, d, "Đã hết số lượt xác minh danh tính.", now);
-        } else if (attempts.size() == 2) {
+        } else if (attempts.size() >= VERIFICATION_LIMIT && pickup) {
             v.setPickupReviewAt(now);
             notifyOperations(v, "Cần đối soát giấy tờ nhận tài sản");
         }
     }
 
-    private void approve(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
-        d.reasonNote = required(c.note(), "căn cứ cho phép thu hồi");
-        d.needsWitness |= d.attendance == Attendance.ABSENT || d.reply == Reply.DISPUTED || c.witnessId() != null;
-        if (c.witnessId() != null) {
-            var witness = staffAt(c.witnessId(), v);
-            if (witness.getId().equals(v.getTask().getAssignedTo().getId()))
-                throw ApiExceptions.validation("Nhân chứng phải khác nhân viên phụ trách.", null);
-            v.getTask().setRecoveryWitness(witness);
-        }
-        d.approvedAt = now;
-        d.approvedBy = actor.userId();
-        d.disputeOpen = false;
-        advance(v, Stage.APPROVED, working(later(now, v.getScheduledAt()), 1));
-        notifyStaff(v, "Đã phê duyệt thu hồi");
-    }
-
     private void start(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
-        if (d.needsWitness) {
-            UUID witnessId = c.witnessId() != null ? c.witnessId()
-                : v.getTask().getRecoveryWitness() == null ? null : v.getTask().getRecoveryWitness().getId();
-            var witness = staffAt(witnessId, v);
+        // Unverified customers cannot receive goods; recovery continues with a witness and temporary storage.
+        boolean needsWitness = needsWitness(d, now);
+        var participants = new ArrayList<UUID>();
+        participants.add(actor.userId());
+        UUID witnessId = c.witnessId() != null ? c.witnessId()
+            : v.getTask().getRecoveryWitness() == null ? null : v.getTask().getRecoveryWitness().getId();
+        if (needsWitness) participants.add(witnessId);
+        staffAvailability.lock(participants);
+        availableStaffAt(actor.userId(), v, now, later(now.plus(WINDOW), v.getDeadlineAt()));
+        if (needsWitness) {
+            var witness = availableStaffAt(witnessId, v, now, later(now.plus(WINDOW), v.getDeadlineAt()));
             if (actor.userId().equals(witness.getId())) throw ApiExceptions.validation("Cần nhân chứng độc lập.", null);
             v.getTask().setRecoveryWitness(witness);
+            d.needsWitness = true;
         }
         if (d.startedAt == null) {
             d.beforeEvidenceId = evidence(v, actor, c.evidenceId());
@@ -457,48 +552,68 @@ public class ViolationRecoveryWorkflow {
     }
 
     private void saveItem(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
-        String code = normalize(required(c.itemCode(), "mã kiện"));
-        if (d.items.containsKey(code)) throw ApiExceptions.conflict("Mã kiện đã được ghi nhận.");
+        int quantity = c.quantity() == null ? 1 : c.quantity();
+        if (quantity < 1 || quantity > 1000) throw ApiExceptions.validation("Số kiện phải từ 1 đến 1.000.", null);
+        String prefix = c.itemCode() == null || c.itemCode().isBlank()
+            ? "KH-" + (c.attemptId() == null ? UUID.randomUUID() : c.attemptId()).toString().replace("-", "").toUpperCase(Locale.ROOT)
+            : normalize(c.itemCode());
+        var codes = new ArrayList<String>();
+        for (int i = 1; i <= quantity; i++) {
+            String code = quantity == 1 ? prefix : prefix + "-" + i;
+            if (code.length() > 80) throw ApiExceptions.validation("Mã lô hàng quá dài.", null);
+            if (d.items.containsKey(code)) throw ApiExceptions.conflict("Mã kiện đã được ghi nhận.");
+            codes.add(code);
+        }
         String disposition = c.disposition();
         if (!"STORED".equals(disposition) && !"HANDED_OVER".equals(disposition))
             throw ApiExceptions.validation("Cần chọn giao khách hoặc lưu tạm.", null);
         boolean handover = "HANDED_OVER".equals(disposition);
         if (handover && !within(d.arrivedAt, now, d.verifiedAt))
             throw ApiExceptions.conflict("Cần xác minh quyền nhận tài sản còn hiệu lực.");
-        d.items.put(code, new Item(code, required(c.itemName(), "tên kiện"), required(c.condition(), "tình trạng"),
-            required(c.location(), "nơi lưu tạm hoặc người nhận"), evidence(v, actor, c.evidenceId()),
+        String name = required(c.itemName(), "loại hàng"), condition = required(c.condition(), "tình trạng");
+        String location = required(c.location(), "nơi lưu tạm hoặc người nhận");
+        UUID photo = evidence(v, actor, c.evidenceId());
+        for (var code : codes) d.items.put(code, new Item(code, name, condition, location, photo,
             disposition, handover ? now : null, null, null));
+        if (c.attemptId() != null) d.itemBatches.put(c.attemptId(), codes);
     }
 
     private void resume(ViolationRecovery v, Details d, Command c, Instant now) {
         d.reasonNote = required(c.note(), "kết luận xử lý ngoại lệ");
+        if (v.getTask() != null && v.getTask().getAssignedTo() != null) {
+            var participants = new ArrayList<UUID>();
+            participants.add(v.getTask().getAssignedTo().getId());
+            if (v.getTask().getRecoveryWitness() != null) participants.add(v.getTask().getRecoveryWitness().getId());
+            staffAvailability.lock(participants);
+            for (var participant : participants)
+                availableStaffAt(participant, v, later(now, v.getScheduledAt()), later(now.plus(WINDOW), v.getDeadlineAt()));
+        }
         if (d.disputeOpen) d.needsWitness = true;
         d.disputeOpen = false;
-        advance(v, v.getRequiredAt() == null ? Stage.REVIEW_REQUIRED
-            : v.getTask() == null || v.getTask().getAssignedTo() == null ? Stage.AWAITING_ASSIGNMENT
-            : d.acceptedAt == null ? Stage.AWAITING_ACCEPTANCE : Stage.AWAITING_ATTENDANCE,
-            c.appointmentAt() == null ? working(now, 1) : future(c.appointmentAt(), now));
+        advance(v, d.startedAt != null ? Stage.IN_PROGRESS
+            : v.getTask() == null || v.getTask().getAssignedTo() == null ? Stage.AWAITING_ASSIGNMENT : Stage.AWAITING_ATTENDANCE,
+            v.getDeadlineAt());
         if (d.attendance == Attendance.PRESENT && !within(d.arrivedAt, now, d.verifiedAt)) {
-            d.attendance = null;
-            d.arrivedAt = null;
             d.verifiedAt = null;
-            d.attempts.clear();
         }
     }
 
     private void cancel(ViolationRecovery v, Details d, Command c, Instant now) {
-        d.reasonNote = required(c.note(), "căn cứ hủy thu hồi và phương án khắc phục");
+        if (d.startedAt != null) {
+            throw ApiExceptions.invalidState("Không thể hủy thu hồi khi đã bắt đầu thu hồi thực tế.");
+        }
+        if (v.getRequiredAt() != null && now.isAfter(v.getRequiredAt().plus(Duration.ofHours(12)))) {
+            throw ApiExceptions.deadlineExpired("Chỉ có thể hủy thu hồi trong 12 giờ đầu kể từ khi phát sinh yêu cầu.");
+        }
+        d.reasonNote = required(c.note(), "căn cứ hủy thu hồi");
         if (v.getRequiredAt() != null) {
             var rental = v.getRental();
             var unit = rental.getStorageUnit();
             em.refresh(unit, LockModeType.PESSIMISTIC_WRITE);
-            if (d.startedAt != null || unit.getStatus() != StorageUnitStatus.occupied
+            if (unit.getStatus() != StorageUnitStatus.occupied
                 || rentals.existsOtherUnreturnedRental(unit.getId(), rental.getId())
                 || assignments.existsOtherActiveAssignment(unit.getId(), rental.getReservation().getId())) {
-                block(v, d, "Cần BO xử lý theo hiện trạng. " + d.reasonNote, now);
-                v.setEscalated(true);
-                notifyBusiness(v, "Cần khắc phục sau khi đã bắt đầu thu hồi");
-                return;
+                throw ApiExceptions.conflict("Gian kho không còn nguyên trạng để khôi phục.");
             }
             restoreRental(v);
         }
@@ -527,7 +642,7 @@ public class ViolationRecoveryWorkflow {
         advance(v, Stage.CANCELLED, null);
         v.setResponseCheckAt(null);
         startPickupFollowUp(v, d, now);
-        notifyCustomer(v, "BO đã xử lý yêu cầu thu hồi bị hủy. Vui lòng liên hệ cơ sở.");
+        notifyCustomer(v, "Chủ doanh nghiệp đã xử lý yêu cầu thu hồi bị hủy. Vui lòng liên hệ cơ sở.");
     }
 
     private void restoreRental(ViolationRecovery v) {
@@ -551,7 +666,7 @@ public class ViolationRecoveryWorkflow {
         em.refresh(unit, LockModeType.PESSIMISTIC_WRITE);
         if (rentals.existsOtherUnreturnedRental(unit.getId(), rental.getId())
             || assignments.existsOtherActiveAssignment(unit.getId(), rental.getReservation().getId()))
-            throw ApiExceptions.conflict("Gian đã có hồ sơ hoặc phân kho khác. Cần BO khắc phục.");
+            throw ApiExceptions.conflict("Gian đã có hồ sơ hoặc phân kho khác. Cần chủ doanh nghiệp khắc phục.");
         var task = v.getTask();
         task.setStatus(MaintenanceTaskStatus.completed);
         task.setCompletedAt(now);
@@ -593,28 +708,38 @@ public class ViolationRecoveryWorkflow {
     }
 
     private void releaseItem(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
-        String code = normalize(required(c.itemCode(), "mã kiện"));
-        var item = d.items.get(code);
-        if (item == null || !isPendingItem(item))
-            throw ApiExceptions.conflict("Kiện hàng không còn chờ nhận.");
-        d.items.put(code, new Item(code, item.name(), item.condition(), item.location(), item.evidenceId(),
-            item.disposition(), now, evidence(v, actor, c.evidenceId()), null));
+        var selected = selectedPendingItems(d, c);
+        UUID photo = evidence(v, actor, c.evidenceId());
+        for (var item : selected) d.items.put(item.code(), new Item(item.code(), item.name(), item.condition(), item.location(), item.evidenceId(),
+            item.disposition(), now, photo, null));
         closePickupIfDone(v, d);
     }
 
     private void recordLiquidation(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
-        String code = normalize(required(c.itemCode(), "kiện cần ghi nhận thanh lý"));
-        var item = d.items.get(code);
-        if (item == null || !isPendingItem(item))
-            throw ApiExceptions.conflict("Kiện hàng đã được giao hoặc đã ghi nhận thanh lý.");
+        var selected = selectedPendingItems(d, c);
         if (!"LIQUIDATED".equals(c.disposition()))
             throw ApiExceptions.validation("Cần xác nhận đã xử lý thanh lý kiện hàng theo biên bản.", null);
         var liquidation = new Liquidation(now, actor.userId(),
             required(c.note(), "căn cứ, biên bản và kết quả xử lý thanh lý"), evidence(v, actor, c.evidenceId()));
-        d.items.put(code, new Item(code, item.name(), item.condition(), item.location(), item.evidenceId(),
+        for (var item : selected) d.items.put(item.code(), new Item(item.code(), item.name(), item.condition(), item.location(), item.evidenceId(),
             item.disposition(), null, null, liquidation));
         closePickupIfDone(v, d);
         notifyCustomer(v, "Đã ghi nhận xử lý thanh lý tài sản lưu tạm");
+    }
+
+    private List<Item> selectedPendingItems(Details d, Command c) {
+        var codes = c.itemCodes() == null ? List.of(normalize(required(c.itemCode(), "kiện cần xử lý")))
+            : c.itemCodes().stream().map(value -> normalize(required(value, "mã kiện"))).toList();
+        if (codes.isEmpty() || codes.size() > 1000 || new HashSet<>(codes).size() != codes.size())
+            throw ApiExceptions.validation("Danh sách kiện cần xử lý không hợp lệ hoặc bị trùng.", null);
+        var selected = new ArrayList<Item>();
+        for (var code : codes) {
+            var item = d.items.get(code);
+            if (item == null || !isPendingItem(item))
+                throw ApiExceptions.conflict("Một hoặc nhiều kiện không còn chờ nhận; hãy kiểm tra số lượng còn lại.");
+            selected.add(item);
+        }
+        return selected;
     }
 
     private void closePickupIfDone(ViolationRecovery v, Details d) {
@@ -626,19 +751,17 @@ public class ViolationRecoveryWorkflow {
 
     @Transactional
     public void processDue(UUID id, Instant now) {
+        var source = recoveries.findById(id).orElse(null);
+        if (source == null) return;
+        rentals.findByIdForUpdate(source.getRental().getId()).orElseThrow();
         var v = recoveries.lock(id).orElse(null);
         if (v == null) return;
         var d = details(v);
-        if (v.getStage() == Stage.REVIEW_REQUIRED) {
-            processReviewDeadline(v, d, now);
-            notifyCoordinationRequired(v);
-            save(v, d);
-            return;
-        }
-        if (v.getDeadlineAt() != null && !now.isBefore(v.getDeadlineAt()) && !terminal(v) && v.getOverdueAt() == null) {
+        upgradeLegacyFlow(v, d, now);
+        if (v.getDeadlineAt() != null && now.isAfter(v.getDeadlineAt()) && !terminal(v) && v.getOverdueAt() == null) {
             v.setOverdueAt(v.getDeadlineAt());
-            notifyOperations(v, "Nhiệm vụ thu hồi đã quá hạn 72 giờ");
-            notifyBusiness(v, "Nhiệm vụ thu hồi đã quá hạn 72 giờ");
+            notifyOperations(v, "Nhiệm vụ thu hồi đã quá hạn hoàn tất");
+            notifyBusiness(v, "Nhiệm vụ thu hồi đã quá hạn hoàn tất");
         }
         if (!terminal(v) && d.responseDueAt != null && !now.isBefore(d.responseDueAt)) {
             if (d.reply == null) {
@@ -648,13 +771,9 @@ public class ViolationRecoveryWorkflow {
             v.setResponseCheckAt(null);
         }
         if (v.getActionDueAt() != null && !now.isBefore(v.getActionDueAt()) && !terminal(v)) {
-            if (v.getStage() == Stage.AWAITING_ACCEPTANCE && d.startedAt == null && !d.disputeOpen) {
-                v.getTask().setAssignedTo(null);
-                advance(v, Stage.AWAITING_ASSIGNMENT, now.plus(Duration.ofHours(1)));
-                notifyOperations(v, "Nhân viên chưa tiếp nhận nhiệm vụ thu hồi");
-            } else if (v.getStage() == Stage.AWAITING_ATTENDANCE || v.getStage() == Stage.APPROVED) {
-                if (d.attendance == null) d.attendance = Attendance.UNDETERMINED;
-                block(v, d, "Đã đến hạn. Cần Manager rà soát tiến độ hoặc kết quả tiếp nhận.", now);
+            if (List.of(Stage.AWAITING_ATTENDANCE, Stage.IN_PROGRESS).contains(v.getStage())) {
+                // An elapsed appointment is not an objection and does not pause Staff's work.
+                v.setActionDueAt(null);
             } else {
                 v.setEscalated(true);
                 v.setActionDueAt(working(now, 4));
@@ -673,9 +792,13 @@ public class ViolationRecoveryWorkflow {
         List<Action> actions = new ArrayList<>();
         if (actor.hasRole(RoleCode.CUSTOMER)) {
             if (v.getRequiredAt() == null) return actions;
-            if (!terminal(v) && !d.disputeOpen) actions.addAll(List.of(Action.WILL_ATTEND, Action.CANNOT_ATTEND));
-            actions.add(Action.DISPUTE);
-            if (terminal(v) && !v.isFinancePending()) actions.add(Action.REQUEST_FINANCE);
+            if (!terminal(v) && d.responseDueAt != null && now.isBefore(d.responseDueAt)) {
+                if (!d.disputeOpen) actions.addAll(List.of(Action.WILL_ATTEND, Action.CANNOT_ATTEND));
+                actions.add(Action.DISPUTE);
+            }
+            if (terminal(v) && hasStoredItems(d) && v.getPickupDueAt() != null && now.isBefore(v.getPickupDueAt())) {
+                actions.add(Action.SCHEDULE_PICKUP);
+            }
             return actions;
         }
         var facility = v.getRental().getFacility().getId();
@@ -684,31 +807,28 @@ public class ViolationRecoveryWorkflow {
             && scopes.canAccessFacility(actor, facility, FacilityScopeLevel.MANAGE);
         boolean business = actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN)
             && scopes.canAccessFacility(actor, facility, FacilityScopeLevel.MANAGE);
-        if (business && v.isFinancePending()) actions.add(Action.RESOLVE_FINANCE);
         if ((manager || business) && terminal(v) && hasStoredItems(d)) {
             actions.add(Action.FOLLOW_UP_PICKUP);
-            actions.add(Action.ASSIGN_PICKUP);
+            if (d.pickupAppointmentAt != null) actions.add(Action.ASSIGN_PICKUP);
             if (business) actions.add(Action.RECORD_LIQUIDATION);
         }
         if (!terminal(v) && (manager || business && v.isEscalated())) {
-            actions.add(Action.CANCEL);
-            if (v.getStage() == Stage.REVIEW_REQUIRED) actions.add(Action.CONFIRM_VIOLATION);
-            if (v.getStage() == Stage.BLOCKED || v.isEscalated() && v.getStage() != Stage.REVIEW_REQUIRED) actions.add(Action.RESUME);
-            if (business && v.getStage() == Stage.BLOCKED && d.startedAt != null) actions.add(Action.CLOSE_REMEDIATION);
+            boolean withinCancelWindow = d.startedAt == null
+                && (v.getRequiredAt() == null || !now.isAfter(v.getRequiredAt().plus(Duration.ofHours(12))));
+            if (withinCancelWindow) actions.add(Action.CANCEL);
+            if (v.getStage() == Stage.BLOCKED) actions.add(Action.RESUME);
             if (v.getRequiredAt() != null) {
-                if (d.startedAt == null && !d.disputeOpen) actions.add(Action.RESCHEDULE);
-                if (!d.disputeOpen && v.getStage() != Stage.IN_PROGRESS) actions.add(Action.ASSIGN);
-                if (d.acceptedAt != null && d.notifiedAt != null
-                    && (d.attendance == Attendance.PRESENT && within(d.arrivedAt, now, d.verifiedAt)
-                        || d.attendance == Attendance.ABSENT && !now.isBefore(d.responseDueAt))
-                    && List.of(Stage.AWAITING_APPROVAL, Stage.BLOCKED, Stage.AWAITING_ATTENDANCE).contains(v.getStage()))
-                    actions.add(Action.APPROVE);
+                if (v.getStage() != Stage.IN_PROGRESS) actions.add(Action.ASSIGN);
             }
         }
         if (!actor.hasRole(RoleCode.STAFF) || !actor.hasPermission(SystemPermission.PROCESS_RETURNS)
             || !isAssigned(v, actor) || !scopes.canAccessFacility(actor, facility, FacilityScopeLevel.OPERATE)) return actions;
         if (terminal(v) && hasStoredItems(d)) {
-            if (!session(d.pickupOpenedAt, now) && d.pickupAttempts.size() < 2) actions.add(Action.OPEN_PICKUP);
+            if (d.pickupAssignedStaffId != null && actor.userId().equals(d.pickupAssignedStaffId)
+                && d.pickupAppointmentAt != null && !now.isBefore(d.pickupAppointmentAt)
+                && !session(d.pickupOpenedAt, now) && d.pickupAttempts.size() < 2) {
+                actions.add(Action.OPEN_PICKUP);
+            }
             if (actor.userId().equals(d.pickupStaffId) && session(d.pickupOpenedAt, now)) {
                 if (d.pickupAttempts.size() < 2 && d.pickupVerifiedAt == null) actions.add(Action.VERIFY_PICKUP);
                 if (d.pickupVerifiedAt != null) actions.add(Action.RELEASE_ITEM);
@@ -716,22 +836,22 @@ public class ViolationRecoveryWorkflow {
             return actions;
         }
         if (terminal(v)) return actions;
-        if (d.acceptedAt == null) {
-            if (v.getStage() == Stage.AWAITING_ACCEPTANCE) {
-                actions.add(Action.ACCEPT);
-                if (d.startedAt == null) actions.add(Action.DECLINE);
-            }
-            return actions;
+        if (v.getStage() == Stage.BLOCKED || d.disputeOpen || v.getRequiredAt() == null) return actions;
+        if (v.getScheduledAt() != null && !now.isBefore(v.getScheduledAt())
+            && d.reply != Reply.CANNOT_ATTEND
+            && d.attempts.size() < VERIFICATION_LIMIT
+            && (d.attendance != Attendance.PRESENT || !session(d.arrivedAt, now))) {
+            actions.add(Action.RECORD_PRESENT);
         }
-        actions.add(Action.BLOCK);
-        if (d.attendance != Attendance.PRESENT) actions.add(Action.RECORD_PRESENT);
-        if (List.of(Stage.AWAITING_ATTENDANCE, Stage.BLOCKED).contains(v.getStage()) && !d.disputeOpen
+        if (v.getStage() == Stage.AWAITING_ATTENDANCE
             && d.attendance != Attendance.PRESENT && d.attendance != Attendance.ABSENT
-            && !now.isBefore(v.getScheduledAt().plus(WINDOW))) actions.add(Action.RECORD_ABSENT);
-        if (d.attendance == Attendance.PRESENT && d.verifiedAt == null && session(d.arrivedAt, now)
-            && d.attempts.size() < 2) actions.add(Action.VERIFY);
-        if (v.getStage() == Stage.APPROVED && !d.disputeOpen && !now.isBefore(v.getScheduledAt())
-            && (d.attendance == Attendance.ABSENT || within(d.arrivedAt, now, d.verifiedAt))) actions.add(Action.START);
+            && !now.isBefore(v.getScheduledAt())) actions.add(Action.RECORD_ABSENT);
+        if (d.startedAt == null && d.attendance == Attendance.PRESENT && d.verifiedAt == null && session(d.arrivedAt, now)
+            && d.attempts.size() < VERIFICATION_LIMIT
+            && !normalize(v.getRental().getReservation().getIdentityDocumentNumber()).isEmpty()) actions.add(Action.VERIFY);
+        if (v.getStage() == Stage.AWAITING_ATTENDANCE && !now.isBefore(v.getScheduledAt())
+            && d.notifiedAt != null && d.responseDueAt != null && !now.isBefore(d.responseDueAt)
+            && (d.attendance == Attendance.ABSENT || d.attendance == Attendance.PRESENT)) actions.add(Action.START);
         if (v.getStage() == Stage.IN_PROGRESS && !d.disputeOpen) actions.addAll(List.of(Action.SAVE_ITEM, Action.COMPLETE));
         return actions;
     }
@@ -753,7 +873,7 @@ public class ViolationRecoveryWorkflow {
             v.getActionDueAt(), v.getOverdueAt(), v.getCompletedAt(), v.getPickupDueAt(), v.getPickupReviewAt(),
             v.isEscalated(), v.isPickupEscalated(), v.isFinancePending(), v.isFinanceClosed(), owner, d.attendance,
             d.reply, d.notifiedAt, d.responseDueAt, d.arrivedAt, d.verifiedAt, d.attempts.size(), d.pickupAttempts.size(),
-            d.needsWitness, customer ? null : d.attendanceEvidenceId, customer ? null : d.beforeEvidenceId,
+            needsWitness(d, now), customer ? null : d.attendanceEvidenceId, customer ? null : d.beforeEvidenceId,
             customer ? null : d.afterEvidenceId, customer ? null : d.reasonNote, d.customerNote,
             customer ? null : d.report,
             d.items.values().stream().map(item -> customer ? new Item(item.code(), item.name(), item.condition(),
@@ -762,7 +882,32 @@ public class ViolationRecoveryWorkflow {
             customer ? List.of() : d.history,
             allowed(actor, v, d, now), customer ? v.getRequiredAt() : detectedAt(v, d), customer ? null : reviewDeadline(v, d),
             customer ? null : businessReviewDeadline(v, d),
-            !customer && v.getStage() == Stage.REVIEW_REQUIRED ? reviewEvidence.read(v, now) : null);
+            !customer && v.getStage() == Stage.REVIEW_REQUIRED ? reviewEvidence.read(v, now) : null,
+            verification(v, d, false, now), verification(v, d, true, now), true,
+            d.pickupAppointmentAt);
+    }
+
+    private boolean needsWitness(Details d, Instant now) {
+        return d.needsWitness || !within(d.arrivedAt, now, d.verifiedAt);
+    }
+
+    private Verification verification(ViolationRecovery v, Details d, boolean pickup, Instant now) {
+        int used = (pickup ? d.pickupAttempts : d.attempts).size();
+        int remaining = Math.max(0, VERIFICATION_LIMIT - used);
+        boolean matched = (pickup ? d.pickupVerifiedAt : d.verifiedAt) != null;
+        boolean canReceive = pickup ? matched && session(d.pickupOpenedAt, now) : within(d.arrivedAt, now, d.verifiedAt);
+        String message;
+        if (canReceive) message = "Xác minh thành công. Có thể bàn giao hàng cho khách trong phiên hiện tại.";
+        else if (matched) message = "Phiên xác minh đã hết hiệu lực. Chưa được bàn giao hàng cho khách.";
+        else if (normalize(v.getRental().getReservation().getIdentityDocumentNumber()).isEmpty())
+            message = "Hồ sơ thiếu giấy tờ đối chiếu. Chưa được bàn giao hàng cho khách.";
+        else if (remaining == 0)
+            message = "Xác minh không thành công sau " + VERIFICATION_LIMIT + "/" + VERIFICATION_LIMIT + " lượt. Đã hết lượt xác minh; chưa được bàn giao hàng cho khách.";
+        else if (used > 0)
+            message = "Giấy tờ không khớp (lần " + used + "/" + VERIFICATION_LIMIT + "). Còn " + remaining + " lượt xác minh; chưa được bàn giao hàng cho khách.";
+        else message = "Chưa xác minh danh tính. Được đối chiếu tối đa " + VERIFICATION_LIMIT + " lượt; chưa được bàn giao hàng cho khách.";
+        if (!pickup && !canReceive) message += " Thu hồi vẫn tiếp tục theo lịch; hàng được lưu tạm với nhân chứng.";
+        return new Verification(used, VERIFICATION_LIMIT, remaining, matched, canReceive, message);
     }
 
     private Instant reviewDeadline(ViolationRecovery v, Details d) {
@@ -782,26 +927,6 @@ public class ViolationRecoveryWorkflow {
             : v.getStage() == Stage.REVIEW_REQUIRED && v.isEscalated() ? v.getActionDueAt() : null;
     }
 
-    private void processReviewDeadline(ViolationRecovery v, Details d, Instant now) {
-        if (d.reviewDueAt == null) d.reviewDueAt = reviewDeadline(v, d);
-        if (d.businessReviewDueAt == null) d.businessReviewDueAt = businessReviewDeadline(v, d);
-        if (!v.isEscalated() && d.reviewDueAt != null && !now.isBefore(d.reviewDueAt)) {
-            d.reviewEscalatedAt = now;
-            d.businessReviewDueAt = working(now, 4);
-            v.setEscalated(true);
-            v.setActionDueAt(d.businessReviewDueAt);
-            d.history.add(new HistoryEvent("REVIEW_ESCALATED", "Hệ thống", now, Stage.REVIEW_REQUIRED,
-                "Quá hạn Manager duyệt mở thu hồi. Đã chuyển BO xử lý."));
-            notifyBusiness(v, "Quá hạn duyệt mở thu hồi, cần BO xử lý");
-        } else if (v.isEscalated() && v.getActionDueAt() != null && !now.isBefore(v.getActionDueAt())) {
-            // Keep the original deadlines visible; never auto-approve or repeatedly extend the BO clock.
-            v.setActionDueAt(null);
-            d.history.add(new HistoryEvent("BO_REVIEW_OVERDUE", "Hệ thống", now, Stage.REVIEW_REQUIRED,
-                "BO chưa xử lý đúng hạn. Hồ sơ tiếp tục chờ quyết định mở hoặc hủy thu hồi."));
-            notifyBusiness(v, "BO chưa xử lý hồ sơ mở thu hồi đúng hạn");
-        }
-    }
-
     private boolean canRead(ActorPrincipal actor, ViolationRecovery v) {
         if (actor.hasRole(RoleCode.CUSTOMER)) return v.getRequiredAt() != null && v.getRental().getCustomer().getId().equals(actor.userId());
         if (actor.hasRole(RoleCode.STAFF) && (!actor.hasPermission(SystemPermission.PROCESS_RETURNS) || !isAssigned(v, actor))) return false;
@@ -816,12 +941,23 @@ public class ViolationRecoveryWorkflow {
     private User staffAt(UUID id, ViolationRecovery v) {
         return eligibleStaff(v).stream()
             .filter(user -> user.getId().equals(id)).findFirst()
-            .orElseThrow(() -> ApiExceptions.validation("Cần chọn nhân viên đang hoạt động tại đúng cơ sở.", null));
+            .orElseThrow(() -> ApiExceptions.validation("Cần chọn nhân viên đang hoạt động, có quyền xử lý trả kho tại đúng cơ sở.", null));
+    }
+
+    private User availableStaffAt(UUID id, ViolationRecovery v, Instant start, Instant end) {
+        var staff = staffAt(id, v);
+        if (end != null && !end.isAfter(Instant.now())) { start = Instant.now(); end = start.plus(WINDOW); }
+        if (!staffAvailability.available(id, v, start, end))
+            throw ApiExceptions.conflict("Nhân viên đã có lịch xử lý đơn khác trong thời gian thu hồi. Vui lòng chọn nhân viên khác.");
+        return staff;
     }
 
     private List<User> eligibleStaff(ViolationRecovery v) {
         return users.findEligibleStaff(UserStatus.ACTIVE, RoleCode.STAFF, v.getRental().getFacility().getId(),
-            List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE));
+            List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)).stream()
+            .filter(user -> user.getRoles().stream().flatMap(role -> role.getEffectivePermissions().stream())
+                .anyMatch(permission -> SystemPermission.PROCESS_RETURNS.code().equals(permission.getCode())))
+            .toList();
     }
 
     private UUID evidence(ViolationRecovery v, ActorPrincipal actor, UUID id) {
@@ -848,20 +984,6 @@ public class ViolationRecoveryWorkflow {
     }
 
     private Instant working(Instant at, int hours) { return calendar.current().afterWorkingHours(at, hours); }
-
-    private Instant nextOpening(Instant candidate) {
-        var s = calendar.current();
-        var day = candidate.atZone(BusinessTime.ZONE).toLocalDate();
-        while (true) {
-            if (s.days().contains(day.getDayOfWeek()) && !s.holidays().contains(day)) {
-                Instant open = day.atTime(s.opens()).atZone(BusinessTime.ZONE).toInstant();
-                Instant close = (s.midnightClose() ? day.plusDays(1).atStartOfDay() : day.atTime(s.closes()))
-                    .atZone(BusinessTime.ZONE).toInstant();
-                if (candidate.isBefore(close)) return later(candidate, open);
-            }
-            day = day.plusDays(1);
-        }
-    }
 
     private static Instant future(Instant at, Instant now) {
         if (at == null || !at.isAfter(now)) throw ApiExceptions.validation("Cần chọn mốc trong tương lai.", null);
@@ -951,29 +1073,29 @@ public class ViolationRecoveryWorkflow {
         var v = recoveries.lock(id).orElseThrow();
         em.refresh(v, LockModeType.PESSIMISTIC_WRITE);
         if (terminal(v)) return;
-        notifyCoordinationRequired(v);
-        if (v.getStage() == Stage.REVIEW_REQUIRED) return;
         var d = details(v);
+        upgradeLegacyFlow(v, d, Instant.now());
+        if (terminal(v)) { save(v, d); return; }
+        notifyCoordinationRequired(v);
         if (v.getRequiredAt() != null && d.notifiedAt == null) {
             notifyCustomerSchedule(v, d, Instant.now(), "Thông báo thu hồi kho");
-            save(v, d);
         }
+        save(v, d);
     }
 
     private void notifyCoordinationRequired(ViolationRecovery v) {
         String title = switch (v.getStage()) {
-            case REVIEW_REQUIRED -> "Cần duyệt mở thu hồi";
+            case REVIEW_REQUIRED -> "Cần phân công nhân viên thu hồi";
             case AWAITING_ASSIGNMENT -> "Cần phân công nhân viên thu hồi";
-            case AWAITING_APPROVAL -> "Cần phê duyệt thực hiện thu hồi";
+            case AWAITING_APPROVAL -> "Hồ sơ thu hồi cần điều phối";
             case BLOCKED -> "Thu hồi tạm dừng, cần xử lý";
             default -> "Hồ sơ thu hồi cần điều phối";
         };
         String step = switch (v.getStage()) {
-            case REVIEW_REQUIRED -> "Kiểm tra biên bản, hạn dọn hàng và tình trạng khắc phục để quyết định mở thu hồi.";
+            case REVIEW_REQUIRED -> "Cần phân công nhân viên thu hồi.";
             case AWAITING_ASSIGNMENT -> "Cần phân công nhân viên thu hồi.";
-            case AWAITING_ACCEPTANCE -> "Đã phân công nhân viên, cần theo dõi việc tiếp nhận nhiệm vụ.";
-            case AWAITING_APPROVAL -> "Cần kiểm tra kết quả tiếp nhận và phê duyệt thực hiện thu hồi.";
-            case BLOCKED -> "Hồ sơ đang tạm dừng, cần quản lý hoặc BO xem xét xử lý.";
+            case AWAITING_ACCEPTANCE, AWAITING_APPROVAL -> "Đã phân công nhân viên, thực hiện thu hồi theo lịch đã thông báo.";
+            case BLOCKED -> "Hồ sơ đang tạm dừng, cần quản lý cơ sở hoặc chủ doanh nghiệp xem xét xử lý.";
             default -> "Cần theo dõi tiến độ và xử lý các bước tiếp theo của hồ sơ thu hồi.";
         };
         for (var manager : users.findEligibleStaff(UserStatus.ACTIVE, RoleCode.MANAGER,

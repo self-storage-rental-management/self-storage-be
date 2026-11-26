@@ -38,6 +38,7 @@ import org.springframework.transaction.PlatformTransactionManager;
         "app.bootstrap-demo-data.enabled=true",
         "app.seed-intake-scenarios.enabled=true",
         "app.bootstrap-admin.enabled=false",
+        "app.mail.enabled=false",
         "storagehub.integration.rental-period.enabled=false"
     }
 )

@@ -31,11 +31,13 @@ class ViolationRecoveryWorkflowTests {
     private final UserFacilityScopeRepository userFacilityScopes = mock(UserFacilityScopeRepository.class);
     private final AccessCredentialService access = mock(AccessCredentialService.class);
     private final NotificationService notifications = mock(NotificationService.class);
+    private final RecoveryStaffAvailability staffAvailability = mock(RecoveryStaffAvailability.class);
     private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     private final ViolationRecoveryWorkflow workflow = new ViolationRecoveryWorkflow(cases, rentals, returns, tasks, users,
         files, access, mock(UnitAssignmentRepository.class), notifications, mock(AuditLogService.class),
         new FacilityScopeService(), new WorkflowBusinessCalendar(mock(SystemSettingRepository.class), mapper),
-        mock(EntityManager.class), mapper, new RecoveryReviewService(checkIns, returns, files, mapper), userFacilityScopes);
+        mock(EntityManager.class), mapper, new RecoveryReviewService(checkIns, returns, files, mapper,
+            mock(ReservationGoodsItemRepository.class)), userFacilityScopes, staffAvailability);
     private final Facility facility = identified(new Facility());
     private final User customer = identified(new User());
     private final User staff = identified(new User());
@@ -71,6 +73,15 @@ class ViolationRecoveryWorkflowTests {
         recovery.setSourceDeadlineAt(rental.getInventoryRemovalDeadlineAt());
         recovery.setStage(Stage.REVIEW_REQUIRED);
         task.setAssignedTo(staff);
+        var staffRole = new Role();
+        staffRole.setCode(RoleCode.STAFF);
+        var permission = new Permission();
+        permission.setCode(SystemPermission.PROCESS_RETURNS.code());
+        staffRole.getPermissions().add(permission);
+        staff.getRoles().add(staffRole);
+        witness.getRoles().add(staffRole);
+        when(staffAvailability.available(any(), any(), any(), any())).thenReturn(true);
+        when(cases.saveAndFlush(any())).thenAnswer(call -> identified(call.getArgument(0)));
         when(cases.findById(recovery.getId())).thenReturn(Optional.of(recovery));
         when(cases.lock(recovery.getId())).thenReturn(Optional.of(recovery));
         when(rentals.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
@@ -85,17 +96,39 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void opensOneRequestAndUses72HoursOnlyAfterManagerConfirms() {
+    void automaticallyOpensOneRequestAndSchedules24HoursThen48HoursToComplete() {
         assertThat(workflow.detect(rental, source, Reason.REMOVAL_OVERDUE, rental.getInventoryRemovalDeadlineAt(),
             Instant.now(), true)).isTrue();
         verify(tasks, never()).saveAndFlush(any());
-        when(cases.findByRental_IdOrderByCreatedAtDesc(rental.getId())).thenReturn(List.of(recovery));
+        var created = org.mockito.ArgumentCaptor.forClass(ViolationRecovery.class);
+        verify(cases).saveAndFlush(created.capture());
+        when(cases.findByRental_IdOrderByCreatedAtDesc(rental.getId())).thenReturn(List.of(created.getValue()));
         assertThat(workflow.detect(rental, source, Reason.REMOVAL_OVERDUE, rental.getInventoryRemovalDeadlineAt(),
             Instant.now(), true)).isFalse();
-        var view = execute(manager(), ViolationRecoveryWorkflow.Action.CONFIRM_VIOLATION, "Đã xác minh căn cứ", null);
-        assertThat(view.deadlineAt()).isEqualTo(view.requiredAt().plus(Duration.ofHours(72)));
-        assertThat(view.taskId()).isNull();
+        assertThat(created.getValue().getStage()).isEqualTo(Stage.AWAITING_ASSIGNMENT);
+        assertThat(created.getValue().getScheduledAt()).isEqualTo(created.getValue().getRequiredAt().plus(Duration.ofHours(24)));
+        assertThat(created.getValue().getDeadlineAt()).isEqualTo(created.getValue().getScheduledAt().plus(Duration.ofHours(48)));
         assertThat(source.getStatus()).isEqualTo(ReturnCaseStatus.withdrawn_for_recovery);
+    }
+
+    @Test
+    void preparationRequiresOwnerOrAssignedStaffOrAnOperationsRoleInTheFacility() throws Exception {
+        readyForAbsentHandover();
+        assertThat(workflow.preparation(staff(), recovery.getId()).declared()).isEmpty();
+        assertThat(workflow.preparation(manager(), recovery.getId()).declared()).isEmpty();
+        assertThat(workflow.preparation(business(), recovery.getId()).declared()).isEmpty();
+        assertThatThrownBy(() -> workflow.preparation(actor(witness, RoleCode.STAFF, SystemPermission.PROCESS_RETURNS,
+            FacilityScopeLevel.OPERATE), recovery.getId())).isInstanceOfSatisfying(ApiException.class,
+                error -> assertThat(error.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        var outside = new ActorPrincipal(manager.getId(), UUID.randomUUID(), Set.of(RoleCode.MANAGER),
+            Set.of(SystemPermission.MANAGE_STAFF_TASKS.code()), Map.of(UUID.randomUUID(), FacilityScopeLevel.MANAGE));
+        assertThatThrownBy(() -> workflow.preparation(outside, recovery.getId())).isInstanceOfSatisfying(ApiException.class,
+            error -> assertThat(error.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(workflow.preparation(actor(customer, RoleCode.CUSTOMER, null, null), recovery.getId()).declared()).isEmpty();
+        assertThatThrownBy(() -> workflow.preparation(actor(identified(new User()), RoleCode.CUSTOMER, null, null), recovery.getId()))
+            .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(workflow.get(staff(), recovery.getId()).canViewSourceGoods()).isTrue();
+        assertThat(workflow.get(actor(customer, RoleCode.CUSTOMER, null, null), recovery.getId()).canViewSourceGoods()).isTrue();
     }
 
     @Test
@@ -114,7 +147,8 @@ class ViolationRecoveryWorkflowTests {
 
     @Test
     void disputeBlocksStartAndDoesNotResetTheDeadline() throws Exception {
-        var before = readyForAbsentHandover();
+        var before = activateRecovery().deadlineAt();
+        recovery.setTask(task);
         var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
         assertThat(execute(customerActor, ViolationRecoveryWorkflow.Action.DISPUTE, "Tôi đã đến cơ sở", null).stage()).isEqualTo(Stage.BLOCKED);
         assertThatThrownBy(() -> execute(staff(), ViolationRecoveryWorkflow.Action.START, null, null))
@@ -143,11 +177,8 @@ class ViolationRecoveryWorkflowTests {
         verify(tasks).save(argThat(created -> created.getRecoveryType() == MaintenanceRecoveryType.VIOLATION_UNIT_READINESS));
     }
 
-    @ParameterizedTest
-    @EnumSource(value = ViolationRecoveryWorkflow.Action.class, names = {"BLOCK", "DISPUTE"})
-    void pausePreventsAddingItemsAndCompletionUntilManagerResumesAndApproves(
-        ViolationRecoveryWorkflow.Action pauseAction
-    ) throws Exception {
+    @Test
+    void pausePreventsAddingItemsAndCompletionUntilManagerResumesWithoutAnotherApproval() throws Exception {
         var deadline = readyForAbsentHandover();
         workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
             null, witness.getId(), photo(), "TEMP-A", null));
@@ -155,9 +186,7 @@ class ViolationRecoveryWorkflowTests {
             ViolationRecoveryWorkflow.Action.SAVE_ITEM, null, null, photo(), null, null,
             null, null, "PKG-1", "Kiện đã lưu", "Nguyên vẹn", "TEMP-A", "STORED");
         var saved = workflow.execute(staff(), recovery.getId(), firstItem);
-        var pausingActor = pauseAction == ViolationRecoveryWorkflow.Action.BLOCK ? staff()
-            : actor(customer, RoleCode.CUSTOMER, null, null);
-        execute(pausingActor, pauseAction, "Cần quản lý rà soát", null);
+        pauseForReview("Cần quản lý rà soát");
 
         when(cases.findBySourceReturnIdOrderByCreatedAtDesc(source.getId())).thenReturn(List.of(recovery));
         var paused = workflow.listForReturn(staff(), source.getId()).getFirst();
@@ -181,8 +210,6 @@ class ViolationRecoveryWorkflowTests {
         verifyNoInteractions(access);
 
         execute(manager(), ViolationRecoveryWorkflow.Action.RESUME, "Đã xử lý, cho tiếp tục", null);
-        execute(manager(), ViolationRecoveryWorkflow.Action.APPROVE, "Đủ điều kiện thu hồi", witness.getId());
-        execute(staff(), ViolationRecoveryWorkflow.Action.START, null, witness.getId());
         assertThat(workflow.execute(staff(), recovery.getId(), nextItem).items()).hasSize(2);
         assertThat(workflow.execute(staff(), recovery.getId(), completion).stage()).isEqualTo(Stage.COMPLETED);
         assertThat(recovery.getDeadlineAt()).isEqualTo(deadline);
@@ -215,8 +242,15 @@ class ViolationRecoveryWorkflowTests {
         var completed = workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.COMPLETE,
             "Gian trống, đã xử lý khóa", null, photo(), null, "VACATED"));
         assertThat(completed.pickupDueAt()).isNotNull();
-        assertThat(completed.actions()).contains(ViolationRecoveryWorkflow.Action.OPEN_PICKUP)
-            .doesNotContain(ViolationRecoveryWorkflow.Action.RELEASE_ITEM);
+        assertThat(completed.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.OPEN_PICKUP,
+            ViolationRecoveryWorkflow.Action.RELEASE_ITEM);
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+        workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, Instant.now(),
+            null, null, null, null, null, null, null));
+        workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.ASSIGN_PICKUP, staff.getId(), null, null, null, null,
+            null, null, null, null, null, null, null));
         execute(staff(), ViolationRecoveryWorkflow.Action.OPEN_PICKUP, null, null);
         workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
             ViolationRecoveryWorkflow.Action.VERIFY_PICKUP, null, null, null, UUID.randomUUID(), null,
@@ -262,6 +296,13 @@ class ViolationRecoveryWorkflowTests {
         assertThatThrownBy(() -> workflow.execute(business(), recovery.getId(), command))
             .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+        workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, Instant.now(),
+            null, null, null, null, null, null, null));
+        workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.ASSIGN_PICKUP, staff.getId(), null, null, null, null,
+            null, null, null, null, null, null, null));
         execute(staff(), ViolationRecoveryWorkflow.Action.OPEN_PICKUP, null, null);
         workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
             ViolationRecoveryWorkflow.Action.VERIFY_PICKUP, null, null, null, UUID.randomUUID(), null,
@@ -350,6 +391,13 @@ class ViolationRecoveryWorkflowTests {
     @Test
     void customerPickupSavedFirstPreventsLiquidationOfThatItem() throws Exception {
         completeWithStoredItems(2);
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+        workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, Instant.now(),
+            null, null, null, null, null, null, null));
+        workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.ASSIGN_PICKUP, staff.getId(), null, null, null, null,
+            null, null, null, null, null, null, null));
         execute(staff(), ViolationRecoveryWorkflow.Action.OPEN_PICKUP, null, null);
         workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
             ViolationRecoveryWorkflow.Action.VERIFY_PICKUP, null, null, null, UUID.randomUUID(), null,
@@ -377,6 +425,22 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
+    void customerPagingUsesOwnerScopeAndReturnsTotalsInsteadOfFilteringAPageInMemory() {
+        activateRecovery();
+        var pageable = org.springframework.data.domain.PageRequest.of(1, 8);
+        when(cases.customerPage(customer.getId(), pageable)).thenReturn(new org.springframework.data.domain.PageImpl<>(
+            Collections.nCopies(5, recovery), pageable, 13));
+        var result = workflow.customerPage(actor(customer, RoleCode.CUSTOMER, null, null), 1, 8, "paging");
+        assertThat(result.data()).hasSize(5);
+        assertThat(result.pagination().totalItems()).isEqualTo(13);
+        assertThat(result.pagination().totalPages()).isEqualTo(2);
+        assertThat(result.pagination().page()).isEqualTo(1);
+        verify(cases).customerPage(customer.getId(), pageable);
+        assertThatThrownBy(() -> workflow.customerPage(manager(), 0, 8, "paging"))
+            .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
     void activeOperationsQueueNamesTheOrderAndFiltersByTheManagersFacility() {
         when(cases.operationsQueue(eq(false), anyCollection(), eq(true), eq(false), any()))
             .thenReturn(List.of(recovery));
@@ -391,11 +455,124 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
+    void businessQueueQueriesOnlyEscalatedManagerStagesBeforePaginationAndKeepsFacilityScope() {
+        activateRecovery();
+        recovery.setEscalated(true);
+        when(cases.findByRental_Facility_IdInAndEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), anyCollection(), any()))
+            .thenReturn(List.of(recovery));
+        var queue = workflow.listEscalatedOperations(business(), 2);
+        assertThat(queue).extracting(ViolationRecoveryWorkflow.Entry::id).containsExactly(recovery.getId());
+        assertThat(queue.getFirst().actions()).contains(ViolationRecoveryWorkflow.Action.ASSIGN);
+        verify(cases).findByRental_Facility_IdInAndEscalatedTrueAndStageInOrderByCreatedAtDesc(
+            eq(Set.of(facility.getId())), argThat(stages -> stages.contains(Stage.AWAITING_ASSIGNMENT)
+                && stages.contains(Stage.BLOCKED) && !stages.contains(Stage.IN_PROGRESS)
+                && !stages.contains(Stage.AWAITING_ATTENDANCE) && !stages.contains(Stage.COMPLETED)),
+            argThat(page -> page.getPageNumber() == 2 && page.getPageSize() == 30));
+        verify(cases, never()).findAllByOrderByCreatedAtDesc(any());
+    }
+
+    @Test
+    void globalBusinessQueueHasTheSameOverdueFilterAndCannotBeRequestedByManagerOrStaff() {
+        when(cases.findByEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), any())).thenReturn(List.of());
+        var globalBusiness = actor(business, RoleCode.BUSINESS, null, null);
+        assertThat(workflow.listEscalatedOperations(globalBusiness, 0)).isEmpty();
+        verify(cases).findByEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), any());
+        assertThatThrownBy(() -> workflow.listEscalatedOperations(manager(), 0)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> workflow.listEscalatedOperations(staff(), 0)).isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void businessQueueAppearsAfterManagerDeadlineAndLeavesAfterAssignment() {
+        activateRecovery();
+        when(cases.findByRental_Facility_IdInAndEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), anyCollection(), any()))
+            .thenAnswer(call -> recovery.isEscalated() && recovery.getStage() == Stage.AWAITING_ASSIGNMENT ? List.of(recovery) : List.of());
+        var due = recovery.getActionDueAt();
+        workflow.processDue(recovery.getId(), due.minusNanos(1));
+        assertThat(workflow.listEscalatedOperations(business(), 0)).isEmpty();
+        workflow.processDue(recovery.getId(), due);
+        assertThat(workflow.listEscalatedOperations(business(), 0)).hasSize(1);
+        workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.ASSIGN, staff.getId(), null, null, null, null, null, null, null, null, null, null, null));
+        assertThat(recovery.getStage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        assertThat(recovery.isEscalated()).isFalse();
+        assertThat(workflow.listEscalatedOperations(business(), 0)).isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Stage.class, names = {"AWAITING_ASSIGNMENT", "AWAITING_ATTENDANCE", "BLOCKED", "IN_PROGRESS"})
+    void escalatedBusinessHasEveryManagerCoordinationAction(Stage stage) throws Exception {
+        activateRecovery();
+        recovery.setStage(stage);
+        recovery.setEscalated(true);
+        if (stage != Stage.AWAITING_ASSIGNMENT) recovery.setTask(task);
+        if (stage == Stage.IN_PROGRESS) {
+            var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+            d.startedAt = Instant.now();
+            recovery.setDetailsJson(mapper.writeValueAsString(d));
+        }
+        var managerActions = workflow.get(manager(), recovery.getId()).actions();
+        assertThat(workflow.get(business(), recovery.getId()).actions()).containsAll(managerActions);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ViolationRecoveryWorkflow.Action.class, names = {"ASSIGN", "RESUME", "CANCEL"})
+    void businessCanExecuteManagerOperationsOnAnEscalatedCase(ViolationRecoveryWorkflow.Action action) throws Exception {
+        var original = activateRecovery();
+        recovery.setEscalated(true);
+        if (action == ViolationRecoveryWorkflow.Action.RESUME) {
+            recovery.setTask(task);
+            recovery.setStage(Stage.BLOCKED);
+            var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+            d.disputeOpen = true;
+            recovery.setDetailsJson(mapper.writeValueAsString(d));
+        }
+        var result = workflow.execute(business(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            action, action == ViolationRecoveryWorkflow.Action.ASSIGN ? staff.getId() : null,
+            null, null, null, null, "BO xử lý hồ sơ thay Manager", null, null, null, null, null, null));
+        assertThat(result.stage()).isEqualTo(action == ViolationRecoveryWorkflow.Action.CANCEL ? Stage.CANCELLED : Stage.AWAITING_ATTENDANCE);
+        assertThat(result.escalated()).isFalse();
+        assertThat(result.deadlineAt()).isEqualTo(original.deadlineAt());
+        assertThat(result.history().getLast().actorName()).isEqualTo(business.getFullName());
+        if (action == ViolationRecoveryWorkflow.Action.ASSIGN) assertThat(recovery.getTask().getAssignedTo()).isEqualTo(staff);
+        if (action == ViolationRecoveryWorkflow.Action.RESUME)
+            assertThat(mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class).disputeOpen).isFalse();
+        if (action == ViolationRecoveryWorkflow.Action.CANCEL) assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
+    }
+
+    @Test
+    void businessKeepsManagerPickupActionsAndItsOwnLiquidationAction() throws Exception {
+        completeWithStoredItems(1);
+        workflow.execute(actor(customer, RoleCode.CUSTOMER, null, null), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, Instant.now(),
+            null, null, null, null, null, null, null));
+        var managerActions = workflow.get(manager(), recovery.getId()).actions();
+        assertThat(managerActions).contains(ViolationRecoveryWorkflow.Action.FOLLOW_UP_PICKUP,
+            ViolationRecoveryWorkflow.Action.ASSIGN_PICKUP);
+        assertThat(workflow.get(business(), recovery.getId()).actions()).containsAll(managerActions)
+            .contains(ViolationRecoveryWorkflow.Action.RECORD_LIQUIDATION);
+    }
+
+    @Test
+    void businessCannotTakeOverBeforeEscalationOrWithoutManagementScope() {
+        activateRecovery();
+        var assign = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.ASSIGN,
+            staff.getId(), null, null, null, null, null, null, null, null, null, null, null);
+        assertThat(workflow.get(business(), recovery.getId()).actions()).doesNotContain(
+            ViolationRecoveryWorkflow.Action.ASSIGN, ViolationRecoveryWorkflow.Action.RESUME, ViolationRecoveryWorkflow.Action.CANCEL);
+        assertThatThrownBy(() -> workflow.execute(business(), recovery.getId(), assign)).isInstanceOf(ApiException.class);
+        recovery.setEscalated(true);
+        var readOnlyBusiness = actor(business, RoleCode.BUSINESS, null, FacilityScopeLevel.READ);
+        assertThat(workflow.get(readOnlyBusiness, recovery.getId()).actions()).doesNotContain(ViolationRecoveryWorkflow.Action.ASSIGN);
+        assertThatThrownBy(() -> workflow.execute(readOnlyBusiness, recovery.getId(), assign)).isInstanceOf(ApiException.class);
+        assertThat(recovery.getTask()).isNull();
+    }
+
+    @Test
     void confirmedRecoveryNotifiesAllEligibleManagersWithOrderAndAssignmentDestination() {
         var anotherManager = identified(new User());
         when(users.findEligibleStaff(UserStatus.ACTIVE, RoleCode.MANAGER, facility.getId(), List.of(FacilityScopeLevel.MANAGE)))
             .thenReturn(List.of(manager, anotherManager));
-        execute(manager(), ViolationRecoveryWorkflow.Action.CONFIRM_VIOLATION, "Đủ căn cứ", null);
+        activateRecovery();
         for (var recipient : List.of(manager, anotherManager)) {
             verify(notifications).createNotificationOnce(eq(recipient.getId()), eq(NotificationType.RETURN),
                 eq("Cần phân công nhân viên thu hồi"), argThat(text -> text.contains("RSV-TEST-10")
@@ -405,7 +582,7 @@ class ViolationRecoveryWorkflowTests {
 
     @Test
     void activationPublishesCustomerNoticeAndStartsReplyWindowWithoutManualConfirmation() {
-        var entry = execute(manager(), ViolationRecoveryWorkflow.Action.CONFIRM_VIOLATION, "Đủ căn cứ", null);
+        var entry = activateRecovery();
         assertThat(entry.notifiedAt()).isEqualTo(entry.requiredAt());
         assertThat(entry.responseDueAt()).isEqualTo(entry.notifiedAt().plus(Duration.ofHours(6)));
         assertThat(recovery.getResponseCheckAt()).isEqualTo(entry.responseDueAt());
@@ -421,7 +598,6 @@ class ViolationRecoveryWorkflowTests {
 
     @Test
     void automaticIntakeDetectionAlsoPublishesNoticeWithoutManagerAction() throws Exception {
-        when(cases.saveAndFlush(any())).thenAnswer(call -> identified(call.getArgument(0)));
         var now = Instant.now();
         assertThat(workflow.detect(rental, null, Reason.INVENTORY_NO_SHOW, now.minusSeconds(60), now, false)).isTrue();
         var created = org.mockito.ArgumentCaptor.forClass(ViolationRecovery.class);
@@ -452,19 +628,24 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void changingAppointmentAutomaticallyNotifiesCustomerAndOpensANewReplyWindow() {
-        var original = execute(manager(), ViolationRecoveryWorkflow.Action.CONFIRM_VIOLATION, "Đủ căn cứ", null);
-        var appointment = original.scheduledAt().atZone(com.storagehub.time.BusinessTime.ZONE)
-            .withHour(10).withMinute(0).withSecond(0).withNano(0).toInstant();
-        if (appointment.equals(original.scheduledAt())) appointment = appointment.plusSeconds(3600);
-        var updated = workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+    void managerAndBoCannotChangeTheAutomaticScheduleOrResetTheCustomerReplyWindow() {
+        var original = activateRecovery();
+        var appointment = original.scheduledAt().plusSeconds(3600);
+        var change = new ViolationRecoveryWorkflow.Command(
             ViolationRecoveryWorkflow.Action.RESCHEDULE, null, null, null, null, appointment,
-            "Đổi lịch theo đề nghị của khách", null, null, null, null, null, null));
-        assertThat(updated.notifiedAt()).isAfterOrEqualTo(original.notifiedAt());
-        assertThat(updated.responseDueAt()).isEqualTo(updated.notifiedAt().plus(Duration.ofHours(6)));
+            "Đổi lịch theo đề nghị của khách", null, null, null, null, null, null);
+        recovery.setEscalated(true);
+        for (var actor : List.of(manager(), business())) {
+            assertThat(workflow.get(actor, recovery.getId()).actions()).doesNotContain(ViolationRecoveryWorkflow.Action.RESCHEDULE);
+            assertThatThrownBy(() -> workflow.execute(actor, recovery.getId(), change)).isInstanceOf(ApiException.class);
+        }
+        var updated = workflow.get(manager(), recovery.getId());
+        assertThat(updated.scheduledAt()).isEqualTo(original.scheduledAt());
+        assertThat(updated.notifiedAt()).isEqualTo(original.notifiedAt());
+        assertThat(updated.responseDueAt()).isEqualTo(original.responseDueAt());
         assertThat(updated.deadlineAt()).isEqualTo(original.deadlineAt());
-        verify(notifications).createNotification(eq(customer.getId()), eq(NotificationType.RETURN),
-            eq("Lịch thu hồi đã thay đổi"), contains("Vui lòng phản hồi trước"), eq(recovery.getId()));
+        verify(notifications, never()).createNotification(eq(customer.getId()), eq(NotificationType.RETURN),
+            eq("Lịch thu hồi đã thay đổi"), anyString(), any());
     }
 
     @Test
@@ -481,81 +662,308 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void reviewExpiryAlertsBoWithoutOpeningRecoveryOrStartingThe72HourClock() {
+    void oldReviewAutomaticallyOpensWithoutManagerApprovalAndKeepsDetectionHistory() throws Exception {
         var detected = Instant.parse("2026-11-26T10:00:00Z");
-        recovery.setActionDueAt(detected.plus(Duration.ofHours(1)));
         var d = new ViolationRecoveryWorkflow.Details();
         d.history.add(new ViolationRecoveryWorkflow.HistoryEvent("DETECT", "Hệ thống", detected, Stage.REVIEW_REQUIRED, null));
-        try { recovery.setDetailsJson(mapper.writeValueAsString(d)); } catch (Exception ex) { throw new AssertionError(ex); }
-        when(users.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE)).thenReturn(List.of(business));
-        var deadline = recovery.getActionDueAt();
-        workflow.processDue(recovery.getId(), deadline.minusNanos(1));
-        assertThat(recovery.isEscalated()).isFalse();
-        workflow.processDue(recovery.getId(), deadline);
-        var escalated = workflow.get(business(), recovery.getId());
-        assertThat(escalated.stage()).isEqualTo(Stage.REVIEW_REQUIRED);
-        assertThat(escalated.detectedAt()).isEqualTo(detected);
-        assertThat(escalated.reviewDueAt()).isEqualTo(deadline);
-        assertThat(escalated.businessReviewDueAt()).isEqualTo(deadline.plus(Duration.ofHours(4)));
-        assertThat(escalated.actions()).contains(ViolationRecoveryWorkflow.Action.CONFIRM_VIOLATION,
-            ViolationRecoveryWorkflow.Action.CANCEL).doesNotContain(ViolationRecoveryWorkflow.Action.RESUME);
-        assertThat(escalated.requiredAt()).isNull();
-        assertThat(escalated.deadlineAt()).isNull();
-        assertThat(escalated.taskId()).isNull();
-        verify(notifications).createNotificationOnce(eq(business.getId()), eq(NotificationType.RETURN),
-            eq("Quá hạn duyệt mở thu hồi, cần BO xử lý"), contains("RSV-TEST-10"), eq(recovery.getId()));
-        workflow.processDue(recovery.getId(), escalated.businessReviewDueAt());
-        var overdue = workflow.get(business(), recovery.getId());
-        assertThat(overdue.reviewDueAt()).isEqualTo(deadline);
-        assertThat(overdue.businessReviewDueAt()).isEqualTo(escalated.businessReviewDueAt());
-        assertThat(overdue.actionDueAt()).isNull();
-        assertThat(overdue.requiredAt()).isNull();
-        assertThat(overdue.history()).anyMatch(event -> "BO_REVIEW_OVERDUE".equals(event.action()));
-        verify(notifications).createNotificationOnce(eq(business.getId()), eq(NotificationType.RETURN),
-            eq("BO chưa xử lý hồ sơ mở thu hồi đúng hạn"), contains("RSV-TEST-10"), eq(recovery.getId()));
-        workflow.processDue(recovery.getId(), escalated.businessReviewDueAt().plusSeconds(3600));
-        verify(notifications, times(1)).createNotificationOnce(eq(business.getId()), eq(NotificationType.RETURN),
-            eq("BO chưa xử lý hồ sơ mở thu hồi đúng hạn"), anyString(), eq(recovery.getId()));
-        assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
-        verify(notifications, never()).createNotification(eq(customer.getId()), any(), anyString(), anyString(), any());
-    }
-
-    @Test
-    void managerCanDeclineOpeningWithoutActivatingOrNotifyingCustomer() {
-        var entry = execute(manager(), ViolationRecoveryWorkflow.Action.CANCEL, "Khách đã khắc phục, không mở thu hồi", null);
-        assertThat(entry.stage()).isEqualTo(Stage.CANCELLED);
-        assertThat(entry.requiredAt()).isNull();
-        assertThat(entry.deadlineAt()).isNull();
-        assertThat(entry.taskId()).isNull();
-        assertThat(rental.getStatus()).isEqualTo(RentalStatus.return_requested);
-        verify(notifications, never()).createNotification(eq(customer.getId()), any(), anyString(), anyString(), any());
-    }
-
-    @Test
-    void clearanceRecordedWhileManagerReviewsPreventsOpeningAtSubmitTime() {
-        assertThat(workflow.get(manager(), recovery.getId()).review().openingAllowed()).isTrue();
-        source.setWarehouseEmptyVerified(true);
-        source.setWarehouseEmptyVerifiedAt(Instant.now());
-        assertThatThrownBy(() -> execute(manager(), ViolationRecoveryWorkflow.Action.CONFIRM_VIOLATION, "Đã kiểm tra", null))
-            .isInstanceOf(ApiException.class).hasMessageContaining("kho trống");
-        assertThat(recovery.getRequiredAt()).isNull();
-        assertThat(recovery.getDeadlineAt()).isNull();
-        verify(tasks, never()).saveAndFlush(any());
-    }
-
-    @Test
-    void pendingReviewNotifiesBothManagerAndBoWithTheOrderAndNextStepBeforeApproval() {
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
         when(users.findEligibleStaff(UserStatus.ACTIVE, RoleCode.MANAGER, facility.getId(), List.of(FacilityScopeLevel.MANAGE)))
             .thenReturn(List.of(manager));
         when(users.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE)).thenReturn(List.of(business));
-        workflow.notifyPendingNotifications(recovery.getId());
-        for (var recipient : List.of(manager, business)) {
+        var entry = activateRecovery();
+        assertThat(entry.stage()).isEqualTo(Stage.AWAITING_ASSIGNMENT);
+        assertThat(entry.detectedAt()).isEqualTo(detected);
+        assertThat(entry.scheduledAt()).isEqualTo(entry.requiredAt().plus(Duration.ofHours(24)));
+        assertThat(entry.deadlineAt()).isEqualTo(entry.scheduledAt().plus(Duration.ofHours(48)));
+        assertThat(entry.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.CONFIRM_VIOLATION,
+            ViolationRecoveryWorkflow.Action.APPROVE, ViolationRecoveryWorkflow.Action.ACCEPT);
+        for (var recipient : List.of(manager, business))
             verify(notifications).createNotificationOnce(eq(recipient.getId()), eq(NotificationType.RETURN),
-                eq("Cần duyệt mở thu hồi"), argThat(text -> text.contains("RSV-TEST-10") && text.contains("GA-01")
-                    && text.contains("biên bản") && text.contains("hạn dọn hàng")), eq(recovery.getId()));
-        }
+                eq("Cần phân công nhân viên thu hồi"), contains("RSV-TEST-10"), eq(recovery.getId()));
+    }
+
+    @Test
+    void oldReviewIsCancelledIfClearanceWasAlreadyVerifiedInsteadOfOpeningStaleRecovery() {
+        source.setWarehouseEmptyVerified(true);
+        source.setWarehouseEmptyVerifiedAt(Instant.now());
+        workflow.notifyPendingNotifications(recovery.getId());
+        assertThat(recovery.getStage()).isEqualTo(Stage.CANCELLED);
         assertThat(recovery.getRequiredAt()).isNull();
         verify(notifications, never()).createNotification(eq(customer.getId()), any(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void automaticDetectionDoesNotOpenARecoveryForGoodsAlreadyCleared() {
+        source.setWarehouseEmptyVerified(true);
+        source.setWarehouseEmptyVerifiedAt(Instant.now());
+        assertThat(workflow.detect(rental, source, Reason.REMOVAL_OVERDUE,
+            rental.getInventoryRemovalDeadlineAt(), Instant.now(), true)).isFalse();
+        verify(cases, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void assignmentMakesTheTaskActionableWithoutAcceptOrApproveAndCannotStartBeforeTheSchedule() {
+        activateRecovery();
+        var assigned = workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.ASSIGN, staff.getId(), null, null, null, null, null, null, null, null, null, null, null));
+        assertThat(assigned.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        var staffView = workflow.get(staff(), recovery.getId());
+        assertThat(staffView.actions())
+            .doesNotContain(ViolationRecoveryWorkflow.Action.ACCEPT, ViolationRecoveryWorkflow.Action.APPROVE,
+                ViolationRecoveryWorkflow.Action.START, ViolationRecoveryWorkflow.Action.RECORD_ABSENT,
+                ViolationRecoveryWorkflow.Action.RECORD_PRESENT, ViolationRecoveryWorkflow.Action.BLOCK);
+        assertThatThrownBy(() -> execute(staff(), ViolationRecoveryWorkflow.Action.ACCEPT, null, null)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> execute(manager(), ViolationRecoveryWorkflow.Action.APPROVE, "Không cần duyệt", null)).isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void customerResponseClosesAtSixHoursAndExpiryDoesNotBlockTheScheduledRecovery() throws Exception {
+        activateRecovery();
+        recovery.setTask(task);
+        recovery.setStage(Stage.AWAITING_ATTENDANCE);
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.responseDueAt = Instant.now().minusSeconds(1);
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+        assertThat(workflow.get(customerActor, recovery.getId()).actions()).doesNotContain(
+            ViolationRecoveryWorkflow.Action.WILL_ATTEND, ViolationRecoveryWorkflow.Action.CANNOT_ATTEND, ViolationRecoveryWorkflow.Action.DISPUTE);
+        assertThatThrownBy(() -> execute(customerActor, ViolationRecoveryWorkflow.Action.WILL_ATTEND, null, null)).isInstanceOf(ApiException.class);
+        workflow.processDue(recovery.getId(), Instant.now());
+        assertThat(recovery.getStage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        assertThat(workflow.get(customerActor, recovery.getId()).reply()).isEqualTo(Reply.NO_RESPONSE);
+    }
+
+    @Test
+    void schedulerDoesNotUnassignOrPauseStaffWhenTheOldAcceptanceOrAttendanceDeadlineExpires() throws Exception {
+        readyForAbsentHandover();
+        recovery.setActionDueAt(Instant.now().minusSeconds(1));
+        workflow.processDue(recovery.getId(), Instant.now());
+        assertThat(recovery.getStage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        assertThat(task.getAssignedTo()).isEqualTo(staff);
+        assertThat(workflow.get(staff(), recovery.getId()).actions()).contains(ViolationRecoveryWorkflow.Action.START);
+    }
+
+    @Test
+    void staffListAndAssignmentBothRejectAnOverlappingOrder() {
+        activateRecovery();
+        when(staffAvailability.available(eq(staff.getId()), eq(recovery), any(), any())).thenReturn(false);
+        assertThat(workflow.staff(manager(), recovery.getId(), false, false))
+            .extracting(ViolationRecoveryWorkflow.StaffOption::id).containsExactly(witness.getId());
+        assertThatThrownBy(() -> workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.ASSIGN, staff.getId(), null, null, null, null, null, null, null, null, null, null, null)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("lịch xử lý đơn khác");
+        assertThat(recovery.getTask()).isNull();
+        verify(staffAvailability).lock(Collections.singletonList(staff.getId()));
+    }
+
+    @Test
+    void staffWithoutReturnProcessingPermissionIsNotOffered() {
+        activateRecovery();
+        witness.getRoles().clear();
+        assertThat(workflow.staff(manager(), recovery.getId(), false, false))
+            .extracting(ViolationRecoveryWorkflow.StaffOption::id).containsExactly(staff.getId());
+    }
+    @Test
+    void absentCustomerCanBeRecoveredAfterAttendanceRecordWithoutApproval() throws Exception {
+        readyForAbsentHandover();
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.attendance = null;
+        d.acceptedAt = null;
+        d.approvedAt = null;
+        d.approvedBy = null;
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        var recorded = workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.RECORD_ABSENT,
+            null, null, photo(), null, null));
+        assertThat(recorded.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        assertThat(recorded.needsWitness()).isTrue();
+        var customerView = workflow.get(actor(customer, RoleCode.CUSTOMER, null, null), recovery.getId());
+        assertThat(customerView.attendance()).isEqualTo(Attendance.ABSENT);
+        assertThat(customerView.attendanceEvidenceId()).isNull();
+        assertThat(recorded.actions()).contains(ViolationRecoveryWorkflow.Action.START)
+            .doesNotContain(ViolationRecoveryWorkflow.Action.ACCEPT, ViolationRecoveryWorkflow.Action.APPROVE);
+        assertThat(workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
+            null, witness.getId(), photo(), "TEMP-A", null)).stage()).isEqualTo(Stage.IN_PROGRESS);
+    }
+
+    @Test
+    void customerPickupCannotBeScheduledInThePastOrAfterTheExactStorageDeadline() throws Exception {
+        completeWithStoredItems(1);
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+        var originalDetails = recovery.getDetailsJson();
+        for (var appointment : List.of(Instant.now().minusSeconds(120), recovery.getPickupDueAt().plusSeconds(1))) {
+            assertThatThrownBy(() -> workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+                ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, appointment,
+                null, null, null, null, null, null, null))).isInstanceOf(ApiException.class);
+            assertThat(recovery.getDetailsJson()).isEqualTo(originalDetails);
+        }
+        var atDeadline = workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, recovery.getPickupDueAt(),
+            null, null, null, null, null, null, null));
+        assertThat(atDeadline.pickupAppointmentAt()).isEqualTo(recovery.getPickupDueAt());
+        recovery.setPickupDueAt(Instant.now().minusSeconds(1));
+        assertThat(workflow.get(customerActor, recovery.getId()).actions()).doesNotContain(ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP);
+    }
+
+    @Test
+    void failedIdentityShowsEachResultButRecoveryContinuesWithTemporaryStorage() throws Exception {
+        readyForPresentHandover();
+        var first = workflow.execute(staff(), recovery.getId(), identityAttempt("WRONG123", UUID.randomUUID()));
+        assertThat(first.verification().used()).isEqualTo(1);
+        assertThat(first.verification().remaining()).isEqualTo(1);
+        assertThat(first.verification().message()).contains("không khớp", "lần 1/2", "Còn 1");
+        assertThat(first.actions()).contains(ViolationRecoveryWorkflow.Action.VERIFY, ViolationRecoveryWorkflow.Action.START);
+        var lastAttempt = identityAttempt("WRONG456", UUID.randomUUID());
+        var failed = workflow.execute(staff(), recovery.getId(), lastAttempt);
+        assertThat(failed.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        assertThat(failed.verification().used()).isEqualTo(2);
+        assertThat(failed.verification().remaining()).isZero();
+        assertThat(failed.verification().canReceiveItems()).isFalse();
+        assertThat(failed.verification().message()).contains("2/2", "Đã hết lượt", "Thu hồi vẫn tiếp tục");
+        var customerView = workflow.get(actor(customer, RoleCode.CUSTOMER, null, null), recovery.getId());
+        assertThat(customerView.verification().used()).isEqualTo(2);
+        assertThat(customerView.verification().matched()).isFalse();
+        assertThat(customerView.verification().message()).contains("2/2");
+        assertThat(customerView.attendanceEvidenceId()).isNull();
+        assertThat(customerView.history()).isEmpty();
+        assertThat(mapper.writeValueAsString(customerView)).doesNotContain("TEST99999", "WRONG123", "WRONG456");
+        assertThat(failed.needsWitness()).isTrue();
+        assertThat(failed.actions()).contains(ViolationRecoveryWorkflow.Action.START)
+            .doesNotContain(ViolationRecoveryWorkflow.Action.VERIFY, ViolationRecoveryWorkflow.Action.RECORD_PRESENT);
+        assertThat(workflow.execute(staff(), recovery.getId(), lastAttempt).verification().used()).isEqualTo(2);
+        assertThatThrownBy(() -> workflow.execute(staff(), recovery.getId(), identityAttempt("TEST99999", UUID.randomUUID())))
+            .isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
+            null, null, photo(), "TEMP-A", null))).isInstanceOf(ApiException.class);
+        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
+            null, witness.getId(), photo(), "TEMP-A", null));
+        assertThat(task.getRecoveryWitness()).isEqualTo(witness);
+        assertThatThrownBy(() -> workflow.execute(staff(), recovery.getId(), parcel("HANDED_OVER")))
+            .isInstanceOf(ApiException.class).hasMessageContaining("xác minh quyền nhận");
+        assertThat(workflow.execute(staff(), recovery.getId(), parcel("STORED")).items()).hasSize(1);
+        assertThat(workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.COMPLETE,
+            "Gian trống, hàng đã lưu tạm", null, photo(), null, "VACATED")).stage()).isEqualTo(Stage.COMPLETED);
+    }
+
+    @Test
+    void newArrivalAndManagerResumeDoNotRestoreConsumedIdentityAttempts() throws Exception {
+        readyForPresentHandover();
+        workflow.execute(staff(), recovery.getId(), identityAttempt("WRONG123", UUID.randomUUID()));
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.arrivedAt = Instant.now().minus(Duration.ofMinutes(31));
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        var rerecorded = workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.RECORD_PRESENT,
+            null, null, photo(), null, null));
+        assertThat(rerecorded.verificationAttempts()).isEqualTo(1);
+        workflow.execute(staff(), recovery.getId(), identityAttempt("WRONG456", UUID.randomUUID()));
+        pauseForReview("Phát hiện hàng nguy hiểm");
+        workflow.processDue(recovery.getId(), Instant.now());
+        assertThat(recovery.getStage()).isEqualTo(Stage.BLOCKED);
+        execute(manager(), ViolationRecoveryWorkflow.Action.RESUME, "Đã xử lý an toàn", null);
+        var resumed = workflow.get(staff(), recovery.getId());
+        assertThat(resumed.verificationAttempts()).isEqualTo(2);
+        assertThat(resumed.actions()).contains(ViolationRecoveryWorkflow.Action.START);
+        assertThat(resumed.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.VERIFY, ViolationRecoveryWorkflow.Action.RECORD_PRESENT);
+    }
+
+    @Test
+    void missingIdentityRecordStillAllowsWitnessedStorageWithoutOfferingVerification() throws Exception {
+        readyForPresentHandover();
+        rental.getReservation().setIdentityDocumentNumber(null);
+        var entry = workflow.get(staff(), recovery.getId());
+        assertThat(entry.verification().message()).contains("thiếu giấy tờ");
+        assertThat(entry.actions()).contains(ViolationRecoveryWorkflow.Action.START)
+            .doesNotContain(ViolationRecoveryWorkflow.Action.VERIFY);
+        var started = workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
+            null, witness.getId(), photo(), "TEMP-A", null));
+        assertThat(started.stage()).isEqualTo(Stage.IN_PROGRESS);
+        assertThat(workflow.execute(staff(), recovery.getId(), parcel("STORED")).items()).hasSize(1);
+    }
+
+    @Test
+    void legacyIdentityOnlyPauseIsRemovedWithoutResettingEvidenceScheduleOrAttempts() throws Exception {
+        readyForPresentHandover();
+        recovery.setPolicyVersion("RECOVERY_V2");
+        recovery.setStage(Stage.BLOCKED);
+        var scheduled = recovery.getScheduledAt();
+        var deadline = recovery.getDeadlineAt();
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.attempts.addAll(List.of(UUID.randomUUID(), UUID.randomUUID()));
+        d.reasonNote = "Đã hết số lượt xác minh danh tính.";
+        d.history.add(new ViolationRecoveryWorkflow.HistoryEvent("VERIFY", "Nhân viên", Instant.now(), Stage.BLOCKED, ""));
+        var evidence = d.attendanceEvidenceId;
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        workflow.notifyPendingNotifications(recovery.getId());
+        var migrated = workflow.get(staff(), recovery.getId());
+        assertThat(migrated.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        assertThat(migrated.verificationAttempts()).isEqualTo(2);
+        assertThat(migrated.attendanceEvidenceId()).isEqualTo(evidence);
+        assertThat(migrated.scheduledAt()).isEqualTo(scheduled);
+        assertThat(migrated.deadlineAt()).isEqualTo(deadline);
+        assertThat(migrated.needsWitness()).isTrue();
+        assertThat(migrated.history().getLast().action()).isEqualTo("IDENTITY_STORAGE");
+        workflow.notifyPendingNotifications(recovery.getId());
+        assertThat(workflow.get(staff(), recovery.getId()).history()).hasSize(migrated.history().size());
+    }
+
+    @Test
+    void identityMigrationKeepsCustomerDisputesAndExplicitStaffPausesBlocked() throws Exception {
+        readyForPresentHandover();
+        recovery.setPolicyVersion("RECOVERY_V2");
+        recovery.setStage(Stage.BLOCKED);
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.attempts.addAll(List.of(UUID.randomUUID(), UUID.randomUUID()));
+        d.reasonNote = "Đã hết số lượt xác minh danh tính.";
+        d.disputeOpen = true;
+        d.history.add(new ViolationRecoveryWorkflow.HistoryEvent("VERIFY", "Nhân viên", Instant.now(), Stage.BLOCKED, ""));
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        workflow.notifyPendingNotifications(recovery.getId());
+        assertThat(recovery.getStage()).isEqualTo(Stage.BLOCKED);
+        d.disputeOpen = false;
+        d.history.add(new ViolationRecoveryWorkflow.HistoryEvent("BLOCK", "Nhân viên", Instant.now(), Stage.BLOCKED, ""));
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        workflow.notifyPendingNotifications(recovery.getId());
+        assertThat(recovery.getStage()).isEqualTo(Stage.BLOCKED);
+    }
+
+    @Test
+    void presentCustomerCanBeRecoveredAfterIdentityVerificationWithoutApproval() throws Exception {
+        readyForAbsentHandover();
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.attendance = null;
+        d.needsWitness = false;
+        d.acceptedAt = null;
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.RECORD_PRESENT,
+            null, null, photo(), null, null));
+        var verified = workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
+            ViolationRecoveryWorkflow.Action.VERIFY, null, null, null, UUID.randomUUID(), null,
+            null, "TEST99999", null, null, null, null, null));
+        assertThat(verified.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
+        assertThat(verified.verification().matched()).isTrue();
+        assertThat(verified.verification().canReceiveItems()).isTrue();
+        assertThat(verified.verification().message()).contains("Xác minh thành công");
+        assertThat(verified.actions()).contains(ViolationRecoveryWorkflow.Action.START);
+        assertThat(workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
+            null, null, photo(), "Khách nhận trực tiếp", null)).stage()).isEqualTo(Stage.IN_PROGRESS);
+        assertThat(workflow.execute(staff(), recovery.getId(), parcel("HANDED_OVER")).items().getFirst().disposition())
+            .isEqualTo("HANDED_OVER");
+    }
+
+    @Test
+    void startIsAvailableAtThe24HourMarkAndCompletionIsOnTimeAtThe72HourMark() throws Exception {
+        readyForAbsentHandover();
+        recovery.setPolicyVersion("RECOVERY_V2");
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        List<ViolationRecoveryWorkflow.Action> early = ReflectionTestUtils.invokeMethod(workflow, "allowed",
+            staff(), recovery, d, recovery.getScheduledAt().minusNanos(1));
+        List<ViolationRecoveryWorkflow.Action> due = ReflectionTestUtils.invokeMethod(workflow, "allowed",
+            staff(), recovery, d, recovery.getScheduledAt());
+        assertThat(early).doesNotContain(ViolationRecoveryWorkflow.Action.START);
+        assertThat(due).contains(ViolationRecoveryWorkflow.Action.START);
+        workflow.processDue(recovery.getId(), recovery.getDeadlineAt());
+        assertThat(recovery.getOverdueAt()).isNull();
+        workflow.processDue(recovery.getId(), recovery.getDeadlineAt().plusNanos(1));
+        assertThat(recovery.getOverdueAt()).isEqualTo(recovery.getDeadlineAt());
     }
 
     @Test
@@ -588,10 +996,95 @@ class ViolationRecoveryWorkflowTests {
             null, null, evidenceId, null, null, note, null, code, null, null, null, confirmation);
     }
 
+    @Test
+    void bulkRecordingAndPartialPickupKeepTheRemainingQuantityAndRejectDuplicateRelease() throws Exception {
+        readyForAbsentHandover();
+        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
+            null, witness.getId(), photo(), "TEMP-A", null));
+        var save = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.SAVE_ITEM,
+            null, null, photo(), UUID.randomUUID(), null, null, null, null, "Thùng tài liệu", "Nguyên vẹn", "TEMP-A", "STORED", 100, null);
+        var recorded = workflow.execute(staff(), recovery.getId(), save);
+        assertThat(recorded.items()).hasSize(100);
+        assertThat(workflow.execute(staff(), recovery.getId(), save).items()).hasSize(100);
+        assertThat(recorded.items()).extracting(ViolationRecoveryWorkflow.Item::code).doesNotHaveDuplicates();
+        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.COMPLETE,
+            "Gian trống; đã lưu tạm 100 kiện", null, photo(), null, "VACATED"));
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.pickupOpenedAt = Instant.now();
+        d.pickupVerifiedAt = Instant.now();
+        d.pickupStaffId = staff.getId();
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        var firstThirty = recorded.items().stream().limit(30).map(ViolationRecoveryWorkflow.Item::code).toList();
+        var release = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.RELEASE_ITEM,
+            null, null, photo(), null, null, null, null, null, null, null, null, null, null, firstThirty);
+        var received = workflow.execute(staff(), recovery.getId(), release);
+        assertThat(received.items().stream().filter(item -> item.releasedAt() != null)).hasSize(30);
+        assertThat(received.items().stream().filter(item -> item.releasedAt() == null && item.liquidation() == null)).hasSize(70);
+        String unchanged = recovery.getDetailsJson();
+        assertThatThrownBy(() -> workflow.execute(staff(), recovery.getId(), release)).isInstanceOf(ApiException.class);
+        var mixed = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.RELEASE_ITEM,
+            null, null, photo(), null, null, null, null, null, null, null, null, null, null,
+            List.of(recorded.items().get(30).code(), firstThirty.getFirst()));
+        assertThatThrownBy(() -> workflow.execute(staff(), recovery.getId(), mixed)).isInstanceOf(ApiException.class);
+        assertThat(recovery.getDetailsJson()).isEqualTo(unchanged);
+        var liquidation = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.RECORD_LIQUIDATION,
+            null, null, photo(business), null, null, "Đã xử lý theo biên bản", null, null, null, null, null, "LIQUIDATED", null,
+            recorded.items().subList(30, 50).stream().map(ViolationRecoveryWorkflow.Item::code).toList());
+        var disposed = workflow.execute(business(), recovery.getId(), liquidation);
+        assertThat(disposed.items().stream().filter(item -> item.liquidation() != null)).hasSize(20);
+        assertThat(disposed.items().stream().filter(item -> item.releasedAt() == null && item.liquidation() == null)).hasSize(50);
+    }
+
+    @Test
+    void bulkRecordingValidatesQuantityAndAllCodesBeforeChangingAnyItem() throws Exception {
+        readyForAbsentHandover();
+        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
+            null, witness.getId(), photo(), "TEMP-A", null));
+        for (int quantity : List.of(0, -1, 1001)) {
+            var invalid = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.SAVE_ITEM,
+                null, null, photo(), null, null, null, null, "BATCH", "Tài liệu", "Nguyên vẹn", "TEMP-A", "STORED", quantity, null);
+            assertThatThrownBy(() -> workflow.execute(staff(), recovery.getId(), invalid)).isInstanceOf(ApiException.class);
+        }
+        workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.SAVE_ITEM,
+            null, null, photo(), null, null, null, null, "BATCH-2", "Tài liệu", "Nguyên vẹn", "TEMP-A", "STORED"));
+        var conflict = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.SAVE_ITEM,
+            null, null, photo(), null, null, null, null, "BATCH", "Tài liệu", "Nguyên vẹn", "TEMP-A", "STORED", 3, null);
+        assertThatThrownBy(() -> workflow.execute(staff(), recovery.getId(), conflict)).isInstanceOf(ApiException.class);
+        assertThat(workflow.get(staff(), recovery.getId()).items()).extracting(ViolationRecoveryWorkflow.Item::code).containsExactly("BATCH-2");
+    }
+
+    private void pauseForReview(String note) throws Exception {
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.reasonNote = note;
+        d.history.add(new ViolationRecoveryWorkflow.HistoryEvent("BLOCK", "Nhân viên", Instant.now(), Stage.BLOCKED, note));
+        recovery.setStage(Stage.BLOCKED);
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+    }
+
+    private void readyForPresentHandover() throws Exception {
+        readyForAbsentHandover();
+        var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        d.attendance = null;
+        d.needsWitness = false;
+        recovery.setDetailsJson(mapper.writeValueAsString(d));
+        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.RECORD_PRESENT,
+            null, null, photo(), null, null));
+    }
+
+    private ViolationRecoveryWorkflow.Command identityAttempt(String document, UUID attemptId) {
+        return new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.VERIFY,
+            null, null, null, attemptId, null, null, document, null, null, null, null, null);
+    }
+
+    private ViolationRecoveryWorkflow.Command parcel(String disposition) {
+        return new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.SAVE_ITEM,
+            null, null, photo(), null, null, null, null, "PKG-1", "Kiện hàng", "Nguyên vẹn", "TEMP-A", disposition);
+    }
+
     private Instant readyForAbsentHandover() throws Exception {
         var now = Instant.now();
         recovery.setTask(task);
-        recovery.setStage(Stage.APPROVED);
+        recovery.setStage(Stage.AWAITING_ATTENDANCE);
         recovery.setRequiredAt(now.minus(Duration.ofHours(26)));
         recovery.setScheduledAt(now.minus(Duration.ofHours(2)));
         recovery.setDeadlineAt(recovery.getRequiredAt().plus(Duration.ofHours(72)));
@@ -603,6 +1096,11 @@ class ViolationRecoveryWorkflowTests {
         details.needsWitness = true;
         recovery.setDetailsJson(mapper.writeValueAsString(details));
         return recovery.getDeadlineAt();
+    }
+
+    private ViolationRecoveryWorkflow.Entry activateRecovery() {
+        workflow.notifyPendingNotifications(recovery.getId());
+        return workflow.get(manager(), recovery.getId());
     }
 
     private UUID photo() {

@@ -12,12 +12,12 @@ import java.util.Map;
 import java.util.UUID;
 
 /** Builds immutable, customer-visible snapshots for a reservation lifecycle. */
-final class ReservationSnapshotCodec {
+public final class ReservationSnapshotCodec {
     static final String VERSION = "RESERVATION_STORAGE_SNAPSHOT_V1";
 
     private ReservationSnapshotCodec() {}
 
-    static String facility(Facility facility, Instant capturedAt) {
+    public static String facility(Facility facility, Instant capturedAt) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("snapshotVersion", VERSION);
         snapshot.put("capturedAt", instant(capturedAt));
@@ -34,7 +34,7 @@ final class ReservationSnapshotCodec {
         return GoodsSnapshotCodec.encodeObject(snapshot);
     }
 
-    static String unitType(UnitType unitType, Instant capturedAt) {
+    public static String unitType(UnitType unitType, Instant capturedAt) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("snapshotVersion", VERSION);
         snapshot.put("capturedAt", instant(capturedAt));
@@ -71,7 +71,7 @@ final class ReservationSnapshotCodec {
         return GoodsSnapshotCodec.encodeObject(snapshot);
     }
 
-    static String storageUnit(StorageUnit unit, Instant capturedAt) {
+    public static String storageUnit(StorageUnit unit, Instant capturedAt) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("snapshotVersion", VERSION);
         snapshot.put("capturedAt", instant(capturedAt));

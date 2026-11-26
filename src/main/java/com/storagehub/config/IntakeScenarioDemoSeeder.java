@@ -1,10 +1,12 @@
 package com.storagehub.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.domain.model.*;
 import com.storagehub.domain.repo.*;
 import com.storagehub.service.IntakePolicyProperties;
 import com.storagehub.service.IntakeTimelineCalculator;
 import com.storagehub.service.InventoryTimelinePolicy;
+import com.storagehub.service.ReservationSnapshotCodec;
 import com.storagehub.service.ViolationRecoveryWorkflow;
 import com.storagehub.time.BusinessTime;
 import java.math.BigDecimal;
@@ -52,6 +54,9 @@ public class IntakeScenarioDemoSeeder {
     private final ReturnCaseRepository returnCaseRepository;
     private final IntakeTimelineCalculator timeline;
     private final ViolationRecoveryWorkflow violationRecovery;
+    private final ViolationRecoveryRepository violationRecoveryRepository;
+    private final MaintenanceTaskRepository maintenanceTaskRepository;
+    private final ObjectMapper objectMapper;
     private final Clock clock;
 
     @Bean
@@ -170,6 +175,9 @@ public class IntakeScenarioDemoSeeder {
             now.minus(168, ChronoUnit.HOURS).minus(35, ChronoUnit.MINUTES), false, false, 0, null,
             ViolationRecovery.Reason.SETUP_OVERDUE, false, false);
 
+        // 22: Đơn đang thu hồi (IN_PROGRESS), đã phân công staff và đang ghi nhận hàng lưu tạm
+        created += createInProgressRecoveryScenario("RSV-TEST-22", "TEST-M-22", "M", facility, customer, staff, now);
+
         if (created > 0) {
             log.info("Seeded {} intake test-case scenarios for customer {} at facility {}", created, customer.getEmail(), facility.getCode());
         }
@@ -195,6 +203,7 @@ public class IntakeScenarioDemoSeeder {
         String firstFailReason
     ) {
         if (reservationRepository.existsByReservationCode(reservationCode)) {
+            repairDemoSnapshots(reservationCode, facility);
             return 0;
         }
         UnitType unitType = unitTypeRepository.findByFacility_IdAndCode(facility.getId(), sizeCode)
@@ -246,9 +255,11 @@ public class IntakeScenarioDemoSeeder {
         quote.setRemainingRentalAmount(remaining);
         quote.setDueAtCheckIn(dueAtCheckIn);
         quote.setTotalInitialObligation(gross.add(secDeposit));
+        Instant snapshotAt = receivedAt.minus(2, ChronoUnit.HOURS);
         quote.setGoodsSnapshotJson("[]");
-        quote.setUnitTypeSnapshotJson("{}");
-        quote.setQuotedAt(receivedAt.minus(2, ChronoUnit.HOURS));
+        quote.setFacilitySnapshotJson(ReservationSnapshotCodec.facility(facility, snapshotAt));
+        quote.setUnitTypeSnapshotJson(ReservationSnapshotCodec.unitType(unitType, snapshotAt));
+        quote.setQuotedAt(snapshotAt);
         quote.setExpiresAt(receivedAt.plus(24, ChronoUnit.HOURS));
         quote = quoteRepository.saveAndFlush(quote);
 
@@ -291,6 +302,9 @@ public class IntakeScenarioDemoSeeder {
         snap.setTotalInitialObligation(gross.add(secDeposit));
         snap.setQuotedAt(quote.getQuotedAt());
         snap.setExpiresAt(quote.getExpiresAt());
+        snap.setFacilitySnapshotJson(quote.getFacilitySnapshotJson());
+        snap.setUnitTypeSnapshotJson(quote.getUnitTypeSnapshotJson());
+        snap.setAssignedUnitSnapshotJson(ReservationSnapshotCodec.storageUnit(unit, snapshotAt));
         snapshotRepository.saveAndFlush(snap);
 
         ReservationGoodsItem item = new ReservationGoodsItem();
@@ -496,6 +510,76 @@ public class IntakeScenarioDemoSeeder {
         return created;
     }
 
+    private int createInProgressRecoveryScenario(
+        String reservationCode,
+        String unitCode,
+        String sizeCode,
+        Facility facility,
+        User customer,
+        User staff,
+        Instant now
+    ) {
+        int created = createRecoveryScenario(reservationCode, unitCode, sizeCode, facility, customer, staff, now,
+            now.minus(120, ChronoUnit.HOURS), true, true, 1, now.minus(73, ChronoUnit.HOURS),
+            ViolationRecovery.Reason.INVENTORY_TIMEOUT, false, false);
+        if (created == 0) return 0;
+
+        Reservation reservation = reservationRepository.findByReservationCode(reservationCode).orElse(null);
+        if (reservation == null) return created;
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElse(null);
+        if (rental == null) return created;
+        ViolationRecovery recovery = violationRecoveryRepository.findByRental_IdOrderByCreatedAtDesc(rental.getId())
+            .stream().findFirst().orElse(null);
+        if (recovery == null || recovery.getTask() == null) return created;
+
+        MaintenanceTask task = recovery.getTask();
+        task.setAssignedTo(staff);
+        task.setStatus(MaintenanceTaskStatus.in_progress);
+        task.setStartedAt(now.minus(30, ChronoUnit.MINUTES));
+        maintenanceTaskRepository.saveAndFlush(task);
+
+        FileAsset evidence = new FileAsset();
+        evidence.setUploadedBy(staff);
+        evidence.setStorageKey("demo/" + reservationCode + "-recovery.jpg");
+        evidence.setOriginalName("recovery-evidence.jpg");
+        evidence.setContentType("image/jpeg");
+        evidence.setSizeBytes(1024);
+        evidence.setChecksumSha256(UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", ""));
+        evidence.setEntityType("MAINTENANCE_TASK");
+        evidence.setEntityId(task.getId());
+        evidence.setStatus(FileAssetStatus.ACTIVE);
+        evidence = fileAssetRepository.saveAndFlush(evidence);
+
+        ViolationRecoveryWorkflow.Details details = new ViolationRecoveryWorkflow.Details();
+        details.notifiedAt = now.minus(2, ChronoUnit.HOURS);
+        details.acceptedAt = now.minus(1, ChronoUnit.HOURS);
+        details.startedAt = now.minus(30, ChronoUnit.MINUTES);
+        details.plannedHandover = "Khu lưu tạm A1";
+        details.beforeEvidenceId = evidence.getId();
+        details.needsWitness = false;
+        details.items.put("KH-TEST22-1", new ViolationRecoveryWorkflow.Item(
+            "KH-TEST22-1", "Thùng hồ sơ kế toán", "Nguyên vẹn", "Khu lưu tạm A1",
+            evidence.getId(), "STORED", null, null, null));
+        details.items.put("KH-TEST22-2", new ViolationRecoveryWorkflow.Item(
+            "KH-TEST22-2", "Thùng hồ sơ kế toán", "Nguyên vẹn", "Khu lưu tạm A1",
+            evidence.getId(), "STORED", null, null, null));
+        details.history.add(new ViolationRecoveryWorkflow.HistoryEvent(
+            "START", staff.getFullName(), now.minus(30, ChronoUnit.MINUTES),
+            ViolationRecovery.Stage.IN_PROGRESS, "Bắt đầu thu hồi kho theo lịch."));
+
+        try {
+            recovery.setDetailsJson(objectMapper.writeValueAsString(details));
+        } catch (Exception ex) {
+            throw new IllegalStateException("Không thể tạo detailsJson cho scenario thu hồi.", ex);
+        }
+        recovery.setStage(ViolationRecovery.Stage.IN_PROGRESS);
+        recovery.setScheduledAt(now.minus(1, ChronoUnit.HOURS));
+        recovery.setDeadlineAt(now.plus(47, ChronoUnit.HOURS));
+        recovery.setActionDueAt(now.plus(47, ChronoUnit.HOURS));
+        violationRecoveryRepository.saveAndFlush(recovery);
+        return created;
+    }
+
     private int createAttendanceReviewWithEvidenceScenario(
         String reservationCode,
         String unitCode,
@@ -573,5 +657,46 @@ public class IntakeScenarioDemoSeeder {
         rc.setCustomerNotes("Buộc trả kho do hàng kiểm kê sai lệch kích thước.");
         returnCaseRepository.saveAndFlush(rc);
         return created;
+    }
+
+    private void repairDemoSnapshots(String reservationCode, Facility fallbackFacility) {
+        if (reservationCode == null || !reservationCode.startsWith("RSV-TEST-")) return;
+        Reservation reservation = reservationRepository.findByReservationCode(reservationCode).orElse(null);
+        if (reservation == null) return;
+        Facility facility = reservation.getFacility() != null ? reservation.getFacility() : fallbackFacility;
+        UnitType unitType = reservation.getUnitType();
+        StorageUnit assignedUnit = reservation.getAssignedUnit();
+        Instant capturedAt = reservation.getCreatedAt() != null ? reservation.getCreatedAt() : clock.instant();
+
+        ReservationQuote quote = reservation.getSourceQuote();
+        if (quote != null) {
+            boolean dirty = false;
+            if (facility != null && (quote.getFacilitySnapshotJson() == null || quote.getFacilitySnapshotJson().isBlank() || "{}".equals(quote.getFacilitySnapshotJson().trim()))) {
+                quote.setFacilitySnapshotJson(ReservationSnapshotCodec.facility(facility, capturedAt));
+                dirty = true;
+            }
+            if (unitType != null && (quote.getUnitTypeSnapshotJson() == null || quote.getUnitTypeSnapshotJson().isBlank() || "{}".equals(quote.getUnitTypeSnapshotJson().trim()))) {
+                quote.setUnitTypeSnapshotJson(ReservationSnapshotCodec.unitType(unitType, capturedAt));
+                dirty = true;
+            }
+            if (dirty) quoteRepository.saveAndFlush(quote);
+        }
+
+        snapshotRepository.findByReservation_Id(reservation.getId()).ifPresent(snap -> {
+            boolean dirty = false;
+            if (facility != null && (snap.getFacilitySnapshotJson() == null || snap.getFacilitySnapshotJson().isBlank() || "{}".equals(snap.getFacilitySnapshotJson().trim()))) {
+                snap.setFacilitySnapshotJson(ReservationSnapshotCodec.facility(facility, capturedAt));
+                dirty = true;
+            }
+            if (unitType != null && (snap.getUnitTypeSnapshotJson() == null || snap.getUnitTypeSnapshotJson().isBlank() || "{}".equals(snap.getUnitTypeSnapshotJson().trim()))) {
+                snap.setUnitTypeSnapshotJson(ReservationSnapshotCodec.unitType(unitType, capturedAt));
+                dirty = true;
+            }
+            if (assignedUnit != null && (snap.getAssignedUnitSnapshotJson() == null || snap.getAssignedUnitSnapshotJson().isBlank() || "{}".equals(snap.getAssignedUnitSnapshotJson().trim()))) {
+                snap.setAssignedUnitSnapshotJson(ReservationSnapshotCodec.storageUnit(assignedUnit, capturedAt));
+                dirty = true;
+            }
+            if (dirty) snapshotRepository.saveAndFlush(snap);
+        });
     }
 }
