@@ -442,8 +442,8 @@ class UnifiedIntakeSpecTests {
         workflow.change(customer, reservationId,
             new IntakeWorkflowService.Command("COMPLETE_SETUP", null, null, null, null));
 
-        // Staff confirms the customer arrived at T0 + 24h; the 72h clock starts there.
-        Instant arriveTime = t0.plus(24, ChronoUnit.HOURS);
+        // Arrive one day before D so the 72h completion window still spans D.
+        Instant arriveTime = calculator.arrivalDeadline(rental).minus(24, ChronoUnit.HOURS);
         clock.set(arriveTime);
         workflow.change(staff, reservationId,
             new IntakeWorkflowService.Command("ARRIVAL", null, null, null, null));

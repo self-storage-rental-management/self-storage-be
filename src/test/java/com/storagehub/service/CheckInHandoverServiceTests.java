@@ -1240,6 +1240,31 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void expired72HoursPreventsSavingDraftBeforeAnyEvidenceOrRecordIsChanged() {
+        prepareDraft();
+        var rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElseThrow();
+        rental.setInspectionClockStartedAt(Instant.now().minus(java.time.Duration.ofHours(73)));
+        rental.setInspectionCompletionDeadlineAt(Instant.now().minusSeconds(3600));
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, checkIn.getId(),
+            new com.storagehub.api.checkin.SaveInventoryDraftRequest(validCompletionRequest(), 0)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("72 giờ");
+        assertThat(checkIn.getInventoryDraftJson()).isNull();
+        verify(checkInRepository, never()).saveAndFlush(any());
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void recoveryPreventsSavingDraftWhileTheOriginalCheckInStillLooksOpen() {
+        prepareDraft();
+        var rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElseThrow();
+        rental.setInventoryEscalatedAt(Instant.now());
+        assertThatThrownBy(() -> service.saveInventoryDraft(actor, checkIn.getId(),
+            new com.storagehub.api.checkin.SaveInventoryDraftRequest(validCompletionRequest(), 0)))
+            .isInstanceOf(ApiException.class).hasMessageContaining("thu hồi");
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void rejectsDraftSaveAfterResultWasSentToCustomer() {
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));

@@ -37,12 +37,14 @@ public class ViolationRecoveryWorkflow {
     private final WorkflowBusinessCalendar calendar;
     private final EntityManager em;
     private final ObjectMapper mapper;
+    private final RecoveryReviewService reviewEvidence;
+    private final UserFacilityScopeRepository userFacilityScopes;
 
     public enum Action {
-        CONFIRM_VIOLATION, ASSIGN, ACCEPT, DECLINE, NOTICE, WILL_ATTEND, CANNOT_ATTEND, DISPUTE,
+        CONFIRM_VIOLATION, ASSIGN, ACCEPT, DECLINE, WILL_ATTEND, CANNOT_ATTEND, DISPUTE,
         RESCHEDULE, RECORD_PRESENT, RECORD_ABSENT, VERIFY, APPROVE, START, SAVE_ITEM, BLOCK,
         RESUME, CANCEL, COMPLETE, OPEN_PICKUP, VERIFY_PICKUP, RELEASE_ITEM, FOLLOW_UP_PICKUP,
-        REQUEST_FINANCE, RESOLVE_FINANCE, ASSIGN_PICKUP, CLOSE_REMEDIATION
+        REQUEST_FINANCE, RESOLVE_FINANCE, ASSIGN_PICKUP, CLOSE_REMEDIATION, RECORD_LIQUIDATION
     }
 
     public record Command(@jakarta.validation.constraints.NotNull Action action, UUID staffId, UUID witnessId, UUID evidenceId, UUID attemptId,
@@ -50,10 +52,14 @@ public class ViolationRecoveryWorkflow {
         @Size(max = 80) String itemCode, @Size(max = 240) String itemName, @Size(max = 240) String condition,
         @Size(max = 240) String location, @Size(max = 40) String disposition) {}
 
+    public record Liquidation(Instant recordedAt, UUID recordedBy, String note, UUID evidenceId) {}
+
     public record Item(String code, String name, String condition, String location, UUID evidenceId, String disposition,
-        Instant releasedAt, UUID releaseEvidenceId) {}
+        Instant releasedAt, UUID releaseEvidenceId, Liquidation liquidation) {}
 
     public record StaffOption(UUID id, String name) {}
+
+    public record HistoryEvent(String action, String actorName, Instant time, Stage stage, String note) {}
 
     @Transactional(readOnly = true)
     public List<StaffOption> staff(ActorPrincipal actor, UUID id) {
@@ -62,14 +68,15 @@ public class ViolationRecoveryWorkflow {
         return eligibleStaff(v).stream().map(user -> new StaffOption(user.getId(), user.getFullName())).toList();
     }
 
-    public record Entry(UUID id, UUID rentalId, UUID reservationId, UUID facilityId, String unitCode, UUID taskId,
-        String staffName, Reason reason, Stage stage, Instant requiredAt, Instant scheduledAt, Instant deadlineAt,
-        Instant actionDueAt, Instant overdueAt, Instant completedAt, Instant pickupDueAt, Instant pickupReviewAt,
-        boolean escalated, boolean pickupEscalated, boolean financePending, boolean financeClosed,
+    public record Entry(UUID id, UUID rentalId, UUID reservationId, String reservationCode, String customerName, UUID facilityId, String unitCode, UUID taskId,
+        String staffName, Reason reason, Stage stage, Instant sourceDeadlineAt, Instant requiredAt, Instant scheduledAt,
+        Instant deadlineAt, Instant actionDueAt, Instant overdueAt, Instant completedAt, Instant pickupDueAt,
+        Instant pickupReviewAt, boolean escalated, boolean pickupEscalated, boolean financePending, boolean financeClosed,
         String owner, Attendance attendance, Reply reply, Instant notifiedAt, Instant responseDueAt,
         Instant arrivedAt, Instant verifiedAt, int verificationAttempts, int pickupAttempts, boolean needsWitness,
-        UUID beforeEvidenceId, UUID afterEvidenceId, String reasonNote, String customerNote,
-        String report, List<Item> items, List<Action> actions) {}
+        UUID attendanceEvidenceId, UUID beforeEvidenceId, UUID afterEvidenceId, String reasonNote, String customerNote,
+        String report, List<Item> items, List<HistoryEvent> history, List<Action> actions,
+        Instant detectedAt, Instant reviewDueAt, Instant businessReviewDueAt, RecoveryReviewService.Review review) {}
 
     public static final class Details {
         public Instant notifiedAt, responseDueAt, arrivedAt, verifiedAt, acceptedAt, startedAt, pickupOpenedAt, pickupVerifiedAt;
@@ -78,10 +85,12 @@ public class ViolationRecoveryWorkflow {
         public Attendance attendance;
         public UUID beforeEvidenceId, afterEvidenceId, attendanceEvidenceId, approvedBy, pickupStaffId;
         public Instant approvedAt;
+        public Instant reviewDueAt, reviewEscalatedAt, businessReviewDueAt;
         public String reasonNote, customerNote, report, plannedHandover;
         public List<UUID> attempts = new ArrayList<>();
         public List<UUID> pickupAttempts = new ArrayList<>();
         public Map<String, Item> items = new LinkedHashMap<>();
+        public List<HistoryEvent> history = new ArrayList<>();
     }
 
     /** Called with the rental locked by the originating scheduler. */
@@ -100,9 +109,17 @@ public class ViolationRecoveryWorkflow {
         v.setSourceDeadlineAt(deadline);
         advance(v, Stage.REVIEW_REQUIRED, working(now, 1));
         if (!review) activate(v, now);
+        var d = new Details();
+        if (review) d.reviewDueAt = v.getActionDueAt();
+        d.history.add(new HistoryEvent("DETECT", "Hệ thống", now, v.getStage(), reason.name()));
+        save(v, d);
         recoveries.saveAndFlush(v);
         notifyOperations(v, review ? "Cần rà soát căn cứ thu hồi" : "Yêu cầu thu hồi chờ phân công");
-        if (!review) notifyCustomer(v, "Đã mở yêu cầu thu hồi");
+        if (!review) {
+            notifyCustomerSchedule(v, d, now, "Thông báo thu hồi kho");
+            save(v, d);
+        }
+        notifyCoordinationRequired(v);
         return true;
     }
 
@@ -122,6 +139,27 @@ public class ViolationRecoveryWorkflow {
                 : actor.facilityScopes().isEmpty() ? List.of()
                 : recoveries.findByRental_Facility_IdInOrderByCreatedAtDesc(actor.facilityScopes().keySet(), paging);
         } else throw ApiExceptions.forbidden("Vai trò không có quyền xem thu hồi.");
+        return rows.stream().filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Entry get(ActorPrincipal actor, UUID id) {
+        if (!actor.hasAnyRole(RoleCode.CUSTOMER, RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN))
+            throw ApiExceptions.forbidden("Vai trò không có quyền xem thu hồi.");
+        var v = recoveries.findById(id).filter(entry -> canRead(actor, entry))
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thu hồi."));
+        return view(actor, v, details(v), Instant.now());
+    }
+
+    @Transactional(readOnly = true)
+    public List<Entry> listActiveOperations(ActorPrincipal actor, int page) {
+        if (!actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN))
+            throw ApiExceptions.forbidden("Vai trò không có quyền điều phối thu hồi.");
+        var paging = PageRequest.of(Math.max(0, page), 30);
+        var closed = List.of(Stage.COMPLETED, Stage.CANCELLED);
+        var rows = scopes.hasGlobalScope(actor) ? recoveries.findByStageNotInOrderByCreatedAtDesc(closed, paging)
+            : actor.facilityScopes().isEmpty() ? List.<ViolationRecovery>of()
+            : recoveries.findByRental_Facility_IdInAndStageNotInOrderByCreatedAtDesc(actor.facilityScopes().keySet(), closed, paging);
         return rows.stream().filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
     }
 
@@ -150,6 +188,12 @@ public class ViolationRecoveryWorkflow {
             throw ApiExceptions.conflict("Thao tác chưa đủ điều kiện hoặc hồ sơ đã chuyển bước.");
         var before = view(actor, v, d, now);
         apply(actor, v, d, command, now);
+        if (!terminal(v)) notifyCoordinationRequired(v);
+        String actorName = users.findById(actor.userId()).map(User::getFullName)
+            .orElse(actor.roles().stream().findFirst().map(Enum::name).orElse("Hệ thống"));
+        var historyNote = command.action() == Action.RECORD_LIQUIDATION
+            ? normalize(command.itemCode()) + " · " + clean(command.note()) : clean(command.note());
+        d.history.add(new HistoryEvent(command.action().name(), actorName, now, v.getStage(), historyNote));
         save(v, d);
         var after = view(actor, v, d, now);
         audit.recordMutation("RECOVERY_" + command.action(), "violation_recovery", id, v.getRental().getFacility().getId(),
@@ -160,10 +204,10 @@ public class ViolationRecoveryWorkflow {
     private void apply(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         switch (c.action()) {
             case CONFIRM_VIOLATION -> {
-                d.reasonNote = required(c.note(), "căn cứ xác định vi phạm");
+                d.reasonNote = required(c.note(), "căn cứ mở thu hồi");
                 validateActivation(v, now);
                 activate(v, now);
-                notifyCustomer(v, "Đã mở yêu cầu thu hồi");
+                notifyCustomerSchedule(v, d, now, "Thông báo thu hồi kho");
             }
             case ASSIGN -> assign(actor, v, d, c, now);
             case ACCEPT -> {
@@ -174,16 +218,6 @@ public class ViolationRecoveryWorkflow {
                 d.reasonNote = required(c.note(), "lý do từ chối");
                 v.getTask().setAssignedTo(null);
                 advance(v, Stage.AWAITING_ASSIGNMENT, now.plusSeconds(3600));
-            }
-            case NOTICE -> {
-                if (!Set.of("APP", "EMAIL", "DELIVERED_IN_PERSON", "OTHER").contains(clean(c.disposition())))
-                    throw ApiExceptions.validation("Cần chọn kênh thông báo.", null);
-                d.reasonNote = c.disposition() + " · " + required(c.note(), "mã hoặc chứng cứ thông báo hợp lệ");
-                if (d.notifiedAt == null) {
-                    d.notifiedAt = now;
-                    d.responseDueAt = now.plus(Duration.ofHours(6));
-                    v.setResponseCheckAt(d.responseDueAt);
-                }
             }
             case WILL_ATTEND, CANNOT_ATTEND -> {
                 d.reply = Reply.valueOf(c.action().name());
@@ -226,6 +260,7 @@ public class ViolationRecoveryWorkflow {
                 d.pickupAttempts.clear();
             }
             case RELEASE_ITEM -> releaseItem(actor, v, d, c, now);
+            case RECORD_LIQUIDATION -> recordLiquidation(actor, v, d, c, now);
             case FOLLOW_UP_PICKUP -> {
                 d.reasonNote = required(c.note(), "kết quả rà soát hàng lưu tạm");
                 v.setPickupReviewAt(future(c.appointmentAt(), now));
@@ -277,6 +312,8 @@ public class ViolationRecoveryWorkflow {
         };
         if (current == null || now.isBefore(current))
             throw ApiExceptions.conflict("Mốc nguồn đã thay đổi hoặc chưa đến hạn.");
+        var review = reviewEvidence.read(v, now);
+        if (!review.openingAllowed()) throw ApiExceptions.conflict(review.blockingReason());
         if (v.getSourceReturnId() != null) {
             var rc = returns.findByIdForUpdate(v.getSourceReturnId()).orElseThrow();
             if (rc.getInspectedAt() != null || rc.getReadyForInspectionAt() != null || ReturnAttendancePolicy.protectsFromRecovery(rc))
@@ -328,7 +365,7 @@ public class ViolationRecoveryWorkflow {
         advance(v, v.getTask() == null || v.getTask().getAssignedTo() == null ? Stage.AWAITING_ASSIGNMENT
             : d.acceptedAt == null ? Stage.AWAITING_ACCEPTANCE : Stage.AWAITING_ATTENDANCE,
             d.acceptedAt == null ? now.plus(Duration.ofHours(1)) : appointment.plus(WINDOW));
-        notifyCustomer(v, "Lịch thu hồi đã thay đổi");
+        notifyCustomerSchedule(v, d, now, "Lịch thu hồi đã thay đổi");
         notifyStaff(v, "Lịch thu hồi đã thay đổi");
     }
 
@@ -422,7 +459,7 @@ public class ViolationRecoveryWorkflow {
             throw ApiExceptions.conflict("Cần xác minh quyền nhận tài sản còn hiệu lực.");
         d.items.put(code, new Item(code, required(c.itemName(), "tên kiện"), required(c.condition(), "tình trạng"),
             required(c.location(), "nơi lưu tạm hoặc người nhận"), evidence(v, actor, c.evidenceId()),
-            disposition, handover ? now : null, null));
+            disposition, handover ? now : null, null, null));
     }
 
     private void resume(ViolationRecovery v, Details d, Command c, Instant now) {
@@ -460,7 +497,7 @@ public class ViolationRecoveryWorkflow {
         if (v.getTask() != null) v.getTask().setStatus(MaintenanceTaskStatus.cancelled);
         advance(v, Stage.CANCELLED, null);
         v.setResponseCheckAt(null);
-        notifyCustomer(v, "Yêu cầu thu hồi đã được hủy");
+        if (v.getRequiredAt() != null) notifyCustomer(v, "Yêu cầu thu hồi đã được hủy");
     }
 
     private void closeRemediation(ViolationRecovery v, Details d, Command c, Instant now) {
@@ -550,11 +587,33 @@ public class ViolationRecoveryWorkflow {
     private void releaseItem(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         String code = normalize(required(c.itemCode(), "mã kiện"));
         var item = d.items.get(code);
-        if (item == null || !"STORED".equals(item.disposition()) || item.releasedAt() != null)
+        if (item == null || !isPendingItem(item))
             throw ApiExceptions.conflict("Kiện hàng không còn chờ nhận.");
         d.items.put(code, new Item(code, item.name(), item.condition(), item.location(), item.evidenceId(),
-            item.disposition(), now, evidence(v, actor, c.evidenceId())));
-        if (!hasStoredItems(d)) v.setPickupReviewAt(null);
+            item.disposition(), now, evidence(v, actor, c.evidenceId()), null));
+        closePickupIfDone(v, d);
+    }
+
+    private void recordLiquidation(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
+        String code = normalize(required(c.itemCode(), "kiện cần ghi nhận thanh lý"));
+        var item = d.items.get(code);
+        if (item == null || !isPendingItem(item))
+            throw ApiExceptions.conflict("Kiện hàng đã được giao hoặc đã ghi nhận thanh lý.");
+        if (!"LIQUIDATED".equals(c.disposition()))
+            throw ApiExceptions.validation("Cần xác nhận đã xử lý thanh lý kiện hàng theo biên bản.", null);
+        var liquidation = new Liquidation(now, actor.userId(),
+            required(c.note(), "căn cứ, biên bản và kết quả xử lý thanh lý"), evidence(v, actor, c.evidenceId()));
+        d.items.put(code, new Item(code, item.name(), item.condition(), item.location(), item.evidenceId(),
+            item.disposition(), null, null, liquidation));
+        closePickupIfDone(v, d);
+        notifyCustomer(v, "Đã ghi nhận xử lý thanh lý tài sản lưu tạm");
+    }
+
+    private void closePickupIfDone(ViolationRecovery v, Details d) {
+        if (!hasStoredItems(d)) {
+            v.setPickupReviewAt(null);
+            v.setPickupEscalated(false);
+        }
     }
 
     @Transactional
@@ -562,6 +621,12 @@ public class ViolationRecoveryWorkflow {
         var v = recoveries.lock(id).orElse(null);
         if (v == null) return;
         var d = details(v);
+        if (v.getStage() == Stage.REVIEW_REQUIRED) {
+            processReviewDeadline(v, d, now);
+            notifyCoordinationRequired(v);
+            save(v, d);
+            return;
+        }
         if (v.getDeadlineAt() != null && !now.isBefore(v.getDeadlineAt()) && !terminal(v) && v.getOverdueAt() == null) {
             v.setOverdueAt(v.getDeadlineAt());
             notifyOperations(v, "Nhiệm vụ thu hồi đã quá hạn 72 giờ");
@@ -593,6 +658,7 @@ public class ViolationRecoveryWorkflow {
             notifyBusiness(v, "Cần rà soát tài sản lưu tạm");
         }
         save(v, d);
+        if (!terminal(v)) notifyCoordinationRequired(v);
     }
 
     private List<Action> allowed(ActorPrincipal actor, ViolationRecovery v, Details d, Instant now) {
@@ -614,16 +680,16 @@ public class ViolationRecoveryWorkflow {
         if ((manager || business) && terminal(v) && hasStoredItems(d)) {
             actions.add(Action.FOLLOW_UP_PICKUP);
             actions.add(Action.ASSIGN_PICKUP);
+            if (business) actions.add(Action.RECORD_LIQUIDATION);
         }
         if (!terminal(v) && (manager || business && v.isEscalated())) {
             actions.add(Action.CANCEL);
             if (v.getStage() == Stage.REVIEW_REQUIRED) actions.add(Action.CONFIRM_VIOLATION);
-            if (v.getStage() == Stage.BLOCKED || v.isEscalated()) actions.add(Action.RESUME);
+            if (v.getStage() == Stage.BLOCKED || v.isEscalated() && v.getStage() != Stage.REVIEW_REQUIRED) actions.add(Action.RESUME);
             if (business && v.getStage() == Stage.BLOCKED && d.startedAt != null) actions.add(Action.CLOSE_REMEDIATION);
             if (v.getRequiredAt() != null) {
                 if (d.startedAt == null && !d.disputeOpen) actions.add(Action.RESCHEDULE);
                 if (!d.disputeOpen && v.getStage() != Stage.IN_PROGRESS) actions.add(Action.ASSIGN);
-                actions.add(Action.NOTICE);
                 if (d.acceptedAt != null && d.notifiedAt != null
                     && (d.attendance == Attendance.PRESENT && within(d.arrivedAt, now, d.verifiedAt)
                         || d.attendance == Attendance.ABSENT && !now.isBefore(d.responseDueAt))
@@ -659,7 +725,6 @@ public class ViolationRecoveryWorkflow {
         if (v.getStage() == Stage.APPROVED && !d.disputeOpen && !now.isBefore(v.getScheduledAt())
             && (d.attendance == Attendance.ABSENT || within(d.arrivedAt, now, d.verifiedAt))) actions.add(Action.START);
         if (v.getStage() == Stage.IN_PROGRESS && !d.disputeOpen) actions.addAll(List.of(Action.SAVE_ITEM, Action.COMPLETE));
-        if (v.getStage() == Stage.BLOCKED && d.startedAt != null) actions.add(Action.SAVE_ITEM);
         return actions;
     }
 
@@ -673,16 +738,60 @@ public class ViolationRecoveryWorkflow {
             case AWAITING_ACCEPTANCE, AWAITING_ATTENDANCE, APPROVED, IN_PROGRESS -> v.isEscalated() ? "BO" : "Nhân viên";
             case COMPLETED, CANCELLED -> v.isFinancePending() || v.isPickupEscalated() ? "BO" : hasStoredItems(d) ? "Cơ sở" : null;
         };
-        return new Entry(v.getId(), rental.getId(), rental.getReservation().getId(), rental.getFacility().getId(),
+        return new Entry(v.getId(), rental.getId(), rental.getReservation().getId(), rental.getReservation().getReservationCode(),
+            rental.getCustomer().getFullName(), rental.getFacility().getId(),
             rental.getStorageUnit().getCode(), task == null ? null : task.getId(), staff == null ? null : staff.getFullName(),
-            v.getReason(), v.getStage(), v.getRequiredAt(), v.getScheduledAt(), v.getDeadlineAt(), v.getActionDueAt(),
-            v.getOverdueAt(), v.getCompletedAt(), v.getPickupDueAt(), v.getPickupReviewAt(), v.isEscalated(), v.isPickupEscalated(),
-            v.isFinancePending(), v.isFinanceClosed(), owner, d.attendance, d.reply, d.notifiedAt, d.responseDueAt,
-            d.arrivedAt, d.verifiedAt, d.attempts.size(), d.pickupAttempts.size(), d.needsWitness,
-            customer ? null : d.beforeEvidenceId, customer ? null : d.afterEvidenceId, customer ? null : d.reasonNote,
-            d.customerNote, customer ? null : d.report,
+            v.getReason(), v.getStage(), v.getSourceDeadlineAt(), v.getRequiredAt(), v.getScheduledAt(), v.getDeadlineAt(),
+            v.getActionDueAt(), v.getOverdueAt(), v.getCompletedAt(), v.getPickupDueAt(), v.getPickupReviewAt(),
+            v.isEscalated(), v.isPickupEscalated(), v.isFinancePending(), v.isFinanceClosed(), owner, d.attendance,
+            d.reply, d.notifiedAt, d.responseDueAt, d.arrivedAt, d.verifiedAt, d.attempts.size(), d.pickupAttempts.size(),
+            d.needsWitness, customer ? null : d.attendanceEvidenceId, customer ? null : d.beforeEvidenceId,
+            customer ? null : d.afterEvidenceId, customer ? null : d.reasonNote, d.customerNote,
+            customer ? null : d.report,
             d.items.values().stream().map(item -> customer ? new Item(item.code(), item.name(), item.condition(),
-                null, null, item.disposition(), item.releasedAt(), null) : item).toList(), allowed(actor, v, d, now));
+                null, null, item.disposition(), item.releasedAt(), null,
+                item.liquidation() == null ? null : new Liquidation(item.liquidation().recordedAt(), null, null, null)) : item).toList(),
+            customer ? List.of() : d.history,
+            allowed(actor, v, d, now), customer ? v.getRequiredAt() : detectedAt(v, d), customer ? null : reviewDeadline(v, d),
+            customer ? null : businessReviewDeadline(v, d),
+            !customer && v.getStage() == Stage.REVIEW_REQUIRED ? reviewEvidence.read(v, now) : null);
+    }
+
+    private Instant reviewDeadline(ViolationRecovery v, Details d) {
+        if (d.reviewDueAt != null) return d.reviewDueAt;
+        if (v.getStage() != Stage.REVIEW_REQUIRED) return null;
+        var detected = detectedAt(v, d);
+        return detected == null ? v.getActionDueAt() : working(detected, 1);
+    }
+
+    private Instant detectedAt(ViolationRecovery v, Details d) {
+        return d.history.stream().filter(event -> "DETECT".equals(event.action()))
+            .map(HistoryEvent::time).filter(Objects::nonNull).min(Comparator.naturalOrder()).orElse(v.getCreatedAt());
+    }
+
+    private Instant businessReviewDeadline(ViolationRecovery v, Details d) {
+        return d.businessReviewDueAt != null ? d.businessReviewDueAt
+            : v.getStage() == Stage.REVIEW_REQUIRED && v.isEscalated() ? v.getActionDueAt() : null;
+    }
+
+    private void processReviewDeadline(ViolationRecovery v, Details d, Instant now) {
+        if (d.reviewDueAt == null) d.reviewDueAt = reviewDeadline(v, d);
+        if (d.businessReviewDueAt == null) d.businessReviewDueAt = businessReviewDeadline(v, d);
+        if (!v.isEscalated() && d.reviewDueAt != null && !now.isBefore(d.reviewDueAt)) {
+            d.reviewEscalatedAt = now;
+            d.businessReviewDueAt = working(now, 4);
+            v.setEscalated(true);
+            v.setActionDueAt(d.businessReviewDueAt);
+            d.history.add(new HistoryEvent("REVIEW_ESCALATED", "Hệ thống", now, Stage.REVIEW_REQUIRED,
+                "Quá hạn Manager duyệt mở thu hồi. Đã chuyển BO xử lý."));
+            notifyBusiness(v, "Quá hạn duyệt mở thu hồi, cần BO xử lý");
+        } else if (v.isEscalated() && v.getActionDueAt() != null && !now.isBefore(v.getActionDueAt())) {
+            // Keep the original deadlines visible; never auto-approve or repeatedly extend the BO clock.
+            v.setActionDueAt(null);
+            d.history.add(new HistoryEvent("BO_REVIEW_OVERDUE", "Hệ thống", now, Stage.REVIEW_REQUIRED,
+                "BO chưa xử lý đúng hạn. Hồ sơ tiếp tục chờ quyết định mở hoặc hủy thu hồi."));
+            notifyBusiness(v, "BO chưa xử lý hồ sơ mở thu hồi đúng hạn");
+        }
     }
 
     private boolean canRead(ActorPrincipal actor, ViolationRecovery v) {
@@ -714,7 +823,7 @@ public class ViolationRecoveryWorkflow {
             || !v.getTask().getId().equals(file.getEntityId()) || file.getUploadedBy() == null
             || !actor.userId().equals(file.getUploadedBy().getId()) || file.getContentType() == null
             || !file.getContentType().startsWith("image/"))
-            throw ApiExceptions.validation("Ảnh phải do nhân viên phụ trách tải lên cho đúng nhiệm vụ.", null);
+            throw ApiExceptions.validation("Ảnh phải do người thực hiện tải lên cho đúng nhiệm vụ.", null);
         return id;
     }
 
@@ -756,7 +865,10 @@ public class ViolationRecoveryWorkflow {
     private static boolean within(Instant start, Instant now, Instant verified) { return verified != null && session(start, now); }
     private static boolean terminal(ViolationRecovery v) { return v.getStage() == Stage.COMPLETED || v.getStage() == Stage.CANCELLED; }
     private static boolean hasStoredItems(Details d) {
-        return d.items.values().stream().anyMatch(item -> "STORED".equals(item.disposition()) && item.releasedAt() == null);
+        return d.items.values().stream().anyMatch(ViolationRecoveryWorkflow::isPendingItem);
+    }
+    private static boolean isPendingItem(Item item) {
+        return "STORED".equals(item.disposition()) && item.releasedAt() == null && item.liquidation() == null;
     }
     private static String clean(String value) { return value == null ? "" : value.strip(); }
     private static String normalize(String value) { return clean(value).toUpperCase(Locale.ROOT); }
@@ -779,7 +891,36 @@ public class ViolationRecoveryWorkflow {
 
     private void notifyCustomer(ViolationRecovery v, String title) {
         notifications.createNotification(v.getRental().getCustomer().getId(), NotificationType.RETURN, title,
-            "Vui lòng mở mục Thu hồi kho để xem chi tiết.", v.getRental().getReservation().getId());
+            customerRecoveryMessage(v) + " Mở thông báo trên web để xem hồ sơ thu hồi.", v.getId());
+    }
+
+    private void notifyCustomerSchedule(ViolationRecovery v, Details d, Instant now, String title) {
+        if (d.notifiedAt == null) {
+            d.notifiedAt = now;
+            d.responseDueAt = now.plus(Duration.ofHours(6));
+            v.setResponseCheckAt(d.responseDueAt);
+        }
+        notifications.createNotification(v.getRental().getCustomer().getId(), NotificationType.RETURN, title,
+            customerRecoveryMessage(v) + " Vui lòng phản hồi trước " + customerTime(d.responseDueAt)
+                + ". Mở thông báo trên web để xác nhận có mặt hoặc gửi phản đối.", v.getId());
+    }
+
+    private String customerRecoveryMessage(ViolationRecovery v) {
+        String reason = switch (v.getReason()) {
+            case SETUP_OVERDUE -> "Quá hạn hoàn tất chuẩn bị";
+            case INVENTORY_NO_SHOW -> "Không đến kiểm kê theo lịch hẹn";
+            case INVENTORY_IDENTITY_FAILED -> "Xác minh kiểm kê chưa thành công";
+            case INVENTORY_TIMEOUT -> "Quá hạn hoàn tất kiểm kê";
+            case REMOVAL_OVERDUE -> "Quá hạn dọn hàng sau kiểm kê sai lệch";
+            case HANDOVER_FOLLOW_UP -> "Bàn giao sau đối soát cần xử lý";
+        };
+        return recoveryIdentity(v) + " Lý do: " + reason + ". Lịch thu hồi: " + customerTime(v.getScheduledAt())
+            + ". Hạn hoàn tất: " + customerTime(v.getDeadlineAt()) + ".";
+    }
+
+    private String customerTime(Instant value) {
+        return value == null ? "chưa xác định" : java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(BusinessTime.ZONE).format(value);
     }
 
     private void notifyStaff(ViolationRecovery v, String title) {
@@ -790,11 +931,69 @@ public class ViolationRecoveryWorkflow {
 
     private void notifyOperations(ViolationRecovery v, String title) {
         notifications.createFacilityOperationsNotificationsOnce(v.getRental().getFacility().getId(), NotificationType.RETURN,
-            title, "Mở mục Thu hồi kho để xử lý.", v.getId());
+            title, recoveryIdentity(v) + " Mở Nhân viên & Nhiệm vụ → Thu hồi kho để xử lý.", v.getId());
+    }
+
+    @Transactional
+    public void notifyPendingNotifications(UUID id) {
+        var source = recoveries.findById(id).orElse(null);
+        if (source == null) return;
+        rentals.findByIdForUpdate(source.getRental().getId()).orElseThrow();
+        var v = recoveries.lock(id).orElseThrow();
+        em.refresh(v, LockModeType.PESSIMISTIC_WRITE);
+        if (terminal(v)) return;
+        notifyCoordinationRequired(v);
+        if (v.getStage() == Stage.REVIEW_REQUIRED) return;
+        var d = details(v);
+        if (v.getRequiredAt() != null && d.notifiedAt == null) {
+            notifyCustomerSchedule(v, d, Instant.now(), "Thông báo thu hồi kho");
+            save(v, d);
+        }
+    }
+
+    private void notifyCoordinationRequired(ViolationRecovery v) {
+        String title = switch (v.getStage()) {
+            case REVIEW_REQUIRED -> "Cần duyệt mở thu hồi";
+            case AWAITING_ASSIGNMENT -> "Cần phân công nhân viên thu hồi";
+            case AWAITING_APPROVAL -> "Cần phê duyệt thực hiện thu hồi";
+            case BLOCKED -> "Thu hồi tạm dừng, cần xử lý";
+            default -> "Hồ sơ thu hồi cần điều phối";
+        };
+        String step = switch (v.getStage()) {
+            case REVIEW_REQUIRED -> "Kiểm tra biên bản, hạn dọn hàng và tình trạng khắc phục để quyết định mở thu hồi.";
+            case AWAITING_ASSIGNMENT -> "Cần phân công nhân viên thu hồi.";
+            case AWAITING_ACCEPTANCE -> "Đã phân công nhân viên, cần theo dõi việc tiếp nhận nhiệm vụ.";
+            case AWAITING_APPROVAL -> "Cần kiểm tra kết quả tiếp nhận và phê duyệt thực hiện thu hồi.";
+            case BLOCKED -> "Hồ sơ đang tạm dừng, cần quản lý hoặc BO xem xét xử lý.";
+            default -> "Cần theo dõi tiến độ và xử lý các bước tiếp theo của hồ sơ thu hồi.";
+        };
+        for (var manager : users.findEligibleStaff(UserStatus.ACTIVE, RoleCode.MANAGER,
+            v.getRental().getFacility().getId(), List.of(FacilityScopeLevel.MANAGE))) {
+            notifications.createNotificationOnce(manager.getId(), NotificationType.RETURN, title,
+                recoveryIdentity(v) + " " + step + " Mở Nhân viên & Nhiệm vụ → Thu hồi kho để xử lý.", v.getId());
+        }
+        for (var business : businessRecipients(v))
+            notifications.createNotificationOnce(business.getId(), NotificationType.RETURN, title,
+                recoveryIdentity(v) + " " + step + " Mở thông báo để theo dõi và xử lý hồ sơ thu hồi.", v.getId());
+    }
+
+    private String recoveryIdentity(ViolationRecovery v) {
+        return "Đơn " + v.getRental().getReservation().getReservationCode() + " · Gian "
+            + v.getRental().getStorageUnit().getCode() + ".";
     }
 
     private void notifyBusiness(ViolationRecovery v, String title) {
-        for (var user : users.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE))
-            notifications.createNotificationOnce(user.getId(), NotificationType.RETURN, title, "Mở mục Thu hồi kho để xử lý.", v.getId());
+        for (var user : businessRecipients(v))
+            notifications.createNotificationOnce(user.getId(), NotificationType.RETURN, title,
+                recoveryIdentity(v) + " Mở hồ sơ thu hồi để xem căn cứ và quyết định xử lý.", v.getId());
+    }
+
+    private List<User> businessRecipients(ViolationRecovery v) {
+        return users.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE).stream().filter(user -> {
+            var granted = userFacilityScopes.findByUserId(user.getId());
+            return granted.isEmpty() || granted.stream().anyMatch(scope ->
+                scope.getFacility().getId().equals(v.getRental().getFacility().getId())
+                    && scope.getScopeLevel().includes(FacilityScopeLevel.MANAGE));
+        }).toList();
     }
 }

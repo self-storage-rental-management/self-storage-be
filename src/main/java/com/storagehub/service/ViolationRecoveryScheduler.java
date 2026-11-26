@@ -26,5 +26,19 @@ public class ViolationRecoveryScheduler {
                 log.error("Could not advance recovery {}", id, ex);
             }
         }
+        // Backfill automatic customer notices and assignment alerts for existing active cases.
+        for (int page = 0; ; page++) {
+            var pending = recoveries.findByStageNotInOrderByCreatedAtDesc(java.util.List.of(
+                com.storagehub.domain.model.ViolationRecovery.Stage.COMPLETED,
+                com.storagehub.domain.model.ViolationRecovery.Stage.CANCELLED), PageRequest.of(page, 100));
+            for (var entry : pending) {
+                try {
+                    workflow.notifyPendingNotifications(entry.getId());
+                } catch (RuntimeException ex) {
+                    log.error("Could not notify pending recovery assignment {}", entry.getId(), ex);
+                }
+            }
+            if (pending.size() < 100) break;
+        }
     }
 }

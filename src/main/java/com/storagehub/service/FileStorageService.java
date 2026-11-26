@@ -338,6 +338,11 @@ public class FileStorageService {
                 .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
             facilityScopeService.assertCanOperate(actor, task.getFacility().getId());
             if (task.getRecoveryType() == com.storagehub.domain.model.MaintenanceRecoveryType.VIOLATION) {
+                if (actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN)
+                    && (task.getStatus() == MaintenanceTaskStatus.completed || task.getStatus() == MaintenanceTaskStatus.cancelled)) {
+                    facilityScopeService.assertCanManage(actor, task.getFacility().getId());
+                    return;
+                }
                 if (!actor.hasRole(RoleCode.STAFF) || !actor.hasPermission(com.storagehub.domain.model.SystemPermission.PROCESS_RETURNS)
                     || task.getAssignedTo() == null || !actor.userId().equals(task.getAssignedTo().getId()))
                     throw ApiExceptions.forbidden("Chỉ nhân viên phụ trách được tải chứng cứ thu hồi.");
