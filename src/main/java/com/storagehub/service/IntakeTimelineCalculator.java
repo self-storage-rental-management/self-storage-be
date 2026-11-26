@@ -123,6 +123,32 @@ public class IntakeTimelineCalculator {
         return firstVerificationAt.plus(Duration.ofHours(policy.getCompletionWindowHours()));
     }
 
+    /**
+     * Anchor of the 72h completion clock. The clock starts when staff confirm the customer
+     * arrived for inspection; records created before that rule started on first verification.
+     */
+    public Instant inspectionClockStartedAt(Rental rental) {
+        if (rental == null) return null;
+        if (rental.getInspectionClockStartedAt() != null) return rental.getInspectionClockStartedAt();
+        return rental.getFirstIdentityVerificationAt();
+    }
+
+    /** True once the 72h completion clock has started, regardless of which anchor set it. */
+    public boolean hasStartedInspectionClock(Rental rental) {
+        return inspectionClockStartedAt(rental) != null;
+    }
+
+    /**
+     * Starts the 72h clock once, on customer arrival. Later calls keep the original anchor and
+     * deadline so verification outcomes cannot restart or extend the window.
+     */
+    public void startInspectionClock(Rental rental, Instant arrivedAt) {
+        if (rental == null || arrivedAt == null) return;
+        if (inspectionClockStartedAt(rental) != null) return;
+        rental.setInspectionClockStartedAt(arrivedAt);
+        rental.setInspectionCompletionDeadlineAt(completionDeadline(arrivedAt));
+    }
+
     /** Setup completion allowed iff receivedAt <= now <= C. */
     public boolean canDeclareSetupComplete(Rental rental, Instant now) {
         if (rental == null || now == null) return false;
@@ -137,7 +163,7 @@ public class IntakeTimelineCalculator {
         if (rental == null || now == null || requestedAt == null) {
             throw ApiExceptions.validation("Vui lòng chọn ngày giờ hẹn kiểm kê.", null);
         }
-        if (isTerminalOrRecovery(rental) || rental.getFirstIdentityVerificationAt() != null
+        if (isTerminalOrRecovery(rental) || hasStartedInspectionClock(rental)
             || rental.getInventoryArrivedAt() != null || rental.getActualArrivedAt() != null) {
             throw ApiExceptions.invalidState("Hồ sơ đã tiếp nhận hoặc chuyển luồng xử lý, không thể đặt lịch.");
         }
@@ -172,7 +198,7 @@ public class IntakeTimelineCalculator {
             throw ApiExceptions.invalidState("Khách hàng chưa xác nhận nhận kho.");
         }
         if (isTerminalOrRecovery(rental) || REVIEW_PENDING.equals(rental.getAttendanceReviewStatus())
-            || rental.getFirstIdentityVerificationAt() != null
+            || hasStartedInspectionClock(rental)
             || rental.getInventoryArrivedAt() != null || rental.getActualArrivedAt() != null) {
             throw ApiExceptions.invalidState("Hồ sơ hiện không thể gia hạn thông thường.");
         }

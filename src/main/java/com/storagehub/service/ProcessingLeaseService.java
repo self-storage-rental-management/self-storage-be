@@ -50,7 +50,12 @@ public class ProcessingLeaseService {
     public View acquire(ActorPrincipal actor, Target type, UUID id, UUID token) {
         Resource resource = lockedResource(actor, type, id);
         ProcessingLease lease = lease(resource);
-        if (active(lease) && !owns(actor, token, lease)) return view(actor, token, resource, lease);
+        // Another user, or this user in the very same session without the matching token, keeps
+        // the lease. A newer session of the same user takes it over so a re-login cannot lock the
+        // operator out of their own record.
+        if (active(lease) && !owns(actor, token, lease) && !sameUserNewerSession(actor, lease)) {
+            return view(actor, token, resource, lease);
+        }
         lease.setOwnerId(actor.userId());
         lease.setSessionId(actor.sessionId());
         lease.setToken(token);
@@ -196,9 +201,28 @@ public class ProcessingLeaseService {
         return lease != null && token != null && token.equals(lease.getToken())
             && actor.userId().equals(lease.getOwnerId()) && Objects.equals(actor.sessionId(), lease.getSessionId());
     }
+
+    /**
+     * True when the same user holds the lease from a different sign-in session.
+     *
+     * The lease records the session that took it, so after signing out and in again (a new
+     * session, e.g. another tab or a re-login) the holder no longer matches and the operator was
+     * locked out of a record nobody else had claimed: the panel said "Hồ sơ đang được <their own
+     * name> xử lý". Ownership is about which person is working, not which browser session, so a
+     * fresh session of the same user takes the lease over. A different user is still refused.
+     */
+    private boolean sameUserNewerSession(ActorPrincipal actor, ProcessingLease lease) {
+        if (lease == null || !active(lease)) return false;
+        return actor != null && actor.userId() != null && actor.userId().equals(lease.getOwnerId())
+            && !Objects.equals(actor.sessionId(), lease.getSessionId());
+    }
     private void requireOwner(ActorPrincipal actor, UUID token, ProcessingLease lease) {
         if (!active(lease) || !owns(actor, token, lease)) {
-            String name = lease != null && active(lease) ? users.findById(lease.getOwnerId()).map(User::getFullName).orElse("nhân sự khác") : null;
+            // Naming the caller as the blocker reads as a bug, so tell them to re-claim instead.
+            boolean heldByCaller = lease != null && active(lease) && actor != null
+                && actor.userId() != null && actor.userId().equals(lease.getOwnerId());
+            String name = lease != null && active(lease) && !heldByCaller
+                ? users.findById(lease.getOwnerId()).map(User::getFullName).orElse("nhân sự khác") : null;
             throw conflict(name == null ? "Quyền xử lý đã hết hạn. Hãy tải lại và nhận xử lý hồ sơ."
                 : "Hồ sơ đang được " + name + " xử lý. Bạn chỉ có thể xem.");
         }

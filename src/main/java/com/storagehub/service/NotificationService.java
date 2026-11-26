@@ -315,6 +315,23 @@ public class NotificationService {
         return PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
     }
 
+    /** Resolves a notification's related reservation id to the order code shown to operators. */
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.storagehub.domain.repo.ReservationRepository reservations;
+
+    /**
+     * The staff bell is a queue across every reservation in a facility, so a notification that
+     * does not name its order leaves the operator unable to tell which case to open. Check-in
+     * and reservation notifications carry the reservation id, so resolve it to the order code.
+     */
+    private String reservationCodeFor(UUID reservationId) {
+        if (reservationId == null || reservations == null) return null;
+        return reservations.findById(reservationId)
+            .map(Reservation::getReservationCode)
+            .filter(code -> !code.isBlank())
+            .orElse(null);
+    }
+
     private NotificationResponse toResponse(Notification notification) {
         String content=notification.getContent();
         content = displayContent(content, notification.getTitle());
@@ -331,6 +348,10 @@ public class NotificationService {
             String code=notification.getType()==NotificationType.RENEWAL&&renewalDisplayIdentity!=null
                 ?renewalDisplayIdentity.find(related).map(com.storagehub.service.renewal.RenewalDisplayIdentity.Identity::label).orElse(null)
                 :key==null||displayCodes==null?null:displayCodes.find(key);
+            if(code==null&&(notification.getType()==NotificationType.CHECKIN
+                ||notification.getType()==NotificationType.RESERVATION)){
+                code=reservationCodeFor(related);
+            }
             if(code!=null&&(content==null||!content.contains(code)))content=code+" · "+(content==null?"":content);
         }
         return new NotificationResponse(

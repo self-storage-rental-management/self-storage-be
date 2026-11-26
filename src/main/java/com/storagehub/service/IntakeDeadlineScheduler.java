@@ -93,7 +93,7 @@ public class IntakeDeadlineScheduler {
         if (!List.of(RentalStatus.setup, RentalStatus.active).contains(r.getStatus())) return;
 
         // Post-V phase: track only F (72h), never recover by arrival deadline D.
-        if (r.getFirstIdentityVerificationAt() != null) {
+        if (r.getInspectionClockStartedAt() != null || r.getFirstIdentityVerificationAt() != null) {
             processCompletionWindow(r, now);
             return;
         }
@@ -141,7 +141,7 @@ public class IntakeDeadlineScheduler {
                     notifications.createFacilityOperationsNotificationsOnce(
                         r.getFacility().getId(), NotificationType.CHECKIN,
                         "Cần xác nhận có mặt sau giờ hẹn",
-                        "Đã qua " + policy.getMissedWaitMinutes() + " phút kể từ giờ hẹn. Staff vui lòng xác nhận khách có mặt hoặc đánh dấu bỏ lỡ.",
+                        withOrderCode(r, "Đã qua " + policy.getMissedWaitMinutes() + " phút kể từ giờ hẹn. Staff vui lòng xác nhận khách có mặt hoặc đánh dấu bỏ lỡ."),
                         r.getReservation().getId()
                     );
                 }
@@ -174,7 +174,7 @@ public class IntakeDeadlineScheduler {
                     notifications.createFacilityOperationsNotificationsOnce(
                         r.getFacility().getId(), NotificationType.CHECKIN,
                         "Khách đã đến đúng hạn, chờ xác minh danh tính",
-                        "Khách hàng đã có mặt trước hạn D nhưng chưa được xác minh danh tính. Manager vui lòng kiểm tra.",
+                        withOrderCode(r, "Khách hàng đã có mặt trước hạn D nhưng chưa được xác minh danh tính. Manager vui lòng kiểm tra."),
                         r.getReservation().getId()
                     );
                 }
@@ -188,7 +188,7 @@ public class IntakeDeadlineScheduler {
                 notifications.createFacilityOperationsNotificationsOnce(
                     r.getFacility().getId(), NotificationType.CHECKIN,
                     "Cần đối soát khách đến phút cuối",
-                    "Hồ sơ đã hết hạn đến kiểm kê. Vui lòng đối soát bằng chứng đến đúng hạn trước mốc R.",
+                    withOrderCode(r, "Hồ sơ đã hết hạn đến kiểm kê. Vui lòng đối soát bằng chứng đến đúng hạn trước mốc R."),
                     r.getReservation().getId()
                 );
                 if (rDeadline != null && now.isAfter(rDeadline)) {
@@ -199,7 +199,7 @@ public class IntakeDeadlineScheduler {
                     notifications.createFacilityOperationsNotificationsOnce(
                         r.getFacility().getId(), NotificationType.CHECKIN,
                         "Nhắc đối soát hồ sơ quá hạn đến",
-                        "Hồ sơ đang chờ đối soát phút cuối quá 15 phút.",
+                        withOrderCode(r, "Hồ sơ đang chờ đối soát phút cuối quá 15 phút."),
                         r.getReservation().getId()
                     );
                 }
@@ -224,7 +224,7 @@ public class IntakeDeadlineScheduler {
         notifications.createFacilityOperationsNotificationsOnce(
             r.getFacility().getId(), NotificationType.CHECKIN,
             "Chuyển Manager kết luận đối soát đến phút cuối",
-            "Có bằng chứng đến đúng hạn nhưng chưa xác minh danh tính trước mốc R. Manager vui lòng tiếp nhận và kết luận.",
+            withOrderCode(r, "Có bằng chứng đến đúng hạn nhưng chưa xác minh danh tính trước mốc R. Manager vui lòng tiếp nhận và kết luận."),
             r.getReservation().getId()
         );
         if (!now.isBefore(d.plus(policy.getAttendanceBoAlertMinutes(), ChronoUnit.MINUTES))) {
@@ -263,7 +263,7 @@ public class IntakeDeadlineScheduler {
             notifications.createFacilityOperationsNotificationsOnce(
                 r.getFacility().getId(), NotificationType.CHECKIN,
                 "Quá hạn 72h đang xử lý ngoại lệ cơ sở",
-                "Hồ sơ quá hạn 72 giờ do sự cố/ngoại lệ cơ sở. Không tự động thu hồi.",
+                withOrderCode(r, "Hồ sơ quá hạn 72 giờ do sự cố/ngoại lệ cơ sở. Không tự động thu hồi."),
                 r.getReservation().getId()
             );
             return;
@@ -294,10 +294,10 @@ public class IntakeDeadlineScheduler {
             if (now.isBefore(rc.getInspectedAt().plus(6, ChronoUnit.HOURS))
                 && !now.isBefore(rc.getInspectedAt().plus(4, ChronoUnit.HOURS)))
                 notifications.createFacilityOperationsNotificationsOnce(rc.getFacility().getId(), NotificationType.RETURN,
-                    "Sắp đến hạn duyệt quyết toán", "Bảng kê sắp hết hạn Manager duyệt 6 giờ. Vui lòng ưu tiên xử lý.", rc.getId());
+                    "Sắp đến hạn duyệt quyết toán", withOrderCode(rc, "Bảng kê sắp hết hạn Manager duyệt 6 giờ. Vui lòng ưu tiên xử lý."), rc.getId());
             if (!now.isBefore(rc.getInspectedAt().plus(6, ChronoUnit.HOURS))) {
                 notifications.createFacilityOperationsNotificationsOnce(rc.getFacility().getId(), NotificationType.RETURN,
-                    "Quá hạn duyệt quyết toán 6 giờ", "Bảng kê đang chờ Manager duyệt. Vui lòng ưu tiên xử lý hồ sơ.", rc.getId());
+                    "Quá hạn duyệt quyết toán 6 giờ", withOrderCode(rc, "Bảng kê đang chờ Manager duyệt. Vui lòng ưu tiên xử lý hồ sơ."), rc.getId());
                 for (User bo : users.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE))
                     notifications.createNotificationOnce(bo.getId(), NotificationType.RETURN, "Quyết toán quá hạn duyệt",
                         "Có bảng kê đã quá hạn Manager duyệt 6 giờ. Vui lòng mở hồ sơ để theo dõi xử lý.", rc.getId());
@@ -318,7 +318,7 @@ public class IntakeDeadlineScheduler {
             if (!now.isBefore(due.minus(2, ChronoUnit.HOURS)))
                 notifications.createFacilityOperationsNotificationsOnce(rc.getFacility().getId(), NotificationType.RETURN,
                     now.isBefore(due) ? "Sắp đến hạn nghiệm thu" : "Đã quá hạn nghiệm thu",
-                    "Khách đã bàn giao đủ điều kiện. Vui lòng kiểm tra và hoàn tất biên bản nghiệm thu.", rc.getId());
+                    withOrderCode(rc, "Khách đã bàn giao đủ điều kiện. Vui lòng kiểm tra và hoàn tất biên bản nghiệm thu."), rc.getId());
         }
         for (MaintenanceTask t : tasks.findAll()) {
             if (t.getRecoveryType() == MaintenanceRecoveryType.MISMATCH_REMOVAL
@@ -328,7 +328,7 @@ public class IntakeDeadlineScheduler {
             if (!now.isBefore(t.getDeadlineAt().minus(12, ChronoUnit.HOURS)))
                 notifications.createFacilityOperationsNotificationsOnce(t.getFacility().getId(), NotificationType.CHECKIN,
                     now.isBefore(t.getDeadlineAt()) ? "Nhắc nhiệm vụ thu hồi" : "Nhiệm vụ thu hồi đã quá hạn",
-                    "Vui lòng mở nhiệm vụ để phân công, ghi nhận bằng chứng và hoàn tất xử lý.", t.getId());
+                    withOrderCode(t, "Vui lòng mở nhiệm vụ để phân công, ghi nhận bằng chứng và hoàn tất xử lý."), t.getId());
             if (!now.isBefore(t.getDeadlineAt()))
                 for (User bo : users.findDistinctByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE))
                     notifications.createNotificationOnce(bo.getId(), NotificationType.CHECKIN, "Nhiệm vụ thu hồi đã quá hạn",
@@ -348,9 +348,35 @@ public class IntakeDeadlineScheduler {
         recovery(rental, now, "Quá hạn trả hàng do kiểm kê sai lệch");
     }
 
+    /**
+     * Staff and Manager notifications must name the record they are about: the bell is a queue
+     * across every reservation in the facility, so a title without the order code leaves the
+     * operator unable to tell which case to open.
+     */
+    private static String withOrderCode(String code, String content) {
+        return code == null || code.isBlank() ? content : "Đơn " + code + ": " + content;
+    }
+
+    private static String withOrderCode(Rental r, String content) {
+        return withOrderCode(r == null || r.getReservation() == null ? null : r.getReservation().getReservationCode(), content);
+    }
+
+    /** Return cases carry the order they belong to through their rental. */
+    private static String withOrderCode(ReturnCase rc, String content) {
+        return withOrderCode(rc == null || rc.getRental() == null || rc.getRental().getReservation() == null
+            ? null : rc.getRental().getReservation().getReservationCode(), content);
+    }
+
+    /** Recovery tasks name the order when the task was raised from a return case or a rental. */
+    private static String withOrderCode(MaintenanceTask t, String content) {
+        if (t == null) return content;
+        if (t.getReturnCase() != null) return withOrderCode(t.getReturnCase(), content);
+        return withOrderCode(t.getRental(), content);
+    }
+
     private void notify(Rental r, String title, String content) {
         notifications.createNotificationOnce(r.getCustomer().getId(), NotificationType.CHECKIN, title, content, r.getReservation().getId());
-        notifications.createFacilityOperationsNotificationsOnce(r.getFacility().getId(), NotificationType.CHECKIN, title, content, r.getReservation().getId());
+        notifications.createFacilityOperationsNotificationsOnce(r.getFacility().getId(), NotificationType.CHECKIN, title, withOrderCode(r, content), r.getReservation().getId());
     }
 
     private void recovery(Rental r, Instant now, String reason) {

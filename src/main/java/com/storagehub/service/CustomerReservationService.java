@@ -546,6 +546,7 @@ public class CustomerReservationService {
         if (reservation.getStatus() != ReservationStatus.PREPARING
             || (checkIn.getStatus() != CheckInStatus.setup_completed && checkIn.getStatus() != CheckInStatus.setup_in_progress)
             || !rental.isInventoryPending() || checkIn.getInventoryArrivedAt() != null
+            || rental.getInspectionClockStartedAt() != null
             || rental.getFirstIdentityVerificationAt() != null
             || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.NOT_STARTED) {
             throw ApiExceptions.conflict("Hồ sơ hiện không thể đặt hoặc đổi lịch kiểm kê.");

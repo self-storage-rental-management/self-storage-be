@@ -40,6 +40,12 @@ public class BusinessRecordCodeCoordinator {
             jdbc.update("update payments set receipt_code = ? where id = uuid_to_bin(?) and receipt_code is null", code, id);
         }
         // Offsets are not cash receipts. Historical transfers require an existing matching receipt.
+        // Recovery receipts live in an optional module, so only query that table when it was installed.
+        String recoveryReceiptEvidence = recoveryReceiptsInstalled()
+            ? """
+                or exists (select 1 from recovery_settlement_receipts s where s.return_case_id = r.id
+                           and s.transaction_reference = r.settlement_payment_id and s.receipt_file_id is not null)"""
+            : "";
         var returns = jdbc.query("""
             select bin_to_uuid(r.id), r.net_refund_amount > 0 from return_cases r
             where r.status = 'completed' and r.settlement_paid_at is not null
@@ -47,11 +53,19 @@ public class BusinessRecordCodeCoordinator {
               and not exists (select 1 from money_receipt_codes m where m.source_type = 'RETURN' and m.source_id = r.id)
               and (exists (select 1 from return_settlement_receipts s where s.return_id = bin_to_uuid(r.id)
                            and s.transaction_reference = r.settlement_payment_id and s.receipt_file_id is not null)
-                or exists (select 1 from recovery_settlement_receipts s where s.return_case_id = r.id
-                           and s.transaction_reference = r.settlement_payment_id and s.receipt_file_id is not null))
+                %s)
             order by r.created_at, r.id limit 100
-            """, (rs, i) -> Map.entry(UUID.fromString(rs.getString(1)), rs.getBoolean(2)));
+            """.formatted(recoveryReceiptEvidence),
+            (rs, i) -> Map.entry(UUID.fromString(rs.getString(1)), rs.getBoolean(2)));
         returns.forEach(row -> receiptCodes.issue("RETURN", row.getKey(), row.getValue()));
+    }
+
+    /** Recovery settlement receipts are created only by the optional recovery module migrations. */
+    private boolean recoveryReceiptsInstalled() {
+        Long count = jdbc.queryForObject(
+            "select count(*) from information_schema.tables where table_schema = database()"
+                + " and table_name = 'recovery_settlement_receipts'", Long.class);
+        return count != null && count > 0;
     }
 
     @Scheduled(initialDelayString="${storagehub.record-codes.initial-delay-ms:1000}",fixedDelayString="${storagehub.record-codes.delay-ms:30000}")

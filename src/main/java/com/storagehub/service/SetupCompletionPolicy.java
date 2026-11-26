@@ -47,7 +47,8 @@ public final class SetupCompletionPolicy {
         Instant d = rental.getInventoryFinalDeadlineAt() != null
             ? rental.getInventoryFinalDeadlineAt()
             : rental.getSetupCompletionDeadlineAt();
-        if (d == null || rental.getFirstIdentityVerificationAt() != null
+        if (d == null || rental.getInspectionClockStartedAt() != null
+            || rental.getFirstIdentityVerificationAt() != null
             || rental.getInventoryArrivedAt() != null || rental.getActualArrivedAt() != null
             || rental.getInventoryEscalatedAt() != null) return false;
         int maxDays = rental.getIntakeExtensionMaxHours() != null

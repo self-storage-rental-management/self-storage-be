@@ -126,6 +126,8 @@ public class Rental extends BaseEntity {
     @Column(length = 32) private String attendanceReviewStatus;
     @Column private java.util.UUID attendanceReviewOwnerId;
     @Column private Instant firstIdentityVerificationAt;
+    /** Start of the 72h inspection completion clock, set when staff confirm the customer arrived. */
+    @Column private Instant inspectionClockStartedAt;
     @Column private Instant inspectionCompletionDeadlineAt;
     @Column(nullable = false) private int verificationAttemptCount = 0;
     @Column(nullable = false, length = 32) private String verificationStatus = "NOT_STARTED";
