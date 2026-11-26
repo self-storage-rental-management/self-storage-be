@@ -88,6 +88,20 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
+    void sourceReturnLinkRespectsCustomerVisibilityAndHidesCancelledCases() {
+        when(cases.findBySourceReturnIdOrderByCreatedAtDesc(source.getId())).thenReturn(List.of(recovery));
+        var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
+        assertThat(workflow.listForReturn(customerActor, source.getId())).isEmpty();
+        assertThat(workflow.listForReturn(manager(), source.getId())).extracting(ViolationRecoveryWorkflow.Entry::id)
+            .containsExactly(recovery.getId());
+        recovery.setRequiredAt(Instant.now());
+        assertThat(workflow.listForReturn(customerActor, source.getId())).hasSize(1);
+        assertThat(workflow.listForReturn(actor(identified(new User()), RoleCode.CUSTOMER, null, null), source.getId())).isEmpty();
+        recovery.setStage(Stage.CANCELLED);
+        assertThat(workflow.listForReturn(customerActor, source.getId())).isEmpty();
+    }
+
+    @Test
     void disputeBlocksStartAndDoesNotResetTheDeadline() throws Exception {
         var before = readyForAbsentHandover();
         var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);

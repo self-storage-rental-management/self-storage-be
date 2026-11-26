@@ -1396,13 +1396,23 @@ public class CheckInHandoverService {
                 InventoryTimelinePolicy.initializeRemovalWindow(rental, now);
             }
             rentalRepository.saveAndFlush(rental);
-            if (request.scheduledDate() != null) {
-                var returns = inventoryReturnServices == null ? null : inventoryReturnServices.getIfAvailable();
-                if (returns == null) throw ApiExceptions.conflict("Chưa thể mở hồ sơ trả kho.");
-                returns.createInventoryReturnAtSite(actor, rental.getId(), new com.storagehub.api.returns.CustomerCreateReturnRequest(
-                    request.scheduledDate(), checkIn.getInventoryDecisionNote(), com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH));
+            var returns = inventoryReturnServices == null ? null : inventoryReturnServices.getIfAvailable();
+            if (returns == null) throw ApiExceptions.conflict("Chưa thể mở hồ sơ trả kho.");
+            LocalDate scheduledDate = request.scheduledDate();
+            if (scheduledDate == null) {
+                LocalDate today = now.atZone(VIETNAM_ZONE).toLocalDate();
+                LocalDate first = rental.getInventoryRemovalPublishedAt() == null ? today
+                    : InventoryTimelinePolicy.removalEffectiveAt(rental.getInventoryRemovalPublishedAt())
+                        .atZone(VIETNAM_ZONE).toLocalDate();
+                scheduledDate = first.isAfter(today) ? first : today;
             }
+            var result = returns.createInventoryReturnAtSite(actor, rental.getId(), new com.storagehub.api.returns.CustomerCreateReturnRequest(
+                scheduledDate, checkIn.getInventoryDecisionNote(), com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH));
+            if (result.returnType() != com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH)
+                throw ApiExceptions.conflict("Đã có hồ sơ trả kho khác đang mở.");
             checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.RETURN_REQUESTED);
+            inventoryDecisions.record(checkIn, decision, operator, true,
+                request.evidenceReferences().stream().map(UUID::fromString).toList());
         } else if (decision == com.storagehub.api.reservation.InventoryResolutionRequest.Decision.ACCEPT_FULL) {
             UnitAssignment assignment = latestAssignment(reservation.getId());
             if (assignment == null || assignment.getStatus() != UnitAssignmentStatus.ACTIVE)
