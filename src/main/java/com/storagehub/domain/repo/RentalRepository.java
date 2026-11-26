@@ -44,7 +44,10 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     java.util.Optional<Rental> findByIdAndCustomer_Id(UUID id, UUID customerId);
 
-    Optional<Rental> findByReservation_Id(UUID reservationId);
+    Optional<Rental> findFirstByReservation_IdOrderByCreatedAtDesc(UUID reservationId);
+    default Optional<Rental> findByReservation_Id(UUID reservationId) {
+        return findFirstByReservation_IdOrderByCreatedAtDesc(reservationId);
+    }
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from Rental r where r.reservation.id = :reservationId")
     Optional<Rental> findByReservationIdForUpdate(@Param("reservationId") UUID reservationId);

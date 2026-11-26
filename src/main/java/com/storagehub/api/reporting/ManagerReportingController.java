@@ -30,6 +30,17 @@ public class ManagerReportingController {
         );
     }
 
+    @GetMapping("/revenue")
+    public ApiResponse<BusinessRevenueReportResponse> getRevenue(
+        @RequestParam(required = false, defaultValue = "6") Integer months,
+        @RequestParam(required = false) UUID facilityId
+    ) {
+        return new ApiResponse<>(
+            reportingService.getBusinessRevenueReport(actorContext.required(), months, facilityId),
+            CorrelationIdContext.current()
+        );
+    }
+
     @GetMapping("/activities")
     public PageResponse<FacilityActivityResponse> getActivities(
         @RequestParam(required = false) UUID facilityId,
