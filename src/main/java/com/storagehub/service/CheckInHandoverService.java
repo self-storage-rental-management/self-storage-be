@@ -585,9 +585,10 @@ public class CheckInHandoverService {
     public enum IdentityComparison { MATCH, CORRECTABLE, REJECT }
 
     @Transactional
-    public IdentityComparison compareIdentity(ActorPrincipal actor, UUID checkInId, String document) {
+    public IdentityComparison compareIdentity(ActorPrincipal actor, UUID checkInId, String document, Boolean bookingOwnerConfirmed) {
         Reservation reservation = requireWorkflowStep(actor, checkInId, CheckInStatus.scheduled).getReservation();
         requireArrivalForAttendanceTerms(reservation);
+        requireBookingOwnerConfirmation(bookingOwnerConfirmed);
         String actual = com.storagehub.validation.CccdPolicy.normalize(document);
         String error = com.storagehub.validation.CccdPolicy.error(actual);
         if (error != null) throw ApiExceptions.validation(error, null);
@@ -598,6 +599,12 @@ public class CheckInHandoverService {
 
     private void startHandoverClock(Reservation reservation) {
         if (reservation.getFirstHandoverComparisonAt() == null) reservation.setFirstHandoverComparisonAt(Instant.now());
+    }
+
+    private static void requireBookingOwnerConfirmation(Boolean confirmed) {
+        if (!Boolean.TRUE.equals(confirmed)) {
+            throw ApiExceptions.validation("Cần đối chiếu giấy tờ gốc và xác nhận đúng người đặt kho.", null);
+        }
     }
 
     private void requireOpenHandover(Reservation reservation) {
@@ -656,9 +663,7 @@ public class CheckInHandoverService {
                 throw ApiExceptions.validation("Chọn Sai thông tin để xác nhận sửa CCCD.", null);
             }
         }
-        if (!Boolean.TRUE.equals(request.bookingOwnerConfirmed())) {
-            throw ApiExceptions.validation("Cần đối chiếu giấy tờ gốc và xác nhận đúng người đặt kho.", null);
-        }
+        requireBookingOwnerConfirmation(request.bookingOwnerConfirmed());
         if ((mismatch || declaredIdentity == null) && clean(request.note()) == null) {
             throw ApiExceptions.validation("Cần ghi căn cứ đối chiếu CCCD.", null);
         }
