@@ -52,7 +52,7 @@ public class ProcessingLeaseService {
     public View acquire(ActorPrincipal actor, Target type, UUID id, UUID token) {
         Resource resource = lockedResource(actor, type, id);
         ProcessingLease lease = lease(resource);
-        if (active(lease) && !owns(actor, token, lease)) return view(actor, token, resource, lease);
+        if (active(lease) && !owns(actor, token, lease) && !sameUserNewerSession(actor, lease)) return view(actor, token, resource, lease);
         if (lease.getOwnerId() != null && !active(lease)) {
             auditLogService.recordMutation("PROCESSING_LEASE_EXPIRED", "ProcessingLease",
                 resource.reservation().getId(), resource.reservation().getFacility().getId(),
@@ -149,7 +149,10 @@ public class ProcessingLeaseService {
                 leases.saveAndFlush(lease);
                 if (attributes.getResponse() != null) {
                     attributes.getResponse().setHeader("X-Processing-Version", Long.toString(lease.getRevision()));
-                    attributes.getResponse().setHeader("X-Processing-Stamp", stamp(resource));
+                    // Read the committed values back. The instances captured before the command ran
+                    // still carry the pre-command updated-at, so handing that stamp to the client
+                    // made its very next request look stale and blocked the whole workflow.
+                    attributes.getResponse().setHeader("X-Processing-Stamp", committedStamp(type, id));
                     if (!customer) attributes.getResponse().setHeader("X-Processing-Expires-At", lease.getExpiresAt().toString());
                 }
                 return result;
@@ -260,9 +263,28 @@ public class ProcessingLeaseService {
         return lease != null && token != null && token.equals(lease.getToken())
             && actor.userId().equals(lease.getOwnerId()) && Objects.equals(actor.sessionId(), lease.getSessionId());
     }
+
+    /**
+     * True when the same user holds the lease from a different sign-in session.
+     *
+     * The lease records the session that took it, so after signing out and in again (a new
+     * session, e.g. another tab or a re-login) the holder no longer matches and the operator was
+     * locked out of a record nobody else had claimed: the panel said "Hồ sơ đang được <their own
+     * name> xử lý". Ownership is about which person is working, not which browser session, so a
+     * fresh session of the same user takes the lease over. A different user is still refused.
+     */
+    private boolean sameUserNewerSession(ActorPrincipal actor, ProcessingLease lease) {
+        if (lease == null || !active(lease)) return false;
+        return actor != null && actor.userId() != null && actor.userId().equals(lease.getOwnerId())
+            && !Objects.equals(actor.sessionId(), lease.getSessionId());
+    }
     private void requireOwner(ActorPrincipal actor, UUID token, ProcessingLease lease) {
         if (!active(lease) || !owns(actor, token, lease)) {
-            String name = lease != null && active(lease) ? users.findById(lease.getOwnerId()).map(User::getFullName).orElse("nhân sự khác") : null;
+            // Naming the caller as the blocker reads as a bug, so tell them to re-claim instead.
+            boolean heldByCaller = lease != null && active(lease) && actor != null
+                && actor.userId() != null && actor.userId().equals(lease.getOwnerId());
+            String name = lease != null && active(lease) && !heldByCaller
+                ? users.findById(lease.getOwnerId()).map(User::getFullName).orElse("nhân sự khác") : null;
             throw conflict(name == null ? "Quyền xử lý đã hết hạn. Hãy tải lại và nhận xử lý hồ sơ."
                 : "Hồ sơ đang được " + name + " xử lý. Bạn chỉ có thể xem.");
         }
@@ -278,6 +300,26 @@ public class ProcessingLeaseService {
     private String stamp(Resource resource) {
         return time(resource.reservation().getUpdatedAt()) + ":" + time(resource.entity().getUpdatedAt());
     }
+
+    /**
+     * Stamp built from freshly read rows, for use right after a command committed.
+     *
+     * The {@code Resource} passed into {@link #command} was loaded before the command ran, so its
+     * updated-at values are the in-memory ones the command produced. MySQL stores timestamp(6) by
+     * rounding to the microsecond while the captured Instant is truncated, so the in-memory value
+     * can differ from the stored one by one microsecond. Handing that stamp to the client made the
+     * record look changed on its very next request, and the workflow locked up.
+     *
+     * Only the two rows behind this record are detached; the rest of the persistence context is
+     * left intact so the caller can still serialize its result.
+     */
+    private String committedStamp(Target type, UUID id) {
+        Resource current = resource(type, id);
+        entities.detach(current.entity());
+        if (current.reservation() != current.entity()) entities.detach(current.reservation());
+        return stamp(resource(type, id));
+    }
+
     private String time(Instant value) { return value == null ? "0" : value.truncatedTo(ChronoUnit.MICROS).toString(); }
     private UUID parseToken(String token) {
         try { return UUID.fromString(token); }

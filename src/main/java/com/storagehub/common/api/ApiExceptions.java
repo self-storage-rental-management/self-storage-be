@@ -26,4 +26,28 @@ public final class ApiExceptions {
     public static ApiException conflict(String message) {
         return new ApiException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, message);
     }
+
+    public static ApiException deadlineExpired(String message) {
+        return new ApiException(ErrorCode.DEADLINE_EXPIRED, HttpStatus.CONFLICT, message);
+    }
+
+    public static ApiException setupCutoffExceeded(String message) {
+        return new ApiException(ErrorCode.SETUP_CUTOFF_EXCEEDED, HttpStatus.CONFLICT, message);
+    }
+
+    public static ApiException noSlot(String message) {
+        return new ApiException(ErrorCode.NO_SLOT, HttpStatus.CONFLICT, message);
+    }
+
+    public static ApiException extensionLimit(String message) {
+        return new ApiException(ErrorCode.EXTENSION_LIMIT, HttpStatus.CONFLICT, message);
+    }
+
+    public static ApiException verificationLimit(String message) {
+        return new ApiException(ErrorCode.VERIFICATION_LIMIT, HttpStatus.CONFLICT, message);
+    }
+
+    public static ApiException invalidState(String message) {
+        return new ApiException(ErrorCode.INVALID_STATE, HttpStatus.CONFLICT, message);
+    }
 }

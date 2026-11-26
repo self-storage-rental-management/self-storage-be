@@ -83,4 +83,22 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
     );
 
     long countByStatus(RentalStatus status);
+
+    @Query("""
+        select count(r) from Rental r
+        where r.facility.id = :facilityId
+          and (:excludeRentalId is null or r.id <> :excludeRentalId)
+          and r.inventoryAppointmentAt >= :slotStart
+          and r.inventoryAppointmentAt < :slotEnd
+          and (r.appointmentStatus is null or r.appointmentStatus = 'ACTIVE')
+          and r.completedAt is null
+          and r.actualReturnedAt is null
+          and r.inventoryEscalatedAt is null
+        """)
+    long countActiveAppointmentsInSlot(
+        @Param("facilityId") UUID facilityId,
+        @Param("excludeRentalId") UUID excludeRentalId,
+        @Param("slotStart") java.time.Instant slotStart,
+        @Param("slotEnd") java.time.Instant slotEnd
+    );
 }
