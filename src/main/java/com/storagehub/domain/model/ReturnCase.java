@@ -46,6 +46,8 @@ public class ReturnCase extends BaseEntity {
     @Column private Instant returnIdentityVerifiedAt;
     @Column private Instant returnArrivalReviewedAt;
     @Column private Boolean returnArrivalReviewAccepted;
+    @Column private Instant postReviewHandoverDueAt;
+    @Column private UUID postReviewHandoverStaffId;
 
     @Column
     private Integer missingPalletCount;

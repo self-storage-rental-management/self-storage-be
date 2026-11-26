@@ -35,6 +35,9 @@ public class RentalSetupLifecycleService {
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
 
+    @Autowired
+    private ViolationRecoveryWorkflow violationRecovery;
+
     @Value("${storagehub.inventory.recovery-sla-hours:24}")
     private long inventoryRecoverySlaHours = 24;
 
@@ -155,6 +158,7 @@ public class RentalSetupLifecycleService {
     }
 
     private void escalateInventory(Rental rental, Instant now, boolean removalOverdue) {
+        if (violationRecovery != null) return; // IntakeDeadlineScheduler owns violation requests.
         String title = removalOverdue ? "Đã hết hạn đưa hàng sai lệch ra khỏi kho" : "Đã quá hạn kiểm kê hàng hóa";
         createInventoryRecoveryTask(rental, now, title);
         notifyCustomer(rental, title,

@@ -52,13 +52,13 @@ public class StaffReturnController {
 
     @PostMapping("/{returnId}/arrival")
     public ApiResponse<ReturnCaseResponse> recordArrival(@PathVariable UUID returnId, @Valid @RequestBody ArrivalRequest request) {
-        return new ApiResponse<>(returnSettlementService.recordMismatchArrival(actorContext.required(), returnId, request.evidenceId()),
+        return new ApiResponse<>(returnSettlementService.recordReturnArrival(actorContext.required(), returnId, request.evidenceId()),
             CorrelationIdContext.current());
     }
 
     @PostMapping("/{returnId}/identity")
     public ApiResponse<ReturnCaseResponse> verifyIdentity(@PathVariable UUID returnId, @Valid @RequestBody IdentityRequest request) {
-        return new ApiResponse<>(returnSettlementService.verifyMismatchIdentity(actorContext.required(), returnId,
+        return new ApiResponse<>(returnSettlementService.verifyReturnIdentity(actorContext.required(), returnId,
             request.attemptId(), request.documentNumber()), CorrelationIdContext.current());
     }
 

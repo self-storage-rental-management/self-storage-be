@@ -47,12 +47,13 @@ public class ManagerReturnController {
     }
 
     public record ArrivalReviewRequest(@jakarta.validation.constraints.NotNull Boolean accepted,
-        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1000) String reason) {}
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 1000) String reason,
+        UUID staffId, java.time.Instant appointmentAt) {}
 
     @PostMapping("/{returnId}/arrival-review")
     public ApiResponse<ReturnCaseResponse> reviewArrival(@PathVariable UUID returnId, @Valid @RequestBody ArrivalReviewRequest request) {
-        return new ApiResponse<>(returnSettlementService.reviewMismatchArrival(actorContext.required(), returnId,
-            request.accepted(), request.reason()), CorrelationIdContext.current());
+        return new ApiResponse<>(returnSettlementService.reviewReturnArrival(actorContext.required(), returnId,
+            request.accepted(), request.reason(), request.staffId(), request.appointmentAt()), CorrelationIdContext.current());
     }
 
     @PostMapping("/{returnId}/review-dispute")

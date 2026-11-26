@@ -87,6 +87,8 @@ public class ReturnClearanceConcurrencyTests {
             rc.setRequestedBy(rental.getCustomer());
             rc.setRequestedAt(Instant.now());
             rc.setScheduledDate(rental.getContractEndDate());
+            rc.setReturnArrivedAt(Instant.now());
+            rc.setReturnIdentityVerifiedAt(rc.getReturnArrivedAt());
             rc.setDepositAmount(BigDecimal.TEN);
             em.persist(rc);
             var photo = new FileAsset();
