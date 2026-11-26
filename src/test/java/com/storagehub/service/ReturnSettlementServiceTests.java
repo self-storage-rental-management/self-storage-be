@@ -592,7 +592,7 @@ class ReturnSettlementServiceTests {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             "Đã đưa hàng vào khu lưu tạm",
-            List.of(UUID.randomUUID().toString()),
+            inspectionPhoto(returnCase),
             false,
             false,
             true,
@@ -654,7 +654,7 @@ class ReturnSettlementServiceTests {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             "Đã kiểm kê và bàn giao hàng vào khu lưu tạm",
-            List.of(UUID.randomUUID().toString()),
+            inspectionPhoto(returnCase),
             false,
             false,
             true,
@@ -668,6 +668,7 @@ class ReturnSettlementServiceTests {
         ReturnCaseResponse response = service.performInspection(staffActor, returnCase.getId(), request);
 
         assertThat(response.status()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
+        assertThat(response.warehouseEmptyVerified()).isTrue();
         assertThat(returnCase.getStatus()).isEqualTo(ReturnCaseStatus.awaiting_customer_confirmation);
         assertThat(returnCase.getRental().getStatus()).isEqualTo(RentalStatus.return_inspection);
         assertThat(recoveryTask.getStatus()).isEqualTo(com.storagehub.domain.model.MaintenanceTaskStatus.completed);
@@ -1326,6 +1327,86 @@ class ReturnSettlementServiceTests {
         assertThat(ReturnAttendancePolicy.protectsFromRecovery(rc)).isFalse();
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = ReturnType.class, names = {"NORMAL", "INVENTORY_MISMATCH"})
+    void managerReopensOnlyOneVerificationWindowForAssignedStaff(ReturnType type) {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setReturnType(type);
+        rc.setSetupExitRequested(type == ReturnType.INVENTORY_MISMATCH);
+        Instant arrivedAt = Instant.now().minusSeconds(1801);
+        rc.setReturnArrivedAt(arrivedAt);
+        rc.setRecoveryEligibleAt(arrivedAt.plusSeconds(60));
+        rental.setInventoryRemovalDeadlineAt(arrivedAt.plusSeconds(60));
+        UUID evidence = UUID.randomUUID();
+        rc.setReturnArrivalEvidenceId(evidence);
+        rc.setReturnFirstAttemptId(UUID.randomUUID());
+        rc.setReturnSecondAttemptId(UUID.randomUUID());
+        rc.setReturnSecondAttemptAt(arrivedAt.plusSeconds(90));
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findEligibleStaff(eq(com.storagehub.domain.model.UserStatus.ACTIVE), eq(RoleCode.STAFF),
+            eq(facility.getId()), any())).thenReturn(List.of(staff));
+
+        assertThatThrownBy(() -> service.reopenReturnVerification(staffActor, rc.getId(), staff.getId(), "Khách mang giấy tờ gốc"))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+        assertThatThrownBy(() -> service.reopenReturnVerification(managerActor, rc.getId(), UUID.randomUUID(), "Khách có mặt"))
+            .hasMessageContaining("nhân viên phụ trách");
+        var reopened = service.reopenReturnVerification(managerActor, rc.getId(), staff.getId(), "Khách mang giấy tờ gốc").attendance();
+        Instant session = reopened.reverificationStartedAt();
+        assertThat(reopened.arrivedAt()).isEqualTo(arrivedAt);
+        assertThat(reopened.evidenceId()).isEqualTo(evidence);
+        assertThat(reopened.attempts()).isZero();
+        assertThat(reopened.expiresAt()).isEqualTo(session.plusSeconds(1800));
+        assertThat(ReturnAttendancePolicy.protectsFromRecovery(rc)).isTrue();
+
+        assertThatThrownBy(() -> service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))
+            .hasMessageContaining("Phiên xác minh đã thay đổi");
+        var otherStaff = new ActorPrincipal(UUID.randomUUID(), staffActor.sessionId(), staffActor.roles(),
+            staffActor.permissions(), staffActor.facilityScopes());
+        assertThatThrownBy(() -> service.verifyReturnIdentity(otherStaff, rc.getId(), UUID.randomUUID(), "TEST99999", session))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+        service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST11111", session);
+        var failed = service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST22222", session).attendance();
+        assertThat(failed.reviewStartsAt()).isNotNull();
+        assertThat(failed.attempts()).isEqualTo(2);
+        assertThatThrownBy(() -> service.reopenReturnVerification(managerActor, rc.getId(), staff.getId(), "Yêu cầu thử thêm"))
+            .hasMessageContaining("Chỉ được mở lại một lần");
+    }
+
+    @Test
+    void managerSetsHandoverTimeAndInspectionOpensOnlyAtThatTime() {
+        var rc = setupReturn(ReturnCaseStatus.scheduled);
+        rc.setReturnType(ReturnType.NORMAL);
+        rc.setSetupExitRequested(false);
+        rc.setReturnArrivedAt(Instant.now().minusSeconds(1900));
+        rc.setReturnArrivalEvidenceId(UUID.randomUUID());
+        rental.getReservation().setIdentityDocumentNumber("TEST99999");
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        when(userRepository.findEligibleStaff(eq(com.storagehub.domain.model.UserStatus.ACTIVE), eq(RoleCode.STAFF),
+            eq(facility.getId()), any())).thenReturn(List.of(staff));
+        var calendar = org.mockito.Mockito.mock(WorkflowBusinessCalendar.class);
+        var schedule = WorkflowBusinessCalendar.parse(WorkflowBusinessCalendar.DEFAULT);
+        when(calendar.current()).thenReturn(schedule);
+        ReflectionTestUtils.setField(service, "recoveryCalendar", calendar);
+
+        var session = service.reopenReturnVerification(managerActor, rc.getId(), staff.getId(), "Đối chiếu giấy tờ gốc").attendance();
+        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999",
+            session.reverificationStartedAt()).attendance().verifiedAt()).isNotNull();
+        assertThat(ReturnAttendancePolicy.canInspect(rc, Instant.now())).isTrue();
+        rc.setReturnReverificationStartedAt(Instant.now().minusSeconds(1900));
+
+        Instant appointment = Instant.now().plusSeconds(3600);
+        var decision = service.reviewReturnArrival(managerActor, rc.getId(), true, "Khách đổi lịch", staff.getId(), appointment).attendance();
+        assertThat(decision.handoverAppointmentAt()).isEqualTo(appointment);
+        assertThat(decision.handoverDueAt()).isEqualTo(schedule.afterWorkingHours(appointment, 4));
+        assertThat(ReturnAttendancePolicy.canInspect(rc, appointment.minusNanos(1))).isFalse();
+        assertThat(ReturnAttendancePolicy.canInspect(rc, appointment)).isTrue();
+        assertThat(ReturnAttendancePolicy.canInspect(rc, decision.handoverDueAt())).isFalse();
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(true)))
+            .hasMessageContaining("Chưa đến lịch bàn giao");
+        verify(returnFinance, org.mockito.Mockito.never()).capture(any());
+    }
+
     @Test
     void timelyArrivalCanBeVerifiedAfterRemovalDeadlineWithoutChangingDeadline() {
         var rc = setupReturn(ReturnCaseStatus.scheduled);
@@ -1382,10 +1463,12 @@ class ReturnSettlementServiceTests {
         UUID arrivalPhoto = UUID.fromString(inspectionPhoto(rc).getFirst());
         settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, arrivalPhoto).setUploadedBy(staff);
         rental.getReservation().setIdentityDocumentNumber("TEST99999");
-        assertThat(service.recordReturnArrival(staffActor, rc.getId(), arrivalPhoto).attendance().evidenceId())
-            .isEqualTo(arrivalPhoto);
-        assertThat(service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999")
-            .attendance().verifiedAt()).isNotNull();
+        assertThatThrownBy(() -> service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999"))
+            .hasMessageContaining("Cần ảnh hiện trường");
+        assertThat(rc.getReturnArrivedAt()).isNull();
+        var verified = service.verifyReturnIdentity(staffActor, rc.getId(), UUID.randomUUID(), "TEST99999", null, arrivalPhoto).attendance();
+        assertThat(verified.evidenceId()).isEqualTo(arrivalPhoto);
+        assertThat(verified.arrivedAt()).isEqualTo(verified.verifiedAt()).isNotNull();
         assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(false)))
             .hasMessageContaining("kho trống");
         assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(true)))
