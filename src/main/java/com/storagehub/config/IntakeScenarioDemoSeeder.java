@@ -4,6 +4,8 @@ import com.storagehub.domain.model.*;
 import com.storagehub.domain.repo.*;
 import com.storagehub.service.IntakePolicyProperties;
 import com.storagehub.service.IntakeTimelineCalculator;
+import com.storagehub.service.InventoryTimelinePolicy;
+import com.storagehub.service.ViolationRecoveryWorkflow;
 import com.storagehub.time.BusinessTime;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -45,7 +47,9 @@ public class IntakeScenarioDemoSeeder {
     private final PaymentRepository paymentRepository;
     private final FileAssetRepository fileAssetRepository;
     private final IntakeVerificationAttemptRepository verificationAttemptRepository;
+    private final ReturnCaseRepository returnCaseRepository;
     private final IntakeTimelineCalculator timeline;
+    private final ViolationRecoveryWorkflow violationRecovery;
     private final Clock clock;
 
     @Bean
@@ -109,6 +113,37 @@ public class IntakeScenarioDemoSeeder {
         // 09: Kho L đã dùng hết 2/2 lượt gia hạn (chặn lần 3)
         created += createScenario("RSV-TEST-09", "TEST-L-09", "L", facility, customer, staff, now,
             now.minus(308, ChronoUnit.HOURS), false, null, null, 2, false, false, 0, null, null);
+
+        // 10: Thu hồi do INVENTORY_NO_SHOW (quá D + 35p không bằng chứng -> ViolationRecovery AWAITING_ASSIGNMENT)
+        created += createRecoveryScenario("RSV-TEST-10", "TEST-M-10", "M", facility, customer, staff, now,
+            now.minus(168, ChronoUnit.HOURS).minus(35, ChronoUnit.MINUTES), true, false, 0, null,
+            ViolationRecovery.Reason.INVENTORY_NO_SHOW, false, false);
+
+        // 11: Thu hồi do INVENTORY_IDENTITY_FAILED (thất bại xác minh CCCD 2 lần -> ViolationRecovery AWAITING_ASSIGNMENT)
+        created += createRecoveryScenario("RSV-TEST-11", "TEST-M-11", "M", facility, customer, staff, now,
+            now.minus(48, ChronoUnit.HOURS), true, true, 2, now.minus(2, ChronoUnit.HOURS),
+            ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED, false, false);
+
+        // 12: Thu hồi do INVENTORY_TIMEOUT (quá cửa sổ 72h kiểm kê -> ViolationRecovery AWAITING_ASSIGNMENT)
+        created += createRecoveryScenario("RSV-TEST-12", "TEST-M-12", "M", facility, customer, staff, now,
+            now.minus(120, ChronoUnit.HOURS), true, true, 1, now.minus(73, ChronoUnit.HOURS),
+            ViolationRecovery.Reason.INVENTORY_TIMEOUT, false, false);
+
+        // 13: Thu hồi do REMOVAL_OVERDUE (kiểm kê sai lệch quá hạn mang hàng ra -> ViolationRecovery REVIEW_REQUIRED)
+        created += createRecoveryScenario("RSV-TEST-13", "TEST-M-13", "M", facility, customer, staff, now,
+            now.minus(190, ChronoUnit.HOURS), true, true, 1, now.minus(160, ChronoUnit.HOURS),
+            ViolationRecovery.Reason.REMOVAL_OVERDUE, true, true);
+
+        // 14: Thu hồi do SETUP_OVERDUE (chưa báo setup xong mà đã quá hạn D + 35p -> ViolationRecovery AWAITING_ASSIGNMENT)
+        created += createRecoveryScenario("RSV-TEST-14", "TEST-M-14", "M", facility, customer, staff, now,
+            now.minus(168, ChronoUnit.HOURS).minus(35, ChronoUnit.MINUTES), false, false, 0, null,
+            ViolationRecovery.Reason.SETUP_OVERDUE, false, false);
+
+        // 15: Trường hợp cần đối soát 30p CÓ bằng chứng đến đúng hạn (REVIEW_PENDING)
+        created += createAttendanceReviewWithEvidenceScenario("RSV-TEST-15", "TEST-M-15", "M", facility, customer, staff, now);
+
+        // 16: Trường hợp hàng kiểm kê sai lệch yêu cầu buộc trả (INVENTORY_MISMATCH + RETURN_REQUESTED)
+        created += createMismatchForcedReturnScenario("RSV-TEST-16", "TEST-L-16", "L", facility, customer, staff, now);
 
         if (created > 0) {
             log.info("Seeded {} intake test-case scenarios for customer {} at facility {}", created, customer.getEmail(), facility.getCode());
@@ -374,5 +409,144 @@ public class IntakeScenarioDemoSeeder {
         }
 
         return 1;
+    }
+
+    private int createRecoveryScenario(
+        String reservationCode,
+        String unitCode,
+        String sizeCode,
+        Facility facility,
+        User customer,
+        User staff,
+        Instant now,
+        Instant receivedAt,
+        boolean setupCompleted,
+        boolean arrived,
+        int verifAttemptsCount,
+        Instant firstVerifAt,
+        ViolationRecovery.Reason vrReason,
+        boolean removalOverdue,
+        boolean reviewRequired
+    ) {
+        int created = createScenario(reservationCode, unitCode, sizeCode, facility, customer, staff, now,
+            receivedAt, setupCompleted, null, arrived ? IntakeTimelineCalculator.APPT_ATTENDED : null,
+            0, arrived, verifAttemptsCount == 1 && (vrReason == ViolationRecovery.Reason.INVENTORY_TIMEOUT || removalOverdue),
+            verifAttemptsCount, firstVerifAt,
+            vrReason == ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED ? "Sai số CCCD 2 lần" : null);
+        if (created == 0) return 0;
+
+        Reservation reservation = reservationRepository.findByReservationCode(reservationCode).orElse(null);
+        if (reservation == null) return created;
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElse(null);
+        if (rental == null) return created;
+
+        if (vrReason == ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED) {
+            rental.setVerificationStatus(IntakeTimelineCalculator.VERIF_FAILED_MAX_ATTEMPTS);
+            rental.setInspectionFailureReason("Xác minh danh tính thất bại 2 lần.");
+        } else if (vrReason == ViolationRecovery.Reason.INVENTORY_TIMEOUT) {
+            rental.setInspectionClockStartedAt(firstVerifAt);
+            rental.setInspectionCompletionDeadlineAt(firstVerifAt.plus(72, ChronoUnit.HOURS));
+            rental.setInspectionFailureReason("Quá hạn hoàn tất kiểm kê 72 giờ.");
+        } else if (removalOverdue) {
+            rental.setInventoryResultPublishedAt(now.minus(120, ChronoUnit.HOURS));
+            rental.setInventoryRemovalPublishedAt(now.minus(120, ChronoUnit.HOURS));
+            rental.setInventoryRemovalDeadlineAt(now.minus(2, ChronoUnit.HOURS));
+        } else {
+            rental.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
+            rental.setInspectionFailureReason("Quá hạn đến kiểm kê và không có bằng chứng.");
+        }
+
+        Instant sourceDeadline = removalOverdue ? rental.getInventoryRemovalDeadlineAt()
+            : vrReason == ViolationRecovery.Reason.INVENTORY_TIMEOUT ? rental.getInspectionCompletionDeadlineAt()
+            : vrReason == ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED ? now.minus(1, ChronoUnit.MINUTES)
+            : timeline.arrivalDeadline(rental);
+        if (sourceDeadline == null || sourceDeadline.isAfter(now)) {
+            sourceDeadline = now.minus(1, ChronoUnit.MINUTES);
+        }
+        violationRecovery.detect(rental, null, vrReason, sourceDeadline, now, reviewRequired);
+        if (!reviewRequired) {
+            rental.setInventoryEscalatedAt(now);
+        }
+        rentalRepository.saveAndFlush(rental);
+        return created;
+    }
+
+    private int createAttendanceReviewWithEvidenceScenario(
+        String reservationCode,
+        String unitCode,
+        String sizeCode,
+        Facility facility,
+        User customer,
+        User staff,
+        Instant now
+    ) {
+        Instant receivedAt = now.minus(168, ChronoUnit.HOURS).minus(10, ChronoUnit.MINUTES);
+        int created = createScenario(reservationCode, unitCode, sizeCode, facility, customer, staff, now,
+            receivedAt, true, null, null, 0, false, false, 0, null, null);
+        if (created == 0) return 0;
+
+        Reservation reservation = reservationRepository.findByReservationCode(reservationCode).orElse(null);
+        if (reservation == null) return created;
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElse(null);
+        if (rental == null) return created;
+
+        Instant d = timeline.arrivalDeadline(rental);
+        rental.setAttendanceReviewStatus(IntakeTimelineCalculator.REVIEW_PENDING);
+        rental.setAttendanceReviewDeadlineAt(timeline.reconciliationDeadline(d));
+        rental.setActualArrivedAt(d.minus(2, ChronoUnit.MINUTES));
+        rental.setAttendanceEvidenceNote("Sổ quầy lễ tân xác nhận khách có mặt đúng hạn trước mốc D.");
+        rentalRepository.saveAndFlush(rental);
+        return created;
+    }
+
+    private int createMismatchForcedReturnScenario(
+        String reservationCode,
+        String unitCode,
+        String sizeCode,
+        Facility facility,
+        User customer,
+        User staff,
+        Instant now
+    ) {
+        Instant receivedAt = now.minus(72, ChronoUnit.HOURS);
+        Instant firstVerifAt = now.minus(4, ChronoUnit.HOURS);
+        int created = createScenario(reservationCode, unitCode, sizeCode, facility, customer, staff, now,
+            receivedAt, true, now.minus(5, ChronoUnit.HOURS), IntakeTimelineCalculator.APPT_ATTENDED,
+            0, true, true, 1, firstVerifAt, null);
+        if (created == 0) return 0;
+
+        Reservation reservation = reservationRepository.findByReservationCode(reservationCode).orElse(null);
+        if (reservation == null) return created;
+        Rental rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElse(null);
+        CheckIn checkIn = checkInRepository.findByReservation_Id(reservation.getId()).orElse(null);
+        if (rental == null || checkIn == null) return created;
+
+        Instant publishedAt = now.minus(2, ChronoUnit.HOURS);
+        checkIn.setInventoryFullFit(false);
+        checkIn.setInventoryResolutionStatus(InventoryResolutionStatus.RETURN_REQUESTED);
+        checkIn.setInventoryDecisionAt(publishedAt);
+        checkIn.setInventoryDecisionNote("Hàng vượt quá kích thước kho thuê, buộc trả kho do kiểm kê sai lệch.");
+        checkIn.setInventoryActualJson("{\"items\":[{\"name\":\"Tủ lạnh công nghiệp quá khổ\",\"quantity\":2}],\"mismatch\":true}");
+        checkInRepository.saveAndFlush(checkIn);
+
+        rental.setStatus(RentalStatus.return_requested);
+        rental.setInventoryResultPublishedAt(publishedAt);
+        rental.setInventoryRemovalPublishedAt(publishedAt);
+        InventoryTimelinePolicy.initializeRemovalWindow(rental, publishedAt);
+        rentalRepository.saveAndFlush(rental);
+
+        ReturnCase rc = new ReturnCase();
+        rc.setRental(rental);
+        rc.setCustomer(customer);
+        rc.setFacility(facility);
+        rc.setRequestedBy(staff);
+        rc.setStorageUnit(rental.getStorageUnit());
+        rc.setStatus(ReturnCaseStatus.requested);
+        rc.setReturnType(ReturnType.INVENTORY_MISMATCH);
+        rc.setRequestedAt(publishedAt);
+        rc.setScheduledDate(publishedAt.atZone(BusinessTime.ZONE).toLocalDate().plusDays(2));
+        rc.setCustomerNotes("Buộc trả kho do hàng kiểm kê sai lệch kích thước.");
+        returnCaseRepository.saveAndFlush(rc);
+        return created;
     }
 }
