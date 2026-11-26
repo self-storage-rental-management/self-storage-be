@@ -258,7 +258,8 @@ class CustomerReceiptPeriodCompatibilityTests {
             .containsEntry("storedEndDate", "2026-11-01");
         verifyNoInteractions(ledger);
         verify(rentals, never()).saveAndFlush(any());
-        verify(checkIns,never()).saveAndFlush(any());
+        assertThat(checkIn.getCustomerReceiptConfirmedAt()).isNotNull();
+        verify(checkIns).saveAndFlush(checkIn);
         verify(units).saveAndFlush(reservation.getAssignedUnit());
         verify(notifications).createNotification(any(), eq(NotificationType.CHECKIN), anyString(), anyString(),
             eq(reservation.getId()));
