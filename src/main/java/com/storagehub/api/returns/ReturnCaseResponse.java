@@ -113,7 +113,8 @@ public record ReturnCaseResponse(
     List<SettlementReceipt> settlementReceipts
 ) {
     public record Attendance(Instant arrivedAt, UUID evidenceId, Instant expiresAt, int attempts, Instant verifiedAt,
-        Instant reviewStartsAt, Boolean reviewAccepted, Instant handoverDueAt, UUID handoverStaffId) {}
+        Instant reviewStartsAt, Boolean reviewAccepted, Instant handoverDueAt, UUID handoverStaffId,
+        Instant reverificationStartedAt, UUID reverificationStaffId, Instant handoverAppointmentAt) {}
     public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired

@@ -406,7 +406,7 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
         boolean fixedDeadline = record.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && record.getRental().getInventoryRemovalDeadlineAt() != null;
-        if (ReturnAttendancePolicy.isScheduledRentalReturn(record) && record.getReturnArrivedAt() != null)
+        if (ReturnAttendancePolicy.applies(record) && record.getReturnArrivedAt() != null)
             throw ApiExceptions.conflict("Khách đã được tiếp nhận. Không thể đổi lịch trả kho.");
         if (fixedDeadline && (record.getRental().getActualReturnedAt() != null || record.getReadyForInspectionAt() != null))
             throw ApiExceptions.conflict("Gian kho đã bàn giao. Không thể đổi lịch trả kho.");
@@ -486,6 +486,7 @@ public class ReturnSettlementService {
         facilityScopeService.assertCanOperate(actor, rc.getFacility().getId());
         lockRecoveryReturn(rc);
         requireEditableCheck(rc);
+        requireReturnHandoverAccess(rc, actor.userId(), Instant.now());
         requireCurrentCheck(rc, request.clearanceRevision());
         if (request.unitVacated() == null)
             throw ApiExceptions.validation("Vui lòng chọn tình trạng tài sản trong gian kho.", null);
@@ -512,13 +513,11 @@ public class ReturnSettlementService {
         return after;
     }
 
-    @Transactional
-    public ReturnCaseResponse recordReturnArrival(ActorPrincipal actor, UUID id, UUID evidenceId) {
-        ReturnCase rc = lockReturnAttendance(actor, id, false);
-        if (rc.getReturnArrivedAt() != null) return toResponse(rc);
-        Instant now = Instant.now();
+    private void captureReturnArrival(ActorPrincipal actor, ReturnCase rc, UUID evidenceId, Instant now) {
         if (!ReturnAttendancePolicy.canRecordArrivalAt(rc, now))
             throw ApiExceptions.conflict("Đã hết hạn tiếp nhận trả kho. Không thể ghi nhận khách đến đúng hạn.");
+        if (evidenceId == null)
+            throw ApiExceptions.validation("Cần ảnh hiện trường để xác minh khách đến trả kho.", null);
         validateInspectionPhotos(rc, List.of(evidenceId.toString()), true);
         FileAsset evidence = settlementEntityManager.find(FileAsset.class, evidenceId);
         if (evidence.getUploadedBy() == null || !actor.userId().equals(evidence.getUploadedBy().getId()))
@@ -526,19 +525,34 @@ public class ReturnSettlementService {
         rc.setReturnArrivedAt(now);
         rc.setReturnArrivalEvidenceId(evidenceId);
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
-            ? "RETURN_ARRIVED" : "MISMATCH_RETURN_ARRIVED", "return", id, rc.getFacility().getId(),
+            ? "RETURN_ARRIVED" : "MISMATCH_RETURN_ARRIVED", "return", rc.getId(), rc.getFacility().getId(),
             null, Map.of("staffId", actor.userId(), "arrivedAt", now, "evidenceId", evidenceId));
-        return toResponse(rc);
     }
 
     @Transactional
     public ReturnCaseResponse verifyReturnIdentity(ActorPrincipal actor, UUID id, UUID attemptId, String documentNumber) {
+        return verifyReturnIdentity(actor, id, attemptId, documentNumber, null);
+    }
+
+    @Transactional
+    public ReturnCaseResponse verifyReturnIdentity(ActorPrincipal actor, UUID id, UUID attemptId, String documentNumber,
+                                                   Instant reverificationStartedAt) {
+        return verifyReturnIdentity(actor, id, attemptId, documentNumber, reverificationStartedAt, null);
+    }
+
+    @Transactional
+    public ReturnCaseResponse verifyReturnIdentity(ActorPrincipal actor, UUID id, UUID attemptId, String documentNumber,
+                                                   Instant reverificationStartedAt, UUID arrivalEvidenceId) {
         ReturnCase rc = lockReturnAttendance(actor, id, false);
+        if (!java.util.Objects.equals(rc.getReturnReverificationStartedAt(), reverificationStartedAt))
+            throw ApiExceptions.conflict("Phiên xác minh đã thay đổi. Vui lòng tải lại hồ sơ.");
+        if (rc.getReturnReverificationStaffId() != null && !actor.userId().equals(rc.getReturnReverificationStaffId()))
+            throw ApiExceptions.forbidden("Chỉ nhân viên được phân công mới có thể xác minh lại.");
         if (attemptId.equals(rc.getReturnFirstAttemptId()) || attemptId.equals(rc.getReturnSecondAttemptId())
             || rc.getReturnIdentityVerifiedAt() != null) return toResponse(rc);
         Instant expires = ReturnAttendancePolicy.expiresAt(rc);
         Instant now = Instant.now();
-        if (expires == null || !now.isBefore(expires) || rc.getReturnSecondAttemptId() != null
+        if ((expires != null && !now.isBefore(expires)) || rc.getReturnSecondAttemptId() != null
             || rc.getReturnArrivalReviewedAt() != null)
             throw ApiExceptions.conflict("Phiên xác minh chưa mở hoặc đã kết thúc. Vui lòng kiểm tra trạng thái đối soát.");
         var reservation = rc.getRental().getReservation();
@@ -548,6 +562,7 @@ public class ReturnSettlementService {
         if (!com.storagehub.validation.IdentityDocumentPolicy.isValid(actual)
             && !actual.matches("(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{6,20}"))
             throw ApiExceptions.validation("Định dạng giấy tờ không hợp lệ. Không ghi nhận lần thử.", null);
+        if (rc.getReturnArrivedAt() == null) captureReturnArrival(actor, rc, arrivalEvidenceId, now);
         boolean matched = expected.equals(actual);
         if (rc.getReturnFirstAttemptId() == null) rc.setReturnFirstAttemptId(attemptId);
         else {
@@ -558,6 +573,29 @@ public class ReturnSettlementService {
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
             ? "RETURN_IDENTITY_ATTEMPT" : "MISMATCH_RETURN_IDENTITY_ATTEMPT", "return", id, rc.getFacility().getId(),
             null, Map.of("attemptId", attemptId, "staffId", actor.userId(), "matched", matched, "attemptedAt", now));
+        return toResponse(rc);
+    }
+
+    @Transactional
+    public ReturnCaseResponse reopenReturnVerification(ActorPrincipal actor, UUID id, UUID staffId, String reason) {
+        ReturnCase rc = lockReturnAttendance(actor, id, true);
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        Instant reviewStart = ReturnAttendancePolicy.reviewStartsAt(rc);
+        if (reviewStart == null || now.isBefore(reviewStart) || rc.getReturnIdentityVerifiedAt() != null
+            || rc.getReturnArrivalEvidenceId() == null || rc.getReturnReverificationStartedAt() != null) {
+            throw ApiExceptions.conflict("Chỉ được mở lại một lần cho hồ sơ đang chờ đối soát và có ảnh tiếp nhận khách.");
+        }
+        requireEligibleReturnStaff(rc, staffId);
+        var before = toResponse(rc).attendance();
+        rc.setReturnReverificationStartedAt(now);
+        rc.setReturnReverificationStaffId(staffId);
+        rc.setReturnFirstAttemptId(null);
+        rc.setReturnSecondAttemptId(null);
+        rc.setReturnSecondAttemptAt(null);
+        auditLogService.recordMutation("RETURN_IDENTITY_REOPENED", "return", id, rc.getFacility().getId(), before,
+            Map.of("managerId", actor.userId(), "staffId", staffId, "startedAt", now, "reason", reason.strip()));
+        notificationService.createNotification(staffId, NotificationType.RETURN, "Cần xác minh lại khi trả kho",
+            "Mở hồ sơ trả kho và đối chiếu giấy tờ gốc trong vòng 30 phút.", id);
         return toResponse(rc);
     }
 
@@ -580,25 +618,51 @@ public class ReturnSettlementService {
         if (accepted && rc.getReturnIdentityVerifiedAt() == null)
             throw ApiExceptions.conflict("Chỉ có thể tiếp tục bàn giao khi danh tính đã được xác minh.");
         if (accepted && recoveryCalendar != null) {
-            if (staffId == null || userRepository.findEligibleStaff(UserStatus.ACTIVE, RoleCode.STAFF, rc.getFacility().getId(),
-                List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)).stream().noneMatch(staff -> staffId.equals(staff.getId())))
-                throw ApiExceptions.validation("Cần chọn nhân viên phụ trách tại cơ sở.", null);
+            requireEligibleReturnStaff(rc, staffId);
             if (appointmentAt != null && appointmentAt.isBefore(now))
                 throw ApiExceptions.validation("Lịch bàn giao phải nằm trong tương lai.", null);
             rc.setPostReviewHandoverStaffId(staffId);
+            rc.setPostReviewHandoverAppointmentAt(appointmentAt);
             rc.setPostReviewHandoverDueAt(recoveryCalendar.current().afterWorkingHours(appointmentAt == null ? now : appointmentAt, 4));
             notificationService.createNotification(staffId, NotificationType.RETURN, "Cần bàn giao sau đối soát",
                 "Mở hồ sơ trả kho để hoàn tất bàn giao trước hạn.", rc.getId());
+            if (appointmentAt != null) {
+                notificationService.createNotification(rc.getCustomer().getId(), NotificationType.RETURN, "Đã cập nhật lịch bàn giao trả kho",
+                    "Mở hồ sơ trả kho để xem lịch bàn giao sau đối soát.", rc.getId());
+            }
         } else {
             rc.setPostReviewHandoverStaffId(null);
+            rc.setPostReviewHandoverAppointmentAt(null);
             rc.setPostReviewHandoverDueAt(null);
         }
         rc.setReturnArrivalReviewedAt(now);
         rc.setReturnArrivalReviewAccepted(accepted);
+        var decision = new java.util.LinkedHashMap<String, Object>(Map.of("managerId", actor.userId(),
+            "accepted", accepted, "reason", reason.strip(), "reviewedAt", now));
+        if (rc.getPostReviewHandoverAppointmentAt() != null) decision.put("appointmentAt", rc.getPostReviewHandoverAppointmentAt());
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
             ? "RETURN_ARRIVAL_REVIEWED" : "MISMATCH_RETURN_ARRIVAL_REVIEWED", "return", id, rc.getFacility().getId(),
-            null, Map.of("managerId", actor.userId(), "accepted", accepted, "reason", reason.strip(), "reviewedAt", now));
+            null, decision);
         return toResponse(rc);
+    }
+
+    private void requireEligibleReturnStaff(ReturnCase rc, UUID staffId) {
+        if (staffId == null || userRepository.findEligibleStaff(UserStatus.ACTIVE, RoleCode.STAFF, rc.getFacility().getId(),
+            List.of(FacilityScopeLevel.OPERATE, FacilityScopeLevel.MANAGE)).stream().noneMatch(staff -> staffId.equals(staff.getId())))
+            throw ApiExceptions.validation("Cần chọn nhân viên phụ trách tại cơ sở.", null);
+    }
+
+    private void requireReturnHandoverAccess(ReturnCase rc, UUID staffId, Instant now) {
+        Instant appointment = rc.getPostReviewHandoverAppointmentAt();
+        Instant due = rc.getPostReviewHandoverDueAt();
+        UUID assigned = rc.getReturnArrivalReviewAccepted() == null
+            ? rc.getReturnReverificationStaffId() : rc.getPostReviewHandoverStaffId();
+        if (assigned != null && !staffId.equals(assigned))
+            throw ApiExceptions.forbidden("Chỉ nhân viên được phân công mới được nghiệm thu.");
+        if (appointment != null && now.isBefore(appointment))
+            throw ApiExceptions.conflict("Chưa đến lịch bàn giao sau đối soát.");
+        if (due != null && !now.isBefore(due))
+            throw ApiExceptions.conflict("Đã hết hạn bàn giao. Hồ sơ cần Quản lý đối soát lại.");
     }
 
     private ReturnCase lockReturnAttendance(ActorPrincipal actor, UUID id, boolean review) {
@@ -911,8 +975,8 @@ public class ReturnSettlementService {
             throw ApiExceptions.conflict("Return is not in a state awaiting inspection");
         if (violationRecovery != null && !isRecovery(returnCase) && violationRecovery.blocksLegacyReturn(returnCase.getRental().getId()))
             throw ApiExceptions.conflict("Mở hồ sơ Thu hồi kho để xử lý theo nhiệm vụ đã được phê duyệt.");
-        if (returnCase.getPostReviewHandoverStaffId() != null && !actor.userId().equals(returnCase.getPostReviewHandoverStaffId()))
-            throw ApiExceptions.forbidden("Chỉ nhân viên được phân công sau đối soát được nghiệm thu.");
+        Instant now = Instant.now();
+        requireReturnHandoverAccess(returnCase, actor.userId(), now);
         var lockResult = request.lockInspectionResult() == null
             ? LockInspectionResult.UNVERIFIED : request.lockInspectionResult();
         if (lockResult == LockInspectionResult.RETURNED_USABLE
@@ -923,7 +987,7 @@ public class ReturnSettlementService {
         boolean recoveredBeforeInspection = ReturnAttendancePolicy.isDeadlineMismatchReturn(returnCase)
             && returnCase.getReadyForInspectionAt() != null && returnCase.getRental().getActualReturnedAt() != null;
         if (!noShowRecovery && !isRecovery(returnCase) && ReturnAttendancePolicy.applies(returnCase)
-            && !recoveredBeforeInspection && !ReturnAttendancePolicy.canInspect(returnCase, Instant.now())) {
+            && !recoveredBeforeInspection && !ReturnAttendancePolicy.canInspect(returnCase, now)) {
             throw ApiExceptions.conflict("Cần phiên bàn giao đã xác minh danh tính còn hiệu lực hoặc kết quả đối soát cho phép tiếp tục.");
         }
         boolean ordinaryInspection = !noShowRecovery && !isRecovery(returnCase);
@@ -943,14 +1007,9 @@ public class ReturnSettlementService {
                 || request.damageClassification() == com.storagehub.domain.model.DamageClassification.abandoned_goods) {
                 throw ApiExceptions.conflict("Cần đưa toàn bộ hàng ra khỏi gian và ghi nhận khu vực lưu tạm trước khi nghiệm thu khách không đến.");
             }
-            if (request.evidencePhotos() == null || request.evidencePhotos().isEmpty()) {
-                throw ApiExceptions.validation("Cần tải bằng chứng kiểm kê và bàn giao trước khi hoàn tất thu hồi hàng.", null);
-            }
-            if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
-                validateInspectionPhotos(returnCase, request.evidencePhotos(), true);
-                if (request.staffNotes() == null || request.staffNotes().isBlank())
-                    throw ApiExceptions.validation("Cần ghi danh mục hàng, tình trạng niêm phong và người nhận bàn giao.", null);
-            }
+            validateInspectionPhotos(returnCase, request.evidencePhotos(), true);
+            if (request.staffNotes() == null || request.staffNotes().isBlank())
+                throw ApiExceptions.validation("Cần ghi danh mục hàng, tình trạng niêm phong và người nhận bàn giao.", null);
             if (request.recoveryHandoverLocation() == null || request.recoveryHandoverLocation().isBlank()) {
                 throw ApiExceptions.validation("Cần ghi nhận khu vực lưu tạm và người nhận bàn giao trước khi hoàn tất thu hồi hàng.", null);
             }
@@ -960,6 +1019,7 @@ public class ReturnSettlementService {
             noShowTask.setRecoveryWitness(requireRecoveryWitness(
                 request.recoveryWitnessStaffId(), returnCase.getFacility().getId(), actor.userId()
             ));
+            recordPropertyCheck(returnCase, true, actor.userId());
         }
         if (!noShowRecovery && !request.customerPresent() && !returnCase.isSetupExitRequested()) {
             throw ApiExceptions.conflict("Cần xác nhận khách hàng có mặt tại thời điểm nghiệm thu trả kho.");
@@ -1101,11 +1161,7 @@ public class ReturnSettlementService {
         if (noShowRecovery && noShowTask.getStatus() != MaintenanceTaskStatus.completed) {
             noShowTask.setStatus(MaintenanceTaskStatus.completed);
             noShowTask.setCompletedAt(inspectionAt);
-            noShowTask.setResultReport(
-                request.staffNotes() == null || request.staffNotes().isBlank()
-                    ? "Đã kiểm kê, niêm phong và bàn giao hàng vào khu vực lưu tạm."
-                    : request.staffNotes().trim()
-            );
+            noShowTask.setResultReport(request.staffNotes().trim());
             noShowTask.setRecoveryHandoverLocation(request.recoveryHandoverLocation().trim());
             try {
                 noShowTask.setEvidencePhotosJson(objectMapper.writeValueAsString(request.evidencePhotos()));
@@ -2335,7 +2391,8 @@ public class ReturnSettlementService {
             ReturnAttendancePolicy.applies(rc) ? new ReturnCaseResponse.Attendance(rc.getReturnArrivedAt(), rc.getReturnArrivalEvidenceId(),
                 ReturnAttendancePolicy.expiresAt(rc), rc.getReturnSecondAttemptId() != null ? 2 : rc.getReturnFirstAttemptId() != null ? 1 : 0,
                 rc.getReturnIdentityVerifiedAt(), ReturnAttendancePolicy.reviewStartsAt(rc),
-                rc.getReturnArrivalReviewAccepted(), rc.getPostReviewHandoverDueAt(), rc.getPostReviewHandoverStaffId()) : null,
+                rc.getReturnArrivalReviewAccepted(), rc.getPostReviewHandoverDueAt(), rc.getPostReviewHandoverStaffId(),
+                rc.getReturnReverificationStartedAt(), rc.getReturnReverificationStaffId(), rc.getPostReviewHandoverAppointmentAt()) : null,
             rc.getSettlementVersion(), rc.getSettlementPublishedAt(), rc.getSettlementPaymentDueAt(),
             hasTwoMismatchObligations(rc) && finance() != null
                 && (rc.getStatus() == ReturnCaseStatus.refund_pending || rc.getStatus() == ReturnCaseStatus.completed)

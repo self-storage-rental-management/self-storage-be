@@ -35,7 +35,9 @@ final class ReturnAttendancePolicy {
     }
 
     static Instant expiresAt(ReturnCase record) {
-        return record.getReturnArrivedAt() == null ? null : record.getReturnArrivedAt().plus(Duration.ofMinutes(30));
+        Instant start = record.getReturnReverificationStartedAt();
+        if (start == null) start = record.getReturnArrivedAt();
+        return start == null ? null : start.plus(Duration.ofMinutes(30));
     }
 
     static Instant reviewStartsAt(ReturnCase record) {
@@ -56,9 +58,11 @@ final class ReturnAttendancePolicy {
     }
 
     static boolean canInspect(ReturnCase record, Instant now) {
+        Instant appointment = record.getPostReviewHandoverAppointmentAt();
         Instant followUp = record.getPostReviewHandoverDueAt();
         return protectsFromRecovery(record) && record.getReturnIdentityVerifiedAt() != null
             && (Boolean.TRUE.equals(record.getReturnArrivalReviewAccepted())
-                ? followUp == null || now.isBefore(followUp) : now.isBefore(expiresAt(record)));
+                ? (appointment == null || !now.isBefore(appointment)) && (followUp == null || now.isBefore(followUp))
+                : now.isBefore(expiresAt(record)));
     }
 }
