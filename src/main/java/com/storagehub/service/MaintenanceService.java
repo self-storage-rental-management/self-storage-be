@@ -277,6 +277,7 @@ public class MaintenanceService {
             .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
 
         facilityScopeService.assertCanManage(actor, task.getFacility().getId());
+        requireStandardMaintenanceAction(task);
 
         User staff = userRepository.findById(request.assignedStaffId())
             .orElseThrow(() -> ApiExceptions.notFound("Staff user was not found"));
@@ -334,6 +335,7 @@ public class MaintenanceService {
             .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
 
         facilityScopeService.assertCanOperate(actor, task.getFacility().getId());
+        requireStandardMaintenanceAction(task);
 
         if (task.getStatus() == MaintenanceTaskStatus.completed || task.getStatus() == MaintenanceTaskStatus.cancelled) {
             throw ApiExceptions.conflict("Cannot start a task that is already " + task.getStatus());
@@ -371,6 +373,7 @@ public class MaintenanceService {
             .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
 
         facilityScopeService.assertCanOperate(actor, task.getFacility().getId());
+        requireStandardMaintenanceAction(task);
         boolean releaseTask = MismatchUnitRelease.isReleaseTask(task);
         StorageUnit releaseUnit = null;
         if (releaseTask) {
@@ -407,7 +410,7 @@ public class MaintenanceService {
         boolean noShowRecovery = task.getRecoveryType() == MaintenanceRecoveryType.RETURN_NO_SHOW
             || task.getReturnCase() != null
                 && task.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required;
-        boolean recoveryTask = task.getRecoveryType() != null
+        boolean recoveryTask = !releaseTask && task.getRecoveryType() != null
             && task.getRecoveryType() != MaintenanceRecoveryType.NONE;
         if (recoveryTask && !actor.hasRole(RoleCode.STAFF))
             throw ApiExceptions.forbidden("Chỉ Staff được ghi nhận hoàn tất thu hồi thực tế.");
@@ -521,6 +524,7 @@ public class MaintenanceService {
             .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
 
         facilityScopeService.assertCanManage(actor, task.getFacility().getId());
+        requireStandardMaintenanceAction(task);
 
         if (task.getStatus() == MaintenanceTaskStatus.completed) {
             throw ApiExceptions.conflict("Cannot cancel an already completed task");
@@ -651,6 +655,11 @@ public class MaintenanceService {
         return PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
     }
 
+    private static void requireStandardMaintenanceAction(MaintenanceTask task) {
+        if (task.getRecoveryType() == MaintenanceRecoveryType.VIOLATION)
+            throw ApiExceptions.conflict("Thực hiện thao tác trong mục Thu hồi kho.");
+    }
+
     public MaintenanceTaskResponse toResponse(MaintenanceTask t) {
         List<String> evidencePhotos = Collections.emptyList();
         if (t.getEvidencePhotosJson() != null && !t.getEvidencePhotosJson().isBlank()) {
@@ -681,6 +690,7 @@ public class MaintenanceService {
             t.getAssignedTo() != null ? t.getAssignedTo().getFullName() : null,
             t.getStatus(),
             t.getRecoveryType() != null && t.getRecoveryType() != MaintenanceRecoveryType.NONE
+                && t.getRecoveryType() != MaintenanceRecoveryType.VIOLATION_UNIT_READINESS
                 || t.getReturnCase() != null
                 && t.getReturnCase().getStatus() == com.storagehub.domain.model.ReturnCaseStatus.recovery_required,
             t.getRecoveryType() == null ? MaintenanceRecoveryType.NONE : t.getRecoveryType(),

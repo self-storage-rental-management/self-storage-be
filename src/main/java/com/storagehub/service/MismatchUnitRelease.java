@@ -20,7 +20,8 @@ class MismatchUnitRelease {
     private final WorkflowBusinessCalendar calendar;
 
     static boolean isReleaseTask(MaintenanceTask task) {
-        return TASK_TITLE.equals(task.getTitle()) && task.getReturnCase() != null
+        return task.getRecoveryType() == MaintenanceRecoveryType.VIOLATION_UNIT_READINESS
+            || TASK_TITLE.equals(task.getTitle()) && task.getReturnCase() != null
             && task.getReturnCase().getReturnType() == ReturnType.INVENTORY_MISMATCH;
     }
 
@@ -41,11 +42,14 @@ class MismatchUnitRelease {
 
     void verifyReady(MaintenanceTask task, StorageUnit unit) {
         var rc = task.getReturnCase();
-        var rental = rc.getRental();
-        if (!unit.getId().equals(rc.getStorageUnit().getId()) || !unit.getId().equals(rental.getStorageUnit().getId())
-            || !unit.getFacility().getId().equals(rc.getFacility().getId())
-            || unit.getStatus() != StorageUnitStatus.maintenance || rc.getInspectedAt() == null
-            || rental.getActualReturnedAt() == null || !Boolean.TRUE.equals(rc.getWarehouseEmptyVerified()))
+        boolean violation = task.getRecoveryType() == MaintenanceRecoveryType.VIOLATION_UNIT_READINESS;
+        var rental = violation ? task.getRental() : rc.getRental();
+        if (rental == null || !unit.getId().equals(rental.getStorageUnit().getId())
+            || unit.getStatus() != StorageUnitStatus.maintenance || rental.getActualReturnedAt() == null
+            || (violation ? rental.getEndReason() != RentalEndReason.VIOLATION_RECOVERY
+                || !unit.getId().equals(task.getStorageUnit().getId()) || !unit.getFacility().getId().equals(rental.getFacility().getId())
+                : !unit.getId().equals(rc.getStorageUnit().getId()) || !unit.getFacility().getId().equals(rc.getFacility().getId())
+                    || rc.getInspectedAt() == null || !Boolean.TRUE.equals(rc.getWarehouseEmptyVerified())))
             throw ApiExceptions.conflict("Cần nghiệm thu gian trống trước khi mở lại.");
         if (credentials.existsByRental_IdAndStatus(rental.getId(), AccessCredentialStatus.ACTIVE)
             || credentials.existsByReservation_IdAndStatus(rental.getReservation().getId(), AccessCredentialStatus.ACTIVE))
