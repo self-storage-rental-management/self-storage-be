@@ -262,16 +262,7 @@ public class IntakeDeadlineScheduler {
             return;
         }
 
-        // now > F: expired 72h completion window.
-        if (r.getExceptionReason() != null && policy.isProtectFromAutoRecoveryOnFacilityException()) {
-            notifications.createFacilityOperationsNotificationsOnce(
-                r.getFacility().getId(), NotificationType.CHECKIN,
-                "Quá hạn 72h đang xử lý ngoại lệ cơ sở",
-                withOrderCode(r, "Hồ sơ quá hạn 72 giờ do sự cố/ngoại lệ cơ sở. Không tự động thu hồi."),
-                r.getReservation().getId()
-            );
-            return;
-        }
+        // now > F: expired 72h completion window -> always create recovery task.
         r.setInspectionFailureReason("Quá hạn hoàn tất kiểm kê 72 giờ.");
         recovery(r, now, "Quá hạn hoàn tất kiểm kê 72 giờ");
     }
