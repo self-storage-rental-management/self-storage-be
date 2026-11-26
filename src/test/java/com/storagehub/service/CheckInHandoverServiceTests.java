@@ -1374,6 +1374,41 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void onsiteForcedReturnCreatesLinkedCaseEvenBeforeCustomerSchedules() {
+        prepareDraft();
+        checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
+        checkIn.setInventoryFullFit(false);
+        var rental = entityWithId(new Rental());
+        unit.getUnitType().setCode("S");
+        rental.setStorageUnit(unit);
+        rental.setInventoryFinalDeadlineAt(Instant.now().plusSeconds(86_400));
+        when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+        var settlement = mock(ReturnSettlementService.class);
+        var response = mock(com.storagehub.api.returns.ReturnCaseResponse.class);
+        when(response.returnType()).thenReturn(com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        when(settlement.createInventoryReturnAtSite(eq(actor), eq(rental.getId()), any())).thenReturn(response);
+        var beans = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("settlement", settlement);
+        ReflectionTestUtils.setField(service, "inventoryReturnServices", beans.getBeanProvider(ReturnSettlementService.class));
+        var decisions = mock(InventoryDecisionService.class);
+        ReflectionTestUtils.setField(service, "inventoryDecisions", decisions);
+        String consent = onsiteConsentEvidence();
+        var decision = com.storagehub.api.reservation.InventoryResolutionRequest.Decision.CANCEL_AND_RETURN;
+
+        service.resolveInventoryAtSite(actor, checkIn.getId(), new com.storagehub.api.checkin.ResolveInventoryAtSiteRequest(
+            decision, true, "Hàng không vừa gian", null, List.of(consent)));
+
+        var sent = org.mockito.ArgumentCaptor.forClass(com.storagehub.api.returns.CustomerCreateReturnRequest.class);
+        verify(settlement).createInventoryReturnAtSite(eq(actor), eq(rental.getId()), sent.capture());
+        assertThat(sent.getValue().scheduledDate()).isEqualTo(InventoryTimelinePolicy.removalEffectiveAt(rental.getInventoryRemovalPublishedAt())
+            .atZone(InventoryTimelinePolicy.ZONE).toLocalDate());
+        assertThat(checkIn.getInventoryResolutionStatus()).isEqualTo(com.storagehub.domain.model.InventoryResolutionStatus.RETURN_REQUESTED);
+        verify(decisions).record(checkIn, decision, staff, true, List.of(UUID.fromString(consent)));
+    }
+
+    @Test
     void onsiteFullAcceptanceCompletesIntakeWithoutWaitingForCustomerAccount() {
         prepareDraft();
         checkIn.setInventoryResolutionStatus(com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION);
