@@ -225,6 +225,31 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void listProjectsRecoveryTransferEvenWhenLegacyCheckInHasNoRentalLink() {
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        var rental = entityWithId(new Rental());
+        rental.setInventoryEscalatedAt(Instant.now());
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+        var row = mock(ReservationRepository.CheckInWorkRow.class);
+        when(row.getReservation()).thenReturn(reservation);
+        when(row.getCheckIn()).thenReturn(checkIn);
+        when(row.getAssignment()).thenReturn(assignment);
+        when(reservationRepository.findCheckInWork(eq("PROCESSED"), any(), any(), any(), any(),
+            isNull(), isNull(), eq(true), eq(false), eq(true), isNull(), isNull(), isNull(),
+            eq(false), any(), any())).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(row)));
+
+        var result = service.list(actor, null, null, "RECOVERY_TRANSFERRED",
+            CheckInHandoverService.WorkGroup.PROCESSED, null, null, 0, 20, "test");
+
+        assertThat(result.data()).singleElement().satisfies(response -> {
+            assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.setup_completed);
+            assertThat(response.inventoryVisit().access().recoveryTransferred()).isTrue();
+            assertThat(response.inventoryVisit().access().writable()).isFalse();
+            assertThat(response.intakeAction().name()).isEqualTo("NONE");
+        });
+    }
+
+    @Test
     void inventoryDraftOpensEmptyAndRejectsStaleSavesAndPublication() {
         mockCompletionChecks(false);
         when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));

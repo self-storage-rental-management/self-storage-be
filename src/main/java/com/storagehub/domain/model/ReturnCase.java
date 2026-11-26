@@ -51,6 +51,18 @@ public class ReturnCase extends BaseEntity {
     @Column private Instant postReviewHandoverAppointmentAt;
     @Column private Instant postReviewHandoverDueAt;
     @Column private UUID postReviewHandoverStaffId;
+    @Column private Instant scheduledAppointmentAt;
+    @Column(nullable = false) private int appointmentVersion = 0;
+    @Column(nullable = false) private long returnVersion = 0L;
+    @Column(length = 128) private String lastExtensionIdempotencyKey;
+    @Column private Instant returnArrivalRecordedAt;
+    @Column(columnDefinition = "BINARY(16)") private UUID returnArrivalRecordedBy;
+    @Column(length = 500) private String returnArrivalEvidenceNote;
+    @Column private Instant returnLateArrivalClaimedAt;
+    @Column(length = 32) private String returnArrivalReviewStatus;
+    @Column private Instant returnArrivalReviewDeadlineAt;
+    @Column(length = 1000) private String returnArrivalReviewReason;
+    @Column(columnDefinition = "BINARY(16)") private UUID returnArrivalReviewedBy;
 
     @Column
     private Integer missingPalletCount;

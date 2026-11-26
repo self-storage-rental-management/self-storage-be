@@ -686,8 +686,23 @@ public class CustomerReservationService {
             || rental.getStatus() == RentalStatus.closing) {
             throw ApiExceptions.conflict("Hồ sơ đã nghiệm thu hoặc chuyển sang thu hồi, không thể gia hạn thêm.");
         }
+        if (setupReturns != null) {
+            var openReturns = setupReturns.findByRental_Id(rental.getId());
+            boolean lockedByReturn = openReturns.stream()
+                .filter(rc -> rc.getReturnType() == com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH)
+                .anyMatch(rc -> rc.getReadyForInspectionAt() != null
+                    || rc.getInspectedAt() != null
+                    || rc.getNoShowAt() != null
+                    || rc.getReturnArrivedAt() != null
+                    || rc.getReturnLateArrivalClaimedAt() != null
+                    || IntakeTimelineCalculator.REVIEW_PENDING.equals(rc.getReturnArrivalReviewStatus()));
+            if (lockedByReturn) {
+                throw ApiExceptions.conflict("Cơ sở đã tiếp nhận khách, đang đối soát hoặc đã bắt đầu nghiệm thu, không thể gia hạn thêm.");
+            }
+        }
         Instant now = Instant.now();
         Instant nextDeadline = InventoryTimelinePolicy.extendRemovalWindow(rental, now);
+        rental.setInventoryReturnLastReminderAt(null);
         rentalRepository.saveAndFlush(rental);
 
         if (setupReturns != null) {
@@ -700,19 +715,21 @@ public class CustomerReservationService {
                     rc.setReturnExtensionDays(rental.getInventoryReturnExtensionDays());
                     rc.setReturnExtensionCount(rental.getInventoryReturnExtensionCount());
                     rc.setRecoveryEligibleAt(nextDeadline);
+                    rc.setReturnVersion(rc.getReturnVersion() + 1);
                     setupReturns.saveAndFlush(rc);
                 });
         }
 
         if (notificationService != null) {
-            String deadlineText = nextDeadline.atZone(BusinessTime.ZONE).toLocalDate().toString();
+            String deadlineText = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+                .withZone(BusinessTime.ZONE).format(nextDeadline);
             notificationService.createNotification(
                 reservation.getCustomer().getId(),
                 NotificationType.RETURN,
                 "Đã gia hạn thời gian trả kho lần " + rental.getInventoryReturnExtensionCount(),
-                "Thời hạn trả kho của đơn " + reservation.getReservationCode()
+                "Thời hạn dọn hàng của đơn " + reservation.getReservationCode()
                     + " đã được kéo dài thêm " + rental.getInventoryReturnExtensionDays()
-                    + " ngày. Hạn cuối mới: " + deadlineText + ".",
+                    + " ngày. Hạn cuối mới: " + deadlineText + " (giờ Việt Nam).",
                 reservation.getId()
             );
         }

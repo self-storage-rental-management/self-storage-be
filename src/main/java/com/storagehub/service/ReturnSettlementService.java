@@ -240,8 +240,10 @@ public class ReturnSettlementService {
         returnCase.setStatus(ReturnCaseStatus.requested);
         returnCase.setRequestedAt(now);
         returnCase.setScheduledDate(inventoryMismatchReturn || request.scheduledDate() != null ? request.scheduledDate() : today);
-        returnCase.setRecoveryEligibleAt(inventoryMismatchReturn
-            ? rental.getInventoryRemovalDeadlineAt() : noShowRecoveryEligibleAt(returnCase.getScheduledDate()));
+        Instant mismatchDeadline = rental.getInventoryRemovalDeadlineAt();
+        returnCase.setRecoveryEligibleAt(inventoryMismatchReturn && mismatchDeadline != null
+            ? mismatchDeadline
+            : (returnCase.getScheduledDate() != null ? noShowRecoveryEligibleAt(returnCase.getScheduledDate()) : null));
         returnCase.setCustomerNotes(request.notes());
         returnCase.setDepositAmount(depositAmount);
         returnCase.setSetupExitRequested(setupExit);
@@ -410,8 +412,10 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
         boolean fixedDeadline = record.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && record.getRental().getInventoryRemovalDeadlineAt() != null;
-        if (ReturnAttendancePolicy.applies(record) && record.getReturnArrivedAt() != null)
-            throw ApiExceptions.conflict("Khách đã được tiếp nhận. Không thể đổi lịch trả kho.");
+        if (ReturnAttendancePolicy.applies(record)
+            && (record.getReturnArrivedAt() != null || record.getReturnLateArrivalClaimedAt() != null
+                || IntakeTimelineCalculator.REVIEW_PENDING.equals(record.getReturnArrivalReviewStatus())))
+            throw ApiExceptions.conflict("Khách đã được tiếp nhận hoặc đang đối soát. Không thể đổi lịch trả kho.");
         if (fixedDeadline && (record.getRental().getActualReturnedAt() != null || record.getReadyForInspectionAt() != null))
             throw ApiExceptions.conflict("Gian kho đã bàn giao. Không thể đổi lịch trả kho.");
         if (record.getStatus() != ReturnCaseStatus.requested
@@ -444,6 +448,7 @@ public class ReturnSettlementService {
             classifyScheduledReturn(record);
         }
         record.setCustomerNotes(request.notes().trim());
+        record.setReturnVersion(record.getReturnVersion() + 1);
         ReturnCase saved = returnCaseRepository.saveAndFlush(record);
         auditLogService.recordMutation("CUSTOMER_RETURN_REQUEST_UPDATED", "return", saved.getId(), saved.getFacility().getId(), before, toResponse(saved));
         if (fixedDeadline) {
@@ -451,6 +456,166 @@ public class ReturnSettlementService {
                 "Khách đã đổi lịch trả kho do kiểm kê sai lệch",
                 "Ngày hẹn mới của gian " + saved.getStorageUnit().getCode() + " là " + saved.getScheduledDate() + ".", saved.getId());
         }
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public ReturnCaseResponse scheduleMismatchReturnAppointment(
+        ActorPrincipal actor,
+        UUID returnId,
+        Instant appointmentAt,
+        Long expectedVersion,
+        String idempotencyKey
+    ) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Chỉ khách hàng được đặt lịch bàn giao trả kho.");
+        }
+        ReturnCase rc = returnCaseRepository.findOwnedForUpdate(returnId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
+        Rental rental = rentalRepository.findByIdForUpdate(rc.getRental().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
+        if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
+            throw ApiExceptions.conflict("Chỉ áp dụng đặt lịch bàn giao cho hồ sơ trả kho do kiểm kê sai lệch.");
+        }
+        if (appointmentAt == null) {
+            throw ApiExceptions.validation("Vui lòng chọn ngày giờ hẹn bàn giao.", null);
+        }
+        if (rc.getStatus() != ReturnCaseStatus.requested && rc.getStatus() != ReturnCaseStatus.scheduled) {
+            throw ApiExceptions.conflict("Hồ sơ đã qua bước chờ bàn giao, không thể đặt hoặc đổi lịch.");
+        }
+        if (rc.getInspectedAt() != null || rc.getNoShowAt() != null || rc.getReadyForInspectionAt() != null
+            || rental.getActualReturnedAt() != null || rental.getInventoryEscalatedAt() != null
+            || Boolean.TRUE.equals(rc.getWarehouseEmptyVerified())
+            || rental.getStatus() == RentalStatus.completed || rental.getStatus() == RentalStatus.return_inspection
+            || rental.getStatus() == RentalStatus.closing) {
+            throw ApiExceptions.conflict("Hồ sơ đã bắt đầu nghiệm thu hoặc chuyển thu hồi, không thể đặt hoặc đổi lịch.");
+        }
+        if (rc.getReturnArrivedAt() != null || rc.getReturnLateArrivalClaimedAt() != null
+            || IntakeTimelineCalculator.REVIEW_PENDING.equals(rc.getReturnArrivalReviewStatus())) {
+            throw ApiExceptions.conflict("Cơ sở đã tiếp nhận khách hoặc đang đối soát, không thể đổi lịch bàn giao.");
+        }
+        Instant normalizedAppointment = appointmentAt.truncatedTo(ChronoUnit.MINUTES);
+        if (rc.getScheduledAppointmentAt() != null
+            && rc.getScheduledAppointmentAt().truncatedTo(ChronoUnit.MINUTES).equals(normalizedAppointment)) {
+            return toResponse(rc);
+        }
+        if (expectedVersion != null && !java.util.Objects.equals(expectedVersion, rc.getReturnVersion())) {
+            throw ApiExceptions.conflict("Hồ sơ trả kho vừa được cập nhật. Vui lòng tải lại.");
+        }
+        Instant now = Instant.now();
+        Instant deadline = rental.getInventoryRemovalDeadlineAt();
+        if (deadline != null && !now.isBefore(deadline)) {
+            throw ApiExceptions.deadlineExpired("Đã hết hạn dọn hàng, không thể đặt hoặc đổi lịch bàn giao.");
+        }
+        if (appointmentAt.isBefore(now)) {
+            throw ApiExceptions.validation("Không thể chọn thời điểm hẹn trong quá khứ.", null);
+        }
+        if (deadline != null && !appointmentAt.isBefore(deadline)) {
+            throw ApiExceptions.validation("Thời điểm hẹn bàn giao phải trước hạn cuối dọn hàng.", null);
+        }
+
+        var before = toResponse(rc);
+        boolean isReschedule = rc.getScheduledAppointmentAt() != null;
+        rc.setScheduledAppointmentAt(appointmentAt);
+        rc.setScheduledDate(appointmentAt.atZone(BusinessTime.ZONE).toLocalDate());
+        if (rc.getStatus() == ReturnCaseStatus.requested) {
+            rc.setStatus(ReturnCaseStatus.scheduled);
+        }
+        rc.setAppointmentVersion(rc.getAppointmentVersion() + 1);
+        rc.setReturnVersion(rc.getReturnVersion() + 1);
+        ReturnCase saved = returnCaseRepository.saveAndFlush(rc);
+
+        String formattedTime = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(BusinessTime.ZONE).format(appointmentAt);
+        auditLogService.recordMutation(
+            isReschedule ? "MISMATCH_RETURN_APPOINTMENT_RESCHEDULED" : "MISMATCH_RETURN_APPOINTMENT_SCHEDULED",
+            "return", saved.getId(), saved.getFacility().getId(), before, toResponse(saved)
+        );
+        notificationService.createFacilityOperationsNotifications(
+            saved.getFacility().getId(),
+            NotificationType.RETURN,
+            isReschedule ? "Khách đã đổi lịch bàn giao trả kho" : "Khách đã đặt lịch bàn giao trả kho",
+            "Gian " + saved.getStorageUnit().getCode() + " có lịch hẹn bàn giao trả kho lúc " + formattedTime + " (giờ Việt Nam).",
+            saved.getId()
+        );
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public ReturnCaseResponse extendMismatchReturnWindow(
+        ActorPrincipal actor,
+        UUID returnId,
+        Long expectedVersion,
+        String idempotencyKey
+    ) {
+        if (!actor.hasRole(RoleCode.CUSTOMER)) {
+            throw ApiExceptions.forbidden("Chỉ khách hàng được gia hạn thời gian trả kho.");
+        }
+        ReturnCase rc = returnCaseRepository.findOwnedForUpdate(returnId, actor.userId())
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
+        Rental rental = rentalRepository.findByIdForUpdate(rc.getRental().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
+        if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
+            throw ApiExceptions.conflict("Chỉ áp dụng gia hạn cho hồ sơ trả kho do kiểm kê sai lệch.");
+        }
+        String idem = idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.trim();
+        if (idem != null && idem.equals(rc.getLastExtensionIdempotencyKey())) {
+            return toResponse(rc);
+        }
+        if (expectedVersion != null && !java.util.Objects.equals(expectedVersion, rc.getReturnVersion())) {
+            throw ApiExceptions.conflict("Hồ sơ trả kho vừa được cập nhật. Vui lòng tải lại.");
+        }
+        if (rc.getStatus() != ReturnCaseStatus.requested && rc.getStatus() != ReturnCaseStatus.scheduled) {
+            throw ApiExceptions.conflict("Hồ sơ không còn ở trạng thái được phép gia hạn.");
+        }
+        if (rc.getInspectedAt() != null || rc.getNoShowAt() != null || rc.getReadyForInspectionAt() != null
+            || rc.getReturnArrivedAt() != null || rc.getReturnLateArrivalClaimedAt() != null
+            || IntakeTimelineCalculator.REVIEW_PENDING.equals(rc.getReturnArrivalReviewStatus())
+            || rental.getActualReturnedAt() != null || rental.getInventoryEscalatedAt() != null
+            || rental.getStatus() == RentalStatus.completed || rental.getStatus() == RentalStatus.return_inspection
+            || rental.getStatus() == RentalStatus.closing) {
+            throw ApiExceptions.conflict("Cơ sở đã tiếp nhận khách, đang đối soát hoặc đã bắt đầu nghiệm thu, không thể gia hạn thêm.");
+        }
+
+        var before = toResponse(rc);
+        Instant now = Instant.now();
+        Instant nextDeadline = InventoryTimelinePolicy.extendRemovalWindow(rental, now);
+        rental.setInventoryReturnLastReminderAt(null);
+        rentalRepository.saveAndFlush(rental);
+
+        rc.setReturnWindowDays(rental.getInventoryReturnWindowDays());
+        rc.setReturnExtensionDays(rental.getInventoryReturnExtensionDays());
+        rc.setReturnExtensionCount(rental.getInventoryReturnExtensionCount());
+        rc.setRecoveryEligibleAt(nextDeadline);
+        if (idem != null) {
+            rc.setLastExtensionIdempotencyKey(idem);
+        }
+        rc.setReturnVersion(rc.getReturnVersion() + 1);
+        ReturnCase saved = returnCaseRepository.saveAndFlush(rc);
+
+        String deadlineText = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
+            .withZone(BusinessTime.ZONE).format(nextDeadline);
+        auditLogService.recordMutation(
+            "MISMATCH_RETURN_WINDOW_EXTENDED",
+            "return", saved.getId(), saved.getFacility().getId(), before, toResponse(saved)
+        );
+        notificationService.createNotification(
+            saved.getCustomer().getId(),
+            NotificationType.RETURN,
+            "Đã gia hạn dọn hàng lần " + rental.getInventoryReturnExtensionCount(),
+            "Thời hạn dọn hàng cho gian " + saved.getStorageUnit().getCode()
+                + " đã được kéo dài thêm " + rental.getInventoryReturnExtensionDays()
+                + " ngày. Hạn cuối mới: " + deadlineText + " (giờ Việt Nam).",
+            saved.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            saved.getFacility().getId(),
+            NotificationType.RETURN,
+            "Khách đã gia hạn thời gian dọn hàng",
+            "Khách hàng " + saved.getCustomer().getFullName() + " đã gia hạn trả kho gian "
+                + saved.getStorageUnit().getCode() + " đến " + deadlineText + " (giờ Việt Nam).",
+            saved.getId()
+        );
         return toResponse(saved);
     }
 
@@ -466,6 +631,7 @@ public class ReturnSettlementService {
         requireCurrentCheck(rc, revision);
         var before = toResponse(rc);
         rc.setCustomerClearedAt(cleared ? Instant.now() : null);
+        rc.setReturnVersion(rc.getReturnVersion() + 1);
         if (!cleared) {
             rc.setClearanceRevision(rc.getClearanceRevision() + 1);
             if (Boolean.TRUE.equals(rc.getWarehouseEmptyVerified())) {
@@ -517,6 +683,111 @@ public class ReturnSettlementService {
         return after;
     }
 
+    @Transactional
+    public ReturnCaseResponse recordReturnArrival(
+        ActorPrincipal actor,
+        UUID id,
+        Instant actualArrivedAt,
+        String evidenceNote,
+        UUID evidenceId,
+        Long expectedVersion
+    ) {
+        ReturnCase rc = lockReturnAttendance(actor, id, false);
+        if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
+            throw ApiExceptions.conflict("Chỉ áp dụng bước tách ghi nhận khách đến cho hồ sơ trả kho do kiểm kê sai lệch.");
+        }
+        if (rc.getReturnArrivedAt() != null) {
+            return toResponse(rc);
+        }
+        if (IntakeTimelineCalculator.REVIEW_PENDING.equals(rc.getReturnArrivalReviewStatus())) {
+            throw ApiExceptions.conflict("Hồ sơ đang chờ Quản lý đối soát lượt đến.");
+        }
+        if (expectedVersion != null && !java.util.Objects.equals(expectedVersion, rc.getReturnVersion())) {
+            throw ApiExceptions.conflict("Hồ sơ trả kho vừa được cập nhật. Vui lòng tải lại.");
+        }
+        Instant now = Instant.now();
+        if (evidenceId != null) {
+            validateInspectionPhotos(rc, List.of(evidenceId.toString()), true);
+            FileAsset evidence = settlementEntityManager.find(FileAsset.class, evidenceId);
+            if (evidence == null || evidence.getUploadedBy() == null || !actor.userId().equals(evidence.getUploadedBy().getId())) {
+                throw ApiExceptions.validation("Vui lòng tải ảnh tiếp nhận từ tài khoản của bạn.", null);
+            }
+        }
+        String cleanNote = evidenceNote == null || evidenceNote.isBlank() ? null : evidenceNote.trim();
+        if (actualArrivedAt != null && actualArrivedAt.isAfter(now)) {
+            throw ApiExceptions.validation("Thời điểm khách đến không thể ở tương lai.", null);
+        }
+        Instant lowerBound = rc.getRental().getInventoryRemovalPublishedAt() != null
+            ? rc.getRental().getInventoryRemovalPublishedAt()
+            : rc.getRequestedAt();
+        if (actualArrivedAt != null && lowerBound != null && actualArrivedAt.isBefore(lowerBound)) {
+            throw ApiExceptions.validation("Thời điểm khách đến không thể trước thời điểm mở hồ sơ trả kho.", null);
+        }
+
+        Instant deadline = rc.getRental().getInventoryRemovalDeadlineAt() != null
+            ? rc.getRental().getInventoryRemovalDeadlineAt()
+            : rc.getRecoveryEligibleAt();
+        boolean backdated = actualArrivedAt != null && actualArrivedAt.isBefore(now.minusSeconds(60));
+        boolean pastDeadline = deadline != null && !now.isBefore(deadline);
+        boolean claimedPastDeadline = actualArrivedAt != null && deadline != null && !actualArrivedAt.isBefore(deadline);
+
+        if (!backdated && !pastDeadline && !claimedPastDeadline) {
+            rc.setReturnArrivedAt(now);
+            rc.setReturnArrivalRecordedAt(now);
+            rc.setReturnArrivalRecordedBy(actor.userId());
+            if (evidenceId != null) rc.setReturnArrivalEvidenceId(evidenceId);
+            if (cleanNote != null) rc.setReturnArrivalEvidenceNote(cleanNote);
+            rc.setReturnArrivalReviewStatus(IntakeTimelineCalculator.REVIEW_NONE);
+            rc.setReturnVersion(rc.getReturnVersion() + 1);
+            ReturnCase saved = returnCaseRepository.saveAndFlush(rc);
+            var payload = new java.util.LinkedHashMap<String, Object>();
+            payload.put("staffId", actor.userId());
+            payload.put("arrivedAt", now);
+            payload.put("recordedAt", now);
+            if (evidenceId != null) payload.put("evidenceId", evidenceId);
+            if (cleanNote != null) payload.put("evidenceNote", cleanNote);
+            auditLogService.recordMutation("MISMATCH_RETURN_ARRIVED", "return", saved.getId(), saved.getFacility().getId(),
+                null, payload);
+            return toResponse(saved);
+        }
+
+        if (cleanNote == null && evidenceId == null) {
+            throw ApiExceptions.validation(
+                "Ghi nhận đến muộn hoặc sau hạn bắt buộc phải có bằng chứng (ghi chú căn cứ hoặc ảnh hiện trường).", null);
+        }
+        Instant claimed = actualArrivedAt != null ? actualArrivedAt : now;
+        rc.setReturnLateArrivalClaimedAt(claimed);
+        rc.setReturnArrivalRecordedAt(now);
+        rc.setReturnArrivalRecordedBy(actor.userId());
+        rc.setReturnArrivalEvidenceNote(cleanNote);
+        if (evidenceId != null) rc.setReturnArrivalEvidenceId(evidenceId);
+        rc.setReturnArrivalReviewStatus(IntakeTimelineCalculator.REVIEW_PENDING);
+        rc.setReturnArrivalReviewDeadlineAt(now.plus(30, ChronoUnit.MINUTES));
+        rc.setReturnVersion(rc.getReturnVersion() + 1);
+        ReturnCase saved = returnCaseRepository.saveAndFlush(rc);
+
+        var payload = new java.util.LinkedHashMap<String, Object>();
+        payload.put("staffId", actor.userId());
+        payload.put("claimedArrivedAt", claimed);
+        payload.put("recordedAt", now);
+        if (evidenceId != null) payload.put("evidenceId", evidenceId);
+        if (cleanNote != null) payload.put("evidenceNote", cleanNote);
+        auditLogService.recordMutation("MISMATCH_RETURN_ARRIVAL_PENDING_REVIEW", "return", saved.getId(),
+            saved.getFacility().getId(), null, payload);
+
+        userRepository.findEligibleStaff(UserStatus.ACTIVE, RoleCode.MANAGER, saved.getFacility().getId(),
+            List.of(FacilityScopeLevel.MANAGE)).forEach(manager ->
+            notificationService.createNotification(
+                manager.getId(), NotificationType.RETURN,
+                "Cần đối soát lượt đến trả kho",
+                "Đơn trả kho gian " + saved.getStorageUnit().getCode()
+                    + " có ghi nhận khách đến cần Quản lý đối soát và kết luận.",
+                saved.getId()
+            )
+        );
+        return toResponse(saved);
+    }
+
     private void captureReturnArrival(ActorPrincipal actor, ReturnCase rc, UUID evidenceId, Instant now) {
         if (!ReturnAttendancePolicy.canRecordArrivalAt(rc, now))
             throw ApiExceptions.conflict("Đã hết hạn tiếp nhận trả kho. Không thể ghi nhận khách đến đúng hạn.");
@@ -527,6 +798,8 @@ public class ReturnSettlementService {
         if (evidence.getUploadedBy() == null || !actor.userId().equals(evidence.getUploadedBy().getId()))
             throw ApiExceptions.validation("Vui lòng tải ảnh tiếp nhận từ tài khoản của bạn.", null);
         rc.setReturnArrivedAt(now);
+        rc.setReturnArrivalRecordedAt(now);
+        rc.setReturnArrivalRecordedBy(actor.userId());
         rc.setReturnArrivalEvidenceId(evidenceId);
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
             ? "RETURN_ARRIVED" : "MISMATCH_RETURN_ARRIVED", "return", rc.getId(), rc.getFacility().getId(),
@@ -548,6 +821,14 @@ public class ReturnSettlementService {
     public ReturnCaseResponse verifyReturnIdentity(ActorPrincipal actor, UUID id, UUID attemptId, String documentNumber,
                                                    Instant reverificationStartedAt, UUID arrivalEvidenceId) {
         ReturnCase rc = lockReturnAttendance(actor, id, false);
+        if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
+            if (IntakeTimelineCalculator.REVIEW_PENDING.equals(rc.getReturnArrivalReviewStatus())) {
+                throw ApiExceptions.conflict("Hồ sơ đang chờ Quản lý đối soát lượt đến.");
+            }
+            if (rc.getReturnArrivedAt() == null) {
+                throw ApiExceptions.conflict("Vui lòng ghi nhận khách đến trước khi xác minh danh tính.");
+            }
+        }
         if (!java.util.Objects.equals(rc.getReturnReverificationStartedAt(), reverificationStartedAt))
             throw ApiExceptions.conflict("Phiên xác minh đã thay đổi. Vui lòng tải lại hồ sơ.");
         if (rc.getReturnReverificationStaffId() != null && !actor.userId().equals(rc.getReturnReverificationStaffId()))
@@ -555,7 +836,7 @@ public class ReturnSettlementService {
         if (attemptId.equals(rc.getReturnFirstAttemptId()) || attemptId.equals(rc.getReturnSecondAttemptId())
             || rc.getReturnIdentityVerifiedAt() != null) return toResponse(rc);
         Instant expires = ReturnAttendancePolicy.expiresAt(rc);
-        Instant now = Instant.now();
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         if ((expires != null && !now.isBefore(expires)) || rc.getReturnSecondAttemptId() != null
             || rc.getReturnArrivalReviewedAt() != null)
             throw ApiExceptions.conflict("Phiên xác minh chưa mở hoặc đã kết thúc. Vui lòng kiểm tra trạng thái đối soát.");
@@ -567,6 +848,13 @@ public class ReturnSettlementService {
             && !actual.matches("(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{6,20}"))
             throw ApiExceptions.validation("Định dạng giấy tờ không hợp lệ. Không ghi nhận lần thử.", null);
         if (rc.getReturnArrivedAt() == null) captureReturnArrival(actor, rc, arrivalEvidenceId, now);
+        else if (arrivalEvidenceId != null && rc.getReturnArrivalEvidenceId() == null) {
+            validateInspectionPhotos(rc, List.of(arrivalEvidenceId.toString()), true);
+            FileAsset evidence = settlementEntityManager.find(FileAsset.class, arrivalEvidenceId);
+            if (evidence == null || evidence.getUploadedBy() == null || !actor.userId().equals(evidence.getUploadedBy().getId()))
+                throw ApiExceptions.validation("Vui lòng tải ảnh tiếp nhận từ tài khoản của bạn.", null);
+            rc.setReturnArrivalEvidenceId(arrivalEvidenceId);
+        }
         boolean matched = expected.equals(actual);
         if (rc.getReturnFirstAttemptId() == null) rc.setReturnFirstAttemptId(attemptId);
         else {
@@ -575,6 +863,7 @@ public class ReturnSettlementService {
         }
         if (matched) rc.setReturnIdentityVerifiedAt(now);
         else if (rc.getReturnSecondAttemptAt() != null) notificationService.notifyManagersOfReturnIdentityReview(rc);
+        rc.setReturnVersion(rc.getReturnVersion() + 1);
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
             ? "RETURN_IDENTITY_ATTEMPT" : "MISMATCH_RETURN_IDENTITY_ATTEMPT", "return", id, rc.getFacility().getId(),
             null, Map.of("attemptId", attemptId, "staffId", actor.userId(), "matched", matched, "attemptedAt", now));
@@ -586,9 +875,12 @@ public class ReturnSettlementService {
         ReturnCase rc = lockReturnAttendance(actor, id, true);
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         Instant reviewStart = ReturnAttendancePolicy.reviewStartsAt(rc);
+        boolean hasArrivalProof = rc.getReturnArrivalEvidenceId() != null
+            || (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+                && rc.getReturnArrivedAt() != null && rc.getReturnArrivalRecordedAt() != null);
         if (reviewStart == null || now.isBefore(reviewStart) || rc.getReturnIdentityVerifiedAt() != null
-            || rc.getReturnArrivalEvidenceId() == null || rc.getReturnReverificationStartedAt() != null) {
-            throw ApiExceptions.conflict("Chỉ được mở lại một lần cho hồ sơ đang chờ đối soát và có ảnh tiếp nhận khách.");
+            || !hasArrivalProof || rc.getReturnReverificationStartedAt() != null) {
+            throw ApiExceptions.conflict("Chỉ được mở lại một lần cho hồ sơ đang chờ đối soát và có bằng chứng tiếp nhận khách.");
         }
         requireEligibleReturnStaff(rc, staffId);
         var before = toResponse(rc).attendance();
@@ -597,6 +889,7 @@ public class ReturnSettlementService {
         rc.setReturnFirstAttemptId(null);
         rc.setReturnSecondAttemptId(null);
         rc.setReturnSecondAttemptAt(null);
+        rc.setReturnVersion(rc.getReturnVersion() + 1);
         auditLogService.recordMutation("RETURN_IDENTITY_REOPENED", "return", id, rc.getFacility().getId(), before,
             Map.of("managerId", actor.userId(), "staffId", staffId, "startedAt", now, "reason", reason.strip()));
         notificationService.createNotification(staffId, NotificationType.RETURN, "Cần xác minh lại khi trả kho",
@@ -610,19 +903,122 @@ public class ReturnSettlementService {
 
     @Transactional
     public ReturnCaseResponse reviewReturnArrival(ActorPrincipal actor, UUID id, boolean accepted, String reason) {
-        return reviewReturnArrival(actor, id, accepted, reason, null, null);
+        return reviewReturnArrival(actor, id, accepted, reason, null, null, null);
     }
 
     @Transactional
     public ReturnCaseResponse reviewReturnArrival(ActorPrincipal actor, UUID id, boolean accepted, String reason, UUID staffId, Instant appointmentAt) {
+        return reviewReturnArrival(actor, id, accepted, reason, staffId, appointmentAt, null);
+    }
+
+    @Transactional
+    public ReturnCaseResponse reviewReturnArrival(
+        ActorPrincipal actor,
+        UUID id,
+        boolean accepted,
+        String reason,
+        UUID staffId,
+        Instant appointmentAt,
+        String rawDecision
+    ) {
         ReturnCase rc = lockReturnAttendance(actor, id, true);
         Instant now = Instant.now();
+        String effectiveDecision;
+        if (rawDecision != null && !rawDecision.isBlank()) {
+            String normalized = rawDecision.trim().toUpperCase(java.util.Locale.ROOT);
+            if (!List.of(
+                IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME,
+                IntakeTimelineCalculator.REVIEW_FACILITY_EXCEPTION,
+                IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT
+            ).contains(normalized)) {
+                throw ApiExceptions.validation("Kết luận đối soát không hợp lệ.", null);
+            }
+            effectiveDecision = normalized;
+        } else {
+            effectiveDecision = accepted
+                ? IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME
+                : IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT;
+        }
+        boolean allowContinue = !IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT.equals(effectiveDecision);
+        boolean preArrivalReview = rc.getReturnArrivedAt() == null && ReturnAttendancePolicy.isPendingArrivalReview(rc);
+
+        if (preArrivalReview) {
+            if (!allowContinue) {
+                rc.setReturnArrivalReviewStatus(IntakeTimelineCalculator.REVIEW_CONFIRMED_ABSENT);
+                rc.setReturnArrivalReviewReason(reason.strip());
+                rc.setReturnArrivalReviewedBy(actor.userId());
+                rc.setReturnArrivalReviewedAt(now);
+                rc.setReturnArrivalReviewAccepted(false);
+                rc.setPostReviewHandoverStaffId(null);
+                rc.setPostReviewHandoverAppointmentAt(null);
+                rc.setPostReviewHandoverDueAt(null);
+                rc.setReturnVersion(rc.getReturnVersion() + 1);
+                auditLogService.recordMutation("MISMATCH_RETURN_ARRIVAL_REVIEWED", "return", id, rc.getFacility().getId(),
+                    null, Map.of("managerId", actor.userId(), "decision", effectiveDecision, "accepted", false,
+                        "reason", reason.strip(), "reviewedAt", now));
+                return toResponse(rc);
+            }
+
+            if (IntakeTimelineCalculator.REVIEW_APPROVED_ON_TIME.equals(effectiveDecision)) {
+                Instant claimed = rc.getReturnLateArrivalClaimedAt();
+                Instant deadline = rc.getRental().getInventoryRemovalDeadlineAt() != null
+                    ? rc.getRental().getInventoryRemovalDeadlineAt() : rc.getRecoveryEligibleAt();
+                if (claimed == null || (deadline != null && !claimed.isBefore(deadline))) {
+                    throw ApiExceptions.conflict("Thời điểm khách đến vượt quá hạn cuối dọn hàng; chỉ có thể xử lý ngoại lệ hoặc kết thúc đối soát.");
+                }
+                requireEligibleReturnStaff(rc, staffId);
+                rc.setReturnArrivedAt(claimed);
+            } else {
+                requireEligibleReturnStaff(rc, staffId);
+                Instant realArrival = rc.getReturnLateArrivalClaimedAt() != null ? rc.getReturnLateArrivalClaimedAt() : now;
+                rc.setReturnArrivedAt(realArrival);
+            }
+
+            rc.setReturnArrivalReviewStatus(effectiveDecision);
+            rc.setReturnArrivalReviewReason(reason.strip());
+            rc.setReturnArrivalReviewedBy(actor.userId());
+            if (rc.getReturnIdentityVerifiedAt() == null) {
+                Instant sessionStart = now.truncatedTo(ChronoUnit.MICROS);
+                rc.setReturnArrivalReviewedAt(null);
+                rc.setReturnArrivalReviewAccepted(null);
+                rc.setReturnReverificationStartedAt(sessionStart);
+                rc.setReturnReverificationStaffId(staffId);
+                rc.setReturnFirstAttemptId(null);
+                rc.setReturnSecondAttemptId(null);
+                rc.setReturnSecondAttemptAt(null);
+                notificationService.createNotification(staffId, NotificationType.RETURN,
+                    IntakeTimelineCalculator.REVIEW_FACILITY_EXCEPTION.equals(effectiveDecision)
+                        ? "Cần xác minh danh tính trả kho (ngoại lệ)"
+                        : "Cần xác minh danh tính trả kho sau đối soát",
+                    "Quản lý đã duyệt đối soát lượt đến. Mở hồ sơ trả kho và xác minh danh tính trong vòng 30 phút.", id);
+            } else if (recoveryCalendar != null) {
+                if (appointmentAt != null && appointmentAt.isBefore(now))
+                    throw ApiExceptions.validation("Lịch bàn giao phải nằm trong tương lai.", null);
+                rc.setPostReviewHandoverStaffId(staffId);
+                rc.setPostReviewHandoverAppointmentAt(appointmentAt);
+                rc.setPostReviewHandoverDueAt(recoveryCalendar.current().afterWorkingHours(appointmentAt == null ? now : appointmentAt, 4));
+                rc.setReturnArrivalReviewedAt(now);
+                rc.setReturnArrivalReviewAccepted(true);
+            }
+            rc.setReturnVersion(rc.getReturnVersion() + 1);
+            var payload = new java.util.LinkedHashMap<String, Object>();
+            payload.put("managerId", actor.userId());
+            payload.put("decision", effectiveDecision);
+            payload.put("accepted", true);
+            payload.put("confirmedArrivedAt", rc.getReturnArrivedAt());
+            payload.put("recordedAt", rc.getReturnArrivalRecordedAt());
+            payload.put("reason", reason.strip());
+            payload.put("reviewedAt", now);
+            auditLogService.recordMutation("MISMATCH_RETURN_ARRIVAL_REVIEWED", "return", id, rc.getFacility().getId(), null, payload);
+            return toResponse(rc);
+        }
+
         Instant reviewStart = ReturnAttendancePolicy.reviewStartsAt(rc);
         if (reviewStart == null || now.isBefore(reviewStart))
             throw ApiExceptions.conflict("Hồ sơ chưa đến lúc đối soát hoặc đã có kết quả.");
-        if (accepted && rc.getReturnIdentityVerifiedAt() == null)
+        if (allowContinue && rc.getReturnIdentityVerifiedAt() == null)
             throw ApiExceptions.conflict("Chỉ có thể tiếp tục bàn giao khi danh tính đã được xác minh.");
-        if (accepted && recoveryCalendar != null) {
+        if (allowContinue && recoveryCalendar != null) {
             requireEligibleReturnStaff(rc, staffId);
             if (appointmentAt != null && appointmentAt.isBefore(now))
                 throw ApiExceptions.validation("Lịch bàn giao phải nằm trong tương lai.", null);
@@ -640,10 +1036,14 @@ public class ReturnSettlementService {
             rc.setPostReviewHandoverAppointmentAt(null);
             rc.setPostReviewHandoverDueAt(null);
         }
+        rc.setReturnArrivalReviewStatus(effectiveDecision);
+        rc.setReturnArrivalReviewReason(reason.strip());
+        rc.setReturnArrivalReviewedBy(actor.userId());
         rc.setReturnArrivalReviewedAt(now);
-        rc.setReturnArrivalReviewAccepted(accepted);
+        rc.setReturnArrivalReviewAccepted(allowContinue);
+        rc.setReturnVersion(rc.getReturnVersion() + 1);
         var decision = new java.util.LinkedHashMap<String, Object>(Map.of("managerId", actor.userId(),
-            "accepted", accepted, "reason", reason.strip(), "reviewedAt", now));
+            "decision", effectiveDecision, "accepted", allowContinue, "reason", reason.strip(), "reviewedAt", now));
         if (rc.getPostReviewHandoverAppointmentAt() != null) decision.put("appointmentAt", rc.getPostReviewHandoverAppointmentAt());
         auditLogService.recordMutation(ReturnAttendancePolicy.isScheduledRentalReturn(rc)
             ? "RETURN_ARRIVAL_REVIEWED" : "MISMATCH_RETURN_ARRIVAL_REVIEWED", "return", id, rc.getFacility().getId(),
@@ -2427,13 +2827,54 @@ public class ReturnSettlementService {
                 ReturnAttendancePolicy.expiresAt(rc), rc.getReturnSecondAttemptId() != null ? 2 : rc.getReturnFirstAttemptId() != null ? 1 : 0,
                 rc.getReturnIdentityVerifiedAt(), ReturnAttendancePolicy.reviewStartsAt(rc),
                 rc.getReturnArrivalReviewAccepted(), rc.getPostReviewHandoverDueAt(), rc.getPostReviewHandoverStaffId(),
-                rc.getReturnReverificationStartedAt(), rc.getReturnReverificationStaffId(), rc.getPostReviewHandoverAppointmentAt()) : null,
+                rc.getReturnReverificationStartedAt(), rc.getReturnReverificationStaffId(), rc.getPostReviewHandoverAppointmentAt(),
+                rc.getReturnArrivalRecordedAt(), rc.getReturnArrivalRecordedBy(), rc.getReturnArrivalEvidenceNote(),
+                rc.getReturnLateArrivalClaimedAt(), rc.getReturnArrivalReviewStatus(), rc.getReturnArrivalReviewDeadlineAt(),
+                rc.getReturnArrivalReviewReason(), rc.getReturnArrivalReviewedBy(), rc.getReturnArrivalReviewedAt()) : null,
             rc.getSettlementVersion(), rc.getSettlementPublishedAt(), rc.getSettlementPaymentDueAt(),
             hasTwoMismatchObligations(rc) && finance() != null
                 && (rc.getStatus() == ReturnCaseStatus.refund_pending || rc.getStatus() == ReturnCaseStatus.completed)
                 ? finance().mismatchReceipts(rc) : List.of(),
-            rc.getMissingPalletCount(), rc.getPalletLossFee()
+            rc.getMissingPalletCount(), rc.getPalletLossFee(),
+            rc.getScheduledAppointmentAt(),
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? rc.getRental().getInventoryRemovalPublishedAt() : null,
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? resolveExtensionDays(rc) : null,
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? resolveExtensionCount(rc) : 0,
+            rc.getReturnType() == ReturnType.INVENTORY_MISMATCH ? InventoryTimelinePolicy.MAX_RETURN_EXTENSIONS : 0,
+            canExtendMismatchReturn(rc, Instant.now()),
+            rc.getReturnVersion()
         );
+    }
+
+    private static Integer resolveExtensionDays(ReturnCase rc) {
+        if (rc == null) return null;
+        if (rc.getReturnExtensionDays() != null) return rc.getReturnExtensionDays();
+        return rc.getRental() == null ? null : rc.getRental().getInventoryReturnExtensionDays();
+    }
+
+    private static int resolveExtensionCount(ReturnCase rc) {
+        if (rc == null) return 0;
+        int rentalCount = rc.getRental() == null ? 0 : rc.getRental().getInventoryReturnExtensionCount();
+        return Math.max(rc.getReturnExtensionCount(), rentalCount);
+    }
+
+    private static boolean canExtendMismatchReturn(ReturnCase rc, Instant now) {
+        if (rc == null || rc.getReturnType() != ReturnType.INVENTORY_MISMATCH || !ReturnAttendancePolicy.isOpen(rc)) {
+            return false;
+        }
+        if (rc.getReadyForInspectionAt() != null || rc.getReturnArrivedAt() != null
+            || rc.getReturnLateArrivalClaimedAt() != null
+            || IntakeTimelineCalculator.REVIEW_PENDING.equals(rc.getReturnArrivalReviewStatus())) {
+            return false;
+        }
+        Rental rental = rc.getRental();
+        if (rental == null || rental.getActualReturnedAt() != null
+            || rental.getStatus() == RentalStatus.completed
+            || rental.getStatus() == RentalStatus.return_inspection
+            || rental.getStatus() == RentalStatus.closing) {
+            return false;
+        }
+        return InventoryTimelinePolicy.canExtendRemovalWindow(rental, now);
     }
 
     private ReturnCaseResponse.Equipment returnEquipment(ReturnCase rc) {
