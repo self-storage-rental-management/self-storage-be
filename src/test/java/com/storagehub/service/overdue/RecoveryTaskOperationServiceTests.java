@@ -39,6 +39,7 @@ class RecoveryTaskOperationServiceTests {
     final UUID id=UUID.randomUUID(),rentalId=UUID.randomUUID(),facilityId=UUID.randomUUID(),actorId=UUID.randomUUID(),returnId=UUID.randomUUID();
     final ActorPrincipal actor=new ActorPrincipal(actorId,UUID.randomUUID(),Set.of(RoleCode.STAFF),Set.of(),Map.of());
     final Rental rental=new Rental();final ReturnCase rc=new ReturnCase();
+    private static final String CUSTOMER_DOCUMENT = "079000000001";
     final Instant now=Instant.parse("2026-10-18T03:00:00Z");
     RecoveryTaskOperationService service;
 
@@ -52,6 +53,8 @@ class RecoveryTaskOperationServiceTests {
                 .replace("CHARACTER SET ascii COLLATE ascii_bin","").replace("ENGINE=InnoDB","");
             for(var statement:sql.split(";"))if(!statement.isBlank())jdbc.execute(statement);
         }
+        jdbc.execute("alter table recovery_tasks add column assigned_staff_id binary(16)");
+        var reservation = new Reservation(); reservation.setIdentityDocumentNumber(CUSTOMER_DOCUMENT); rental.setReservation(reservation);
         var f=new Facility();ReflectionTestUtils.setField(f,"id",facilityId);rental.setFacility(f);
         var customer=new User();ReflectionTestUtils.setField(customer,"id",UUID.randomUUID());rental.setCustomer(customer);
         var unit=new StorageUnit();ReflectionTestUtils.setField(unit,"id",UUID.randomUUID());unit.setStatus(StorageUnitStatus.occupied);rental.setStorageUnit(unit);
@@ -63,17 +66,35 @@ class RecoveryTaskOperationServiceTests {
         when(em.find(ReturnCase.class,returnId)).thenReturn(rc);
         when(em.find(ReturnCase.class,returnId,LockModeType.PESSIMISTIC_WRITE)).thenReturn(rc);
         when(returns.createRecoveryReturn(actor,rentalId)).thenReturn(rc);
-        when(returns.performInspection(eq(actor),eq(returnId),any())).thenAnswer(inv->{rc.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);rental.setStatus(RentalStatus.return_inspection);return null;});
+        when(returns.performInspection(eq(actor),eq(returnId),any(),eq(0L))).thenAnswer(inv->{rc.setStatus(ReturnCaseStatus.awaiting_customer_confirmation);rental.setStatus(RentalStatus.return_inspection);return null;});
         jdbc.update("insert into facilities values(?)",bytes(facilityId));jdbc.update("insert into users values(?,?)",bytes(actorId),"Staff");
         jdbc.update("insert into users values(?,?)",bytes(customer.getId()),"Customer");jdbc.update("insert into storage_units values(?,?)",bytes(unit.getId()),"S1");
         jdbc.update("insert into rentals values(?,?,?)",bytes(rentalId),bytes(customer.getId()),bytes(unit.getId()));jdbc.update("insert into return_cases values(?)",bytes(returnId));
-        jdbc.update("insert into recovery_tasks values(?,?,?,?,?,?,?)",bytes(id),"RENTAL_TERM:"+rentalId,bytes(rentalId),bytes(facilityId),"OPEN","OVERDUE_DAY_8",Timestamp.from(now));
+        jdbc.update("insert into recovery_tasks(id,case_ref,rental_id,facility_id,status,reason,received_at) values(?,?,?,?,?,?,?)",bytes(id),"RENTAL_TERM:"+rentalId,bytes(rentalId),bytes(facilityId),"OPEN","OVERDUE_DAY_8",Timestamp.from(now));
         var beans=new StaticListableBeanFactory();beans.addBean("clock",Clock.fixed(now,ZoneOffset.UTC));
         service=new RecoveryTaskOperationService(em,jdbc,new RecoveryTaskReadService(jdbc,access),access,evidence,returns,audit,notifications,
             new ObjectMapper().findAndRegisterModules(),beans.getBeanProvider(Clock.class));
     }
     @AfterEach void shutdown(){ds.close();}
     private static com.zaxxer.hikari.HikariDataSource pool(){var ds=new com.zaxxer.hikari.HikariDataSource();ds.setJdbcUrl("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=MySQL");ds.setMaximumPoolSize(4);ds.setMinimumIdle(1);return ds;}
+
+    @Test void managerAssignsOnceAndOnlyTheAssigneeCanStart() {
+        var manager=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(),Map.of());
+        var staff=new User();ReflectionTestUtils.setField(staff,"id",actorId);
+        when(em.find(User.class,actorId)).thenReturn(staff);
+        when(access.eligible(staff,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.PROCESS_RETURNS)).thenReturn(true);
+        assertThatThrownBy(()->tx.execute(s->service.assign(manager,id,actorId))).hasMessageContaining("tại cơ sở này");
+        when(access.scope(actorId,facilityId,FacilityScopeLevel.OPERATE)).thenReturn(true);
+        var assigned=tx.execute(s->service.assign(manager,id,actorId));
+        assertThat(assigned.assignedStaffId()).isEqualTo(actorId);
+        assertThat(assigned.assignedStaffName()).isEqualTo("Staff");
+        assertThat(tx.execute(s->service.assign(manager,id,actorId)).assignedStaffId()).isEqualTo(actorId);
+        verify(notifications,times(1)).createNotification(eq(actorId),eq(NotificationType.SYSTEM),anyString(),anyString(),eq(id));
+        var other=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.STAFF),Set.of(),Map.of());
+        assertThatThrownBy(()->tx.execute(s->service.start(other,RoleCode.STAFF,id,new Start(0L,"Start"),"other")))
+            .hasMessageContaining("nhân viên khác");
+        assertThat(tx.execute(s->service.start(actor,RoleCode.STAFF,id,new Start(0L,"Start"),"own")).status()).isEqualTo("IN_PROGRESS");
+    }
 
     @Test void startReplaysButChangedPayloadStaleVersionAndRevokedPermissionCannotWrite() {
         var request=new Start(0L,"Start inventory");var result=tx.execute(s->service.start(actor,RoleCode.STAFF,id,request,"start"));
@@ -98,7 +119,7 @@ class RecoveryTaskOperationServiceTests {
         inventory();rc.setStatus(ReturnCaseStatus.payment_due);rc.setAmountDueFromCustomer(new BigDecimal("950000"));
         UUID receipt=UUID.randomUUID();jdbc.update("insert into file_assets values(?)",bytes(receipt));
         when(returns.completeRecoverySettlement(eq(actor),eq(returnId),startsWith("TM-"))).thenAnswer(inv->{rc.setStatus(ReturnCaseStatus.completed);return null;});
-        var result=tx.execute(s->service.settle(actor,RoleCode.STAFF,id,new Settlement(2L,PaymentMethod.CASH,null,receipt,true),"settle"));
+        var result=tx.execute(s->service.settle(actor,RoleCode.STAFF,id,new Settlement(2L,PaymentMethod.CASH,null,receipt,true,CUSTOMER_DOCUMENT),"settle"));
         assertThat(result.expectedVersion()).isEqualTo(3);assertThat(result.status()).isEqualTo("IN_PROGRESS");
         assertThat(jdbc.queryForObject("select amount from recovery_settlement_receipts",BigDecimal.class)).isEqualByComparingTo("950000");
         assertThat(jdbc.queryForObject("select payment_method from recovery_settlement_receipts",String.class)).isEqualTo("CASH");
@@ -110,10 +131,26 @@ class RecoveryTaskOperationServiceTests {
         assertThat(closed.status()).isEqualTo("CLOSED");assertThat(closed.assetsCleared()).isTrue();verify(returns).finalizeRecoveryReturn(actor,returnId);
         var replay=tx.execute(s->service.complete(actor,RoleCode.STAFF,id,completion(3L,report),"close"));assertThat(replay).isEqualTo(closed);
     }
+    @Test void wrongOrMissingCustomerDocumentDoesNotRecordSettlement() {
+        inventory();
+        rc.setStatus(ReturnCaseStatus.payment_due);
+        rc.setAmountDueFromCustomer(new BigDecimal("950000"));
+        var receipt = UUID.randomUUID();
+        for (String document : List.of("", "079000000002")) {
+            assertThatThrownBy(() -> tx.execute(s -> service.settle(actor, RoleCode.STAFF, id,
+                new Settlement(2L, PaymentMethod.CASH, null, receipt, true, document), "verify-" + document)))
+                .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                    error -> assertThat(error.getStatus().value()).isEqualTo(400));
+        }
+        assertThat(jdbc.queryForObject("select count(*) from recovery_settlement_receipts", Long.class)).isZero();
+        assertThat(service.read(actor, RoleCode.STAFF, id).expectedVersion()).isEqualTo(2);
+        verify(returns, never()).completeRecoverySettlement(any(), any(), any());
+    }
+
     @Test void staffCannotCollectByBankTransfer() {
         inventory();rc.setStatus(ReturnCaseStatus.payment_due);rc.setAmountDueFromCustomer(new BigDecimal("950000"));
         assertThatThrownBy(()->tx.execute(s->service.settle(actor,RoleCode.STAFF,id,
-            new Settlement(2L,PaymentMethod.BANK_TRANSFER,"BANK-1",UUID.randomUUID(),true),"bank-settle")))
+            new Settlement(2L,PaymentMethod.BANK_TRANSFER,"BANK-1",UUID.randomUUID(),true,CUSTOMER_DOCUMENT),"bank-settle")))
             .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
                 e->assertThat(e.getStatus().value()).isEqualTo(403));
         assertThat(jdbc.queryForObject("select count(*) from recovery_settlement_receipts",Long.class)).isZero();

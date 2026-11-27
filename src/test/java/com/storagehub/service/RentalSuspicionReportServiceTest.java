@@ -3,13 +3,17 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.storagehub.api.rental.ManagerRentalController;
 import com.storagehub.api.rental.RentalSummaryResponse;
 import com.storagehub.api.rental.StaffRentalDetailResponse;
 import com.storagehub.domain.model.*;
 import com.storagehub.domain.repo.ActivityLogRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.security.ActorContext;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.util.List;
@@ -18,8 +22,27 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class RentalSuspicionReportServiceTest {
+    @Test
+    void transferAcceptsOneCombinedConclusion() throws Exception {
+        var actor = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.MANAGER), Set.of(), Map.of());
+        var actors = mock(ActorContext.class);
+        when(actors.required()).thenReturn(actor);
+        var reports = mock(RentalSuspicionReportService.class);
+        var mvc = MockMvcBuilders.standaloneSetup(
+            new ManagerRentalController(actors, mock(RentalQueryService.class), reports)).build();
+        var reportId = UUID.randomUUID();
+        var conclusion = "Đã xác minh vi phạm theo biên bản đối chiếu.";
+        mvc.perform(post("/api/manager/rentals/suspicion-reports/{reportId}/transfer", reportId)
+                .contentType("application/json").content("""
+                    {"conclusion":"%s"}
+                    """.formatted(conclusion)))
+            .andExpect(status().isOk());
+        verify(reports).transferToRecovery(actor, reportId, new RentalSuspicionReportService.TransferInput(conclusion, null));
+    }
+
     @Test
     void sendsOnlyToFacilityManagersAndTreatsAnIdenticalRequestAsAlreadySubmitted() {
         var queries = mock(RentalQueryService.class);
@@ -81,7 +104,7 @@ class RentalSuspicionReportServiceTest {
     }
 
     @Test
-    void acceptanceRecordsManagerAndTimeOnlyOnce() {
+    void acceptanceAndClosureRecordEachDecisionOnlyOnce() {
         var rentals = mock(RentalRepository.class);
         var users = mock(UserRepository.class);
         var activity = mock(ActivityLogRepository.class);
@@ -148,5 +171,36 @@ class RentalSuspicionReportServiceTest {
         var staffView = service.staffReportDetail(staff, rentalId, reportId);
         assertThat(staffView.report().status()).isEqualTo("INVESTIGATING");
         assertThat(staffView.report().description()).isEqualTo("Dấu hiệu ban đầu");
+
+        var decidedAt = Instant.parse("2026-11-27T13:00:00Z");
+        var reason = "Đã đối chiếu và không phát hiện hàng cấm.";
+        var closure = new ActivityLog();
+        closure.setEntityId(reportId);
+        closure.setAction("RENTAL_SUSPICION_CLOSED");
+        closure.setAfterStateJson("{\"reason\":\"" + reason + "\"}");
+        closure.setActor(author);
+        org.springframework.test.util.ReflectionTestUtils.setField(closure, "createdAt", decidedAt);
+        when(activity.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc(
+            "RentalSuspicionReport", reportId, "RENTAL_SUSPICION_CLOSED")).thenReturn(List.of(), List.of(closure));
+
+        var input = new RentalSuspicionReportService.CloseInput("  " + reason + "  ");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.closeWithoutViolation(staff, reportId, input))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                error -> assertThat(error.getStatus().value()).isEqualTo(403));
+        var closed = service.closeWithoutViolation(manager, reportId, input);
+        assertThat(closed.report().status()).isEqualTo("CLOSED_NO_VIOLATION");
+        assertThat(closed.report().description()).isEqualTo("Dấu hiệu ban đầu");
+        assertThat(closed.transfer()).isNull();
+        assertThat(closed.closure()).isEqualTo(new RentalSuspicionReportService.Closure(reason, "Quản lý Quận 1", decidedAt));
+        assertThat(service.closeWithoutViolation(manager, reportId,
+            new RentalSuspicionReportService.CloseInput("Lý do khác"))).isEqualTo(closed);
+        assertThat(service.staffReportDetail(staff, rentalId, reportId).closure()).isEqualTo(closed.closure());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.transferToRecovery(manager, reportId,
+            new RentalSuspicionReportService.TransferInput("Kết luận mới", "Căn cứ mới")))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                error -> assertThat(error.getStatus().value()).isEqualTo(409));
+        verify(audit).recordMutation(author, "RENTAL_SUSPICION_CLOSED", "RentalSuspicionReport",
+            reportId, facilityId, "INVESTIGATING", new RentalSuspicionReportService.CloseInput(reason));
+        verify(rentals, never()).findByIdForUpdate(any());
     }
 }

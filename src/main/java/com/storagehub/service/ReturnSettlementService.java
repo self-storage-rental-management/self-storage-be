@@ -11,7 +11,6 @@ import com.storagehub.api.returns.ManagerInventoryMismatchDecisionRequest;
 import com.storagehub.api.returns.ManagerReviewDisputeRequest;
 import com.storagehub.api.returns.ReturnCaseResponse;
 import com.storagehub.api.returns.ReturnInspectionRequest;
-import com.storagehub.api.returns.ReturnPropertyCheckRequest;
 import com.storagehub.domain.model.FileAsset;
 import com.storagehub.api.returns.StaffCompleteRefundRequest;
 import com.storagehub.common.api.ApiExceptions;
@@ -673,40 +672,6 @@ public class ReturnSettlementService {
             title, title + " tại gian " + rc.getStorageUnit().getCode() + ".", id);
         auditLogService.recordMutation(cleared ? "CUSTOMER_RETURN_CLEARED" : "CUSTOMER_RETURN_CLEARANCE_REVOKED",
             "return", id, rc.getFacility().getId(), before, after);
-        return after;
-    }
-
-    @Transactional
-    public ReturnCaseResponse savePropertyCheck(ActorPrincipal actor, UUID id, ReturnPropertyCheckRequest request) {
-        authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
-        var rc = returnCaseRepository.findById(id).orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ trả kho."));
-        facilityScopeService.assertCanOperate(actor, rc.getFacility().getId());
-        lockRecoveryReturn(rc);
-        requireEditableCheck(rc);
-        requireReturnHandoverAccess(rc, actor.userId(), Instant.now());
-        requireCurrentCheck(rc, request.clearanceRevision());
-        if (request.unitVacated() == null)
-            throw ApiExceptions.validation("Vui lòng chọn tình trạng tài sản trong gian kho.", null);
-        if (!request.unitVacated() && (request.staffNotes() == null || request.staffNotes().isBlank()))
-            throw ApiExceptions.validation("Vui lòng mô tả tài sản còn lại.", null);
-        validateInspectionPhotos(rc, request.evidencePhotos(), false);
-        var before = toResponse(rc);
-        recordPropertyCheck(rc, request.unitVacated(), actor.userId());
-        rc.setClearanceRevision(rc.getClearanceRevision() + 1);
-        rc.setInspectionNotes(request.staffNotes());
-        if (request.evidencePhotos() != null) {
-            try {
-                rc.setEvidencePhotosJson(objectMapper.writeValueAsString(request.evidencePhotos()));
-            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-                throw new IllegalStateException("Không thể lưu ảnh kiểm tra.", e);
-            }
-        }
-        if (!request.unitVacated())
-            notificationService.createNotification(rc.getCustomer().getId(), NotificationType.RETURN,
-                "Gian kho vẫn còn tài sản", "Vui lòng dọn hết tài sản tại gian " + rc.getStorageUnit().getCode()
-                    + ". Ghi chú của nhân viên: " + request.staffNotes(), id);
-        var after = toResponse(rc);
-        auditLogService.recordMutation("RETURN_PROPERTY_CHECK", "return", id, rc.getFacility().getId(), before, after);
         return after;
     }
 

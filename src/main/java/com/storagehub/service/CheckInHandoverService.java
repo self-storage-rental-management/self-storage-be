@@ -702,7 +702,7 @@ public class CheckInHandoverService {
         IdentityComparison comparison = compareIdentity(reservation, customer, actualIdentity);
         startHandoverClock(reservation);
         if (comparison == IdentityComparison.REJECT) {
-            throw ApiExceptions.validation("CCCD vượt giới hạn sửa 3 chữ số. Cần xử lý từ chối bàn giao.", null);
+            throw ApiExceptions.validation("Chỉ được sửa tối đa 3 chữ số trong 6 số cuối CCCD và phải giữ nguyên 6 số đầu. Cần kiểm tra lại hoặc xử lý từ chối bàn giao.", null);
         }
         boolean mismatch = comparison == IdentityComparison.CORRECTABLE;
         if (mismatch) {

@@ -53,6 +53,12 @@ public class ManagerRentalController {
         return new ApiResponse<>(suspicionReports.transferToRecovery(actors.required(), reportId, input), CorrelationIdContext.current());
     }
 
+    @PostMapping("/suspicion-reports/{reportId}/close")
+    public ApiResponse<com.storagehub.service.RentalSuspicionReportService.ManagerDetail> closeSuspicionReport(
+        @PathVariable UUID reportId, @jakarta.validation.Valid @RequestBody com.storagehub.service.RentalSuspicionReportService.CloseInput input) {
+        return new ApiResponse<>(suspicionReports.closeWithoutViolation(actors.required(), reportId, input), CorrelationIdContext.current());
+    }
+
     @PostMapping("/suspicion-reports/{reportId}/accept")
     public ApiResponse<com.storagehub.service.RentalSuspicionReportService.ManagerDetail> acceptSuspicionReport(@PathVariable UUID reportId) {
         return new ApiResponse<>(suspicionReports.accept(actors.required(), reportId), CorrelationIdContext.current());

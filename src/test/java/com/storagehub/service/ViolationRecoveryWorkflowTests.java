@@ -767,9 +767,10 @@ class ViolationRecoveryWorkflowTests {
         assertThat(assigned.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
         var staffView = workflow.get(staff(), recovery.getId());
         assertThat(staffView.actions())
+            .contains(ViolationRecoveryWorkflow.Action.RECORD_PRESENT)
             .doesNotContain(ViolationRecoveryWorkflow.Action.ACCEPT, ViolationRecoveryWorkflow.Action.APPROVE,
                 ViolationRecoveryWorkflow.Action.START, ViolationRecoveryWorkflow.Action.RECORD_ABSENT,
-                ViolationRecoveryWorkflow.Action.RECORD_PRESENT, ViolationRecoveryWorkflow.Action.BLOCK);
+                ViolationRecoveryWorkflow.Action.BLOCK);
         assertThatThrownBy(() -> execute(staff(), ViolationRecoveryWorkflow.Action.ACCEPT, null, null)).isInstanceOf(ApiException.class);
         assertThatThrownBy(() -> execute(manager(), ViolationRecoveryWorkflow.Action.APPROVE, "Không cần duyệt", null)).isInstanceOf(ApiException.class);
     }
@@ -1074,18 +1075,21 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void presentCustomerCanBeRecoveredAfterIdentityVerificationWithoutApproval() throws Exception {
+    void earlyArrivalCanStartRecoveryAfterVerificationBeforeTheReplyDeadline() throws Exception {
         readyForAbsentHandover();
         var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        recovery.setScheduledAt(Instant.now().plus(Duration.ofHours(24)));
+        recovery.setDeadlineAt(recovery.getScheduledAt().plus(Duration.ofHours(48)));
+        d.responseDueAt = Instant.now().plus(Duration.ofHours(6));
         d.attendance = null;
         d.needsWitness = false;
         d.acceptedAt = null;
         recovery.setDetailsJson(mapper.writeValueAsString(d));
-        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.RECORD_PRESENT,
-            null, null, photo(), null, null));
+        var beforeArrival = Instant.now();
         var verified = workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
-            ViolationRecoveryWorkflow.Action.VERIFY, null, null, null, UUID.randomUUID(), null,
+            ViolationRecoveryWorkflow.Action.RECORD_PRESENT, null, null, photo(), UUID.randomUUID(), null,
             null, "TEST99999", null, null, null, null, null));
+        assertThat(verified.arrivedAt()).isBetween(beforeArrival, Instant.now());
         assertThat(verified.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
         assertThat(verified.verification().matched()).isTrue();
         assertThat(verified.verification().canReceiveItems()).isTrue();

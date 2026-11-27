@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -110,6 +111,22 @@ public class ManagerPaymentHistoryService {
             transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable(),
             reservationCode, payment.getGatewayTransactionNo(), payment.getReceiptCode()
         );
+    }
+
+    @Transactional(readOnly = true)
+    public ManagerPaymentHistoryResponse detail(ActorPrincipal actor, UUID paymentId) {
+        if (!actor.hasRole(RoleCode.MANAGER)) {
+            throw ApiExceptions.forbidden("Only managers can read facility payment history");
+        }
+        authorizationService.require(actor, SystemPermission.VIEW_PAYMENTS);
+        var payment = paymentRepository.findById(paymentId)
+            .orElseThrow(() -> ApiExceptions.notFound("Payment not found"));
+        var facility = payment.getReservation() != null ? payment.getReservation().getFacility()
+            : payment.getRenewal() != null && payment.getRenewal().getRental() != null
+                ? payment.getRenewal().getRental().getFacility() : null;
+        if (facility == null) throw ApiExceptions.notFound("Payment not found");
+        facilityScopeService.assertCanRead(actor, facility.getId());
+        return paymentRow(payment);
     }
 
     private ManagerPaymentHistoryResponse settlementRow(ReturnCase returnCase) {

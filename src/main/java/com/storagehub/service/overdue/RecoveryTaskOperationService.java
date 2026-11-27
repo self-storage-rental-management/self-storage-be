@@ -42,12 +42,34 @@ public class RecoveryTaskOperationService {
         UUID returnCaseId,ReturnCaseStatus settlementStatus,List<UUID> evidenceFileIds,
         UUID receiptFileId,boolean assetsCleared,UUID completionFileId,Instant completedAt,String transactionReference) {}
     private record SettlementReceipt(UUID fileId,String reference) {}
+    private record SettlementDetails(Long expectedVersion, PaymentMethod paymentMethod, String transactionReference,
+        UUID receiptFileId, Boolean confirmed) {}
     private record State(long version,UUID startedBy,Instant startedAt,UUID returnId,String inspection,
         Instant clearedAt,UUID completionFile,Instant completedAt) {}
     private record Context(RecoveryTaskReadService.View task,Rental rental,User actor) {}
 
     @Transactional(readOnly=true)
     public View read(ActorPrincipal actor,RoleCode role,UUID id) {return project(tasks.detail(actor,role,id));}
+
+    public RecoveryTaskReadService.View assign(ActorPrincipal actor,UUID id,UUID staffId) {
+        var visible=tasks.detail(actor,RoleCode.MANAGER,id);
+        var manager=access.require(actor,RoleCode.MANAGER,visible.facilityId(),FacilityScopeLevel.MANAGE,
+            SystemPermission.VIEW_RENTALS,SystemPermission.MANAGE_STAFF_TASKS);
+        lockTask(visible);
+        var task=tasks.detail(actor,RoleCode.MANAGER,id);
+        if(staffId.equals(task.assignedStaffId()))return task;
+        if(!"OPEN".equals(task.status())||task.assignedStaffId()!=null)
+            throw ApiExceptions.conflict("Chỉ giao được nhiệm vụ thu hồi chưa phân công và chưa bắt đầu.");
+        var staff=em.find(User.class,staffId);
+        if(!access.eligible(staff,RoleCode.STAFF,SystemPermission.VIEW_RENTALS,SystemPermission.PROCESS_RETURNS)
+            ||!access.scope(staffId,task.facilityId(),FacilityScopeLevel.OPERATE))
+            throw ApiExceptions.validation("Nhân viên cần có quyền xử lý trả kho tại cơ sở này.",null);
+        jdbc.update("update recovery_tasks set assigned_staff_id=? where id=?",bytes(staffId),bytes(id));
+        notifications.createNotification(staffId,NotificationType.SYSTEM,"Được giao nhiệm vụ thu hồi kho",
+            "Quản lý đã giao bạn xử lý thu hồi gian kho "+task.storageUnitCode()+".",id);
+        audit.recordMutation(manager,"RECOVERY_TASK_ASSIGNED","RecoveryTask",id,task.facilityId(),null,Map.of("assignedStaffId",staffId));
+        return tasks.detail(actor,RoleCode.MANAGER,id);
+    }
 
     public View start(ActorPrincipal actor,RoleCode role,UUID id,Start body,String key) {
         var c=context(actor,role,id);var replay=replay(c,key,"START",body);if(replay.isPresent())return replay.get();
@@ -84,7 +106,9 @@ public class RecoveryTaskOperationService {
             body.evidenceFileIds().stream().map(file->"/api/files/"+file).toList(),
             input.returnedKey(),input.returnedCard(),input.returnedLock(),input.proposedUnitStatus(),
             false,null,true,null,null,input.lockInspectionResult());
-        returns.performInspection(actor,rc.getId(),inspection);em.flush();
+        // The new return belongs to the locked recovery task and has no separate processing lease.
+        returns.performInspection(actor,rc.getId(),inspection,rc.getClearanceRevision());
+        em.flush();
         return finish(c,key,"INSPECTION",body);
     }
 
@@ -100,7 +124,9 @@ public class RecoveryTaskOperationService {
 
     public View settle(ActorPrincipal actor,RoleCode role,UUID id,Settlement body,String key) {
         var c=context(actor,role,id);
-        var replay=replay(c,key,"SETTLEMENT",body);if(replay.isPresent())return replay.get();
+        var settlement = new SettlementDetails(body.expectedVersion(), body.paymentMethod(), body.transactionReference(),
+            body.receiptFileId(), body.confirmed());
+        var replay=replay(c,key,"SETTLEMENT",settlement);if(replay.isPresent())return replay.get();
         var s=version(id,body.expectedVersion());inProgress(c,s);var rc=returnCase(c,s);
         if(!Boolean.TRUE.equals(body.confirmed())||body.paymentMethod()==null)
             throw ApiExceptions.validation("Cần chọn phương thức và xác nhận đã thực thu hoặc thực hoàn tiền.",null);
@@ -120,6 +146,7 @@ public class RecoveryTaskOperationService {
                 throw ApiExceptions.forbidden("Staff may collect only cash payments during an active collection session");
             }
         }
+        verifySettlementCustomer(c.rental(), body.documentNumber());
         var amount=direction.equals("COLLECTION")?rc.getAmountDueFromCustomer():rc.getNetRefundAmount();
         if(amount==null||amount.signum()<=0)throw ApiExceptions.conflict("No amount to settle");
         evidence.require(actor,id,"SETTLEMENT",Collections.singletonList(body.receiptFileId()));
@@ -137,7 +164,24 @@ public class RecoveryTaskOperationService {
         }
         returns.completeRecoverySettlement(actor,rc.getId(),transactionReference);
         jdbc.update("update recovery_task_operations set version=version+1 where task_id=?",bytes(id));
-        return finish(c,key,"SETTLEMENT",body);
+        return finish(c,key,"SETTLEMENT",settlement);
+    }
+
+    private static void verifySettlementCustomer(Rental rental, String documentNumber) {
+        var reservation = rental.getReservation();
+        var expected = reservation == null ? "" : normalizeDocument(reservation.getIdentityDocumentNumber());
+        if (expected.isEmpty())
+            throw ApiExceptions.conflict("Hồ sơ thiếu giấy tờ đối chiếu để quyết toán thu hồi.");
+        var actual = normalizeDocument(documentNumber);
+        if (!com.storagehub.validation.IdentityDocumentPolicy.isValid(actual)
+            && !actual.matches("(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{6,20}"))
+            throw ApiExceptions.validation("Nhập số CCCD hoặc hộ chiếu đã dùng khi đặt kho.", null);
+        if (!expected.equals(actual))
+            throw ApiExceptions.validation("Giấy tờ không khớp với hồ sơ đặt kho. Vui lòng đối chiếu lại.", null);
+    }
+
+    private static String normalizeDocument(String value) {
+        return value == null ? "" : value.strip().toUpperCase(Locale.ROOT);
     }
 
     public View complete(ActorPrincipal actor,RoleCode role,UUID id,Completion body,String key) {
@@ -162,10 +206,18 @@ public class RecoveryTaskOperationService {
         var user=access.require(actor,role,visible.facilityId(),FacilityScopeLevel.OPERATE,SystemPermission.VIEW_RENTALS,SystemPermission.PROCESS_RETURNS);
         var rental=em.find(Rental.class,visible.rentalId(),LockModeType.PESSIMISTIC_WRITE);
         if(rental==null)throw ApiExceptions.notFound("Recovery Rental not found");em.refresh(rental,LockModeType.PESSIMISTIC_WRITE);
+        lockTask(visible);
+        if(!visible.facilityId().equals(rental.getFacility().getId()))throw ApiExceptions.conflict("Recovery task resource binding changed");
+        var task=tasks.detail(actor,role,id);
+        if(task.assignedStaffId()!=null&&!task.assignedStaffId().equals(actor.userId()))
+            throw ApiExceptions.forbidden("Nhiệm vụ thu hồi đã được giao cho nhân viên khác.");
+        return new Context(task,rental,user);
+    }
+
+    private void lockTask(RecoveryTaskReadService.View task) {
         var rows=jdbc.query("select rental_id,facility_id from recovery_tasks where id=? for update",
-            (rs,i)->List.of(uuid(rs.getBytes(1)),uuid(rs.getBytes(2))),bytes(id));
-        if(rows.size()!=1||!rows.getFirst().equals(List.of(rental.getId(),rental.getFacility().getId())))throw ApiExceptions.conflict("Recovery task resource binding changed");
-        return new Context(tasks.detail(actor,role,id),rental,user);
+            (rs,i)->List.of(uuid(rs.getBytes(1)),uuid(rs.getBytes(2))),bytes(task.id()));
+        if(rows.size()!=1||!rows.getFirst().equals(List.of(task.rentalId(),task.facilityId())))throw ApiExceptions.conflict("Recovery task resource binding changed");
     }
     private State version(UUID task,Long expected) {
         var state=state(task);long actual=state==null?0:state.version();

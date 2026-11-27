@@ -78,13 +78,6 @@ public class StaffReturnController {
             request.attemptId(), request.documentNumber(), request.reverificationStartedAt(), request.evidenceId()), CorrelationIdContext.current());
     }
 
-    @PostMapping("/{returnId}/property-check")
-    public ApiResponse<ReturnCaseResponse> savePropertyCheck(@PathVariable UUID returnId,
-        @Valid @RequestBody ReturnPropertyCheckRequest request) {
-        return new ApiResponse<>(returnSettlementService.savePropertyCheck(actorContext.required(), returnId, request),
-            CorrelationIdContext.current());
-    }
-
     @PostMapping("/{returnId}/inspection")
     public ApiResponse<ReturnCaseResponse> performInspection(
         @PathVariable UUID returnId,
