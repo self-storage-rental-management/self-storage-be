@@ -32,8 +32,7 @@ class InventoryTimelinePolicyTests {
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("L"))).isEqualTo(7);
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XL"))).isEqualTo(10);
 
-        assertThatThrownBy(() -> InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XXL")))
-            .isInstanceOf(RuntimeException.class);
+        assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XXL"))).isEqualTo(3);
         assertThatThrownBy(() -> InventoryTimelinePolicy.returnWindowDaysForUnitType(null))
             .isInstanceOf(RuntimeException.class);
     }
@@ -145,9 +144,42 @@ class InventoryTimelinePolicyTests {
         assertThat(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null)).isNull();
     }
 
+    @Test void sameCodeUsesIndependentPolicyAndSnapshotsExtensionLimit() {
+        Rental first = rentalWithSize("CUSTOM");
+        Rental second = rentalWithSize("CUSTOM");
+        first.getStorageUnit().getUnitType().setMismatchReturnDays(11);
+        first.getStorageUnit().getUnitType().setMismatchReturnMaxExtensionDays(4);
+        second.getStorageUnit().getUnitType().setMismatchReturnDays(6);
+        Instant now = Instant.parse("2026-11-20T08:00:00Z");
+        InventoryTimelinePolicy.initializeRemovalWindow(first, now);
+        InventoryTimelinePolicy.initializeRemovalWindow(second, now);
+        assertThat(first.getInventoryReturnWindowDays()).isEqualTo(11);
+        assertThat(second.getInventoryReturnWindowDays()).isEqualTo(6);
+        first.getStorageUnit().getUnitType().setMismatchReturnMaxExtensionDays(9);
+        InventoryTimelinePolicy.extendRemovalWindow(first, now.plusSeconds(60));
+        assertThat(first.getInventoryReturnWindowDays()).isEqualTo(15);
+        assertThat(first.getInventoryReturnExtensionDays()).isEqualTo(4);
+    }
+
+    @Test void setupUsesCustomTypePolicyAndKeepsExistingSnapshot() {
+        Rental rental = rentalWithSize("CUSTOM");
+        UnitType type = rental.getStorageUnit().getUnitType();
+        type.setSetupDeadlineDays(13);
+        type.setSetupMaxExtensionDays(6);
+        Instant now = Instant.parse("2026-11-20T08:00:00Z");
+        var calculator = new IntakeTimelineCalculator(new IntakePolicyProperties());
+        calculator.initializeOnReceipt(rental, now);
+        assertThat(rental.getOriginalInspectionArrivalDeadlineAt()).isEqualTo(now.plusSeconds(13 * 86400));
+        assertThat(rental.getIntakeExtensionMaxHours()).isEqualTo(144);
+        type.setSetupDeadlineDays(20);
+        calculator.initializeOnReceipt(rental, now);
+        assertThat(rental.getOriginalInspectionArrivalDeadlineAt()).isEqualTo(now.plusSeconds(13 * 86400));
+    }
+
     private static UnitType unitType(String code) {
         UnitType type = new UnitType();
         type.setCode(code);
+        type.setMismatchReturnDays(switch(code) {case "M" -> 5; case "L" -> 7; case "XL" -> 10; default -> 3;});
         return type;
     }
 

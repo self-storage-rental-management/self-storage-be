@@ -188,6 +188,20 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
+    void openRenewalBlocksDirectReturnRequestWithoutCreatingOrChangingTheRental() {
+        var policy=org.mockito.Mockito.mock(com.storagehub.service.renewal.RenewalReturnPolicy.class);
+        ReflectionTestUtils.setField(service,"renewalReturnPolicy",policy);
+        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
+        org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.conflict("Hủy gia hạn trước khi trả kho"))
+            .when(policy).requireAllowed(rental);
+        var request=new CustomerCreateReturnRequest(LocalDate.now().plusDays(1),"Trả kho");
+        assertThatThrownBy(()->service.createCustomerReturnRequest(customerActor,rental.getId(),request))
+            .hasMessageContaining("Hủy gia hạn trước");
+        verify(returnCaseRepository,never()).save(any());verify(rentalRepository,never()).save(any());
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
+    }
+
+    @Test
     void createCustomerReturnRequest_success() {
         CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
             LocalDate.now().plusDays(5),
@@ -750,7 +764,7 @@ class ReturnSettlementServiceTests {
             "Mặt sàn xước nhẹ, cần vệ sinh bụi",
             inspectionPhoto(returnCase),
             true, true, true,
-            StorageUnitStatus.available, true
+            StorageUnitStatus.maintenance, true
         );
 
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
@@ -1155,7 +1169,7 @@ class ReturnSettlementServiceTests {
         when(settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, fileId)).thenReturn(asset);
         var inspection = new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.minor_damage,
             new BigDecimal(damage), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            "Vết xước khi trả kho, có ảnh đối chiếu", List.of(fileId.toString()), true, true, true, StorageUnitStatus.available, true);
+            "Vết xước khi trả kho, có ảnh đối chiếu", List.of(fileId.toString()), true, true, true, StorageUnitStatus.maintenance, true);
         var response = service.performInspection(staffActor, rc.getId(), inspection);
         assertThat(response.rentalRefundCredit()).isEqualByComparingTo("4800000");
         assertThat(response.earlyTerminationFee()).isEqualByComparingTo("1200000");

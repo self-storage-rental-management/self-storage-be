@@ -27,7 +27,8 @@ public final class SetupCompletionPolicy {
             || rental.getStorageUnit() == null || rental.getStorageUnit().getUnitType() == null) return;
         Instant receivedAt = rental.getSetupStartedAt() != null ? rental.getSetupStartedAt() : rental.getSetupEndsAt();
         if (receivedAt == null) return;
-        int[] policy = days(rental.getStorageUnit().getUnitType().getCode());
+        var type = rental.getStorageUnit().getUnitType();
+        int[] policy = new int[]{type.getSetupDeadlineDays(), type.getSetupMaxExtensionDays()};
         if (policy == null) return;
         Instant d0 = receivedAt.plus(policy[0] * 24L, ChronoUnit.HOURS);
         rental.setIntakePolicyVersion(IntakePolicyProperties.POLICY_VERSION);

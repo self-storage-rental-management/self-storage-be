@@ -622,7 +622,7 @@ public class CheckInHandoverService {
     private void requireOpenHandover(Reservation reservation) {
         Instant deadline = ReservationCheckInPolicy.completionDeadline(reservation);
         if (deadline != null && Instant.now().isAfter(deadline)) {
-            throw ApiExceptions.conflict("Đã quá 72 giờ từ lần đối chiếu CCCD đầu tiên.");
+            throw ApiExceptions.conflict("Đã quá 72 giờ kể từ khi xác nhận khách đến nhận kho.");
         }
     }
 
@@ -693,10 +693,7 @@ public class CheckInHandoverService {
         Instant now = Instant.now();
         checkIn.setPerformedBy(operator);
         checkIn.setStatus(CheckInStatus.identity_verified);
-        CustomerIdentityPolicy.assign(customer, actualIdentity, userRepository);
-        customer.getProfileDetails().setIdentityVerifiedAt(now);
-        CustomerProfilePolicy.validate(customer, true);
-        userRepository.saveAndFlush(customer);
+        requireIdentityAvailableForHandover(customer, actualIdentity);
         checkIn.setIdentityVerifiedAt(now);
         checkIn.setVerifiedIdentityDocument(actualIdentity);
         String note = clean(request.note());
@@ -714,6 +711,12 @@ public class CheckInHandoverService {
         recordWorkflowAudit(operator, reservation, saved, "CHECKIN_IDENTITY_VERIFIED",
             CheckInStatus.scheduled, CheckInStatus.identity_verified);
         return toResponse(actor, reservation, saved, latestAssignment(reservation.getId()));
+    }
+
+    private void requireIdentityAvailableForHandover(User customer, String identity) {
+        // Validate account ownership without changing the customer's profile or verification state.
+        if (userRepository.existsByIdentityDocumentHashAndIdNot(CustomerIdentityPolicy.hash(identity), customer.getId()))
+            throw ApiExceptions.conflict("CCCD đã được sử dụng bởi tài khoản khác.");
     }
 
     private void requireIdentityCorrectionAvailable(CheckIn checkIn) {
@@ -752,17 +755,15 @@ public class CheckInHandoverService {
         CustomerIdentityPolicy.requireMinorCorrection(checkIn.getVerifiedIdentityDocument(), actualIdentity);
         CustomerIdentityPolicy.requireMinorCorrection(customer.getProfileDetails() == null ? null
             : customer.getProfileDetails().getIdentityDocumentNumber(), actualIdentity);
-        CustomerIdentityPolicy.assign(customer, actualIdentity, userRepository);
-        customer.getProfileDetails().setIdentityVerifiedAt(Instant.now());
-        userRepository.saveAndFlush(customer);
-        String value = customer.getProfileDetails().getIdentityDocumentNumber();
+        requireIdentityAvailableForHandover(customer, actualIdentity);
+        String value = actualIdentity;
         checkIn.setIdentityCorrected(true);
         checkIn.setVerifiedIdentityDocument(value);
         checkIn.setIdentityVerificationNote(request.note().replaceAll("[0-9]{12}", "[CCCD đã ẩn]"));
         reservation.setIdentityDocumentNumber(value);
         reservationRepository.saveAndFlush(reservation);
         checkInRepository.saveAndFlush(checkIn);
-        auditLogService.recordMutation(requireActor(actor), "CUSTOMER_IDENTITY_CORRECTED", "User", customer.getId(),
+        auditLogService.recordMutation(requireActor(actor), "CHECKIN_IDENTITY_CORRECTED", "CheckIn", checkInId,
             reservation.getFacility().getId(), Map.of("identityVerified", true), Map.of("identityCorrected", true, "reason", checkIn.getIdentityVerificationNote()));
         return toResponse(actor, reservation, checkIn, latestAssignment(reservation.getId()));
     }
@@ -785,8 +786,8 @@ public class CheckInHandoverService {
         User operator = requireActor(actor);
         checkIn.setPerformedBy(operator);
         CustomerProfilePolicy.validate(reservation.getCustomer(), true);
-        if (!java.util.Objects.equals(checkIn.getVerifiedIdentityDocument(), reservation.getCustomer().getProfileDetails().getIdentityDocumentNumber()))
-            throw ApiExceptions.conflict("CCCD trong hồ sơ phải khớp giấy tờ đã được nhân viên đối chiếu trước khi ký hợp đồng.");
+        if (!java.util.Objects.equals(checkIn.getVerifiedIdentityDocument(), reservation.getIdentityDocumentNumber()))
+            throw ApiExceptions.conflict("CCCD trên hồ sơ nhận kho và hợp đồng phải khớp giấy tờ đã được nhân viên đối chiếu.");
         checkIn.setEmergencyContactsSnapshot(CustomerProfilePolicy.snapshot(reservation.getCustomer()));
         checkIn.setStatus(CheckInStatus.contract_signed);
         checkIn.setContractSignedAt(Instant.now());
@@ -1835,7 +1836,7 @@ public class CheckInHandoverService {
         if (now.isBefore(deadline)) {
             int previousReminder = reservation.getAttendanceReminderHours();
             if (!now.isBefore(deadline.minus(Duration.ofHours(ReservationCheckInPolicy.FINAL_REMINDER_WINDOW_HOURS)))) {
-                int hours = ReservationCheckInPolicy.finalReminderHours(now);
+                int hours = ReservationCheckInPolicy.finalReminderHours(now, deadline);
                 if (previousReminder != 0 && previousReminder != ReservationCheckInPolicy.ATTENDANCE_FIRST_REMINDER_HOURS
                     && Math.abs(previousReminder) <= hours) return;
                 reminder = ReservationCheckInPolicy.finalReminderMarker(hours);
@@ -1902,7 +1903,7 @@ public class CheckInHandoverService {
         UnitAssignment assignment = activeAssignment(reservation.getId());
         StorageUnit unit = lockAssignedUnit(assignment);
         assertReservationUnitMatch(reservation, assignment, unit);
-        String reason = "Quá 72 giờ từ lần đối chiếu CCCD đầu tiên, bàn giao chưa hoàn tất.";
+        String reason = "Quá 72 giờ kể từ khi xác nhận khách đến nhận kho, bàn giao chưa hoàn tất.";
         Instant now = Instant.now();
         var previous = checkIn.getStatus();
         boolean reviewUnit = previous == CheckInStatus.payment_collected || checkIn.getLockReference() != null

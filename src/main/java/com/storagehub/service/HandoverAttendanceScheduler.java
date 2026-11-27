@@ -21,7 +21,6 @@ public class HandoverAttendanceScheduler {
         var due = new java.util.LinkedHashSet<>(reservations.findAttendanceDue(ReservationCheckInPolicy.ATTENDANCE_VERSIONS, ReservationCheckInPolicy.ATTENDANCE_TERMS,
             ReservationCheckInPolicy.firstValidAppointment(now.minus(ReservationCheckInPolicy.ARRIVAL_REVIEW)),
             ReservationCheckInPolicy.firstValidAppointment(now),
-            ReservationCheckInPolicy.finalReminderMarker(ReservationCheckInPolicy.finalReminderHours(now)),
             ReservationCheckInPolicy.firstValidAppointment(now.plus(Duration.ofHours(ReservationCheckInPolicy.FINAL_REMINDER_WINDOW_HOURS))),
             now.minus(Duration.ofHours(ReservationCheckInPolicy.ATTENDANCE_FIRST_REMINDER_HOURS))));
         due.addAll(reservations.findUnfinishedHandovers(now.minus(ReservationCheckInPolicy.HANDOVER_COMPLETION)));

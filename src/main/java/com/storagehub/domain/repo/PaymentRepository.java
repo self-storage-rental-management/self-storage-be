@@ -17,6 +17,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from Payment p where p.renewal.id=:id order by p.createdAt,p.id")
+    List<Payment> findRenewalPaymentsForUpdate(@Param("id") UUID id);
     List<Payment> findByPurposeAndFailureCode(PaymentType purpose, String failureCode);
 
     @Query("""

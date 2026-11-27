@@ -81,6 +81,23 @@ class RentalReadIntegrationTests {
         assertThat(repo.existsActiveRental(own.getReservation().getId(),own.getStorageUnit().getId(),RentalStatus.active)).isTrue();
     }
 
+    @Test void listAndDetailSharePhysicalIntakeProgressWithoutChangingPaidDates() {
+        Rental r=fixture("INTAKE","INTAKE-1","Customer",LocalDate.of(2026,10,31));
+        r.setSetupStartedAt(Instant.parse("2026-10-01T00:00:00Z"));
+        r.setMoveInCompletedAt(Instant.parse("2026-10-02T00:00:00Z"));
+        r.getStorageUnit().setStatus(StorageUnitStatus.assigned);em.flush();
+        var customer=actor(r,false,Map.of());
+        var query=RentalQuery.parse(new LinkedMultiValueMap<>(),false);
+        assertThat(service.list(customer,query,false,"test").data().getFirst().intakeCompleted()).isFalse();
+        assertThat(service.detail(customer,r.getId(),false).intakeCompleted()).isFalse();
+        r.getStorageUnit().setStatus(StorageUnitStatus.occupied);
+        r.setInventoryVerifiedAt(Instant.parse("2026-10-03T00:00:00Z"));r.setInventoryPending(false);em.flush();
+        assertThat(service.list(customer,query,false,"test").data().getFirst().intakeCompleted()).isTrue();
+        assertThat(service.detail(customer,r.getId(),false).intakeCompleted()).isTrue();
+        assertThat(r.getStatus()).isEqualTo(RentalStatus.active);
+        assertThat(r.getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
+    }
+
     @Test void httpEnvelopeValidationUnknownAndReadOnly() throws Exception {
         Rental r=fixture("HTTP","S-1","Customer",LocalDate.of(2026,10,31)); em.flush(); em.clear();
         ActorContext context=mock(ActorContext.class); when(context.required()).thenReturn(actor(r,false,Map.of()));
