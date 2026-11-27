@@ -211,7 +211,7 @@ public class ReturnSettlementService {
         }
         long openRenewals = settlementEntityManager.createQuery(
                 "select count(n) from Renewal n where n.rental.id=:rentalId and n.status not in :terminal", Long.class)
-            .setParameter("rentalId", rentalId)
+            .setParameter("rentalId", rental.getId())
             .setParameter("terminal", List.of(RenewalStatus.rejected, RenewalStatus.cancelled,
                 RenewalStatus.completed, RenewalStatus.payment_expired))
             .getSingleResult();
