@@ -140,7 +140,7 @@ CREATE TABLE business_record_code_sequences (
  serial_value BIGINT NOT NULL CHECK(serial_value BETWEEN 1 AND 1000000),
  PRIMARY KEY(type_code,period)
 );
-CREATE TABLE business_record_codes (
+CREATE TABLE IF NOT EXISTS business_record_codes (
  resource_key VARCHAR(120) PRIMARY KEY,
  type_code CHAR(2) NOT NULL,
  period CHAR(4) NOT NULL,
