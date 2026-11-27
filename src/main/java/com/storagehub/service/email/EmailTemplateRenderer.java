@@ -1,7 +1,9 @@
 package com.storagehub.service.email;
 
+import com.storagehub.common.text.TextEncodingRepair;
 import com.storagehub.config.EmailProperties;
 import java.time.Year;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -29,10 +31,25 @@ public class EmailTemplateRenderer {
 
         // Apply provided variables
         if (variables != null) {
-            variables.forEach(context::setVariable);
+            variables.forEach((key, value) -> context.setVariable(key, sanitizeTemplateValue(value)));
         }
 
         String templatePath = templateName.startsWith("email/") ? templateName : "email/" + templateName;
         return templateEngine.process(templatePath, context);
+    }
+
+    private Object sanitizeTemplateValue(Object value) {
+        if (value instanceof String str) {
+            return TextEncodingRepair.repairUtf8Mojibake(str);
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<Object, Object> repaired = new LinkedHashMap<>();
+            map.forEach((k, v) -> repaired.put(
+                k instanceof String ks ? TextEncodingRepair.repairUtf8Mojibake(ks) : k,
+                sanitizeTemplateValue(v)
+            ));
+            return repaired;
+        }
+        return value;
     }
 }
