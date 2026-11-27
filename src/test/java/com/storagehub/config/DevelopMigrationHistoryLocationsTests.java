@@ -82,6 +82,29 @@ class DevelopMigrationHistoryLocationsTests {
             verify(statement,never()).execute(anyString());verify(statement,never()).executeUpdate(anyString());verify(connection).close();
         }
     }
+
+    @Test void lateNovemberVersionsResolveTheirOriginalScriptsWithoutChangingHistory() throws Exception {
+        for (String script : new String[]{"V2026112702__renewal_customer_cancellation_accounting.sql", "V2026112702__account_lifecycle_and_lease_limits.sql", "unexpected.sql"}) {
+            var datasource=mock(DataSource.class);var connection=mock(Connection.class);var query=mock(PreparedStatement.class);
+            var exists=mock(ResultSet.class);var statement=mock(Statement.class);var rows=mock(ResultSet.class);
+            when(datasource.getConnection()).thenReturn(connection);when(connection.prepareStatement(anyString())).thenReturn(query);
+            when(query.executeQuery()).thenReturn(exists);when(exists.next()).thenReturn(true);when(exists.getInt(1)).thenReturn(1);
+            when(connection.createStatement()).thenReturn(statement);when(statement.executeQuery(anyString())).thenReturn(rows);
+            when(rows.next()).thenReturn(true,false);when(rows.getString("version")).thenReturn("2026112702");
+            when(rows.getString("script")).thenReturn(script);when(rows.getString("type")).thenReturn("SQL");when(rows.getBoolean("success")).thenReturn(true);
+            var config=Flyway.configure().dataSource(datasource).locations("classpath:db/migration");
+            if(script.equals("unexpected.sql")) {
+                assertThatThrownBy(()->DevelopMigrationHistoryLocations.configure(config)).hasMessageContaining("Unrecognized or failed");
+            } else {
+                DevelopMigrationHistoryLocations.configure(config);
+                boolean legacy=script.contains("renewal_customer");
+                assertThat(config.getLocations()).extracting(Object::toString)
+                    .contains("classpath:db/migration-history/"+(legacy?"legacy-local-2702":"develop-lifecycle-2702"))
+                    .doesNotContain("classpath:db/migration-history/"+(legacy?"develop-lifecycle-2702":"legacy-local-2702"));
+            }
+            verify(statement,never()).execute(anyString());verify(statement,never()).executeUpdate(anyString());
+        }
+    }
     @Test void appointmentVersionDoesNotRunLegacyLedgerCallback(){
         var context=mock(org.flywaydb.core.api.callback.Context.class);var info=mock(org.flywaydb.core.api.MigrationInfo.class);
         when(context.getMigrationInfo()).thenReturn(info);when(info.getVersion()).thenReturn(org.flywaydb.core.api.MigrationVersion.fromVersion("2026101001"));
