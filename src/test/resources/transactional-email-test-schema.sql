@@ -1,7 +1,5 @@
 -- H2 test profile has Flyway disabled, so JDBC tables are outside Hibernate's schema.
 CREATE TABLE IF NOT EXISTS facility_code_prefixes (code_prefix VARCHAR(32) PRIMARY KEY);
-CREATE TABLE IF NOT EXISTS business_record_codes (resource_key VARCHAR(120) PRIMARY KEY, display_code VARCHAR(16));
-CREATE TABLE IF NOT EXISTS money_receipt_codes (source_type VARCHAR(24), source_id BINARY(16), receipt_code VARCHAR(20));
 CREATE ALIAS IF NOT EXISTS BIN_TO_UUID FOR "com.storagehub.service.ReturnClearanceConcurrencyTests.binaryUuid";
 
 CREATE TABLE IF NOT EXISTS payment_receipt_emails (

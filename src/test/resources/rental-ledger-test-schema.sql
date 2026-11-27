@@ -174,3 +174,5 @@ CREATE TABLE recovery_overdue_fee_assessments (
  calculated_at_ms BIGINT NOT NULL,
  PRIMARY KEY(return_id,snapshot_revision)
 );
+
+CREATE ALIAS IF NOT EXISTS BIN_TO_UUID FOR "com.storagehub.service.ReturnClearanceConcurrencyTests.binaryUuid";
