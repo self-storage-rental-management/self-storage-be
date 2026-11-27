@@ -623,78 +623,7 @@ public class VnpayService {
         VnpayRefundRequest request,
         String clientIp
     ) {
-        requireConfigured();
-        if (actor == null || !actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
-            throw ApiExceptions.forbidden("Manager or Business approval is required for VNPAY refunds");
-        }
-        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
-        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
-            .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
-        if (payment.getStatus() != PaymentStatus.PAID || payment.getGatewayTransactionNo() == null) {
-            throw ApiExceptions.conflict("Only a successful VNPAY payment can be refunded");
-        }
-        if (payment.getRenewal() != null) {
-            throw ApiExceptions.conflict("Renewal refunds require the Renewal refund entitlement and payout workflow");
-        }
-        if (payment.getReservation() == null) {
-            throw ApiExceptions.conflict("Only an original reservation payment can be refunded through this endpoint");
-        }
-        UUID facilityId = payment.getReservation().getFacility().getId();
-        if (facilityScopeService != null && actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS)) {
-            facilityScopeService.assertCanManage(actor, facilityId);
-        }
-        if (refundRentals.findByReservation_Id(payment.getReservation().getId())
-            .filter(rental -> rental.getSetupStartedAt() != null).isPresent())
-            throw ApiExceptions.conflict("Tiền của hồ sơ đã bàn giao phải được hoàn qua quyết toán trả kho để tránh hoàn trùng.");
-        BigDecimal remaining = payment.getAmount().subtract(payment.getRefundedAmount());
-        if (request.amount().compareTo(remaining) > 0) {
-            throw ApiExceptions.validation("Refund amount exceeds the refundable amount", null);
-        }
-        if (actor.hasRole(RoleCode.MANAGER)
-            && request.amount().compareTo(managerRefundApprovalLimit()) > 0) {
-            UUID requestId = createEscalatedRefundRequest(actor, payment, request);
-            throw ApiExceptions.conflict(
-                "Refund exceeds the Manager approval limit; Business approval is required. requestId=" + requestId
-            );
-        }
-        User user = userRepository.findById(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
-        Refund refund = null;
-        if (refundRepository != null) {
-            refund = new Refund();
-            refund.setPayment(payment);
-            refund.setRequestedBy(user);
-            refund.setApprovedBy(user);
-            refund.setApprovedAt(Instant.now());
-            refund.setAmount(request.amount());
-            refund.setReason(request.reason());
-            refund.setStatus(RefundStatus.PROCESSING);
-            refund = refundRepository.saveAndFlush(refund);
-        }
-        Map<String, String> payload = refundRequest(payment, request, user.getEmail(), clientIp);
-        Map<String, String> gateway = post(payload);
-        boolean successful = "00".equals(gateway.get("vnp_ResponseCode"));
-        if (successful) {
-            payment.setRefundedAmount(payment.getRefundedAmount().add(request.amount()));
-        }
-        if (refund != null) {
-            refund.setStatus(successful ? RefundStatus.COMPLETED : RefundStatus.FAILED);
-            refund.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
-            refund.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
-            refund.setGatewayRefundId(gateway.get("vnp_TransactionNo") != null
-                ? gateway.get("vnp_TransactionNo") : gateway.get("vnp_TxnRef"));
-            refundRepository.save(refund);
-        }
-        payment.setLastReconciledAt(Instant.now());
-        paymentRepository.saveAndFlush(payment);
-        auditLogService.recordMutation(
-            user, "VNPAY_REFUND_REQUESTED", "Payment", payment.getId(),
-            payment.getReservation().getFacility().getId(), null,
-            Map.of("amount", request.amount(), "reason", request.reason(),
-                "responseCode", gateway.getOrDefault("vnp_ResponseCode", "99"),
-                "refundStatus", successful ? RefundStatus.COMPLETED.name() : RefundStatus.FAILED.name())
-        );
-        return response(payment, gateway.getOrDefault("vnp_Message", "Refund request completed"));
+        throw ApiExceptions.conflict("Không hỗ trợ hoàn tiền qua VNPay. Vui lòng hoàn bằng chuyển khoản hoặc tiền mặt kèm biên lai.");
     }
 
     @Transactional(readOnly = true)
@@ -727,104 +656,7 @@ public class VnpayService {
     public VnpayTransactionResponse approveRefundRequest(
         ActorPrincipal actor, UUID requestId, String resolutionNote, String clientIp
     ) {
-        requireConfigured();
-        if (actor == null || !actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN)) {
-            throw ApiExceptions.forbidden("Business approval is required");
-        }
-        authorizationService.require(actor, SystemPermission.APPROVE_REFUNDS);
-        if (refundRequestRepository == null) {
-            throw ApiExceptions.conflict("Refund request workflow is unavailable");
-        }
-        RefundRequest request = refundRequestRepository.findById(requestId)
-            .orElseThrow(() -> ApiExceptions.notFound("Refund request was not found"));
-        if (request.getStatus() != RefundRequestStatus.REQUESTED
-            && request.getStatus() != RefundRequestStatus.PENDING_ESCALATION) {
-            throw ApiExceptions.conflict("Refund request is not awaiting Business approval");
-        }
-        Payment payment = paymentRepository.findByIdForUpdate(request.getPayment().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Payment was not found"));
-        if (payment.getReservation() == null || payment.getStatus() != PaymentStatus.PAID) {
-            throw ApiExceptions.conflict("Only a successful original reservation payment can be refunded");
-        }
-        facilityScopeService.assertCanManage(actor, payment.getReservation().getFacility().getId());
-        if (request.getRequestedBy() != null && request.getRequestedBy().getId().equals(actor.userId())) {
-            throw ApiExceptions.forbidden("The requester cannot approve the same refund request");
-        }
-        BigDecimal remaining = payment.getAmount().subtract(payment.getRefundedAmount());
-        if (request.getAmount().compareTo(remaining) > 0) {
-            throw ApiExceptions.conflict("Refund request exceeds the remaining refundable amount");
-        }
-
-        User approver = userRepository.findById(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
-        request.setApprovedBy(approver);
-        request.setApprovedAt(Instant.now());
-        request.setStatus(RefundRequestStatus.APPROVED);
-        if (resolutionNote != null && !resolutionNote.isBlank()) {
-            request.setReason(request.getReason() + " | Business: " + resolutionNote.trim());
-        }
-        request.setStatus(RefundRequestStatus.PROCESSING);
-        refundRequestRepository.saveAndFlush(request);
-
-        Refund execution = null;
-        if (refundRepository != null) {
-            execution = new Refund();
-            execution.setPayment(payment);
-            execution.setRequestedBy(request.getRequestedBy());
-            execution.setApprovedBy(approver);
-            execution.setApprovedAt(request.getApprovedAt());
-            execution.setAmount(request.getAmount());
-            execution.setReason(request.getReason());
-            execution.setStatus(RefundStatus.PROCESSING);
-            execution = refundRepository.saveAndFlush(execution);
-        }
-
-        boolean manualSettlement = payment.getGatewayTransactionNo() == null || payment.getGatewayTransactionNo().isBlank();
-        Map<String, String> gateway = manualSettlement
-            ? Map.of(
-                "vnp_ResponseCode", "00",
-                "vnp_TransactionNo", "MANUAL-" + request.getId().toString().substring(0, 8).toUpperCase(),
-                "vnp_Message", "Manual refund approved and recorded"
-            )
-            : post(refundRequest(
-                payment,
-                new VnpayRefundRequest(request.getAmount(), request.getReason()),
-                approver.getEmail(), clientIp
-            ));
-        boolean successful = "00".equals(gateway.get("vnp_ResponseCode"));
-        String gatewayReference = gateway.get("vnp_TransactionNo") != null
-            ? gateway.get("vnp_TransactionNo") : gateway.get("vnp_TxnRef");
-        request.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
-        request.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
-        request.setGatewayRefundId(gatewayReference);
-        request.setProcessedAt(Instant.now());
-        request.setStatus(successful ? RefundRequestStatus.REFUNDED : RefundRequestStatus.FAILED);
-        refundRequestRepository.save(request);
-        if (execution != null) {
-            execution.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
-            execution.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
-            execution.setGatewayRefundId(gatewayReference);
-            execution.setStatus(successful ? RefundStatus.COMPLETED : RefundStatus.FAILED);
-            refundRepository.save(execution);
-        }
-        if (successful) {
-            payment.setRefundedAmount(payment.getRefundedAmount().add(request.getAmount()));
-            payment.setLastReconciledAt(Instant.now());
-            paymentRepository.saveAndFlush(payment);
-        }
-        UUID auditFacilityId = payment.getReservation() != null && payment.getReservation().getFacility() != null
-            ? payment.getReservation().getFacility().getId()
-            : (payment.getRenewal() != null && payment.getRenewal().getRental() != null && payment.getRenewal().getRental().getFacility() != null
-                ? payment.getRenewal().getRental().getFacility().getId()
-                : null);
-        auditLogService.recordMutation(
-            approver, "VNPAY_ESCALATED_REFUND_PROCESSED", "RefundRequest", request.getId(),
-            auditFacilityId, null,
-            Map.of("requestStatus", request.getStatus().name(),
-                "amount", request.getAmount(),
-                "gatewayReference", gatewayReference == null ? "" : gatewayReference)
-        );
-        return response(payment, gateway.getOrDefault("vnp_Message", "Refund request processed"));
+        throw ApiExceptions.conflict("Không hỗ trợ hoàn tiền qua VNPay. Vui lòng hoàn bằng chuyển khoản hoặc tiền mặt kèm biên lai.");
     }
 
     private UUID createEscalatedRefundRequest(ActorPrincipal actor, Payment payment, VnpayRefundRequest request) {
@@ -893,61 +725,7 @@ public class VnpayService {
     public String executeApprovedReturnRefund(
         ActorPrincipal actor, UUID paymentId, BigDecimal amount, String reason, String clientIp
     ) {
-        requireConfigured();
-        if (actor == null || !actor.hasAnyRole(RoleCode.STAFF, RoleCode.ADMIN)) {
-            throw ApiExceptions.forbidden("Staff execution is required for an approved return refund");
-        }
-        authorizationService.require(actor, SystemPermission.EXECUTE_REFUNDS);
-        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
-            .orElseThrow(() -> ApiExceptions.notFound("Original payment was not found"));
-        if (payment.getStatus() != PaymentStatus.PAID || payment.getGatewayTransactionNo() == null
-            || payment.getRenewal() != null || payment.getReservation() == null) {
-            throw ApiExceptions.conflict("The original payment is not refundable through VNPay");
-        }
-        BigDecimal remaining = payment.getAmount().subtract(payment.getRefundedAmount());
-        if (amount == null || amount.signum() <= 0 || amount.compareTo(remaining) > 0) {
-            throw ApiExceptions.validation("Refund amount exceeds the original payment's refundable amount", null);
-        }
-        User user = userRepository.findById(actor.userId())
-            .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
-        VnpayRefundRequest request = new VnpayRefundRequest(amount, reason);
-        Refund refund = null;
-        if (refundRepository != null) {
-            refund = new Refund();
-            refund.setPayment(payment);
-            refund.setRequestedBy(user);
-            refund.setApprovedBy(user);
-            refund.setApprovedAt(Instant.now());
-            refund.setAmount(amount);
-            refund.setReason(reason);
-            refund.setStatus(RefundStatus.PROCESSING);
-            refund = refundRepository.saveAndFlush(refund);
-        }
-        Map<String, String> gateway = post(refundRequest(payment, request, user.getEmail(), clientIp));
-        if (!"00".equals(gateway.get("vnp_ResponseCode"))) {
-            if (refund != null) {
-                refund.setStatus(RefundStatus.FAILED);
-                refund.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
-                refundRepository.save(refund);
-            }
-            throw ApiExceptions.conflict("VNPay did not confirm the return refund");
-        }
-        payment.setRefundedAmount(payment.getRefundedAmount().add(amount));
-        payment.setLastReconciledAt(Instant.now());
-        paymentRepository.saveAndFlush(payment);
-        String reference = gateway.get("vnp_TransactionNo") != null
-            ? gateway.get("vnp_TransactionNo") : gateway.get("vnp_TxnRef");
-        if (refund != null) {
-            refund.setStatus(RefundStatus.COMPLETED);
-            refund.setGatewayResponseCode(gateway.get("vnp_ResponseCode"));
-            refund.setGatewayTransactionNo(gateway.get("vnp_TransactionNo"));
-            refund.setGatewayRefundId(reference);
-            refundRepository.save(refund);
-        }
-        auditLogService.recordMutation(user, "VNPAY_RETURN_REFUND_COMPLETED", "Payment", payment.getId(),
-            payment.getReservation().getFacility().getId(), null,
-            Map.of("amount", amount, "reference", reference == null ? payment.getGatewayIntentId() : reference));
-        return reference == null ? payment.getGatewayIntentId() : reference;
+        throw ApiExceptions.conflict("Không hỗ trợ hoàn tiền qua VNPay. Vui lòng hoàn bằng chuyển khoản hoặc tiền mặt kèm biên lai.");
     }
 
     @Transactional(readOnly = true)
@@ -1007,7 +785,10 @@ public class VnpayService {
         values.put("vnp_Locale", "vn");
         values.put("vnp_ReturnUrl", properties.getReturnUrl());
         values.put("vnp_IpAddr", ip(clientIp));
-        values.put("vnp_CreateDate", DATE_TIME.format(now));
+        if (payment.getGatewayCreateDate() == null) {
+            payment.setGatewayCreateDate(DATE_TIME.format(now));
+        }
+        values.put("vnp_CreateDate", payment.getGatewayCreateDate());
         values.put("vnp_ExpireDate", DATE_TIME.format(gatewayExpiry));
         String query = encode(values);
         return properties.getPayUrl() + "?" + query + "&vnp_SecureHash=" + hmac(query);
@@ -1067,8 +848,10 @@ public class VnpayService {
 
     private Map<String, String> queryRequest(Payment payment, String clientIp) {
         String createDate = DATE_TIME.format(Instant.now());
-        String transactionDate = payment.getGatewayPayDate() != null
-            ? payment.getGatewayPayDate() : DATE_TIME.format(payment.getCreatedAt());
+        // QueryDR requires the original pay request's CreateDate, not PayDate.
+        // Legacy intents did not persist it; createdAt is the best available fallback.
+        String transactionDate = payment.getGatewayCreateDate() != null
+            ? payment.getGatewayCreateDate() : DATE_TIME.format(payment.getCreatedAt());
         Map<String, String> values = new HashMap<>();
         values.put("vnp_RequestId", requestId()); values.put("vnp_Version", VERSION);
         values.put("vnp_Command", "querydr"); values.put("vnp_TmnCode", properties.getTmnCode());
@@ -1144,7 +927,7 @@ public class VnpayService {
 
     private String url(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }
     private String join(Map<String, String> values, String... keys) {
-        return java.util.Arrays.stream(keys).map(key -> values.getOrDefault(key, "")).reduce((a, b) -> a + "|" + b).orElse("");
+        return java.util.Arrays.stream(keys).map(key -> java.util.Objects.toString(values.get(key), "")).reduce((a, b) -> a + "|" + b).orElse("");
     }
     private String hmac(String value) {
         try {
@@ -1160,7 +943,12 @@ public class VnpayService {
     }
     private long amountMinor(BigDecimal amount) { return amount.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.UNNECESSARY).longValueExact(); }
     private String requestId() { return UUID.randomUUID().toString().replace("-", "").substring(0, 32); }
-    private String ip(String value) { return value == null || value.isBlank() ? "127.0.0.1" : value.split(",")[0].trim(); }
+    private String ip(String value) {
+        String address = value == null || value.isBlank() ? "127.0.0.1" : value.split(",", -1)[0].trim();
+        // The sandbox expects at least 7 characters; local browsers can supply ::1.
+        return address.isBlank() || "::1".equals(address) || "0:0:0:0:0:0:0:1".equals(address)
+            ? "127.0.0.1" : address;
+    }
     private String requiredKey(String value) {
         if (value == null || value.isBlank() || value.length() > 100) throw ApiExceptions.validation("Idempotency-Key is required and must be at most 100 characters", null);
         return value.trim();
@@ -1645,5 +1433,105 @@ public class VnpayService {
             this(rspCode,message,paymentId,reservationId,null,success,false);
         }
     }
+    public record QueryDrVerification(
+        Instant checkedAt,
+        String responseCode,
+        String transactionStatus,
+        String transactionNo,
+        String payDate,
+        String conclusion,
+        String message
+    ) {}
+
+    public QueryDrVerification verifyPaymentForComplaint(Payment payment, String clientIp) {
+        Instant now = Instant.now();
+        if (payment == null || payment.getGatewayIntentId() == null || payment.getGatewayIntentId().isBlank()) {
+            return new QueryDrVerification(now, null, null, null, null, "UNAVAILABLE",
+                "Giao dịch chưa có mã tham chiếu VNPAY (vnp_TxnRef) để truy vấn.");
+        }
+        if (!properties.isEnabled() || properties.getTmnCode().isBlank() || properties.getHashSecret().isBlank()) {
+            return new QueryDrVerification(now, null, null, null, null, "UNAVAILABLE",
+                "Cấu hình VNPAY Sandbox chưa được kích hoạt trên hệ thống.");
+        }
+        final Map<String, String> gateway;
+        try {
+            gateway = post(queryRequest(payment, clientIp));
+        } catch (RuntimeException exception) {
+            return new QueryDrVerification(now, null, null, null, null, "UNAVAILABLE",
+                "Cổng VNPAY không phản hồi hoặc đang bận. Vui lòng thử truy vấn lại.");
+        }
+        payment.setLastReconciledAt(now);
+        String responseCode = gateway.get("vnp_ResponseCode");
+        String suppliedHash = gateway.get("vnp_SecureHash");
+        // Gateway errors may contain only ResponseCode and Message. They are
+        // diagnostics, never authenticated payment evidence or a signature mismatch.
+        if (responseCode != null && !"00".equals(responseCode)
+            && (suppliedHash == null || suppliedHash.isBlank())) {
+            return new QueryDrVerification(now, responseCode, null, null, null, "UNAVAILABLE",
+                queryErrorMessage(responseCode) + " Phản hồi không có chữ ký xác thực; chưa đủ căn cứ xác nhận thanh toán.");
+        }
+        if (!verifyQueryResponse(gateway)
+            || !payment.getGatewayIntentId().equals(gateway.get("vnp_TxnRef"))
+            || !properties.getTmnCode().equals(gateway.get("vnp_TmnCode"))) {
+            return new QueryDrVerification(now, gateway.get("vnp_ResponseCode"), gateway.get("vnp_TransactionStatus"),
+                gateway.get("vnp_TransactionNo"), gateway.get("vnp_PayDate"), "INVALID_SIGNATURE",
+                "Chữ ký hoặc mã tham chiếu từ VNPAY không khớp với giao dịch nội bộ.");
+        }
+        String txStatus = gateway.get("vnp_TransactionStatus");
+        String txNo = gateway.get("vnp_TransactionNo");
+        String payDate = gateway.get("vnp_PayDate");
+        payment.setGatewayResponseCode(responseCode);
+        payment.setGatewayTransactionStatus(txStatus);
+        if (txNo != null && !txNo.isBlank()) payment.setGatewayTransactionNo(txNo);
+        if (payDate != null && !payDate.isBlank()) payment.setGatewayPayDate(payDate);
+
+        if ("91".equals(responseCode)) {
+            return new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "NOT_FOUND",
+                "VNPAY không tìm thấy giao dịch (91) — chưa đủ căn cứ xác nhận đã thanh toán.");
+        }
+        if ("94".equals(responseCode)) {
+            return new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "UNAVAILABLE",
+                "VNPAY giới hạn tần suất truy vấn lại trong 5 phút (94). Vui lòng thử lại sau ít phút.");
+        }
+        if (!"00".equals(responseCode)) {
+            return new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "UNAVAILABLE",
+                queryErrorMessage(responseCode));
+        }
+        try {
+            if (gateway.get("vnp_Amount") == null || gateway.get("vnp_Amount").isBlank()) {
+                return new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "UNAVAILABLE",
+                    "Phản hồi VNPAY thiếu số tiền giao dịch; chưa đủ căn cứ xác minh.");
+            }
+            validateQueryAmount(payment, gateway);
+        } catch (RuntimeException exception) {
+            return new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "INVALID_SIGNATURE",
+                "Số tiền VNPAY trả về không khớp với số tiền giao dịch trong hệ thống.");
+        }
+        return switch (txStatus == null ? "" : txStatus) {
+            case "00" -> new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "PAID_CONFIRMED",
+                "Thanh toán thành công (00) — có căn cứ xác nhận khách đã thanh toán qua VNPAY.");
+            case "01" -> new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "INCOMPLETE",
+                "Giao dịch chưa hoàn tất (01) — chưa đủ căn cứ, cần tiếp tục kiểm tra.");
+            case "02" -> new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "FAILED",
+                "Giao dịch lỗi (02) — VNPAY chưa xác nhận thanh toán thành công.");
+            case "04" -> new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "REVERSED",
+                "Giao dịch đảo (04) — có căn cứ bị trừ tiền theo mô phỏng, cần chuyển xử lý tra soát.");
+            default -> new QueryDrVerification(now, responseCode, txStatus, txNo, payDate, "INCOMPLETE",
+                "Trạng thái giao dịch VNPAY (" + txStatus + ") chưa hoàn tất — chưa đủ căn cứ.");
+        };
+    }
+
+    private String queryErrorMessage(String code) {
+        return switch (code) {
+            case "02" -> "VNPAY từ chối mã merchant (02). Cần kiểm tra cấu hình TmnCode và môi trường kết nối.";
+            case "03" -> "VNPAY báo dữ liệu truy vấn không đúng định dạng (03).";
+            case "91" -> "VNPAY không tìm thấy giao dịch (91).";
+            case "94" -> "VNPAY giới hạn truy vấn lại trong 5 phút (94). Vui lòng thử lại sau.";
+            case "97" -> "VNPAY từ chối chữ ký yêu cầu (97). Cần kiểm tra HashSecret và dữ liệu ký.";
+            case "99" -> "VNPAY trả lỗi khác (99), chưa cung cấp kết quả giao dịch. Mã 99 không xác định lỗi chữ ký hay thanh toán thất bại.";
+            default -> "VNPAY chưa xác minh được giao dịch (mã " + code + ").";
+        };
+    }
+
     enum ReconciliationOutcome { SUCCESS, FINAL_FAILURE, UNKNOWN }
 }

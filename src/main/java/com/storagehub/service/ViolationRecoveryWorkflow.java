@@ -117,7 +117,7 @@ public class ViolationRecoveryWorkflow {
         Instant detectedAt, Instant reviewDueAt, Instant businessReviewDueAt, RecoveryReviewService.Review review,
         Verification verification, Verification pickupVerification, boolean canViewSourceGoods,
         Instant pickupAppointmentAt, String managerResponseNote, Instant managerRespondedAt,
-        List<UUID> customerAttachmentIds, List<UUID> managerAttachmentIds,
+        List<UUID> customerAttachmentIds, List<UUID> managerAttachmentIds, List<UUID> inventoryEvidenceIds,
         List<CommunicationEntry> communications) {}
 
     public static final class Details {
@@ -132,6 +132,7 @@ public class ViolationRecoveryWorkflow {
         public Instant managerRespondedAt;
         public List<UUID> customerAttachmentIds = new ArrayList<>();
         public List<UUID> managerAttachmentIds = new ArrayList<>();
+        public List<UUID> inventoryEvidenceIds = new ArrayList<>();
         public List<CommunicationEntry> communications = new ArrayList<>();
         public List<UUID> attempts = new ArrayList<>();
         public List<UUID> pickupAttempts = new ArrayList<>();
@@ -158,6 +159,25 @@ public class ViolationRecoveryWorkflow {
         var recovery = openRecovery(rental, null, Reason.CONFIRMED_PROHIBITED_GOODS, now, now);
         if (recovery == null)
             throw ApiExceptions.conflict("Hồ sơ đang có luồng thu hồi hoặc chưa đủ điều kiện mở thu hồi.");
+        return recovery.getId();
+    }
+
+    /** The caller must lock and authorize the inventory visit before invoking this method. */
+    @Transactional
+    public UUID openInventoryProhibitedGoodsRecovery(ActorPrincipal actor, Rental rental, String description, List<UUID> evidenceIds) {
+        if (!List.of(RentalStatus.setup, RentalStatus.active).contains(rental.getStatus()))
+            throw ApiExceptions.conflict("Hồ sơ không còn trong giai đoạn kiểm kê.");
+        var now = Instant.now();
+        var recovery = openRecovery(rental, null, Reason.CONFIRMED_PROHIBITED_GOODS, now, now);
+        if (recovery == null)
+            throw ApiExceptions.conflict("Hồ sơ đã chuyển thu hồi hoặc không còn đủ điều kiện.");
+        var details = details(recovery);
+        details.reasonNote = description;
+        details.report = description;
+        details.inventoryEvidenceIds = new ArrayList<>(evidenceIds);
+        details.history.add(new HistoryEvent("INVENTORY_PROHIBITED_GOODS", users.getReferenceById(actor.userId()).getFullName(), now, recovery.getStage(), description));
+        save(recovery, details);
+        recoveries.saveAndFlush(recovery);
         return recovery.getId();
     }
 
@@ -209,7 +229,13 @@ public class ViolationRecoveryWorkflow {
         var paging = PageRequest.of(Math.max(0, page), 30);
         List<ViolationRecovery> rows;
         if (actor.hasRole(RoleCode.CUSTOMER)) rows = recoveries.findByRental_Customer_IdOrderByCreatedAtDesc(actor.userId(), paging);
-        else if (actor.hasRole(RoleCode.STAFF)) rows = recoveries.findByTask_AssignedTo_IdOrderByCreatedAtDesc(actor.userId(), paging);
+        else if (actor.hasRole(RoleCode.STAFF)) {
+            if (!actor.hasPermission(SystemPermission.PROCESS_RETURNS)) return List.of();
+            var facilities = actor.facilityScopes().entrySet().stream()
+                .filter(scope -> scope.getValue().includes(FacilityScopeLevel.OPERATE))
+                .map(Map.Entry::getKey).toList();
+            rows = recoveries.staffQueue(actor.userId(), facilities.isEmpty() ? List.of(new UUID(0, 0)) : facilities, paging);
+        }
         else if (actor.hasAnyRole(RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
             rows = operationsQueue(actor, false, paging);
         } else throw ApiExceptions.forbidden("Vai trò không có quyền xem thu hồi.");
@@ -542,20 +568,15 @@ public class ViolationRecoveryWorkflow {
 
     private void attendance(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         boolean present = c.action() == Action.RECORD_PRESENT;
-        if (present) {
-            if (v.getScheduledAt() != null && now.isBefore(v.getScheduledAt())) {
-                throw ApiExceptions.conflict("Chưa đến ngày giờ lịch thu hồi, chưa thể ghi nhận khách có mặt.");
-            }
-            if (d.reply == Reply.CANNOT_ATTEND) {
-                throw ApiExceptions.conflict("Khách hàng đã báo không thể có mặt, không thể ghi nhận có mặt.");
-            }
+        if (present && d.reply == Reply.CANNOT_ATTEND) {
+            throw ApiExceptions.conflict("Khách hàng đã báo không thể có mặt, không thể ghi nhận có mặt.");
         }
-        Instant actual = c.appointmentAt() == null ? now : c.appointmentAt();
-        if (actual.isAfter(now) || actual.isBefore(v.getRequiredAt()))
+        if (!present && c.appointmentAt() != null
+            && (c.appointmentAt().isAfter(now) || c.appointmentAt().isBefore(v.getRequiredAt())))
             throw ApiExceptions.validation("Giờ ghi nhận khách không hợp lệ.", null);
         d.attendanceEvidenceId = evidence(v, actor, c.evidenceId());
         d.attendance = present ? Attendance.PRESENT : Attendance.ABSENT;
-        d.arrivedAt = present ? actual : null;
+        d.arrivedAt = present ? now : null;
         d.verifiedAt = null;
         d.reasonNote = clean(c.note());
         if (d.startedAt != null || d.disputeOpen) {
@@ -563,6 +584,9 @@ public class ViolationRecoveryWorkflow {
         } else {
             d.needsWitness |= !present;
             advance(v, Stage.AWAITING_ATTENDANCE, v.getDeadlineAt());
+            if (present && c.document() != null && !normalize(v.getRental().getReservation().getIdentityDocumentNumber()).isEmpty()) {
+                verify(v, d, c, now);
+            }
         }
     }
 
@@ -927,7 +951,7 @@ public class ViolationRecoveryWorkflow {
         }
         if (terminal(v)) return actions;
         if (v.getStage() == Stage.BLOCKED || d.disputeOpen || v.getRequiredAt() == null) return actions;
-        if (v.getScheduledAt() != null && !now.isBefore(v.getScheduledAt())
+        if (v.getScheduledAt() != null
             && d.reply != Reply.CANNOT_ATTEND
             && d.attempts.size() < VERIFICATION_LIMIT
             && (d.attendance != Attendance.PRESENT || !session(d.arrivedAt, now))) {
@@ -939,9 +963,12 @@ public class ViolationRecoveryWorkflow {
         if (d.startedAt == null && d.attendance == Attendance.PRESENT && d.verifiedAt == null && session(d.arrivedAt, now)
             && d.attempts.size() < VERIFICATION_LIMIT
             && !normalize(v.getRental().getReservation().getIdentityDocumentNumber()).isEmpty()) actions.add(Action.VERIFY);
-        if (v.getStage() == Stage.AWAITING_ATTENDANCE && !now.isBefore(v.getScheduledAt())
-            && d.notifiedAt != null && d.responseDueAt != null && !now.isBefore(d.responseDueAt)
-            && (d.attendance == Attendance.ABSENT || d.attendance == Attendance.PRESENT)) actions.add(Action.START);
+        if (v.getStage() == Stage.AWAITING_ATTENDANCE && d.notifiedAt != null && d.responseDueAt != null
+            && (d.attendance == Attendance.ABSENT || d.attendance == Attendance.PRESENT)) {
+            boolean verifiedInPerson = d.attendance == Attendance.PRESENT && within(d.arrivedAt, now, d.verifiedAt);
+            boolean scheduledWindowOpen = !now.isBefore(v.getScheduledAt()) && !now.isBefore(d.responseDueAt);
+            if (verifiedInPerson || scheduledWindowOpen) actions.add(Action.START);
+        }
         if (v.getStage() == Stage.IN_PROGRESS && !d.disputeOpen) actions.addAll(List.of(Action.SAVE_ITEM, Action.COMPLETE));
         return actions;
     }
@@ -993,6 +1020,7 @@ public class ViolationRecoveryWorkflow {
             d.pickupAppointmentAt, d.managerResponseNote, d.managerRespondedAt,
             d.customerAttachmentIds == null ? List.of() : List.copyOf(d.customerAttachmentIds),
             d.managerAttachmentIds == null ? List.of() : List.copyOf(d.managerAttachmentIds),
+            customer || d.inventoryEvidenceIds == null ? List.of() : List.copyOf(d.inventoryEvidenceIds),
             List.copyOf(communications));
     }
 
@@ -1038,7 +1066,13 @@ public class ViolationRecoveryWorkflow {
 
     private boolean canRead(ActorPrincipal actor, ViolationRecovery v) {
         if (actor.hasRole(RoleCode.CUSTOMER)) return v.getRequiredAt() != null && v.getRental().getCustomer().getId().equals(actor.userId());
-        if (actor.hasRole(RoleCode.STAFF) && (!actor.hasPermission(SystemPermission.PROCESS_RETURNS) || !isAssigned(v, actor))) return false;
+        if (actor.hasRole(RoleCode.STAFF)) {
+            if (!actor.hasPermission(SystemPermission.PROCESS_RETURNS)) return false;
+            boolean pendingProhibited = v.getReason() == Reason.CONFIRMED_PROHIBITED_GOODS
+                && v.getStage() == Stage.AWAITING_ASSIGNMENT && (v.getTask() == null || v.getTask().getAssignedTo() == null)
+                && scopes.canAccessFacility(actor, v.getRental().getFacility().getId(), FacilityScopeLevel.OPERATE);
+            if (!isAssigned(v, actor) && !pendingProhibited) return false;
+        }
         return scopes.canAccessFacility(actor, v.getRental().getFacility().getId(), FacilityScopeLevel.READ);
     }
 

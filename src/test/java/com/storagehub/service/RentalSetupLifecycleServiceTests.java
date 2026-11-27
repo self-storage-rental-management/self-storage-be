@@ -135,7 +135,8 @@ class RentalSetupLifecycleServiceTests {
             org.mockito.ArgumentMatchers.eq(rental.getCustomer().getId()),
             org.mockito.ArgumentMatchers.eq(com.storagehub.domain.model.NotificationType.CHECKIN),
             org.mockito.ArgumentMatchers.eq("Hôm nay là ngày chuẩn bị miễn phí cuối cùng"),
-            any(String.class), org.mockito.ArgumentMatchers.eq(rental.getReservation().getId()));
+            org.mockito.ArgumentMatchers.contains("Kỳ thuê tính từ " + rental.getStartDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))),
+            org.mockito.ArgumentMatchers.eq(rental.getReservation().getId()));
         verify(notificationService, never()).createNotification(any(), any(),
             org.mockito.ArgumentMatchers.eq("Nhắc thời gian chuẩn bị sắp kết thúc"), any(), any());
     }

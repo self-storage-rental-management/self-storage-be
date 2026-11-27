@@ -128,6 +128,35 @@ public class CheckInHandoverService {
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
 
+    @Autowired
+    private ObjectProvider<ViolationRecoveryWorkflow> violationRecoveryWorkflow;
+
+    public record ProhibitedGoodsRequest(
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 2000) String description,
+        @jakarta.validation.constraints.NotEmpty @jakarta.validation.constraints.Size(max = 10) List<@jakarta.validation.constraints.NotNull UUID> evidenceIds
+    ) {}
+
+    @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
+    public UUID transferProhibitedGoods(ActorPrincipal actor, UUID checkInId, ProhibitedGoodsRequest input) {
+        CheckIn checkIn = requireOpenInventoryVisit(actor, checkInId);
+        if (checkIn.getInventoryArrivedAt() == null || checkIn.getInventoryIdentityVerifiedAt() == null)
+            throw ApiExceptions.conflict("Cần ghi nhận khách đến và xác minh danh tính trước khi chuyển thu hồi.");
+        var ids = input.evidenceIds();
+        validateEvidence(checkInId, ids.stream().map(UUID::toString).toList());
+        var files = fileAssetRepository.findAllById(ids);
+        if (files.stream().anyMatch(file -> file.getUploadedBy() == null || !actor.userId().equals(file.getUploadedBy().getId())
+            || file.getContentType() == null || !(file.getContentType().startsWith("image/") || "application/pdf".equalsIgnoreCase(file.getContentType()))))
+            throw ApiExceptions.validation("Bằng chứng phải là ảnh hoặc PDF do nhân viên tải lên cho hồ sơ này.", null);
+        Rental rental = rentalRepository.findByReservationIdForUpdate(checkIn.getReservation().getId())
+            .orElseThrow(() -> ApiExceptions.conflict("Thiếu hồ sơ thuê."));
+        UUID recoveryId = violationRecoveryWorkflow.getObject().openInventoryProhibitedGoodsRecovery(actor, rental, input.description().strip(), ids);
+        auditLogService.recordMutation(requireActor(actor), "INVENTORY_PROHIBITED_GOODS_RECOVERY", "CheckIn", checkInId,
+            checkIn.getReservation().getFacility().getId(), null,
+            Map.of("description", input.description().strip(), "evidenceIds", ids, "recoveryId", recoveryId));
+        return recoveryId;
+    }
+
     public enum WorkGroup { ALL, ONGOING, PROCESSED }
 
     public record InventoryAlternative(UUID storageUnitId, String storageUnitCode, String unitTypeName,
@@ -553,7 +582,7 @@ public class CheckInHandoverService {
         IdentityComparison comparison = compareIdentity(reservation, customer, actualIdentity);
         startHandoverClock(reservation);
         if (comparison == IdentityComparison.REJECT) {
-            throw ApiExceptions.validation("CCCD vượt giới hạn sửa 3 chữ số. Cần xử lý từ chối bàn giao.", null);
+            throw ApiExceptions.validation("Chỉ được sửa tối đa 3 chữ số trong 6 số cuối CCCD và phải giữ nguyên 6 số đầu. Cần kiểm tra lại hoặc xử lý từ chối bàn giao.", null);
         }
         boolean mismatch = comparison == IdentityComparison.CORRECTABLE;
         if (mismatch) {

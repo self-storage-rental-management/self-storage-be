@@ -96,6 +96,64 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
+    void unassignedProhibitedRecoveryIsVisibleToStaffInFacilityButCannotBeOperated() {
+        recovery.setReason(Reason.CONFIRMED_PROHIBITED_GOODS);
+        recovery.setStage(Stage.AWAITING_ASSIGNMENT);
+        recovery.setTask(null);
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(workflow, "canRead", staff(), recovery)).isTrue();
+        var details = new ViolationRecoveryWorkflow.Details();
+        List<?> actions = ReflectionTestUtils.invokeMethod(workflow, "allowed", staff(), recovery, details, Instant.now());
+        assertThat(actions).isEmpty();
+        var foreignStaff = new ActorPrincipal(staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
+            Set.of(SystemPermission.PROCESS_RETURNS.code()), Map.of(UUID.randomUUID(), FacilityScopeLevel.OPERATE));
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(workflow, "canRead", foreignStaff, recovery)).isFalse();
+        recovery.setReason(Reason.SETUP_OVERDUE);
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(workflow, "canRead", staff(), recovery)).isFalse();
+    }
+
+    @Test
+    void inventoryProhibitedGoodsStartsRecoveryFromSetupWithEvidenceAndCannotRepeat() throws Exception {
+        rental.setStatus(RentalStatus.setup);
+        staff.setFullName("Nhân viên kiểm kê");
+        when(users.getReferenceById(staff.getId())).thenReturn(staff);
+        UUID evidence = UUID.randomUUID();
+        UUID id = workflow.openInventoryProhibitedGoodsRecovery(staff(), rental, "Hàng cấm: bình hóa chất", List.of(evidence));
+        var captor = org.mockito.ArgumentCaptor.forClass(ViolationRecovery.class);
+        verify(cases, atLeastOnce()).saveAndFlush(captor.capture());
+        var opened = captor.getValue();
+        assertThat(opened.getId()).isEqualTo(id);
+        assertThat(opened.getReason()).isEqualTo(Reason.CONFIRMED_PROHIBITED_GOODS);
+        assertThat(opened.getStage()).isEqualTo(Stage.AWAITING_ASSIGNMENT);
+        assertThat(opened.getPreviousRentalStatus()).isEqualTo(RentalStatus.setup);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.closing);
+        var details = mapper.readTree(opened.getDetailsJson());
+        assertThat(details.path("report").asText()).contains("bình hóa chất");
+        assertThat(details.path("inventoryEvidenceIds").get(0).asText()).isEqualTo(evidence.toString());
+        assertThatThrownBy(() -> workflow.openInventoryProhibitedGoodsRecovery(staff(), rental, "Hàng cấm", List.of(evidence)))
+            .isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void confirmedProhibitedGoodsEntersOrdinaryAssignmentAndOpensOnlyOnce() {
+        rental.setStatus(RentalStatus.active);
+        UUID id = workflow.openConfirmedProhibitedGoodsRecovery(manager(), rental.getId());
+
+        var created = org.mockito.ArgumentCaptor.forClass(ViolationRecovery.class);
+        verify(cases).saveAndFlush(created.capture());
+        var opened = created.getValue();
+        assertThat(id).isEqualTo(opened.getId());
+        assertThat(opened.getReason()).isEqualTo(Reason.CONFIRMED_PROHIBITED_GOODS);
+        assertThat(opened.getStage()).isEqualTo(Stage.AWAITING_ASSIGNMENT);
+        assertThat(opened.getScheduledAt()).isEqualTo(opened.getRequiredAt().plus(Duration.ofHours(24)));
+        assertThat(opened.getPreviousRentalStatus()).isEqualTo(RentalStatus.active);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.closing);
+        assertThatThrownBy(() -> workflow.openConfirmedProhibitedGoodsRecovery(manager(), rental.getId()))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                error -> assertThat(error.getStatus().value()).isEqualTo(409));
+        verify(tasks, never()).saveAndFlush(any());
+    }
+
+    @Test
     void automaticallyOpensOneRequestAndSchedules24HoursThen48HoursToComplete() {
         assertThat(workflow.detect(rental, source, Reason.REMOVAL_OVERDUE, rental.getInventoryRemovalDeadlineAt(),
             Instant.now(), true)).isTrue();
@@ -709,9 +767,10 @@ class ViolationRecoveryWorkflowTests {
         assertThat(assigned.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
         var staffView = workflow.get(staff(), recovery.getId());
         assertThat(staffView.actions())
+            .contains(ViolationRecoveryWorkflow.Action.RECORD_PRESENT)
             .doesNotContain(ViolationRecoveryWorkflow.Action.ACCEPT, ViolationRecoveryWorkflow.Action.APPROVE,
                 ViolationRecoveryWorkflow.Action.START, ViolationRecoveryWorkflow.Action.RECORD_ABSENT,
-                ViolationRecoveryWorkflow.Action.RECORD_PRESENT, ViolationRecoveryWorkflow.Action.BLOCK);
+                ViolationRecoveryWorkflow.Action.BLOCK);
         assertThatThrownBy(() -> execute(staff(), ViolationRecoveryWorkflow.Action.ACCEPT, null, null)).isInstanceOf(ApiException.class);
         assertThatThrownBy(() -> execute(manager(), ViolationRecoveryWorkflow.Action.APPROVE, "Không cần duyệt", null)).isInstanceOf(ApiException.class);
     }
@@ -1014,18 +1073,21 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void presentCustomerCanBeRecoveredAfterIdentityVerificationWithoutApproval() throws Exception {
+    void earlyArrivalCanStartRecoveryAfterVerificationBeforeTheReplyDeadline() throws Exception {
         readyForAbsentHandover();
         var d = mapper.readValue(recovery.getDetailsJson(), ViolationRecoveryWorkflow.Details.class);
+        recovery.setScheduledAt(Instant.now().plus(Duration.ofHours(24)));
+        recovery.setDeadlineAt(recovery.getScheduledAt().plus(Duration.ofHours(48)));
+        d.responseDueAt = Instant.now().plus(Duration.ofHours(6));
         d.attendance = null;
         d.needsWitness = false;
         d.acceptedAt = null;
         recovery.setDetailsJson(mapper.writeValueAsString(d));
-        workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.RECORD_PRESENT,
-            null, null, photo(), null, null));
+        var beforeArrival = Instant.now();
         var verified = workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
-            ViolationRecoveryWorkflow.Action.VERIFY, null, null, null, UUID.randomUUID(), null,
+            ViolationRecoveryWorkflow.Action.RECORD_PRESENT, null, null, photo(), UUID.randomUUID(), null,
             null, "TEST99999", null, null, null, null, null));
+        assertThat(verified.arrivedAt()).isBetween(beforeArrival, Instant.now());
         assertThat(verified.stage()).isEqualTo(Stage.AWAITING_ATTENDANCE);
         assertThat(verified.verification().matched()).isTrue();
         assertThat(verified.verification().canReceiveItems()).isTrue();

@@ -20,13 +20,17 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> 
         String entityType, UUID entityId, String action, Collection<UUID> facilityIds);
 
     @EntityGraph(attributePaths = {"actor"})
+    List<ActivityLog> findByEntityTypeAndActionInAndEntityIdIn(
+        String entityType, Collection<String> actions, Collection<UUID> entityIds);
+
+    @EntityGraph(attributePaths = {"actor"})
     List<ActivityLog> findByEntityTypeAndActionAndEntityIdIn(String entityType, String action, Collection<UUID> entityIds);
 
     @EntityGraph(attributePaths = {"actor", "facility"})
     @Query("""
         select log from ActivityLog log
         left join log.actor actor
-        where log.action not in ('RENTAL_SUSPICION_JOURNAL_ADDED', 'RENTAL_SUSPICION_TRANSFERRED')
+        where log.action not in ('RENTAL_SUSPICION_JOURNAL_ADDED', 'RENTAL_SUSPICION_TRANSFERRED', 'RENTAL_SUSPICION_CLOSED')
           and (:search is null
             or lower(log.action) like lower(concat('%', :search, '%'))
             or lower(log.entityType) like lower(concat('%', :search, '%'))
@@ -50,7 +54,7 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> 
     @Query("""
         select log from ActivityLog log
         left join log.actor actor
-        where log.action not in ('RENTAL_SUSPICION_JOURNAL_ADDED', 'RENTAL_SUSPICION_TRANSFERRED')
+        where log.action not in ('RENTAL_SUSPICION_JOURNAL_ADDED', 'RENTAL_SUSPICION_TRANSFERRED', 'RENTAL_SUSPICION_CLOSED')
           and (:facilityId is null or log.facility.id = :facilityId)
           and (:search is null
             or lower(log.action) like lower(concat('%', :search, '%'))

@@ -15,5 +15,6 @@ public class PaymentComplaintDeadlineScheduler {
     )
     public void markOverdue() {
         deadlineService.markOverdueComplaints();
+        deadlineService.sendDueReminders();
     }
 }

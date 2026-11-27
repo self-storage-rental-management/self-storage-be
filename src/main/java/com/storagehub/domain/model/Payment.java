@@ -92,6 +92,10 @@ public class Payment extends BaseEntity {
     @Column(length = 32)
     private String gatewayPayDate;
 
+    /** Exact vnp_CreateDate sent with the original pay request (GMT+7). */
+    @Column(length = 14)
+    private String gatewayCreateDate;
+
     @Column
     private Instant lastReconciledAt;
 
