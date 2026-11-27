@@ -597,6 +597,12 @@ public class CheckInHandoverService {
 
     @Transactional
     @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
+    public IdentityComparison compareIdentity(ActorPrincipal actor, UUID checkInId, String document) {
+        return compareIdentity(actor, checkInId, document, true);
+    }
+
+    @Transactional
+    @ProcessingGuard(ProcessingLeaseService.Target.CHECK_IN)
     public IdentityComparison compareIdentity(ActorPrincipal actor, UUID checkInId, String document, Boolean bookingOwnerConfirmed) {
         Reservation reservation = requireWorkflowStep(actor, checkInId, CheckInStatus.scheduled).getReservation();
         requireArrivalForAttendanceTerms(reservation);

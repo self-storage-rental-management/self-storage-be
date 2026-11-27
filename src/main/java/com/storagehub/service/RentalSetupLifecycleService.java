@@ -211,6 +211,7 @@ public class RentalSetupLifecycleService {
     private String timeline(Rental rental) {
         String setupEnd = java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")
             .withZone(VIETNAM_ZONE).format(rental.getSetupEndsAt());
-        return "Thời gian chuẩn bị miễn phí đến " + setupEnd + " (giờ Việt Nam). Kỳ thuê tính từ " + rental.getStartDate() + ".";
+        String rentalStart = rental.getStartDate().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+        return "Thời gian chuẩn bị miễn phí đến " + setupEnd + " (giờ Việt Nam). Kỳ thuê tính từ " + rentalStart + ".";
     }
 }
