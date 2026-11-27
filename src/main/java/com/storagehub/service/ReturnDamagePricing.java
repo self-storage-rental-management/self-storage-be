@@ -18,6 +18,8 @@ public final class ReturnDamagePricing {
     public record Item(String code, String label, String category, String unit,
                        BigDecimal suggestedMin, BigDecimal suggestedMax, BigDecimal unitPrice) {}
 
+    public static final String FRAME_DAMAGE = "equipment_frame_damage";
+
     private static final Map<String, Item> CATALOG;
 
     static {
@@ -36,6 +38,7 @@ public final class ReturnDamagePricing {
         add(items, "major_serious_wall_crack", "Tường bị nứt nghiêm trọng", "major", "vị trí", 500_000, 2_000_000);
         add(items, "major_electrical_damage", "Hệ thống điện bị hư hỏng", "major", "lần", 500_000, 3_000_000);
         add(items, "major_unusable_door", "Cửa kho không thể sử dụng", "major", "cái", 1_500_000, 4_000_000);
+        add(items, FRAME_DAMAGE, "Hư hỏng khung kệ", "equipment", "khung", 0, 0);
         CATALOG = Collections.unmodifiableMap(items);
     }
 
@@ -49,34 +52,61 @@ public final class ReturnDamagePricing {
         items.put(code, new Item(code, label, category, unit, low, high, midpoint));
     }
 
+    public static boolean isCustom(String code) {
+        return code != null && code.matches("custom_(minor|major)_[0-9a-f]{32}");
+    }
+
+    public static Item lookup(String code, Map<String, BigDecimal> prices) {
+        if (prices != null && !prices.containsKey(code) && !FRAME_DAMAGE.equals(code)) return null;
+        if (prices != null && prices.containsKey(code) && isCustom(code)) {
+            var amount = prices.get(code);
+            return new Item(code, code, code.startsWith("custom_minor_") ? "minor" : "major", "lần", amount, amount, amount);
+        }
+        return CATALOG.get(code);
+    }
+
     public static Map<String, Item> catalog() {
         return CATALOG;
     }
 
     public static BigDecimal calculate(List<ReturnInspectionRequest.DamageItem> damageItems) {
+        return calculate(damageItems, null);
+    }
+
+    public static BigDecimal calculate(List<ReturnInspectionRequest.DamageItem> damageItems, Map<String, BigDecimal> prices) {
         BigDecimal total = BigDecimal.ZERO;
         if (damageItems == null) return total.setScale(0);
         for (ReturnInspectionRequest.DamageItem item : damageItems) {
             if (item == null || item.code() == null || item.code().isBlank()) {
                 throw new IllegalArgumentException("Mã hạng mục hư hỏng không hợp lệ.");
             }
-            Item price = CATALOG.get(item.code());
+            Item price = lookup(item.code(), prices);
             if (price == null) throw new IllegalArgumentException("Hạng mục hư hỏng không nằm trong bảng giá.");
             BigDecimal quantity = item.quantity();
             if (quantity == null || quantity.signum() <= 0 || quantity.compareTo(BigDecimal.valueOf(100_000)) > 0) {
                 throw new IllegalArgumentException("Số lượng hư hỏng phải lớn hơn 0 và không vượt quá 100.000.");
             }
-            total = total.add(price.unitPrice().multiply(quantity));
+            total = total.add((prices == null ? price.unitPrice() : prices.getOrDefault(item.code(), BigDecimal.ZERO)).multiply(quantity));
         }
         return total.setScale(0, RoundingMode.HALF_UP);
     }
 
     public static String describe(List<ReturnInspectionRequest.DamageItem> damageItems) {
+        return describe(damageItems, null);
+    }
+
+    public static String describe(List<ReturnInspectionRequest.DamageItem> damageItems, Map<String, BigDecimal> prices) {
+        return describe(damageItems, prices, null);
+    }
+
+    public static String describe(List<ReturnInspectionRequest.DamageItem> damageItems, Map<String, BigDecimal> prices,
+                                  Map<String, ReturnFeeScheduleService.Detail> details) {
         if (damageItems == null || damageItems.isEmpty()) return "";
         return damageItems.stream().map(item -> {
-            Item price = CATALOG.get(item.code());
-            return price == null ? item.code() : price.label() + " x " + item.quantity().stripTrailingZeros().toPlainString()
-                + " " + price.unit() + " (" + price.unitPrice().toPlainString() + " đ/" + price.unit() + ")";
+            Item price = lookup(item.code(), prices);
+            String label = details != null && details.containsKey(item.code()) ? details.get(item.code()).label() : (price == null ? item.code() : price.label());
+            return price == null ? item.code() : label + " x " + item.quantity().stripTrailingZeros().toPlainString()
+                + " " + price.unit() + " (" + (prices == null ? price.unitPrice() : prices.getOrDefault(item.code(), BigDecimal.ZERO)).toPlainString() + " đ/" + price.unit() + ")";
         }).reduce((left, right) -> left + "; " + right).orElse("");
     }
 }

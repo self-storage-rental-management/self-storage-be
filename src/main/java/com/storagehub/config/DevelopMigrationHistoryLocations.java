@@ -30,7 +30,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                     if (result.next() && result.getInt(1) > 0) {
                         boolean clean2402 = false;
                         boolean clean2404 = false;
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402','2026112402','2026112403','2026112404')")) {
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402','2026112402','2026112403','2026112404','2026112601','2026112602','2026112603')")) {
                             while (rows.next()) {
                                 String version = rows.getString("version");
                                 boolean success = rows.getBoolean("success");
@@ -61,6 +61,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             }
         } catch (SQLException error) { throw new IllegalStateException("Cannot inspect actual Flyway history; no migration performed", error); }
         var selected = new ArrayList<>(locations.stream().filter(location -> !location.startsWith("classpath:db/migration-history/")).toList());
+        selectCheckinRenumbered(selected, applied, configuration);
         selected.add(select(applied, "2026112403", "V2026112403__ensure_money_receipt_codes.sql", "receipt-checked-2403",
             "V2026112403__register_money_receipt_codes.sql", "receipt-original-2403"));
         selected.add(select(applied, "2026102401", "V2026102401__support_handoff_retention.sql", "develop-support-2401",
@@ -187,6 +188,47 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             selected.add("classpath:db/migration-history/applied-vnpay-0910");
         }
         return configuration.locations(selected.toArray(String[]::new));
+    }
+    private static void selectCheckinRenumbered(ArrayList<String> selected, Map<String,Applied> applied,
+        FluentConfiguration configuration) {
+        String legacyViolation = "V2026112601__violation_recovery_workflow.sql";
+        String legacyReturn = "V2026112602__return_reverification_and_handover_appointment.sql";
+        String currentViolation = "V2026112602__violation_recovery_workflow.sql";
+        String currentReturn = "V2026112603__return_reverification_and_handover_appointment.sql";
+        Applied at2601 = applied.get("2026112601");
+        Applied at2602 = applied.get("2026112602");
+        Applied at2603 = applied.get("2026112603");
+
+        if (at2601 != null) {
+            require(at2601, legacyViolation);
+            selected.add("classpath:db/migration-history/legacy-2601");
+            if (at2602 == null) {
+                if (at2603 != null) throw new IllegalStateException("Mixed 2026112601/2026112603 migration history; no repair performed");
+                selected.add("classpath:db/migration-history/legacy-2602");
+                configuration.outOfOrder(true);
+            } else if (legacyReturn.equals(at2602.script())) {
+                require(at2602, legacyReturn);
+                selected.add("classpath:db/migration-history/legacy-2602");
+            } else {
+                throw new IllegalStateException("Mixed 2026112601/2026112602 migration history; no repair performed");
+            }
+            if (at2603 != null && "V2026112603__allow_violation_recovery_notifications.sql".equals(at2603.script())) {
+                require(at2603, at2603.script());
+                selected.add("classpath:db/migration-history/legacy-notifications-2603");
+            } else if (at2603 != null) {
+                require(at2603, currentReturn);
+                selected.add("classpath:db/migration-history/develop-2603");
+            }
+            return;
+        }
+
+        if (at2602 != null && legacyReturn.equals(at2602.script()))
+            throw new IllegalStateException("2026112602 has legacy history without 2026112601; no repair performed");
+        if (at2602 != null) require(at2602, currentViolation);
+        if (at2603 != null) require(at2603, currentReturn);
+        selected.add("classpath:db/migration-history/develop-2602");
+        selected.add("classpath:db/migration-history/develop-2603");
+        if (at2602 == null && at2603 != null) configuration.outOfOrder(true);
     }
     private static void selectRenumbered(ArrayList<String> selected, Map<String,Applied> applied,
         String oldVersion, String newVersion, String name, String oldFolder, String newFolder) {
