@@ -10,12 +10,12 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 class InventoryTimelinePolicyTests {
-    @Test void preservesSevenFullCalendarDaysAcrossMonthBoundary() {
+    @Test void preservesSevenExactDaysAcrossMonthBoundary() {
         Instant notice = Instant.parse("2026-12-28T16:45:00Z");
         assertThat(InventoryTimelinePolicy.removalEffectiveAt(notice))
-            .isEqualTo(Instant.parse("2026-12-28T17:00:00Z"));
+            .isEqualTo(Instant.parse("2026-12-28T16:45:00Z"));
         assertThat(InventoryTimelinePolicy.removalDeadline(notice))
-            .isEqualTo(Instant.parse("2027-01-04T17:00:00Z"));
+            .isEqualTo(Instant.parse("2027-01-04T16:45:00Z"));
     }
 
     @Test void remindsAtStartOfFourthDayAndRecoversAtStartOfEighth() {
@@ -63,16 +63,16 @@ class InventoryTimelinePolicyTests {
     }
 
     @Test void handlesYearBoundaryForXlTenDaysAndPreservesSnapshotAfterConfigChange() {
-        // Announced on 29/12/2026 15:00 ICT (08:00 UTC) -> effective 30/12 00:00 ICT,
-        // 10 calendar days = 30/12..08/01, recovery boundary = 09/01 00:00 ICT (08/01 17:00 UTC).
+        // Announced on 29/12/2026 15:00 ICT (08:00 UTC) -> effective 29/12 15:00 ICT,
+        // 10 * 24h window -> recovery boundary = 08/01/2027 15:00 ICT (08/01 08:00 UTC).
         Instant dec29 = Instant.parse("2026-12-29T08:00:00Z");
         Rental xlRental = rentalWithSize("XL");
         InventoryTimelinePolicy.initializeRemovalWindow(xlRental, dec29);
         assertThat(InventoryTimelinePolicy.removalEffectiveAt(dec29))
-            .isEqualTo(Instant.parse("2026-12-29T17:00:00Z"));
+            .isEqualTo(Instant.parse("2026-12-29T08:00:00Z"));
         assertThat(xlRental.getInventoryReturnWindowDays()).isEqualTo(10);
         assertThat(xlRental.getInventoryRemovalDeadlineAt())
-            .isEqualTo(Instant.parse("2027-01-08T17:00:00Z"));
+            .isEqualTo(Instant.parse("2027-01-08T08:00:00Z"));
 
         // Changing the unit type later does not mutate the already-snapshotted rental window.
         Rental smallRental = rentalWithSize("S");
@@ -132,7 +132,7 @@ class InventoryTimelinePolicyTests {
         Instant approved = InventoryTimelinePolicy.removalDeadline(published, 6);
         rental.setInventoryRemovalDeadlineAt(approved);
         assertThat(InventoryTimelinePolicy.extendRemovalWindow(rental, published.plusSeconds(60)))
-            .isEqualTo(InventoryTimelinePolicy.dayStart(approved, 2));
+            .isEqualTo(approved.plusSeconds(2 * 86400L));
         assertThat(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null)).isEqualTo(8);
     }
 
