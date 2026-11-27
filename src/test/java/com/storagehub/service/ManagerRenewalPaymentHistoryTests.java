@@ -17,6 +17,33 @@ import org.springframework.data.domain.*;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class ManagerRenewalPaymentHistoryTests {
+    @Test void directPaymentLinkChecksFacilityScopeBeforeReturningTheExactPayment() {
+        var payments = mock(PaymentRepository.class);
+        var scopes = mock(FacilityScopeService.class);
+        var authorization = mock(AdminAuthorizationService.class);
+        var service = new ManagerPaymentHistoryService(payments, mock(ReturnCaseRepository.class), authorization, scopes);
+        var actor = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.MANAGER), Set.of(), Map.of());
+        var id = UUID.randomUUID();
+        var facilityId = UUID.randomUUID();
+        var payment = mock(Payment.class, RETURNS_DEEP_STUBS);
+        when(payments.findById(id)).thenReturn(Optional.of(payment));
+        when(payment.getId()).thenReturn(id);
+        when(payment.getReservation().getFacility().getId()).thenReturn(facilityId);
+        when(payment.getReservation().getCustomer().getFullName()).thenReturn("Demo Customer");
+        when(payment.getPurpose()).thenReturn(PaymentType.MONTHLY_RENT);
+        when(payment.getStatus()).thenReturn(PaymentStatus.PENDING);
+        when(payment.getAmount()).thenReturn(new BigDecimal("100"));
+        when(payment.getCurrency()).thenReturn("VND");
+        when(payment.getCreatedAt()).thenReturn(Instant.now());
+        doThrow(com.storagehub.common.api.ApiExceptions.forbidden("Outside facility"))
+            .doNothing().when(scopes).assertCanRead(actor, facilityId);
+        assertThatThrownBy(() -> service.detail(actor, id)).hasMessageContaining("Outside facility");
+        var result = service.detail(actor, id);
+        assertThat(result.id()).isEqualTo(id.toString());
+        assertThat(result.status()).isEqualTo("PENDING");
+        verify(authorization, times(2)).require(actor, SystemPermission.VIEW_PAYMENTS);
+    }
+
     @Test void searchUsesReturnReceiptCodesWithinTheFacilityQuery() {
         var payments = mock(PaymentRepository.class);
         var returns = mock(ReturnCaseRepository.class);

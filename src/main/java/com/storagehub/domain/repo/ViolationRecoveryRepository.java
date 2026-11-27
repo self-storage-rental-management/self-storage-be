@@ -36,6 +36,11 @@ public interface ViolationRecoveryRepository extends JpaRepository<ViolationReco
     @Query("select v from ViolationRecovery v where v.task.assignedTo.id = :staffId" + QUEUE_ORDER
         + "case when v.stage in ('AWAITING_ACCEPTANCE', 'AWAITING_ATTENDANCE', 'APPROVED', 'IN_PROGRESS') then 0 else 1 end, " + QUEUE_DATES)
     List<ViolationRecovery> findByTask_AssignedTo_IdOrderByCreatedAtDesc(@Param("staffId") UUID staffId, Pageable page);
+    @Query("select v from ViolationRecovery v left join v.task task where task.assignedTo.id = :staffId "
+        + "or (v.reason = 'CONFIRMED_PROHIBITED_GOODS' and v.stage = 'AWAITING_ASSIGNMENT' "
+        + "and (task is null or task.assignedTo is null) and v.rental.facility.id in :facilities)" + QUEUE_ORDER
+        + "case when v.stage in ('AWAITING_ACCEPTANCE', 'AWAITING_ATTENDANCE', 'APPROVED', 'IN_PROGRESS') then 0 else 1 end, " + QUEUE_DATES)
+    List<ViolationRecovery> staffQueue(@Param("staffId") UUID staffId, @Param("facilities") java.util.Collection<UUID> facilities, Pageable page);
     String MANAGER_ORDER = QUEUE_ORDER
         + "case when v.stage in ('REVIEW_REQUIRED', 'AWAITING_ASSIGNMENT', 'AWAITING_APPROVAL', 'BLOCKED') then 0 else 1 end, "
         + "case when v.stage = 'BLOCKED' then 0 else 1 end, " + QUEUE_DATES;

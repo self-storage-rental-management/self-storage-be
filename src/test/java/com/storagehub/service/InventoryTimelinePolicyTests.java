@@ -26,14 +26,13 @@ class InventoryTimelinePolicyTests {
             .isEqualTo(Instant.parse("2026-11-28T17:00:00Z"));
     }
 
-    @Test void mapsReturnWindowDaysByUnitTypeAndRejectsUnconfiguredSize() {
+    @Test void readsConfiguredReturnWindowsAndRequiresAUnitType() {
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("S"))).isEqualTo(3);
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("M"))).isEqualTo(5);
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("L"))).isEqualTo(7);
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XL"))).isEqualTo(10);
 
-        assertThatThrownBy(() -> InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XXL")))
-            .isInstanceOf(RuntimeException.class);
+        assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XXL"))).isEqualTo(3);
         assertThatThrownBy(() -> InventoryTimelinePolicy.returnWindowDaysForUnitType(null))
             .isInstanceOf(RuntimeException.class);
     }
@@ -80,7 +79,7 @@ class InventoryTimelinePolicyTests {
         InventoryTimelinePolicy.initializeRemovalWindow(smallRental, dec29);
         assertThat(smallRental.getInventoryReturnWindowDays()).isEqualTo(3);
         Instant smallDeadline = smallRental.getInventoryRemovalDeadlineAt();
-        smallRental.getStorageUnit().getUnitType().setCode("XL");
+        smallRental.getStorageUnit().getUnitType().setMismatchReturnDays(10);
         InventoryTimelinePolicy.initializeRemovalWindow(smallRental, Instant.parse("2026-12-30T08:00:00Z"));
         assertThat(smallRental.getInventoryReturnWindowDays()).isEqualTo(3);
         assertThat(smallRental.getInventoryRemovalDeadlineAt()).isEqualTo(smallDeadline);
@@ -148,6 +147,12 @@ class InventoryTimelinePolicyTests {
     private static UnitType unitType(String code) {
         UnitType type = new UnitType();
         type.setCode(code);
+        type.setMismatchReturnDays(switch (code) {
+            case "M" -> 5;
+            case "L" -> 7;
+            case "XL" -> 10;
+            default -> 3;
+        });
         return type;
     }
 

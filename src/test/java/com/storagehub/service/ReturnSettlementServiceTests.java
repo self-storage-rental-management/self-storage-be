@@ -1484,28 +1484,26 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
-    void draftPreservesDeadlineAndRevocationInvalidatesPendingInspection() {
+    void revocationClearsLegacyPropertyCheckAndInvalidatesPendingInspection() {
         var rc = setupReturn(ReturnCaseStatus.requested);
         rc.setRecoveryEligibleAt(Instant.now().plusSeconds(86400));
         var deadline = rc.getRecoveryEligibleAt();
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
         when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
-        var photos = inspectionPhoto(rc);
-        var draft = service.savePropertyCheck(staffActor, rc.getId(),
-            new com.storagehub.api.returns.ReturnPropertyCheckRequest(false, 0, "Còn hai thùng", photos));
-        assertThat(draft.evidencePhotos()).isEqualTo(photos);
-        assertThat(draft.inspectionNotes()).isEqualTo("Còn hai thùng");
-        assertThat(draft.recoveryEligibleAt()).isEqualTo(deadline);
-        assertThat(draft.status()).isEqualTo(ReturnCaseStatus.requested);
-        assertThat(draft.inspectedAt()).isNull();
-        verify(notificationService).createNotification(eq(customer.getId()), any(), any(), any(), eq(rc.getId()));
-        service.setCustomerClearance(customerActor, rc.getId(), true, draft.clearanceRevision());
-        var verified = service.savePropertyCheck(staffActor, rc.getId(),
-            new com.storagehub.api.returns.ReturnPropertyCheckRequest(true, draft.clearanceRevision(), "Đã kiểm tra", photos));
-        var revoked = service.setCustomerClearance(customerActor, rc.getId(), false, verified.clearanceRevision());
+        var cleared = service.setCustomerClearance(customerActor, rc.getId(), true, 0);
+        rc.setWarehouseEmptyVerified(true);
+        rc.setWarehouseEmptyVerifiedAt(Instant.now());
+        rc.setWarehouseEmptyVerifiedBy(staff.getId());
+
+        var revoked = service.setCustomerClearance(customerActor, rc.getId(), false, cleared.clearanceRevision());
+
         assertThat(revoked.warehouseEmptyVerified()).isNull();
+        assertThat(revoked.warehouseEmptyVerifiedAt()).isNull();
         assertThat(revoked.warehouseEmptyVerifiedBy()).isNull();
-        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), propertyInspection(true, photos), verified.clearanceRevision()))
+        assertThat(revoked.recoveryEligibleAt()).isEqualTo(deadline);
+        assertThat(revoked.status()).isEqualTo(ReturnCaseStatus.requested);
+        assertThat(revoked.inspectedAt()).isNull();
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(true), cleared.clearanceRevision()))
             .hasMessageContaining("kiểm tra thực tế");
         verify(returnFinance, org.mockito.Mockito.never()).capture(any());
     }
@@ -1726,6 +1724,30 @@ class ReturnSettlementServiceTests {
             assertThat(smallEarlyResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("300000");
         }
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"VNPAY", "VNPAY_GATEWAY", "CARD", ""})
+    void refundRejectsUnsupportedMethodsWithoutSettlement(String method) {
+        var rc = setupReturn(ReturnCaseStatus.refund_pending);
+        rc.setNetRefundAmount(new BigDecimal("100"));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, rc.getId(),
+            new StaffCompleteRefundRequest("ref", "test", UUID.randomUUID(), method, true, new BigDecimal("100"))))
+            .hasMessageContaining(method.startsWith("VNPAY") ? "Không hỗ trợ hoàn tiền qua VNPay" : "chuyển khoản hoặc tiền mặt");
+        verify(returnFinance, never()).receipt(any(), any(), any(), any(), any());
+        verify(returnFinance, never()).settle(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+        assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.refund_pending);
+    }
+
+    @Test void cashRefundRequiresReceipt() {
+        var rc = setupReturn(ReturnCaseStatus.refund_pending);
+        rc.setNetRefundAmount(new BigDecimal("100"));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, rc.getId(),
+            new StaffCompleteRefundRequest(null, "test", null, "CASH", true, new BigDecimal("100"))))
+            .hasMessageContaining("biên lai");
+        verify(returnFinance, never()).receipt(any(), any(), any(), any(), any());
+    }
+
     @Test
     void staffDateSortIsAppliedByRepositoryBeforePagination() {
         when(returnCaseRepository.searchReturnCases(any(), any(), any(), any(), any()))

@@ -29,7 +29,7 @@ class OverdueServicePaginationTests {
     @SuppressWarnings("unchecked") <T>ObjectProvider<T> provider(T v){var p=(ObjectProvider<T>)mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(v);return p;}
     @BeforeEach @SuppressWarnings("unchecked") void setup(){
         em=mock(EntityManager.class);query=mock(TypedQuery.class);finance=mock(FinancialSource.class);terms=mock(TermSource.class);
-        service=new OverdueService(em,new ObjectMapper(),mock(RenewalPersistence.class),mock(AuditLogService.class),provider(Clock.fixed(NOW,ZoneOffset.UTC)),provider(finance),provider(terms),provider(null),provider(null));
+        service=new OverdueService(em,new ObjectMapper(),mock(RenewalPersistence.class),mock(AuditLogService.class),provider(Clock.fixed(NOW,ZoneOffset.UTC)),provider(finance),provider(terms),provider(null));
         facility=id(new Facility());facility.setName("TEST facility");rentals=new ArrayList<>();closed=new AtomicBoolean();
         for(int i=0;i<3;i++){
             var u=id(new User());u.setFullName("TEST Customer "+i);var unit=id(new StorageUnit());unit.setCode("TEST-A-"+i);

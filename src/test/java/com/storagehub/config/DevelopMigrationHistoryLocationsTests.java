@@ -43,8 +43,8 @@ class DevelopMigrationHistoryLocationsTests {
         var config=Flyway.configure().dataSource(datasource).locations("classpath:db/migration");
         DevelopMigrationHistoryLocations.configure(config);
         assertThat(config.getLocations()).extracting(Object::toString)
-            .contains("classpath:db/migration-history/develop-2602","classpath:db/migration-history/develop-2603")
-            .doesNotContain("classpath:db/migration-history/legacy-2601","classpath:db/migration-history/legacy-2602");
+            .contains("classpath:db/migration-history/november/V2026112602__violation_recovery_workflow","classpath:db/migration-history/november/V2026112603__return_reverification_and_handover_appointment")
+            .doesNotContain("classpath:db/migration-history/november/V2026112601__violation_recovery_workflow","classpath:db/migration-history/november/V2026112602__return_reverification_and_handover_appointment");
         verify(statement,never()).execute(anyString());verify(statement,never()).executeUpdate(anyString());
     }
     @Test void paymentOnlyLocationDoesNotInspectOrAlterDatasource(){
@@ -99,8 +99,8 @@ class DevelopMigrationHistoryLocationsTests {
                 DevelopMigrationHistoryLocations.configure(config);
                 boolean legacy=script.contains("renewal_customer");
                 assertThat(config.getLocations()).extracting(Object::toString)
-                    .contains("classpath:db/migration-history/"+(legacy?"legacy-local-2702":"develop-lifecycle-2702"))
-                    .doesNotContain("classpath:db/migration-history/"+(legacy?"develop-lifecycle-2702":"legacy-local-2702"));
+                    .contains("classpath:db/migration-history/november/"+(legacy?"V2026112702__renewal_customer_cancellation_accounting":"V2026112702__account_lifecycle_and_lease_limits"))
+                    .doesNotContain("classpath:db/migration-history/november/"+(legacy?"V2026112702__account_lifecycle_and_lease_limits":"V2026112702__renewal_customer_cancellation_accounting"));
             }
             verify(statement,never()).execute(anyString());verify(statement,never()).executeUpdate(anyString());
         }
