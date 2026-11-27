@@ -19,6 +19,7 @@ public final class ReturnDamagePricing {
                        BigDecimal suggestedMin, BigDecimal suggestedMax, BigDecimal unitPrice) {}
 
     public static final String FRAME_DAMAGE = "equipment_frame_damage";
+    public static final String PALLET_MISSING = "equipment_pallet_missing";
 
     private static final Map<String, Item> CATALOG;
 
@@ -39,6 +40,7 @@ public final class ReturnDamagePricing {
         add(items, "major_electrical_damage", "Hệ thống điện bị hư hỏng", "major", "lần", 500_000, 3_000_000);
         add(items, "major_unusable_door", "Cửa kho không thể sử dụng", "major", "cái", 1_500_000, 4_000_000);
         add(items, FRAME_DAMAGE, "Hư hỏng khung kệ", "equipment", "khung", 0, 0);
+        add(items, PALLET_MISSING, "Thiếu tấm kê", "equipment", "tấm", 300_000, 300_000);
         CATALOG = Collections.unmodifiableMap(items);
     }
 

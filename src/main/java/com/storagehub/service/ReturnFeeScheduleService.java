@@ -43,7 +43,13 @@ public class ReturnFeeScheduleService {
         var details = new LinkedHashMap<String, Detail>();
         ReturnDamagePricing.catalog().forEach((code, item) -> {
             prices.put(code, item.unitPrice());
-            details.put(code, new Detail(item.label(), "Ghi nhận khi nghiệm thu: " + item.label(), "Theo số lượng " + item.unit() + " hư hỏng thực tế"));
+            String trigger = ReturnDamagePricing.PALLET_MISSING.equals(code)
+                ? "Tấm kê bàn giao bị thiếu khi nghiệm thu trả kho."
+                : "Ghi nhận khi nghiệm thu: " + item.label();
+            String applies = ReturnDamagePricing.PALLET_MISSING.equals(code)
+                ? "Theo số lượng tấm kê thiếu thực tế"
+                : "Theo số lượng " + item.unit() + " hư hỏng thực tế";
+            details.put(code, new Detail(item.label(), trigger, applies));
         });
         prices.put("clean", BigDecimal.ZERO);
         prices.put("minor", BigDecimal.valueOf(100000));
@@ -93,6 +99,8 @@ public class ReturnFeeScheduleService {
                 prices.putIfAbsent(ReturnDamagePricing.FRAME_DAMAGE, BigDecimal.ZERO);
                 compatibleDetails.putIfAbsent(ReturnDamagePricing.FRAME_DAMAGE, defaults().details().get(ReturnDamagePricing.FRAME_DAMAGE));
             }
+            prices.putIfAbsent(ReturnDamagePricing.PALLET_MISSING, defaults().prices().get(ReturnDamagePricing.PALLET_MISSING));
+            compatibleDetails.putIfAbsent(ReturnDamagePricing.PALLET_MISSING, defaults().details().get(ReturnDamagePricing.PALLET_MISSING));
             return new Schedule(version.getRevision(), prices, compatibleDetails,
                 version.getPublishedAt() == null ? null : version.getPublishedAt().toString(), value.editableCatalog());
         }

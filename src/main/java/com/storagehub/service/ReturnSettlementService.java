@@ -2907,8 +2907,10 @@ public class ReturnSettlementService {
     private ReturnCaseResponse.Equipment returnEquipment(ReturnCase rc) {
         ReturnCaseResponse.Equipment resolved = resolveEquipment(rc);
         if (resolved != null) return resolved;
+        var feePrices = returnFeePrices(rc);
+        BigDecimal configuredPalletPrice = feePrices == null ? null : feePrices.get(ReturnDamagePricing.PALLET_MISSING);
         return HandoverEquipmentInventory.read(objectMapper, reservationPricingSnapshot(rc),
-            missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice);
+            configuredPalletPrice != null ? configuredPalletPrice : (missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice));
     }
 
     private ReturnCaseResponse.Equipment resolveEquipment(ReturnCase rc) {
@@ -2930,8 +2932,11 @@ public class ReturnSettlementService {
         int rackCount = handoverRacks != null ? handoverRacks : (unitEquipment != null ? unitEquipment.rackCount() : 0);
         int frameCount = unitEquipment != null ? unitEquipment.frameCount() : rackCount;
         Integer palletCount = handoverPallets != null ? handoverPallets : (unitEquipment != null ? unitEquipment.palletCount() : null);
-        BigDecimal unitPrice = palletUnitPrice != null && palletUnitPrice.signum() > 0
-            ? palletUnitPrice : BigDecimal.valueOf(300_000);
+        var feePrices = returnFeePrices(rc);
+        BigDecimal configuredPalletPrice = feePrices == null ? null : feePrices.get(ReturnDamagePricing.PALLET_MISSING);
+        BigDecimal unitPrice = configuredPalletPrice != null && configuredPalletPrice.signum() > 0
+            ? configuredPalletPrice
+            : palletUnitPrice != null && palletUnitPrice.signum() > 0 ? palletUnitPrice : BigDecimal.valueOf(300_000);
         return new ReturnCaseResponse.Equipment(rackCount, frameCount, palletCount, unitPrice);
     }
 
