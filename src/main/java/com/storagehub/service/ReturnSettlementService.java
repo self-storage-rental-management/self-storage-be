@@ -21,6 +21,7 @@ import com.storagehub.domain.model.LockInspectionResult;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
+import com.storagehub.domain.model.RenewalStatus;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
 import com.storagehub.domain.model.ReturnType;
@@ -207,6 +208,15 @@ public class ReturnSettlementService {
         boolean setupExit = inventoryMismatchReturn || inSetupReturnWindow(rental);
         if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
             throw ApiExceptions.conflict("Chỉ hồ sơ đang trong thời gian chuẩn bị hoặc đang thuê mới được yêu cầu trả kho");
+        }
+        long openRenewals = settlementEntityManager.createQuery(
+                "select count(n) from Renewal n where n.rental.id=:rentalId and n.status not in :terminal", Long.class)
+            .setParameter("rentalId", rentalId)
+            .setParameter("terminal", List.of(RenewalStatus.rejected, RenewalStatus.cancelled,
+                RenewalStatus.completed, RenewalStatus.payment_expired))
+            .getSingleResult();
+        if (openRenewals > 0) {
+            throw ApiExceptions.conflict("Hồ sơ đang có yêu cầu gia hạn chưa kết thúc. Hãy hoàn tất hoặc hủy gia hạn trước khi trả kho.");
         }
         var recoveryGuard=recoveryGuard();
         if(recoveryGuard!=null) {
@@ -2880,8 +2890,12 @@ public class ReturnSettlementService {
     private ReturnCaseResponse.Equipment returnEquipment(ReturnCase rc) {
         ReturnCaseResponse.Equipment resolved = resolveEquipment(rc);
         if (resolved != null) return resolved;
+        var unit = rc.getStorageUnit();
+        var unitType = unit == null ? null : unit.getUnitType();
         return HandoverEquipmentInventory.read(objectMapper, reservationPricingSnapshot(rc),
-            missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice);
+            missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice,
+            unit == null ? null : unit.getRackLayoutJson(),
+            unitType == null ? null : unitType.getRackLayoutJson());
     }
 
     private ReturnCaseResponse.Equipment resolveEquipment(ReturnCase rc) {

@@ -49,6 +49,7 @@ public class RenewalOperationState {
     public boolean hasVerifiedPayment() { return depositPaidAt!=null || fullRentPaidAt!=null; }
     public void appointment(UUID ref,Instant start,Instant end) {appointmentRef=ref;appointmentStart=start;appointmentEnd=end;arrivalRef=null;}
     public void arrival(UUID ref) {arrivalRef=ref;}
+    public void processingDeadline(Instant deadline) {effectiveSigningDeadline=deadline;}
     public void noShow() {phase=Phase.NO_SHOW;}
     public void resumeSigning() {phase=Phase.SIGNING;}
     public void proposedException(UUID ref) {pendingExceptionRef=ref;}
