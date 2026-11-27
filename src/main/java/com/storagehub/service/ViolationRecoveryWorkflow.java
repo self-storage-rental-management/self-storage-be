@@ -123,7 +123,7 @@ public class ViolationRecoveryWorkflow {
     public static final class Details {
         public Instant notifiedAt, responseDueAt, arrivedAt, verifiedAt, acceptedAt, startedAt, pickupOpenedAt, pickupVerifiedAt, pickupAppointmentAt;
         public Reply reply;
-        public boolean disputeOpen, needsWitness, customerReplyPending;
+        public boolean disputeOpen, needsWitness;
         public Attendance attendance;
         public UUID beforeEvidenceId, afterEvidenceId, attendanceEvidenceId, approvedBy, pickupStaffId, pickupAssignedStaffId;
         public Instant approvedAt;
@@ -209,6 +209,19 @@ public class ViolationRecoveryWorkflow {
     public boolean blocksLegacyReturn(UUID rentalId) {
         return recoveries.findByRental_IdOrderByCreatedAtDesc(rentalId).stream()
             .anyMatch(v -> v.getRequiredAt() != null && v.getStage() != Stage.CANCELLED);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Entry> list(ActorPrincipal actor, int page, String sort) {
+        if (sort.equals("priority")) return list(actor, page);
+        if (!java.util.Set.of("createdAt,desc", "createdAt,asc").contains(sort))
+            throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.", null);
+        if (!actor.hasRole(RoleCode.STAFF)) throw ApiExceptions.forbidden("Chỉ nhân viên được xem danh sách công việc được phân công.");
+        var paging = PageRequest.of(Math.max(0, page), 30,
+            org.springframework.data.domain.Sort.by(sort.endsWith("asc") ? org.springframework.data.domain.Sort.Direction.ASC
+                : org.springframework.data.domain.Sort.Direction.DESC, "createdAt").and(org.springframework.data.domain.Sort.by("id")));
+        return recoveries.findByTask_AssignedTo_Id(actor.userId(), paging).stream()
+            .filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
     }
 
     @Transactional(readOnly = true)
@@ -349,7 +362,6 @@ public class ViolationRecoveryWorkflow {
                         : "Bạn đã báo không thể có mặt. Chỉ có thể chọn lại sau khi chuyển sang sẽ có mặt.");
                 }
                 d.reply = target;
-                d.customerReplyPending = true;
                 d.customerNote = clean(c.note());
                 var uploaded = attachments(v, actor, c.attachmentIds());
                 if (!uploaded.isEmpty()) d.customerAttachmentIds.addAll(uploaded);
@@ -357,7 +369,6 @@ public class ViolationRecoveryWorkflow {
             case DISPUTE -> {
                 d.customerNote = required(c.note(), "nội dung phản đối");
                 d.reply = Reply.DISPUTED;
-                d.customerReplyPending = true;
                 var uploaded = attachments(v, actor, c.attachmentIds());
                 if (!uploaded.isEmpty()) d.customerAttachmentIds.addAll(uploaded);
                 if (terminal(v)) {
@@ -661,7 +672,6 @@ public class ViolationRecoveryWorkflow {
         d.reasonNote = required(c.note(), "kết luận xử lý ngoại lệ");
         d.managerResponseNote = d.reasonNote;
         d.managerRespondedAt = now;
-        d.customerReplyPending = false;
         var uploaded = attachments(v, actor, c.attachmentIds());
         if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         if (v.getTask() != null && v.getTask().getAssignedTo() != null) {
@@ -699,7 +709,6 @@ public class ViolationRecoveryWorkflow {
         d.reasonNote = required(c.note(), "căn cứ hủy thu hồi");
         d.managerResponseNote = d.reasonNote;
         d.managerRespondedAt = now;
-        d.customerReplyPending = false;
         var uploaded = attachments(v, actor, c.attachmentIds());
         if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         if (v.getRequiredAt() != null) {
@@ -725,7 +734,6 @@ public class ViolationRecoveryWorkflow {
         d.reasonNote = required(c.note(), "kết luận khắc phục, tình trạng gian và tài sản");
         d.managerResponseNote = d.reasonNote;
         d.managerRespondedAt = now;
-        d.customerReplyPending = false;
         var uploaded = attachments(v, actor, c.attachmentIds());
         if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         var rental = v.getRental();
@@ -895,7 +903,7 @@ public class ViolationRecoveryWorkflow {
         List<Action> actions = new ArrayList<>();
         if (actor.hasRole(RoleCode.CUSTOMER)) {
             if (v.getRequiredAt() == null) return actions;
-            if (!terminal(v) && !d.customerReplyPending && !d.disputeOpen && d.responseDueAt != null && now.isBefore(d.responseDueAt)) {
+            if (!terminal(v) && d.responseDueAt != null && now.isBefore(d.responseDueAt)) {
                 if (!d.disputeOpen) {
                     if (d.reply != Reply.WILL_ATTEND) actions.add(Action.WILL_ATTEND);
                     if (d.reply != Reply.CANNOT_ATTEND) actions.add(Action.CANNOT_ATTEND);
@@ -922,7 +930,7 @@ public class ViolationRecoveryWorkflow {
             boolean withinCancelWindow = d.startedAt == null
                 && (v.getRequiredAt() == null || !now.isAfter(v.getRequiredAt().plus(Duration.ofHours(12))));
             if (withinCancelWindow) actions.add(Action.CANCEL);
-            if (v.getStage() == Stage.BLOCKED || d.customerReplyPending) actions.add(Action.RESUME);
+            if (v.getStage() == Stage.BLOCKED) actions.add(Action.RESUME);
             if (v.getRequiredAt() != null) {
                 if (v.getStage() != Stage.IN_PROGRESS) actions.add(Action.ASSIGN);
             }

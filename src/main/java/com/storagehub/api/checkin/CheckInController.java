@@ -37,6 +37,12 @@ public class CheckInController {
         return new ApiResponse<>(service.inventoryAlternatives(actorContext.required(), checkInId), CorrelationIdContext.current());
     }
 
+    @PostMapping("/{checkInId}/identity-correction-check")
+    public ApiResponse<CheckInHandoverService.CorrectionCheck> checkIdentityCorrection(
+        @PathVariable UUID checkInId, @RequestBody VerifyCheckInIdentityRequest request) {
+        return new ApiResponse<>(service.checkIdentityCorrection(actorContext.required(), checkInId, request), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{checkInId}/identity-correction")
     public ApiResponse<CheckInResponse> correctIdentity(@PathVariable UUID checkInId, @Valid @RequestBody VerifyCheckInIdentityRequest request) {
         return new ApiResponse<>(service.correctIdentity(actorContext.required(), checkInId, request), CorrelationIdContext.current());
@@ -51,11 +57,12 @@ public class CheckInController {
         @RequestParam(required = false) Instant scheduledFrom,
         @RequestParam(required = false) Instant scheduledTo,
         @RequestParam(defaultValue = "0") int page,
-        @RequestParam(defaultValue = "20") int pageSize
+        @RequestParam(defaultValue = "20") int pageSize,
+        @RequestParam(defaultValue = "priority") String sort
     ) {
         return service.list(
             actorContext.required(), facilityId, q, status, group, scheduledFrom, scheduledTo,
-            page, pageSize,
+            page, pageSize, sort,
             CorrelationIdContext.current()
         );
     }
@@ -127,7 +134,7 @@ public class CheckInController {
     @PostMapping("/{checkInId}/identity-comparison")
     public ApiResponse<CheckInHandoverService.IdentityComparison> compareIdentity(
         @PathVariable UUID checkInId,
-        @Valid @RequestBody VerifyCheckInIdentityRequest request
+        @RequestBody VerifyCheckInIdentityRequest request
     ) {
         return new ApiResponse<>(service.compareIdentity(actorContext.required(), checkInId, request.identityDocumentNumber(),
             request.bookingOwnerConfirmed()),

@@ -23,7 +23,7 @@ class SetupCompletionPolicyTests {
         assertThat(r.getSetupCompletionDeadlineAt()).isEqualTo(Instant.parse("2026-12-02T10:30:00Z"));
         assertThat(r.getInventoryFinalDeadlineAt()).isEqualTo(Instant.parse("2026-12-02T10:30:00Z"));
         assertThat(r.getSetupEndsAt()).isEqualTo(freeEnd);
-        t.setCode("XL"); SetupCompletionPolicy.initialize(r);
+        t.setSetupDeadlineDays(12); SetupCompletionPolicy.initialize(r);
         assertThat(r.getSetupExtensionDays()).isEqualTo(3);
     }
     @Test void rejectsExpiredThirdAndOversizedExtensions() {

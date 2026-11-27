@@ -5,12 +5,13 @@ import java.math.BigDecimal;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Immutable cancellation credits. Original accepted terms, receipts and allocations remain intact. */
-@Component @RequiredArgsConstructor
+@Component @RequiredArgsConstructor @Profile("shared-payment-schema")
 @ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-simple-payment.enabled"},havingValue="true")
 public class RenewalLedgerAdjustments {
     private final JdbcTemplate jdbc;

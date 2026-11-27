@@ -79,6 +79,12 @@ public class CheckIn extends BaseEntity {
 
     @Column(table = "check_in_identity_display")
     private Boolean identityCorrected;
+    @Column(table = "check_in_identity_display", nullable = false)
+    private int identityFailedAttempts;
+    @Column(table = "check_in_identity_display", nullable = false)
+    private int identityCorrectionFailedAttempts;
+    @Column(table = "check_in_identity_display", length = 12)
+    private String approvedIdentityCorrection;
 
     @Column(length = 1000)
     private String identityVerificationNote;

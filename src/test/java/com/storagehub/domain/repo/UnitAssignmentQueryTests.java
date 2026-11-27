@@ -65,4 +65,16 @@ class UnitAssignmentQueryTests {
 
         assertThat(result).isEmpty();
     }
+
+    @Test
+    void reservationCreationAndAppointmentSortsExecuteBeforePaging() {
+        var scope = List.of(new UUID(0, 0));
+        var page = PageRequest.of(0, 1);
+        for (String order : List.of("createdAt,asc", "createdAt,desc", "appointmentAt,asc")) {
+            assertThat(reservationRepository.findPendingGoodsReviewsOrdered(null, true, scope, order, page)).isEmpty();
+            assertThat(reservationRepository.findCompletedGoodsReviewsOrdered(null, true, scope, order, page)).isEmpty();
+            assertThat(reservationRepository.findStaffActiveReservationsOrdered(
+                List.of(com.storagehub.domain.model.ReservationStatus.CONFIRMED), null, null, null, true, scope, order, page)).isEmpty();
+        }
+    }
 }

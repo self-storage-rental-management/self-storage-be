@@ -126,9 +126,9 @@ public class WorkflowSlaScheduler {
         process(mismatchFinancialIds(), ReturnCase.class, this::mismatchFinancialDeadline, true, deadline -> {
             if (deadline.owner() != RoleCode.CUSTOMER || !now.isBefore(deadline.dueAt())) return;
             boolean payment = deadline.workflow().equals("MISMATCH_RETURN_PAYMENT");
-            Instant first = payment ? deadline.startedAt().plus(Duration.ofHours(3 * 24L))
+            Instant first = payment ? InventoryTimelinePolicy.dayStart(deadline.startedAt(), 3)
                 : deadline.startedAt().plus(Duration.ofHours(24));
-            Instant second = payment ? deadline.startedAt().plus(Duration.ofHours(6 * 24L))
+            Instant second = payment ? InventoryTimelinePolicy.dayStart(deadline.startedAt(), 6)
                 : deadline.startedAt().plus(Duration.ofHours(48));
             if (now.isBefore(first)) return;
             deliverCustomerReminder(deadline, now.isBefore(second) ? "REMINDER_1" : "REMINDER_2", now,
@@ -177,7 +177,7 @@ public class WorkflowSlaScheduler {
                 start = rc.getCustomerConfirmedAt() == null || reviewed != null && reviewed.isAfter(rc.getCustomerConfirmedAt())
                     ? reviewed : rc.getCustomerConfirmedAt();
                 if (start == null) return null;
-                due = rc.getSettlementPaymentDueAt() == null ? start.plus(Duration.ofHours(7 * 24L)) : rc.getSettlementPaymentDueAt();
+                due = rc.getSettlementPaymentDueAt() == null ? InventoryTimelinePolicy.dayStart(start, 8) : rc.getSettlementPaymentDueAt();
                 workflow = "MISMATCH_RETURN_PAYMENT";
                 description = "thanh toán công nợ trả kho";
                 owner = RoleCode.CUSTOMER;
@@ -452,6 +452,16 @@ public class WorkflowSlaScheduler {
         var reservation = checkIn.getReservation();
         UUID facility = reservation.getFacility().getId();
         String order = " của đơn " + reservation.getReservationCode();
+        Instant completion = ReservationCheckInPolicy.completionDeadline(reservation);
+        if (completion != null && reservation.getAssignedUnit() != null
+            && Set.of(ReservationStatus.UNIT_RESERVED, ReservationStatus.READY_FOR_CHECKIN).contains(reservation.getStatus())
+            && Set.of(CheckInStatus.scheduled, CheckInStatus.identity_verified, CheckInStatus.contract_signed, CheckInStatus.payment_collected).contains(checkIn.getStatus())) {
+            return new Deadline("HANDOVER_COMPLETION", checkIn, facility,
+                completion.minus(ReservationCheckInPolicy.HANDOVER_COMPLETION), completion, Duration.ofHours(48),
+                RoleCode.CUSTOMER, RoleCode.MANAGER, reservation.getCustomer().getId(), NotificationType.CHECKIN,
+                "hoàn tất bàn giao" + order);
+        }
+
         if (reservation.getStatus() == ReservationStatus.READY_FOR_CHECKIN && reservation.getFirstHandoverComparisonAt() == null
             && checkIn.getIdentityVerifiedAt() != null && java.util.EnumSet.of(CheckInStatus.identity_verified,
                 CheckInStatus.contract_signed, CheckInStatus.payment_collected).contains(checkIn.getStatus())) {
@@ -632,9 +642,16 @@ public class WorkflowSlaScheduler {
         }
         if (now.isBefore(deadline.dueAt().minus(deadline.warningLead()))) return;
         boolean overdue = !now.isBefore(deadline.dueAt());
-        String milestone = overdue ? "OVERDUE" : "WARNING";
+        boolean handoverCompletion = deadline.workflow().equals("HANDOVER_COMPLETION");
+        boolean assignment = deadline.workflow().equals("UNIT_ASSIGNMENT");
+        String milestone = handoverCompletion ? DeadlineReminderPolicy.handover(deadline.dueAt(), now)
+            : assignment ? DeadlineReminderPolicy.assignment(deadline.dueAt(), now)
+            : overdue ? "OVERDUE" : "WARNING";
+        if (milestone == null) return;
         boolean receipt = deadline.workflow().equals("CUSTOMER_RECEIPT");
-        Set<UUID> recipients = new LinkedHashSet<>(recipients(receipt ? RoleCode.MANAGER : deadline.owner(), deadline.facility()));
+        Set<UUID> recipients = handoverCompletion ? new LinkedHashSet<>(Set.of(deadline.customer()))
+            : new LinkedHashSet<>(recipients(receipt ? RoleCode.MANAGER : deadline.owner(), deadline.facility()));
+        Set<UUID> owners = Set.copyOf(recipients);
         if (deadline.resource() instanceof MaintenanceTask task && task.getAssignedTo() != null) {
             recipients.retainAll(Set.of(task.getAssignedTo().getId()));
             if (recipients.isEmpty()) recipients.addAll(recipients(RoleCode.MANAGER, deadline.facility()));
@@ -643,15 +660,27 @@ public class WorkflowSlaScheduler {
             recipients.addAll(recipients(deadline.escalation(), deadline.facility()));
             if (!receipt && deadline.customer() != null) recipients.add(deadline.customer());
         }
+        if (handoverCompletion) {
+            recipients.clear();
+            recipients.add(deadline.customer());
+        }
         String title = (overdue ? "Quá hạn " : "Sắp đến hạn ") + deadline.description();
         if (title.length() > 200) title = title.substring(0, 200);
         String content = "Hạn xử lý " + LOCAL_TIME.format(deadline.dueAt()) + " (giờ Việt Nam). "
             + (overdue ? "Công việc đã được báo cho bên phụ trách." : "Vui lòng hoàn tất trước hạn.");
+        if (handoverCompletion) {
+            title = "Nhắc " + deadline.description();
+            content = "Vui lòng hoàn tất bàn giao trước " + LOCAL_TIME.format(deadline.dueAt())
+                + " (giờ Việt Nam). Quá 72 giờ kể từ khi xác nhận khách đến mà chưa hoàn tất bàn giao, đơn sẽ tự động bị hủy.";
+        } else if (assignment && overdue) {
+            content += " Đơn vẫn đang chờ phân gian kho. Quản lý cần phân gian hoặc liên hệ khách để xử lý ngay.";
+        }
         int sent = 0;
         for (UUID recipient : recipients) {
-            if (!claim(deadline, milestone, recipient, now)) continue;
+            String deliveryMilestone = assignment && overdue && !owners.contains(recipient) ? "OVERDUE" : milestone;
+            if (!claim(deadline, deliveryMilestone, recipient, now)) continue;
             if (!receipt) notifications.createNotification(recipient, deadline.type(), title, content, notificationResource(deadline));
-            if (!recipient.equals(deadline.customer())) queueEmail(deadline, milestone, recipient, title, content, overdue);
+            if (!recipient.equals(deadline.customer())) queueEmail(deadline, deliveryMilestone, recipient, title, content, overdue);
             sent++;
         }
         if (sent > 0) {
