@@ -96,6 +96,26 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
+    void confirmedProhibitedGoodsEntersOrdinaryAssignmentAndOpensOnlyOnce() {
+        rental.setStatus(RentalStatus.active);
+        UUID id = workflow.openConfirmedProhibitedGoodsRecovery(manager(), rental.getId());
+
+        var created = org.mockito.ArgumentCaptor.forClass(ViolationRecovery.class);
+        verify(cases).saveAndFlush(created.capture());
+        var opened = created.getValue();
+        assertThat(id).isEqualTo(opened.getId());
+        assertThat(opened.getReason()).isEqualTo(Reason.CONFIRMED_PROHIBITED_GOODS);
+        assertThat(opened.getStage()).isEqualTo(Stage.AWAITING_ASSIGNMENT);
+        assertThat(opened.getScheduledAt()).isEqualTo(opened.getRequiredAt().plus(Duration.ofHours(24)));
+        assertThat(opened.getPreviousRentalStatus()).isEqualTo(RentalStatus.active);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.closing);
+        assertThatThrownBy(() -> workflow.openConfirmedProhibitedGoodsRecovery(manager(), rental.getId()))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                error -> assertThat(error.getStatus().value()).isEqualTo(409));
+        verify(tasks, never()).saveAndFlush(any());
+    }
+
+    @Test
     void automaticallyOpensOneRequestAndSchedules24HoursThen48HoursToComplete() {
         assertThat(workflow.detect(rental, source, Reason.REMOVAL_OVERDUE, rental.getInventoryRemovalDeadlineAt(),
             Instant.now(), true)).isTrue();
