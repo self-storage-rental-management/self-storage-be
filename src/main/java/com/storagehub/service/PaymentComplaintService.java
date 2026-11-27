@@ -426,7 +426,7 @@ public class PaymentComplaintService {
             : reservation.getStatus() == ReservationStatus.PAYMENT_GRACE ? 2 : 3;
         return new ManagerPaymentQueueItemResponse(
             reservation.getId(), reservation.getReservationCode(), reservation.getCustomer().getId(),
-            reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
+            reservation.getCustomerEmail(), reservation.getFacility().getId(),
             reservation.getUnitType().getId(), reservation.getStartDate(), reservation.getEndDate(),
             reservation.getStatus(), snapshot == null ? null : snapshot.getReservationDepositAmount(),
             complaint == null ? null : complaint.getId(), complaintStatus,

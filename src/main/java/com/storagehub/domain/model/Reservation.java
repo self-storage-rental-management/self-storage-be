@@ -51,12 +51,28 @@ public class Reservation extends BaseEntity {
     @Column(name = "identity_document_number", length = 30)
     private String identityDocumentNumber;
 
+    @Column(name = "customer_name", length = 160, updatable = false)
+    private String customerName;
+
+    @Column(name = "customer_email", length = 320, updatable = false)
+    private String customerEmail;
+
     /** Contact details declared for this reservation; keep them stable if the profile changes later. */
-    @Column(name = "customer_phone", length = 40)
+    @Column(name = "customer_phone", length = 40, updatable = false)
     private String customerPhone;
 
-    @Column(name = "customer_address", length = 500)
+    @Column(name = "customer_address", length = 500, updatable = false)
     private String customerAddress;
+
+    /** Capture once on insert; profile edits must never update booking details. */
+    @jakarta.persistence.PrePersist
+    public void captureCustomerDetails() {
+        if (customer == null) return;
+        if (customerName == null) customerName = customer.getFullName();
+        if (customerEmail == null) customerEmail = customer.getEmail();
+        if (customerPhone == null) customerPhone = customer.getPhone();
+        if (customerAddress == null) customerAddress = customer.getPermanentAddress();
+    }
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "facility_id", nullable = false)

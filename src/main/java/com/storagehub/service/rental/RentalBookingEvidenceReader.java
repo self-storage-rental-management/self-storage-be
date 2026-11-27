@@ -66,7 +66,7 @@ public class RentalBookingEvidenceReader {
             preflight.read(p,rental,snapshots.isEmpty()?null:snapshots.getFirst(),classification),sandboxPolicy.evaluate(p,classification));}).toList();
         // Do not return gateway intent, idempotency key, failure details or other internal identifiers.
         var customer = new RentalBookingEvidence.CustomerSnapshot(
-            reservation.getCustomer().getFullName(), reservation.getCustomer().getEmail(),
+            reservation.getCustomerName(), reservation.getCustomerEmail(),
             reservation.getCustomerPhone(), reservation.getCustomerAddress(), reservation.getIdentityDocumentNumber());
         var goods = goodsItems.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()).stream().map(item -> {
             var images = files.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("RESERVATION_GOODS_ITEM", item.getId()).stream()

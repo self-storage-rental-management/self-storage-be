@@ -127,8 +127,11 @@ public final class ReservationSnapshotView {
             reservation.getTotalGoodsVolumeM3(), reservation.getTotalGoodsWeightKg(),
             reservation.getHoldExpiresAt(), reservation.getCreatedAt()
         );
-        response.setCustomerName(reservation.getCustomer() == null ? null : reservation.getCustomer().getFullName());
-        response.setCustomerEmail(reservation.getCustomer() == null ? null : reservation.getCustomer().getEmail());
+        response.setCustomerName(reservation.getCustomerName());
+        response.setCustomerEmail(reservation.getCustomerEmail());
+        response.setCustomerPhone(reservation.getCustomerPhone());
+        response.setCustomerAddress(reservation.getCustomerAddress());
+        response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         response.setAppointmentAt(reservation.getAppointmentAt());
         describe(response, reservation, null);
         return response;

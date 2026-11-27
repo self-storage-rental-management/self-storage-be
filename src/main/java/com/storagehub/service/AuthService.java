@@ -535,10 +535,13 @@ public class AuthService {
             var verifiedAt = previous == null ? null : previous.getIdentityVerifiedAt();
             String oldIdentity = previous == null ? null : com.storagehub.validation.CccdPolicy.normalize(previous.getIdentityDocumentNumber());
             String newIdentity = com.storagehub.validation.CccdPolicy.normalize(request.profileDetails().getIdentityDocumentNumber());
-            if ((verifiedAt != null || (oldIdentity != null && !oldIdentity.isBlank()))
+            boolean isCustomer = actor.hasAnyRole(com.storagehub.domain.model.RoleCode.CUSTOMER);
+            if (!isCustomer && (verifiedAt != null || (oldIdentity != null && !oldIdentity.isBlank()))
                 && !java.util.Objects.equals(oldIdentity, newIdentity))
                 throw ApiExceptions.conflict("CCCD đã lưu. Vui lòng liên hệ nhân viên cơ sở để chỉnh sửa.");
-            request.profileDetails().setIdentityVerifiedAt(verifiedAt);
+            request.profileDetails().setIdentityVerifiedAt(
+                java.util.Objects.equals(oldIdentity, newIdentity) ? verifiedAt : null
+            );
             user.setProfileDetails(request.profileDetails());
             CustomerIdentityPolicy.assign(user, newIdentity, userRepository);
         }

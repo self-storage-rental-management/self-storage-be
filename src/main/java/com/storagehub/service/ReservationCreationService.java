@@ -231,6 +231,7 @@ public class ReservationCreationService {
             ? clean(request.getCustomerPhone()) : clean(quote.getCustomer().getPhone()));
         reservation.setCustomerAddress(clean(request.getCustomerAddress()) != null
             ? clean(request.getCustomerAddress()) : clean(quote.getCustomer().getPermanentAddress()));
+        reservation.captureCustomerDetails();
         reservation.setIdempotencyKey(normalizedKey);
         reservation.setRequestFingerprint(requestFingerprint);
         reservation.setFacility(quote.getFacility());
@@ -478,12 +479,10 @@ public class ReservationCreationService {
         ReservationSnapshotView.describe(response,reservation,snapshot);
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
-        response.setCustomerName(reservation.getCustomer().getFullName());
-        response.setCustomerEmail(reservation.getCustomer().getEmail());
-        response.setCustomerPhone(reservation.getCustomerPhone() != null
-            ? reservation.getCustomerPhone() : reservation.getCustomer().getPhone());
-        response.setCustomerAddress(reservation.getCustomerAddress() != null
-            ? reservation.getCustomerAddress() : reservation.getCustomer().getPermanentAddress());
+        response.setCustomerName(reservation.getCustomerName());
+        response.setCustomerEmail(reservation.getCustomerEmail());
+        response.setCustomerPhone(reservation.getCustomerPhone());
+        response.setCustomerAddress(reservation.getCustomerAddress());
         response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         return response;
     }
