@@ -611,9 +611,10 @@ public class ReservationCreationService {
         Map<String, Object> terms = new LinkedHashMap<>();
         terms.put("termsVersion", "RESERVATION_TERMS_V6_20261125");
         terms.put("handoverTermsVersion", ReservationCheckInPolicy.ATTENDANCE_TERMS);
-        terms.put("handoverNotice", "Khách cần đến nhận kho đúng giờ hẹn và cung cấp CCCD gốc hợp lệ. "
-            + "Bàn giao phải hoàn tất trong 72 giờ kể từ khi nhân viên xác nhận khách đã đến nhận kho. "
+        terms.put("handoverNotice", "Ngày hẹn là ngày 1. Khách có 7 ngày theo giờ Việt Nam để đến nhận kho và cung cấp CCCD gốc hợp lệ. "
+            + "Cơ sở có 30 phút để đối soát lượt đến đúng hạn. Bàn giao phải hoàn tất trong 72 giờ từ lần đối chiếu CCCD đầu tiên. "
             + "CCCD phải có 12 chữ số, mã tỉnh/thành hợp lệ và thể hiện người thuê đủ 18 tuổi. "
+            + "CCCD sai lệch tối đa 3 chữ số chỉ được sửa một lần nếu nhân viên xác minh đúng người đặt kho. Nếu sai lệch từ 4 chữ số, cơ sở từ chối bàn giao. "
             + "Nếu không đáp ứng điều kiện nhận kho đúng hạn hoặc bị từ chối do sai lệch CCCD vượt giới hạn, khoản trả trước giữ chỗ 20% không được hoàn lại. "
             + "Khách cần đặt và thanh toán đơn mới nếu đơn cũ bị hủy hoặc bị từ chối.");
         terms.put("handoverDepositAtRisk", quote.getReservationDepositAmount());

@@ -23,6 +23,9 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, UUID> 
     List<ActivityLog> findByEntityTypeAndActionInAndEntityIdIn(
         String entityType, Collection<String> actions, Collection<UUID> entityIds);
 
+    @EntityGraph(attributePaths = {"actor"})
+    List<ActivityLog> findByEntityTypeAndActionAndEntityIdIn(String entityType, String action, Collection<UUID> entityIds);
+
     @EntityGraph(attributePaths = {"actor", "facility"})
     @Query("""
         select log from ActivityLog log

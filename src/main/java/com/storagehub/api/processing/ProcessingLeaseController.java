@@ -19,8 +19,17 @@ public class ProcessingLeaseController {
     public record TokenRequest(@NotNull UUID token, Boolean reclaimSameOwner) {
         public TokenRequest(UUID token) { this(token, false); }
     }
+    public record DecisionRequest(@NotNull UUID token, @NotNull Boolean approve) {}
     private final ActorContext actors;
     private final ProcessingLeaseService leases;
+    @PostMapping("/requests") public ApiResponse<View> request(@PathVariable Target type, @PathVariable UUID id,
+        @Valid @RequestBody TokenRequest request) {
+        return envelope(leases.requestAccess(actors.required(), type, id, request.token()));
+    }
+    @PostMapping("/requests/{requestId}/decision") public ApiResponse<View> decide(@PathVariable Target type, @PathVariable UUID id,
+        @PathVariable UUID requestId, @Valid @RequestBody DecisionRequest request) {
+        return envelope(leases.decideRequest(actors.required(), type, id, request.token(), requestId, request.approve()));
+    }
     @GetMapping public ApiResponse<View> status(@PathVariable Target type, @PathVariable UUID id,
         @RequestHeader(value = "X-Processing-Token", required = false) UUID token) {
         return envelope(leases.status(actors.required(), type, id, token));

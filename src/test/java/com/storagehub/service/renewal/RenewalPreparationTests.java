@@ -35,7 +35,7 @@ class RenewalPreparationTests {
     }
     @Test void queryWhitelistAndStableOrdering(){
         var p=new LinkedMultiValueMap<String,String>();var q=RenewalListQuery.parse(p,true);
-        assertThat(q.sort().toString()).isEqualTo("createdAt: DESC,id: ASC");
+        assertThat(q.sort().toString()).isEqualTo("priority: ASC,id: ASC");
         for(var key:List.of("needsAttention","customerId","paid")){
             p.clear();p.add(key,"true");assertThatThrownBy(()->RenewalListQuery.parse(p,true)).isInstanceOf(ApiException.class);
         }

@@ -111,11 +111,8 @@ class RenewalPaymentTransactionTests {
         tx=new TransactionTemplate(manager);reset(policy,calendar,safety,finance);
         if(jdbc.queryForObject("select count(*) from information_schema.tables where table_name='RENTAL_LEDGER_ACCOUNTS'",Long.class)==0)
             new ResourceDatabasePopulator(new ClassPathResource("rental-ledger-test-schema.sql")).execute(jdbc.getDataSource());
-        jdbc.execute("create table if not exists money_receipt_codes (source_type varchar(24), source_id binary(16), receipt_code varchar(20))");
-        jdbc.execute("create alias if not exists bin_to_uuid for 'com.storagehub.service.ReturnClearanceConcurrencyTests.binaryUuid'");
         jdbc.execute("create table if not exists rental_ledger_gateway_evidence(receipt_id varchar(36) primary key,payment_id varchar(36) unique,proof_log_id varchar(36) unique,environment varchar(16),transaction_no varchar(128) unique)");
         jdbc.execute("create table if not exists renewal_deposit_forfeitures(renewal_id varchar(36) primary key,rental_id varchar(36),payment_id varchar(36) unique,receipt_id varchar(36) unique,obligation_id varchar(36),amount decimal(19,2),environment varchar(16),forfeited_at timestamp,reason varchar(64))");
-        jdbc.execute("create table if not exists renewal_payment_forfeitures(renewal_id varchar(36),rental_id varchar(36),payment_id varchar(36) unique,receipt_id varchar(36) primary key,amount decimal(20,0),environment varchar(16),forfeited_at timestamp,reason varchar(64))");
         config=new VnpayProperties();config.setEnabled(true);config.setTmnCode("TEST");config.setHashSecret("test-only");
         gateway=new VnpayService(config,payments,mock(PaymentComplaintRepository.class),mock(ReservationRepository.class),
             mock(ReservationPricingSnapshotRepository.class),mock(UserRepository.class),mock(AdminAuthorizationService.class),
@@ -281,97 +278,6 @@ class RenewalPaymentTransactionTests {
             assertThat(ledger.read(n.getRental().getId()).orElseThrow().knownOutstanding()).isZero();
         });
     }
-    @Test void voluntaryCancellationKeepsTheOriginalDepositReceiptAndVoidsOnlyUnpaidRemainder() throws Exception {
-        UUID payment=paidDeposit(false);var source=depositSource(NOW.plusSeconds(3600));
-        tx.executeWithoutResult(s->{
-            var p=payments.findById(payment).orElseThrow();var n=p.getRenewal();
-            var before=ledger.read(n.getRental().getId()).orElseThrow();
-            source.forfeitCustomerCancellation(n,n.getRequestedBy());
-            var after=ledger.read(n.getRental().getId()).orElseThrow();
-            assertThat(after.receipts()).isEqualTo(before.receipts());
-            assertThat(after.knownOutstanding()).isZero();
-            assertThat(p.getStatus()).isEqualTo(PaymentStatus.PAID);assertThat(p.getRefundedAmount()).isZero();
-            assertThat(after.refunds()).isEmpty();
-            assertThat(jdbc.queryForObject("select reason from renewal_deposit_forfeitures where renewal_id=?",String.class,n.getId().toString())).isEqualTo("CUSTOMER_CANCELLED");
-            assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
-            assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
-        });
-    }
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
-    void fullyPaidCancellationRetainsAllMoneyAndUnlocksReturnOnlyAfterCancellation(boolean separateDeposit) throws Exception {
-        UUID payment=paidRenewal(separateDeposit,false);
-        if(separateDeposit) {
-            var accounting=cashAccounting();
-            tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();var n=p.getRenewal();
-                var statement=accounting.statement(n,decodeTerms(p),NOW.plusSeconds(60));
-                recordFeeCash(accounting,n,statement,"full-balance",NOW.plusSeconds(60));});
-        }
-        var source=depositSource(NOW.plusSeconds(3600));
-        tx.executeWithoutResult(s->{
-            var n=payments.findById(payment).orElseThrow().getRenewal();
-            var before=ledger.read(n.getRental().getId()).orElseThrow();
-            var providers=new org.springframework.beans.factory.support.StaticListableBeanFactory();providers.addBean("forfeitures",new RenewalDepositForfeitures(jdbc));
-            var policy=new com.storagehub.service.renewal.RenewalReturnPolicy(em,mock(RentalRepository.class),payments,mapper,providers.getBeanProvider(RenewalDepositForfeitures.class));
-            assertThat(policy.assess(n).state()).isEqualTo("FULLY_PAID");assertThat(policy.read(n.getRental()).allowed()).isFalse();
-            source.forfeitFullyPaidCustomerCancellation(n,n.getRequestedBy());
-            n.setStatus(RenewalStatus.cancelled);em.flush();
-            var result=source.read(n.getId());assertThat(result.status()).isEqualTo("PAYMENT_FORFEITED");
-            assertThat(result.amount()).isEqualByComparingTo("100");assertThat(result.refundedAmount()).isZero();
-            assertThat(result.environment()).isEqualTo(separateDeposit?"MIXED":"SANDBOX");
-            var after=ledger.read(n.getRental().getId()).orElseThrow();
-            assertThat(after.receipts()).isEqualTo(before.receipts());assertThat(after.refunds()).isEmpty();assertThat(after.knownOutstanding()).isZero();
-            var paid=payments.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId());
-            assertThat(paid).hasSize(separateDeposit?2:1);
-            assertThat(paid).allSatisfy(p->{assertThat(p.getStatus()).isEqualTo(PaymentStatus.PAID);assertThat(p.getRefundedAmount()).isZero();});
-            assertThat(jdbc.queryForObject("select sum(amount) from renewal_payment_forfeitures where renewal_id=?",BigDecimal.class,n.getId().toString())).isEqualByComparingTo("100");
-            assertThat(policy.read(n.getRental()).allowed()).isTrue();
-            assertThat(n.getRental().getContractEndDate()).isEqualTo(LocalDate.of(2026,10,31));
-            assertThat(n.getRental().getStorageUnit().getStatus()).isEqualTo(StorageUnitStatus.occupied);
-        });
-    }
-    @Test void delayedDepositReviewDoesNotReprocessAFullyPaidCustomerCancellation() throws Exception {
-        UUID payment=paidRenewal(true,false);var accounting=cashAccounting();
-        tx.executeWithoutResult(s->{var p=payments.findById(payment).orElseThrow();
-            recordFeeCash(accounting,p.getRenewal(),accounting.statement(p.getRenewal(),decodeTerms(p),NOW.plusSeconds(60)),"cancelled-balance",NOW.plusSeconds(60));});
-        var source=depositSource(NOW.plusSeconds(3600));
-        tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();
-            source.forfeitFullyPaidCustomerCancellation(n,n.getRequestedBy());n.setStatus(RenewalStatus.cancelled);});
-        var late=depositSource(NOW.plus(Duration.ofDays(29)));
-        tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();
-            assertThat(late.candidates()).doesNotContain(n.getId());assertThat(late.reconcile(n.getId())).isFalse();
-            assertThat(late.read(n.getId()).status()).isEqualTo("PAYMENT_FORFEITED");
-            assertThat(ledger.read(n.getRental().getId()).orElseThrow().refunds()).isEmpty();});
-    }
-    @Test void fullyPaidCancellationCannotBypassAFacilityIncidentOrACompletedRenewal() throws Exception {
-        UUID payment=paidRenewal(false,false);var source=depositSource(NOW.plusSeconds(3600));
-        tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();incident(n,false);});
-        assertThatThrownBy(()->tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();
-            source.forfeitFullyPaidCustomerCancellation(n,n.getRequestedBy());})).hasMessageContaining("đối soát");
-        tx.executeWithoutResult(s->{payments.findById(payment).orElseThrow().getRenewal().setStatus(RenewalStatus.completed);});
-        assertThatThrownBy(()->tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();
-            source.forfeitFullyPaidCustomerCancellation(n,n.getRequestedBy());})).hasMessageContaining("đã hoàn tất");
-        assertThat(jdbc.queryForObject("select count(*) from renewal_payment_forfeitures where payment_id=?",Long.class,payment.toString())).isZero();
-    }
-    private RenewalLedgerAccountingConfiguration.Accounting cashAccounting() {
-        var provider=new org.springframework.beans.factory.support.StaticListableBeanFactory();provider.addBean("finance",finance);
-        var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
-        var manual=new ManualRentalPaymentService(payments,audit);
-        var identity=mock(com.storagehub.service.renewal.RenewalDisplayIdentity.class);
-        when(identity.resolve(any())).thenReturn(new com.storagehub.service.renewal.RenewalDisplayIdentity.Identity("SH-000001",1));
-        org.springframework.test.util.ReflectionTestUtils.setField(manual,"renewalIdentity",identity);
-        org.springframework.test.util.ReflectionTestUtils.setField(manual,"receiptCodes",mock(com.storagehub.service.MoneyReceiptCodes.class));
-        org.springframework.test.util.ReflectionTestUtils.setField(manual,"receiptEmails",mock(com.storagehub.service.email.TransactionalEmailService.class));
-        org.springframework.test.util.ReflectionTestUtils.setField(accounting,"manualPayments",manual);
-        return accounting;
-    }
-    @Test void voluntaryDepositForfeitureCannotBypassAnOpenFacilityIncident() throws Exception {
-        UUID payment=paidDeposit(false);var source=depositSource(NOW.plusSeconds(3600));
-        tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();incident(n,false);});
-        assertThatThrownBy(()->tx.executeWithoutResult(s->{var n=payments.findById(payment).orElseThrow().getRenewal();
-            source.forfeitCustomerCancellation(n,n.getRequestedBy());})).hasMessageContaining("đối soát");
-        assertThat(jdbc.queryForObject("select count(*) from renewal_deposit_forfeitures where payment_id=?",Long.class,payment.toString())).isZero();
-    }
     @Test void expiredSigningDoesNotForfeitDepositBeforeDayEightRecoveryStart() throws Exception {
         UUID payment=paidDeposit(false);var source=depositSource(NOW.plus(Duration.ofDays(4)));
         tx.executeWithoutResult(s->{
@@ -425,10 +331,11 @@ class RenewalPaymentTransactionTests {
         var provider=new org.springframework.beans.factory.support.StaticListableBeanFactory();provider.addBean("finance",finance);
         var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
         var manualPayments = new ManualRentalPaymentService(payments, audit);
-        var identity=mock(com.storagehub.service.renewal.RenewalDisplayIdentity.class);
-        when(identity.resolve(any())).thenReturn(new com.storagehub.service.renewal.RenewalDisplayIdentity.Identity("SH-000001",1));
-        org.springframework.test.util.ReflectionTestUtils.setField(manualPayments,"renewalIdentity",identity);
         org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptCodes", mock(com.storagehub.service.MoneyReceiptCodes.class));
+        var mockRenewalIdentity = mock(com.storagehub.service.renewal.RenewalDisplayIdentity.class);
+        when(mockRenewalIdentity.resolve(any())).thenReturn(new com.storagehub.service.renewal.RenewalDisplayIdentity.Identity(
+            "SH-100001", 1));
+        org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "renewalIdentity", mockRenewalIdentity);
         org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptEmails",
             mock(com.storagehub.service.email.TransactionalEmailService.class));
         org.springframework.test.util.ReflectionTestUtils.setField(accounting, "manualPayments", manualPayments);
@@ -461,10 +368,7 @@ class RenewalPaymentTransactionTests {
         catch(Exception e){throw new IllegalStateException(e);}
     }
     private UUID paidDeposit(boolean overdue) throws Exception {
-        return paidRenewal(true,overdue);
-    }
-    private UUID paidRenewal(boolean deposit,boolean overdue) throws Exception {
-        UUID id=fixture(deposit,overdue);when(safety.atomic()).thenReturn(true);when(calendar.atomic()).thenReturn(true);
+        UUID id=fixture(true,overdue);when(safety.atomic()).thenReturn(true);when(calendar.atomic()).thenReturn(true);
         when(policy.read(any())).thenReturn(Optional.of(new RenewalOperationSources.Policy("test","v1",Duration.ofDays(3),Duration.ofHours(1))));
         when(safety.check(any(),any(),any(),any())).thenReturn(NOW.plus(Duration.ofDays(5)));
         when(calendar.feasible(any(Renewal.class),any(),any())).thenReturn(true);
@@ -498,7 +402,6 @@ class RenewalPaymentTransactionTests {
         });
         sources.addBean("terms",termSource);
         org.springframework.test.util.ReflectionTestUtils.setField(ledger,"cancellationCredits",sources.getBeanProvider(RenewalLedgerAdjustments.class));
-        org.springframework.test.util.ReflectionTestUtils.setField(ledger,"depositForfeitures",sources.getBeanProvider(RenewalDepositForfeitures.class));
         var source=new RenewalDepositSettlementService(em,mapper,ledger,payments,provenance,new RenewalPersistence(em,mapper),audit,mock(NotificationService.class),
             sources.getBeanProvider(Clock.class),sources.getBeanProvider(RenewalOperationSources.PolicySource.class),sources.getBeanProvider(RenewalOperationSources.CalendarSource.class),
             sources.getBeanProvider(RenewalOperationSources.SafetySource.class),sources.getBeanProvider(com.storagehub.service.renewal.operations.RenewalOperationService.class));

@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 
 public interface ViolationRecoveryRepository extends JpaRepository<ViolationRecovery, UUID> {
+    List<ViolationRecovery> findByTask_AssignedTo_Id(UUID staffId, Pageable page);
+
     // Order the complete authorized queue in SQL, before applying the page limit.
     // A completed recovery may still have pickup/finance work; cancellation never authorizes movement.
     String QUEUE_ORDER = " order by case when v.stage = 'CANCELLED' then 3 "

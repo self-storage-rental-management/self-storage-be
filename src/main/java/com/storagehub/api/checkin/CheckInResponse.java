@@ -108,8 +108,14 @@ public record CheckInResponse(
     Equipment equipment,
     Attendance attendance,
     String declaredIdentityMasked,
-    boolean identityCorrected
+    boolean identityCorrected, int identityFailedAttempts, int identityCorrectionFailedAttempts
 ) {
+    /** Human-readable contract reference; the file UUID remains the download key. */
+    @com.fasterxml.jackson.annotation.JsonProperty("contractEvidenceCode")
+    public String contractEvidenceCode() {
+        return contractEvidenceReference == null || contractEvidenceReference.isBlank()
+            || reservationCode == null || reservationCode.isBlank() ? null : "HD-" + reservationCode;
+    }
     public record Attendance(Instant deadline, Instant arrivedAt, String termsVersion, Instant completionDeadline, boolean arrivalUnderReview) {}
 
     public record Equipment(int rackCount, int frameCount, Integer palletCount) {}
@@ -230,7 +236,7 @@ public record CheckInResponse(
             null, 0L, null, null, null, false,
             null, false, null, false,
             null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-            null, false
+            null, false, 0, 0
         );
     }
 

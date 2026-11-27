@@ -4,12 +4,11 @@ import com.storagehub.common.api.ApiExceptions;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.UnitType;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 
-/** Exact N * 24h return windows from publishedAt, matching IntakeTimelineCalculator. */
+/** Calendar boundaries are exclusive, so every allowed final date is usable in full. */
 public final class InventoryTimelinePolicy {
     public static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     public static final String RETURN_WINDOW_POLICY_VERSION = "INVENTORY_MISMATCH_RETURN_BY_UNIT_SIZE_V1";
@@ -35,10 +34,10 @@ public final class InventoryTimelinePolicy {
 
     public static Instant reminderAt(Instant ready) { return dayStart(ready, 4); }
     public static Instant inventoryDeadline(Instant ready) { return dayStart(ready, 8); }
-    public static Instant removalEffectiveAt(Instant published) { return published; }
-    public static Instant removalDeadline(Instant published) { return removalDeadline(published, 7); }
+    public static Instant removalEffectiveAt(Instant published) { return dayStart(published, 1); }
+    public static Instant removalDeadline(Instant published) { return dayStart(published, 8); }
     public static Instant removalDeadline(Instant published, int returnWindowDays) {
-        return published.plus(Duration.ofHours((long) returnWindowDays * 24L));
+        return dayStart(published, 1 + returnWindowDays);
     }
 
     public static void initializeRemovalWindow(Rental rental, Instant publishedAt) {
@@ -83,11 +82,11 @@ public final class InventoryTimelinePolicy {
             throw ApiExceptions.conflict("Bạn đã sử dụng hết số lần gia hạn trả kho cho phép.");
         }
         int nextCount = rental.getInventoryReturnExtensionCount() + 1;
-        Instant nextDeadline = rental.getInventoryRemovalDeadlineAt()
-            .plus(Duration.ofHours((long) rental.getInventoryReturnExtensionDays() * 24L));
-        int nextWindowDays = Math.toIntExact(Duration.between(
-            rental.getInventoryRemovalPublishedAt(),
-            nextDeadline).toDays());
+        Instant nextDeadline = rental.getInventoryRemovalDeadlineAt().atZone(ZONE)
+            .plusDays(rental.getInventoryReturnExtensionDays()).toInstant();
+        int nextWindowDays = Math.toIntExact(ChronoUnit.DAYS.between(
+            removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
+            nextDeadline.atZone(ZONE).toLocalDate()));
         rental.setInventoryReturnExtensionCount(nextCount);
         rental.setInventoryReturnWindowDays(nextWindowDays);
         rental.setInventoryRemovalDeadlineAt(nextDeadline);
@@ -102,10 +101,10 @@ public final class InventoryTimelinePolicy {
             return rental.getInventoryReturnWindowDays();
         }
         if (rental != null && rental.getInventoryRemovalPublishedAt() != null && rental.getInventoryRemovalDeadlineAt() != null) {
-            long days = Duration.between(
-                rental.getInventoryRemovalPublishedAt(),
-                rental.getInventoryRemovalDeadlineAt()
-            ).toDays();
+            long days = ChronoUnit.DAYS.between(
+                removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
+                rental.getInventoryRemovalDeadlineAt().atZone(ZONE).toLocalDate()
+            );
             return days > 0 ? Math.toIntExact(days) : null;
         }
         return null;

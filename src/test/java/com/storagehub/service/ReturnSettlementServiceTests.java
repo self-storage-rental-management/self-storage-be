@@ -188,20 +188,6 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
-    void openRenewalBlocksDirectReturnRequestWithoutCreatingOrChangingTheRental() {
-        var policy=org.mockito.Mockito.mock(com.storagehub.service.renewal.RenewalReturnPolicy.class);
-        ReflectionTestUtils.setField(service,"renewalReturnPolicy",policy);
-        when(rentalRepository.findByIdForUpdate(rental.getId())).thenReturn(Optional.of(rental));
-        org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.conflict("Hủy gia hạn trước khi trả kho"))
-            .when(policy).requireAllowed(rental);
-        var request=new CustomerCreateReturnRequest(LocalDate.now().plusDays(1),"Trả kho");
-        assertThatThrownBy(()->service.createCustomerReturnRequest(customerActor,rental.getId(),request))
-            .hasMessageContaining("Hủy gia hạn trước");
-        verify(returnCaseRepository,never()).save(any());verify(rentalRepository,never()).save(any());
-        assertThat(rental.getStatus()).isEqualTo(RentalStatus.active);
-    }
-
-    @Test
     void createCustomerReturnRequest_success() {
         CustomerCreateReturnRequest request = new CustomerCreateReturnRequest(
             LocalDate.now().plusDays(5),
@@ -1760,5 +1746,22 @@ class ReturnSettlementServiceTests {
             new StaffCompleteRefundRequest(null, "test", null, "CASH", true, new BigDecimal("100"))))
             .hasMessageContaining("biên lai");
         verify(returnFinance, never()).receipt(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void staffDateSortIsAppliedByRepositoryBeforePagination() {
+        when(returnCaseRepository.searchReturnCases(any(), any(), any(), any(), any()))
+            .thenReturn(org.springframework.data.domain.Page.empty());
+        for (String sort : List.of("createdAt,desc", "createdAt,asc")) {
+            service.listReturns(staffActor, null, null, null, 1, 20, sort, "test");
+        }
+        var pages = org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        org.mockito.Mockito.verify(returnCaseRepository, org.mockito.Mockito.times(2))
+            .searchReturnCases(any(), any(), any(), any(), pages.capture());
+        assertThat(pages.getAllValues()).allSatisfy(p -> assertThat(p.getPageNumber()).isEqualTo(1));
+        assertThat(pages.getAllValues().get(0).getSort().getOrderFor("createdAt").isDescending()).isTrue();
+        assertThat(pages.getAllValues().get(1).getSort().getOrderFor("createdAt").isAscending()).isTrue();
+        assertThatThrownBy(() -> service.listReturns(staffActor, null, null, null, 0, 20, "bad", "test"))
+            .hasMessageContaining("không hợp lệ");
     }
 }

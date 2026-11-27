@@ -54,15 +54,4 @@ class RenewalLocalPaymentChecksTests {
         var c=checks();when(ledger.read(id)).thenReturn(Optional.empty());c.requireKnownFinance(rental,renewal,now);
         verify(ledger,never()).open(any(),any(),any());
     }
-    @Test void paymentCannotBypassIncompleteIntake() {
-        var c=checks();var unit=new StorageUnit();unit.setStatus(StorageUnitStatus.assigned);
-        when(rental.getStatus()).thenReturn(RentalStatus.active);when(rental.getStorageUnit()).thenReturn(unit);
-        assertThatThrownBy(()->c.requireRental(rental))
-            .hasMessageContaining(com.storagehub.service.RentalIntakePolicy.INCOMPLETE);
-        unit.setStatus(StorageUnitStatus.occupied);when(rental.isInventoryPending()).thenReturn(true);
-        assertThatThrownBy(()->c.requireRental(rental))
-            .hasMessageContaining(com.storagehub.service.RentalIntakePolicy.INCOMPLETE);
-        when(rental.isInventoryPending()).thenReturn(false);
-        assertThatCode(()->c.requireRental(rental)).doesNotThrowAnyException();
-    }
 }

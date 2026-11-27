@@ -191,8 +191,9 @@ class UnitAssignmentServiceTests {
             .hasMessageContaining("not available");
     }
 
-    @Test
-    void changesAssignmentOnlyToACurrentlyAvailableReplacement() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void changesAssignmentOnlyToACurrentlyAvailableReplacement(boolean needsMaintenance) {
         reservation.setStatus(ReservationStatus.UNIT_RESERVED);
         UnitAssignment current = entityWithId(new UnitAssignment());
         current.setReservation(reservation);
@@ -223,11 +224,12 @@ class UnitAssignmentServiceTests {
             .thenAnswer(invocation -> invocation.getArgument(0));
 
         var response = service.change(
-            actor, reservation.getId(), new ChangeUnitAssignmentRequest(replacement.getId(), "Kho cũ cần bảo trì")
+            actor, reservation.getId(), new ChangeUnitAssignmentRequest(replacement.getId(), "Kho cũ cần bảo trì", needsMaintenance)
         );
 
         assertThat(response.storageUnitId()).isEqualTo(replacement.getId());
-        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        assertThat(unit.getStatus()).isEqualTo(needsMaintenance ? StorageUnitStatus.maintenance : StorageUnitStatus.available);
+        if (needsMaintenance) assertThat(unit.getAvailableFrom()).isNull();
         assertThat(replacement.getStatus()).isEqualTo(StorageUnitStatus.reserved);
         assertThat(current.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
         assertThat(reservation.getAssignedUnit()).isSameAs(replacement);

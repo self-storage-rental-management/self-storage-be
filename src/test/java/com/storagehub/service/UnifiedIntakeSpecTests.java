@@ -92,8 +92,6 @@ class UnifiedIntakeSpecTests {
         when(facility.getId()).thenReturn(facilityId);
         UnitType unitType = new UnitType();
         unitType.setCode("M");
-        unitType.setSetupDeadlineDays(7);
-        unitType.setSetupMaxExtensionDays(3);
         StorageUnit unit = new StorageUnit();
         unit.setCode("M001");
         unit.setUnitType(unitType);
@@ -154,7 +152,6 @@ class UnifiedIntakeSpecTests {
             Rental r = new Rental();
             UnitType ut = new UnitType();
             ut.setCode(entry.getKey());
-            ut.setSetupDeadlineDays((int)(entry.getValue() / 24));
             StorageUnit su = new StorageUnit();
             su.setUnitType(ut);
             r.setStorageUnit(su);
@@ -170,8 +167,8 @@ class UnifiedIntakeSpecTests {
         StorageUnit su = new StorageUnit();
         su.setUnitType(custom);
         unknown.setStorageUnit(su);
-        calculator.initializeOnReceipt(unknown, t0);
-        assertThat(unknown.getOriginalInspectionArrivalDeadlineAt()).isEqualTo(t0.plus(120, ChronoUnit.HOURS));
+        assertThatThrownBy(() -> calculator.initializeOnReceipt(unknown, t0))
+            .isInstanceOf(ApiException.class);
     }
 
     @Test

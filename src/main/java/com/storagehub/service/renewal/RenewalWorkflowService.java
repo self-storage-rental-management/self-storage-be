@@ -25,10 +25,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service @RequiredArgsConstructor @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
 public class RenewalWorkflowService {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
-    private RenewalReturnPolicy returnPolicy;
-    @org.springframework.beans.factory.annotation.Autowired
-    private ObjectProvider<com.storagehub.service.ledger.RenewalDepositSettlementService> depositSettlements;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.BusinessRecordCodes displayCodes;
     private static final Duration RENEWAL_QUOTE_VALIDITY = Duration.ofMinutes(15);
@@ -61,12 +57,6 @@ public class RenewalWorkflowService {
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectProvider<com.storagehub.service.ledger.RenewalDepositObligationWriter> depositWriters;
     private Instant now(){var c=clocks.getIfAvailable();return (c==null?Clock.systemUTC():c).instant();}
-    @Transactional(readOnly=true)
-    public RenewalReturnPolicy.View cancellationPolicy(ActorPrincipal actor,UUID id) {
-        var renewal=reads.find(actor,id,false);
-        if (returnPolicy==null) throw deferred("Cancellation policy unavailable");
-        return returnPolicy.assess(renewal);
-    }
     public List<RenewalCommands.Option> options(ActorPrincipal a,UUID rentalId){
         var r=owned(a,rentalId);var context=policyPeriod(r);
         return prices(r,context).stream()
@@ -195,28 +185,10 @@ public class RenewalWorkflowService {
     public RenewalResponse cancel(ActorPrincipal a,UUID id,RenewalCommands.Cancel body,String key){
         var n=reads.find(a,id,false);var user=lockActor(a);var r=store.lockRental(n.getRental().getId());em.refresh(r);checkOwner(a,r);
         var replay=store.replay(user,"cancel",key,id,body);if(replay.isPresent())return decode(replay.get().dataJson(),RenewalResponse.class);
-        em.refresh(n);
-        String cancellationState=returnPolicy==null?"":returnPolicy.assess(n).state();
-        boolean canCancelPaid=returnPolicy!=null && returnPolicy.canCancel(n);
-        boolean cancelDeposit=canCancelPaid && "DEPOSIT_PAID".equals(cancellationState);
-        boolean cancelFullPayment=canCancelPaid && "FULLY_PAID".equals(cancellationState);
-        if (cancelDeposit) {
-            if (!Boolean.TRUE.equals(body.acknowledgeDepositForfeiture()))
-                throw ApiExceptions.conflict("Vui lòng xác nhận tiền cọc gia hạn không được hoàn lại khi bạn tự hủy.");
-        } else if (cancelFullPayment) {
-            if (!Boolean.TRUE.equals(body.acknowledgePaymentForfeiture()))
-                throw ApiExceptions.conflict("Vui lòng xác nhận toàn bộ tiền gia hạn đã thanh toán không được hoàn lại khi bạn tự hủy.");
-        } else requireCancelable(n);
-        var wf=store.lockWorkflow(id,body.expectedVersion());var before=Map.of("status",n.getStatus());
+        em.refresh(n);requireCancelable(n);var wf=store.lockWorkflow(id,body.expectedVersion());var before=Map.of("status",n.getStatus());
         var selectedState=em.find(com.storagehub.service.renewal.operations.RenewalOperationState.class,id);
-        if(!cancelDeposit&&!cancelFullPayment&&selectedState!=null&&selectedState.hasVerifiedPayment())
+        if(selectedState!=null&&selectedState.hasVerifiedPayment())
             throw ApiExceptions.conflict("Đã xác minh tiền gia hạn; cần xử lý theo quy trình đối soát và hoàn tiền.");
-        if (cancelDeposit || cancelFullPayment) {
-            var settlement=depositSettlements.getIfAvailable();
-            if (settlement==null) throw deferred("Deposit cancellation accounting unavailable");
-            if (cancelFullPayment) settlement.forfeitFullyPaidCustomerCancellation(n,user);
-            else settlement.forfeitCustomerCancellation(n,user);
-        }
         if(selectedState!=null&&selectedState.getAppointmentRef()!=null) {
             var calendar=calendars.getIfAvailable();
             if(calendar==null||!calendar.atomic())throw deferred("Signing calendar release unavailable");
@@ -229,7 +201,7 @@ public class RenewalWorkflowService {
         }
         if(selectedState!=null&&!selectedState.hasVerifiedPayment())em.remove(selectedState);
         var cancellationWriter=depositWriters.getIfAvailable();
-        if(cancellationWriter!=null&&!cancelDeposit&&!cancelFullPayment)cancellationWriter.cancelUnpaid(wf);
+        if(cancellationWriter!=null)cancellationWriter.cancelUnpaid(wf);
         n.setStatus(RenewalStatus.cancelled);wf.cancelled(body.reason());store.releaseSlot(wf);
         return finish(user,"cancel",key,id,body,n,200,before);
     }
@@ -387,11 +359,6 @@ public class RenewalWorkflowService {
         var actions=new ArrayList<String>();
         if(actor!=null&&isPrePayment(n)){
             if(!manager&&actor.hasRole(RoleCode.CUSTOMER)&&actor.userId().equals(n.getRental().getCustomer().getId())){actions.add("CANCEL");if(review.equals("AWAITING_CUSTOMER_CONFIRMATION"))actions.add("ACCEPT_REVISED_QUOTE");}
-        }
-        if (actor!=null && !manager && actor.hasRole(RoleCode.CUSTOMER)
-            && actor.userId().equals(n.getRental().getCustomer().getId()) && returnPolicy!=null) {
-            actions.remove("CANCEL");
-            if (returnPolicy.canCancel(n)) actions.add("CANCEL");
         }
         var reasons=new ArrayList<String>();
         if(isPrePayment(n)){
