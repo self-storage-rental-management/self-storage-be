@@ -137,15 +137,6 @@ public class UnitType extends BaseEntity {
     @Column(name = "accepted_goods_json", nullable = false, columnDefinition = "LONGTEXT")
     private String acceptedGoodsJson = "{\"categoryIds\":[],\"materialIds\":[]}";
 
-    @Column(nullable = false)
-    private int setupDeadlineDays = 5;
-    @Column(nullable = false)
-    private int setupMaxExtensionDays = 2;
-    @Column(nullable = false)
-    private int mismatchReturnDays = 3;
-    @Column(nullable = false)
-    private int mismatchReturnMaxExtensionDays = 2;
-
     @Version
     private long version;
 

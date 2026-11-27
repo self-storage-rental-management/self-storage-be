@@ -170,12 +170,12 @@ public class BusinessPolicyService {
         requirePolicyOwner(actor);
 
         Facility facility = facilityRepository.findById(request.facilityId())
-            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy cơ sở."));
+            .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
 
         facilityScopeService.assertCanManage(actor, facility.getId());
 
         if (policyRepository.findByFacility_IdAndCode(facility.getId(), request.code().trim()).isPresent()) {
-            throw ApiExceptions.conflict("Mã gói thuê '" + request.code() + "' đã tồn tại tại cơ sở này.");
+            throw ApiExceptions.conflict("A package policy with code '" + request.code() + "' already exists for this facility");
         }
         validatePackagePeriod(request, facility.getId(), null);
 
@@ -534,9 +534,9 @@ public class BusinessPolicyService {
     }
 
     private void requirePolicyOwner(ActorPrincipal actor) {
-        if (actor == null) throw ApiExceptions.unauthorized("Vui lòng đăng nhập để tiếp tục.");
+        if (actor == null) throw ApiExceptions.unauthorized("Authentication is required");
         if (!actor.hasRole(RoleCode.BUSINESS)) {
-            throw ApiExceptions.forbidden("Chỉ quản lý vận hành kinh doanh được chỉnh sửa chính sách thuê.");
+            throw ApiExceptions.forbidden("Only Business Operations may edit rental policies");
         }
         authorizationService.require(actor, SystemPermission.MANAGE_POLICIES);
     }

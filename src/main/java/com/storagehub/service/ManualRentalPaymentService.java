@@ -98,11 +98,14 @@ public class ManualRentalPaymentService {
         String paidAtText = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
             .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(paidAt);
         String amount = java.text.NumberFormat.getNumberInstance(java.util.Locale.forLanguageTag("vi-VN")).format(payment.getAmount()) + " đ";
+        var identity = renewalIdentity != null ? renewalIdentity.resolve(renewal) : null;
+        String label = reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode()
+            : (identity != null && identity.label() != null ? identity.label() : "Hồ sơ gia hạn");
         receiptEmails.sendPaymentBillAsync(customer.getId(), customer.getEmail(), customer.getFullName(),
             payment.getId(),
             reference, amount, paidAtText, unit == null ? "Chưa phân gian kho" : unit.getCode(),
             facility.getName(), facility.getAddress(),
-            reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode() : renewalIdentity.resolve(renewal).label(),
+            label,
             reservation != null ? "Thanh toán phần còn lại khi nhận kho" : "Thanh toán phần còn lại kỳ gia hạn",
             "Biên lai ghi nhận khoản thanh toán tại cơ sở. Vui lòng lưu email này để đối chiếu khi cần.");
     }

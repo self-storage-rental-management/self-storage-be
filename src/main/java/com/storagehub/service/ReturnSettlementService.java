@@ -21,6 +21,7 @@ import com.storagehub.domain.model.LockInspectionResult;
 import com.storagehub.domain.model.NotificationType;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
+import com.storagehub.domain.model.RenewalStatus;
 import com.storagehub.domain.model.ReturnCase;
 import com.storagehub.domain.model.ReturnCaseStatus;
 import com.storagehub.domain.model.ReturnType;
@@ -74,27 +75,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class ReturnSettlementService {
-    @Autowired(required = false)
-    private ReturnFeeScheduleService returnFeeScheduleService;
-
-    private java.util.Map<String, BigDecimal> returnFeePrices(ReturnCase returnCase) {
-        return returnFeeScheduleService == null ? null : returnFeeScheduleService.applicableTo(returnCase.getRental()).prices();
-    }
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
-    private com.storagehub.service.renewal.RenewalReturnPolicy renewalReturnPolicy;
-
-    @org.springframework.transaction.annotation.Transactional(readOnly=true)
-    public com.storagehub.service.renewal.RenewalReturnPolicy.View customerReturnEligibility(ActorPrincipal actor, UUID rentalId) {
-        if (renewalReturnPolicy==null) throw ApiExceptions.conflict("Chưa thể kiểm tra điều kiện gia hạn và trả kho. Vui lòng thử lại.");
-        return renewalReturnPolicy.customer(actor,rentalId);
-    }
-
-    private void requireRenewalResolved(Rental rental) {
-        if (renewalReturnPolicy!=null) {
-            rentalRepository.findByIdForUpdate(rental.getId()).orElseThrow(()->ApiExceptions.notFound("Rental not found"));
-            renewalReturnPolicy.requireAllowed(rental);
-        }
-    }
     private static final String NO_SHOW_RECOVERY_TASK_TITLE = "Thu hồi hàng do khách không đến ngày trả kho";
     @org.springframework.beans.factory.annotation.Value("${app.refund.processing-days:7}")
     private int refundProcessingDays = 7;
@@ -154,12 +134,12 @@ public class ReturnSettlementService {
     private final ObjectMapper objectMapper;
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
-    @org.springframework.beans.factory.annotation.Value("${storagehub.returns.missing-pallet-unit-price:300000}")
-    private BigDecimal missingPalletUnitPrice = BigDecimal.valueOf(300000);
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-grace-hours:24}")
     private long noShowGraceHours = 24;
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.no-show-recovery-sla-hours:24}")
     private long noShowRecoverySlaHours = 24;
+    @org.springframework.beans.factory.annotation.Value("${storagehub.returns.missing-pallet-unit-price:300000}")
+    private BigDecimal missingPalletUnitPrice = BigDecimal.valueOf(300000);
     @org.springframework.beans.factory.annotation.Value("${storagehub.return.auto-settlement.sla-hours:72}")
     private long autoSettlementSlaHours = 72;
 
@@ -197,7 +177,6 @@ public class ReturnSettlementService {
     }
 
     private ReturnCaseResponse createReturnRequest(Rental rental, CustomerCreateReturnRequest request, User staff) {
-        requireRenewalResolved(rental);
         if (staff == null && inventoryCheckInRepository != null && rental.getReservation() != null
             && inventoryCheckInRepository.findByReservation_Id(rental.getReservation().getId())
                 .map(com.storagehub.domain.model.CheckIn::hasPendingInventoryRefusal).orElse(false))
@@ -229,6 +208,24 @@ public class ReturnSettlementService {
         boolean setupExit = inventoryMismatchReturn || inSetupReturnWindow(rental);
         if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
             throw ApiExceptions.conflict("Chỉ hồ sơ đang trong thời gian chuẩn bị hoặc đang thuê mới được yêu cầu trả kho");
+        }
+        if (settlementEntityManager != null) {
+            try {
+                var renewalCountQuery = settlementEntityManager.createQuery(
+                    "select count(n) from Renewal n where n.rental.id=:rentalId and n.status not in :terminal", Long.class);
+                if (renewalCountQuery != null) {
+                    long openRenewals = renewalCountQuery
+                        .setParameter("rentalId", rental.getId())
+                        .setParameter("terminal", List.of(RenewalStatus.rejected, RenewalStatus.cancelled,
+                            RenewalStatus.completed, RenewalStatus.payment_expired))
+                        .getSingleResult();
+                    if (openRenewals > 0) {
+                        throw ApiExceptions.conflict("Hồ sơ đang có yêu cầu gia hạn chưa kết thúc. Hãy hoàn tất hoặc hủy gia hạn trước khi trả kho.");
+                    }
+                }
+            } catch (Exception e) {
+                if (e instanceof com.storagehub.common.api.ApiException) throw e;
+            }
         }
         var recoveryGuard=recoveryGuard();
         if(recoveryGuard!=null) {
@@ -347,7 +344,6 @@ public class ReturnSettlementService {
         Rental rental = rentalRepository.findByIdForUpdate(rentalId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
         facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
-        requireRenewalResolved(rental);
         if (request == null || request.returnType() != ReturnType.INVENTORY_MISMATCH || request.scheduledDate() == null) {
             throw ApiExceptions.validation("Yêu cầu trả kho do sai lệch cần có ngày trả dự kiến.", null);
         }
@@ -435,7 +431,6 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
         boolean fixedDeadline = record.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && record.getRental().getInventoryRemovalDeadlineAt() != null;
-        requireRenewalResolved(record.getRental());
         if (ReturnAttendancePolicy.applies(record)
             && (record.getReturnArrivedAt() != null || record.getReturnLateArrivalClaimedAt() != null
                 || IntakeTimelineCalculator.REVIEW_PENDING.equals(record.getReturnArrivalReviewStatus())))
@@ -501,7 +496,6 @@ public class ReturnSettlementService {
         if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
             throw ApiExceptions.conflict("Chỉ áp dụng đặt lịch bàn giao cho hồ sơ trả kho do kiểm kê sai lệch.");
         }
-        requireRenewalResolved(rental);
         if (appointmentAt == null) {
             throw ApiExceptions.validation("Vui lòng chọn ngày giờ hẹn bàn giao.", null);
         }
@@ -583,7 +577,6 @@ public class ReturnSettlementService {
         if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
             throw ApiExceptions.conflict("Chỉ áp dụng gia hạn cho hồ sơ trả kho do kiểm kê sai lệch.");
         }
-        requireRenewalResolved(rental);
         String idem = idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.trim();
         if (idem != null && idem.equals(rc.getLastExtensionIdempotencyKey())) {
             return toResponse(rc);
@@ -652,7 +645,6 @@ public class ReturnSettlementService {
         var rc = returnCaseRepository.findByIdAndCustomer_Id(id, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
         lockRecoveryReturn(rc);
-        requireRenewalResolved(rc.getRental());
         requireEditableCheck(rc);
         if ((rc.getCustomerClearedAt() != null) == cleared) return toResponse(rc);
         requireCurrentCheck(rc, revision);
@@ -1154,10 +1146,7 @@ public class ReturnSettlementService {
     private void validateRemovalDate(Rental rental, LocalDate date) {
         LocalDate first = InventoryTimelinePolicy.removalEffectiveAt(rental.getInventoryRemovalPublishedAt())
             .atZone(BusinessTime.ZONE).toLocalDate();
-        var deadlineZoned = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE);
-        LocalDate last = deadlineZoned.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
-            ? deadlineZoned.toLocalDate().minusDays(1)
-            : deadlineZoned.toLocalDate();
+        LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
         if (date == null || date.isBefore(first) || date.isAfter(last))
             throw ApiExceptions.validation("Ngày hẹn trả kho phải từ " + first + " đến hết " + last + ".", null);
     }
@@ -1476,7 +1465,7 @@ public class ReturnSettlementService {
             if (returnedAt == null) returnedAt = returnCase.getReadyForInspectionAt();
             returnCase.setSetupReturnedAt((returnedAt == null ? Instant.now() : returnedAt)
                 .truncatedTo(java.time.temporal.ChronoUnit.MICROS));
-            if (calculatedDamageFee(request, returnCase).signum() > 0 || request.cleaningFee().signum() > 0 || request.lostItemFee().signum() > 0) {
+            if (calculatedDamageFee(request).signum() > 0 || request.cleaningFee().signum() > 0 || request.lostItemFee().signum() > 0) {
                 if (request.staffNotes() == null || request.staffNotes().isBlank() || request.evidencePhotos() == null || request.evidencePhotos().isEmpty())
                     throw ApiExceptions.validation("Phí phát sinh trong thời gian chuẩn bị cần ghi chú và bằng chứng kiểm kê.", null);
                 if (!ordinaryInspection) validateInspectionPhotos(returnCase, request.evidencePhotos(), false);
@@ -1488,26 +1477,15 @@ public class ReturnSettlementService {
 
         var equipment = returnEquipment(returnCase);
         int missingPallets = request.missingPalletCount() == null ? 0 : request.missingPalletCount();
-        if (equipment == null || equipment.palletCount() == null)
+        if (equipment.palletCount() == null)
             throw ApiExceptions.validation("Thiếu cấu hình thiết bị bàn giao; cần đối soát trước khi nghiệm thu.", null);
-        if (request.damageItems() != null) {
-            boolean frameCountRecorded = false;
-            for (var item : request.damageItems()) {
-                if (item == null || !ReturnDamagePricing.FRAME_DAMAGE.equals(item.code())) continue;
-                if (frameCountRecorded || item.quantity() == null || item.quantity().signum() <= 0
-                    || item.quantity().stripTrailingZeros().scale() > 0
-                    || item.quantity().compareTo(BigDecimal.valueOf(equipment.frameCount())) > 0)
-                    throw ApiExceptions.validation("Số khung hư phải là số nguyên và không vượt số khung đã bàn giao.", null);
-                frameCountRecorded = true;
-            }
-        }
         if (missingPallets < 0 || missingPallets > equipment.palletCount())
             throw ApiExceptions.validation("Số tấm kê thiếu phải nằm trong số lượng đã bàn giao.", null);
         if (missingPallets > 0 && equipment.palletUnitPrice().signum() <= 0)
             throw ApiExceptions.validation("Chưa cấu hình đơn giá bồi thường tấm kê.", null);
         boolean goodsLeft = request.damageClassification() == com.storagehub.domain.model.DamageClassification.abandoned_goods;
-        if (goodsLeft && safeFee(request.cleaningFee()).compareTo(returnFeePrices(returnCase) == null ? BigDecimal.valueOf(200000) : returnFeePrices(returnCase).getOrDefault("major", BigDecimal.ZERO)) < 0)
-            throw ApiExceptions.validation("Kho còn hàng phải tính ít nhất phí tổng vệ sinh theo biểu phí hiện hành.", null);
+        if (goodsLeft && safeFee(request.cleaningFee()).compareTo(BigDecimal.valueOf(200000)) < 0)
+            throw ApiExceptions.validation("Kho còn hàng phải tính phí tổng vệ sinh tối thiểu 200.000 đ.", null);
         boolean requiresMaintenance = goodsLeft || safeFee(request.cleaningFee()).signum() > 0
             || request.damageClassification() != com.storagehub.domain.model.DamageClassification.no_damage || missingPallets > 0;
         if (requiresMaintenance && request.proposedUnitStatus() != StorageUnitStatus.maintenance)
@@ -1515,12 +1493,8 @@ public class ReturnSettlementService {
         BigDecimal palletFee = equipment.palletUnitPrice().multiply(BigDecimal.valueOf(missingPallets));
         returnCase.setMissingPalletCount(missingPallets);
         returnCase.setPalletLossFee(palletFee);
-        BigDecimal safeDamage = calculatedDamageFee(request, returnCase);
+        BigDecimal safeDamage = calculatedDamageFee(request);
         BigDecimal safeCleaning = safeFee(request.cleaningFee());
-        var cleaningPrices = returnFeePrices(returnCase);
-        if (cleaningPrices != null && safeCleaning.signum() != 0 && request.damageItems() != null && cleaningPrices.entrySet().stream()
-            .noneMatch(entry -> ReturnFeeScheduleService.isCleaningFee(entry.getKey()) && entry.getValue().compareTo(safeCleaning) == 0))
-            throw ApiExceptions.conflict("Phí vệ sinh đã thay đổi. Vui lòng tải lại trước khi nghiệm thu.");
         BigDecimal safeLostItem = (request.returnedLock() ? BigDecimal.ZERO : BigDecimal.valueOf(150000)).add(palletFee);
         BigDecimal safeOverdue = safeFee(request.overdueFee());
         Instant inspectionAt=Instant.now();
@@ -1583,9 +1557,7 @@ public class ReturnSettlementService {
         returnCase.setInspectedAt(inspectionAt);
         returnCase.setInventoryMatch(missingPallets > 0 ? com.storagehub.domain.model.InventoryMatch.missing : request.inventoryMatch());
         returnCase.setDamageClassification(request.damageClassification());
-        var applicableSchedule = returnFeeScheduleService == null ? null : returnFeeScheduleService.applicableTo(returnCase.getRental());
-        String damageBreakdown = ReturnDamagePricing.describe(request.damageItems(),
-            applicableSchedule == null ? null : applicableSchedule.prices(), applicableSchedule == null ? null : applicableSchedule.details());
+        String damageBreakdown = ReturnDamagePricing.describe(request.damageItems());
         String inspectionNotes = request.staffNotes();
         if (!damageBreakdown.isBlank()) {
             inspectionNotes = (inspectionNotes == null ? "" : inspectionNotes.trim());
@@ -1816,7 +1788,6 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
         lockRecoveryReturn(returnCase);
-        requireRenewalResolved(returnCase.getRental());
         if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && !java.util.Objects.equals(request.settlementVersion(), returnCase.getSettlementVersion()))
             throw ApiExceptions.conflict("Bảng kê đã thay đổi. Vui lòng tải lại và kiểm tra phiên bản hiện tại.");
@@ -2204,34 +2175,59 @@ public class ReturnSettlementService {
         if (recoveryGuard != null) {
             recoveryGuard.requireManualSettlement(returnCase);
         }
-        String method = request.paymentMethod();
-        if ("VNPAY".equalsIgnoreCase(method) || "VNPAY_GATEWAY".equalsIgnoreCase(method)) {
-            throw ApiExceptions.conflict("Không hỗ trợ hoàn tiền qua VNPay. Vui lòng hoàn bằng chuyển khoản hoặc tiền mặt kèm biên lai.");
-        }
-        if (!"CASH".equals(method) && !"BANK_TRANSFER".equals(method)) {
-            throw ApiExceptions.validation("Vui lòng chọn hoàn tiền bằng chuyển khoản hoặc tiền mặt.", null);
-        }
+        boolean vnpay = "VNPAY".equalsIgnoreCase(request.paymentMethod())
+            || "VNPAY_GATEWAY".equalsIgnoreCase(request.paymentMethod());
         if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
             if (returnCase.getStatus() != ReturnCaseStatus.refund_pending || zeroIfNull(returnCase.getNetRefundAmount()).signum() <= 0)
                 throw ApiExceptions.conflict("Hồ sơ chưa có khoản hoàn tiền đang chờ xử lý.");
+            if (vnpay)
+                throw ApiExceptions.conflict("Vui lòng ghi nhận hoàn tiền đã đối chiếu bằng biên lai cho hồ sơ sai lệch kiểm kê.");
             requireFinance().requireCurrent(returnCase);
         }
         if (hasTwoMismatchObligations(returnCase) && !requireFinance().hasCollectionReceipt(returnCase))
             throw ApiExceptions.conflict("Hồ sơ cần đủ biên lai thực thu và thực hoàn. Vui lòng đối soát thu tiền trước và ghi hoàn bằng biên lai.");
-        if (!Boolean.TRUE.equals(request.confirmed()) || request.amount() == null) {
-            throw ApiExceptions.validation("Vui lòng xác nhận số tiền thực hoàn và đối chiếu biên lai trước khi ghi nhận.", null);
+        String settlementReference;
+        if (vnpay) {
+            if (vnpayService == null || paymentRepository == null || request.originalPaymentId() == null) {
+                throw ApiExceptions.conflict("Original VNPay payment is required for a gateway refund");
+            }
+            var originalPayment = paymentRepository.findById(request.originalPaymentId())
+                .orElseThrow(() -> ApiExceptions.notFound("Original payment was not found"));
+            if (originalPayment.getReservation() == null
+                || !originalPayment.getReservation().getId().equals(returnCase.getRental().getReservation().getId())) {
+                throw ApiExceptions.conflict("Original payment does not belong to this rental");
+            }
+            settlementReference = vnpayService.executeApprovedReturnRefund(
+                actor, originalPayment.getId(), returnCase.getNetRefundAmount(),
+                request.notes() == null || request.notes().isBlank() ? "StorageHub return refund" : request.notes(),
+                "127.0.0.1"
+            );
+            if (finance() != null) {
+                finance().requireCurrent(returnCase);
+                finance().settle(returnCase, actor.userId(), settlementReference, true);
+            }
+        } else {
+            if (!Boolean.TRUE.equals(request.confirmed()) || request.amount() == null) {
+                throw ApiExceptions.validation("Vui lòng xác nhận số tiền thực hoàn và đối chiếu biên lai trước khi ghi nhận.", null);
+            }
+            if (request.receiptFileId() == null) {
+                throw ApiExceptions.validation("Vui lòng đính kèm biên lai thực hoàn.", null);
+            }
+            if (returnCase.getStatus() != ReturnCaseStatus.refund_pending
+                || returnCase.getNetRefundAmount() == null || returnCase.getNetRefundAmount().signum() <= 0
+                || returnCase.getNetRefundAmount().compareTo(request.amount()) != 0) {
+                throw ApiExceptions.conflict("Số tiền thực hoàn không khớp với bảng kê đang chờ hoàn tiền.");
+            }
+            String method = request.paymentMethod() != null && !request.paymentMethod().isBlank()
+                ? request.paymentMethod() : "BANK_TRANSFER";
+            String txRef = returnSettlementReference(returnCase, method, request.transactionReference());
+
+            if (finance() != null) {
+                finance().receipt(actor, returnCase, method, txRef, request.receiptFileId());
+                finance().settle(returnCase, actor.userId(), txRef, true);
+            }
+            settlementReference = txRef;
         }
-        if (request.receiptFileId() == null) {
-            throw ApiExceptions.validation("Vui lòng đính kèm biên lai thực hoàn.", null);
-        }
-        if (returnCase.getStatus() != ReturnCaseStatus.refund_pending
-            || returnCase.getNetRefundAmount() == null || returnCase.getNetRefundAmount().signum() <= 0
-            || returnCase.getNetRefundAmount().compareTo(request.amount()) != 0) {
-            throw ApiExceptions.conflict("Số tiền thực hoàn không khớp với bảng kê đang chờ hoàn tiền.");
-        }
-        String settlementReference = returnSettlementReference(returnCase, method, request.transactionReference());
-        requireFinance().receipt(actor, returnCase, method, settlementReference, request.receiptFileId());
-        requireFinance().settle(returnCase, actor.userId(), settlementReference, true);
 
         returnCase.setStatus(ReturnCaseStatus.completed);
         returnCase.setCompletedAt(Instant.now());
@@ -2651,7 +2647,7 @@ public class ReturnSettlementService {
 
     private static void startMismatchPaymentDeadline(ReturnCase rc, Instant now) {
         if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH && rc.getSettlementPaymentDueAt() == null)
-            rc.setSettlementPaymentDueAt(now.plus(java.time.Duration.ofHours(7 * 24L)));
+            rc.setSettlementPaymentDueAt(InventoryTimelinePolicy.dayStart(now, 8));
     }
 
     private Map<String, BigDecimal> mismatchStatementAmounts(ReturnCase rc) {
@@ -2718,13 +2714,10 @@ public class ReturnSettlementService {
         catch(ArithmeticException invalid){throw ApiExceptions.validation("Phí quyết toán phải là số nguyên đồng Việt Nam.",null);}
     }
 
-    private BigDecimal calculatedDamageFee(ReturnInspectionRequest request, ReturnCase returnCase) {
+    private BigDecimal calculatedDamageFee(ReturnInspectionRequest request) {
         if (request.damageItems() == null) return safeFee(request.damageFee());
         try {
-            var prices = returnFeePrices(returnCase);
-            BigDecimal calculated = ReturnDamagePricing.calculate(request.damageItems(), prices);
-            if (returnFeeScheduleService != null && calculated.compareTo(safeFee(request.damageFee())) != 0)
-                throw ApiExceptions.conflict("Biểu phí đã thay đổi. Vui lòng tải lại trước khi nghiệm thu.");
+            BigDecimal calculated = ReturnDamagePricing.calculate(request.damageItems());
             if (!request.damageItems().isEmpty()
                 && request.damageClassification() == com.storagehub.domain.model.DamageClassification.no_damage) {
                 throw new IllegalArgumentException("Đã chọn hạng mục hư hỏng nhưng mức độ đang là không hư hại.");
@@ -2734,8 +2727,8 @@ public class ReturnSettlementService {
                     || request.damageClassification() == com.storagehub.domain.model.DamageClassification.major_damage)) {
                 String expectedCategory = request.damageClassification() == com.storagehub.domain.model.DamageClassification.major_damage ? "major" : "minor";
                 boolean wrongCategory = request.damageItems().stream().anyMatch(item -> {
-                    var price = ReturnDamagePricing.lookup(item.code(), prices);
-                    return price == null || (!ReturnDamagePricing.FRAME_DAMAGE.equals(item.code()) && !expectedCategory.equals(price.category()));
+                    var price = ReturnDamagePricing.catalog().get(item.code());
+                    return price == null || !expectedCategory.equals(price.category());
                 });
                 if (wrongCategory) throw new IllegalArgumentException("Hạng mục không khớp mức độ hư hỏng đã chọn.");
             }
@@ -2866,8 +2859,7 @@ public class ReturnSettlementService {
             rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
                 ? (rc.getReturnPolicyVersion() != null ? rc.getReturnPolicyVersion() : rc.getRental().getInventoryReturnPolicyVersion())
                 : null,
-            resolveEquipment(rc),
-            rc.getCustomerClearedAt(), rc.getWarehouseEmptyVerified(),
+            resolveEquipment(rc), rc.getCustomerClearedAt(), rc.getWarehouseEmptyVerified(),
             rc.getWarehouseEmptyVerifiedAt(), rc.getWarehouseEmptyVerifiedBy(), rc.getClearanceRevision(),
             rc.getDisplayCode(), rc.getRental().getDisplayCode(),
             ReturnAttendancePolicy.applies(rc) ? new ReturnCaseResponse.Attendance(rc.getReturnArrivedAt(), rc.getReturnArrivalEvidenceId(),
@@ -2927,8 +2919,12 @@ public class ReturnSettlementService {
     private ReturnCaseResponse.Equipment returnEquipment(ReturnCase rc) {
         ReturnCaseResponse.Equipment resolved = resolveEquipment(rc);
         if (resolved != null) return resolved;
+        var unit = rc.getStorageUnit();
+        var unitType = unit == null ? null : unit.getUnitType();
         return HandoverEquipmentInventory.read(objectMapper, reservationPricingSnapshot(rc),
-            missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice);
+            missingPalletUnitPrice == null ? BigDecimal.ZERO : missingPalletUnitPrice,
+            unit == null ? null : unit.getRackLayoutJson(),
+            unitType == null ? null : unitType.getRackLayoutJson());
     }
 
     private ReturnCaseResponse.Equipment resolveEquipment(ReturnCase rc) {
@@ -3036,10 +3032,7 @@ public class ReturnSettlementService {
             if (actual == null || snapshot.getMonthlyPrice() == null || snapshot.getNetRentalAmount() == null) return null;
             LocalDate endDate = actual.atZone(BusinessTime.ZONE).toLocalDate();
             if (rental.getInventoryRemovalDeadlineAt() != null && endDate != null) {
-                var deadlineZoned = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE);
-        LocalDate last = deadlineZoned.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
-            ? deadlineZoned.toLocalDate().minusDays(1)
-            : deadlineZoned.toLocalDate();
+                LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
                 if (endDate.isAfter(last)) endDate = last;
             }
             int usedDays = EarlyTerminationPolicy.calendarUsageDays(usageStart, endDate);

@@ -356,8 +356,8 @@ public class UnitAssignmentService {
     private UnitAssignmentCandidateResponse toCandidateResponse(Reservation reservation) {
         return new UnitAssignmentCandidateResponse(
             reservation.getId(), reservation.getReservationCode(), reservation.getStatus(),
-            reservation.getCustomer().getId(), reservation.getCustomerName(),
-            reservation.getCustomerEmail(), reservation.getFacility().getId(),
+            reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
+            reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), reservation.getUnitType().getId(),
             ReservationSnapshotView.unitTypeName(reservation), reservation.getStartDate(), reservation.getEndDate(),
             reservation.getConfirmedAt(), ReservationCheckInPolicy.managerAssignmentDueAt(reservation.getConfirmedAt()),

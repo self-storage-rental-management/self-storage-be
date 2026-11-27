@@ -30,10 +30,8 @@ public class FacilityScopeService {
 
     public boolean hasGlobalScope(ActorPrincipal actor) {
         if (actor == null) return false;
-        // Business Operations is the system-wide owner of facilities. Older
-        // demo data may still contain a legacy facility scope for this role;
-        // that stale row must not reduce BO visibility to one facility.
-        return actor.hasAnyRole(RoleCode.ADMIN, RoleCode.BUSINESS);
+        if (actor.hasRole(RoleCode.ADMIN)) return true;
+        return actor.hasRole(RoleCode.BUSINESS) && actor.facilityScopes().isEmpty();
     }
 
     public boolean canAccessFacility(ActorPrincipal actor, UUID facilityId, FacilityScopeLevel required) {
@@ -48,7 +46,7 @@ public class FacilityScopeService {
 
     private void assertCanAccess(ActorPrincipal actor, UUID facilityId, FacilityScopeLevel required) {
         if (!canAccessFacility(actor, facilityId, required)) {
-            throw ApiExceptions.forbidden("Tài khoản không có quyền thực hiện thao tác tại cơ sở này.");
+            throw ApiExceptions.forbidden("The actor has no required scope for this facility");
         }
     }
 }

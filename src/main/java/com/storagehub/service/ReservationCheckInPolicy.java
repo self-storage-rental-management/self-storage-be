@@ -25,7 +25,8 @@ final class ReservationCheckInPolicy {
     }
 
     static Instant attendanceDeadline(Instant appointment) {
-        return appointment == null ? null : appointment.plus(Duration.ofDays(CHECK_IN_WINDOW_DAYS));
+        return appointment == null ? null : appointment.atZone(VIETNAM_ZONE).toLocalDate()
+            .plusDays(CHECK_IN_WINDOW_DAYS).atStartOfDay(VIETNAM_ZONE).toInstant();
     }
 
     static final Duration ARRIVAL_REVIEW = Duration.ofMinutes(30);
@@ -33,7 +34,6 @@ final class ReservationCheckInPolicy {
 
     static Instant completionDeadline(Reservation reservation) {
         Instant start = reservation.getHandoverArrivedAt();
-        // Preserve the deadline for legacy records without a recorded arrival.
         if (start == null) start = reservation.getFirstHandoverComparisonAt();
         return start == null ? null : start.plus(HANDOVER_COMPLETION);
     }
@@ -59,12 +59,10 @@ final class ReservationCheckInPolicy {
     static final int FINAL_REMINDER_WINDOW_HOURS = 24;
     private static final int REMINDER_INTERVAL_HOURS = 2;
 
-    // Reminder buckets follow each appointment deadline rather than the wall-clock hour.
-    static int finalReminderHours(Instant now, Instant deadline) {
-        long remainingSeconds = Math.max(1, Duration.between(now, deadline).getSeconds());
-        long bucketSeconds = REMINDER_INTERVAL_HOURS * 3600L;
-        return (int) Math.min(FINAL_REMINDER_WINDOW_HOURS,
-            ((remainingSeconds + bucketSeconds - 1) / bucketSeconds) * REMINDER_INTERVAL_HOURS);
+    // Every attendance deadline falls at midnight in Vietnam.
+    static int finalReminderHours(Instant now) {
+        int hour = now.atZone(VIETNAM_ZONE).getHour();
+        return FINAL_REMINDER_WINDOW_HOURS - hour / REMINDER_INTERVAL_HOURS * REMINDER_INTERVAL_HOURS;
     }
 
     static int finalReminderMarker(int hours) {
@@ -116,7 +114,8 @@ final class ReservationCheckInPolicy {
     }
 
     static Instant firstValidAppointment(Instant now) {
-        return now.minus(Duration.ofDays(CHECK_IN_WINDOW_DAYS));
+        return now.atZone(VIETNAM_ZONE).toLocalDate().minusDays(CHECK_IN_WINDOW_DAYS - 1)
+            .atStartOfDay(VIETNAM_ZONE).toInstant();
     }
 
     record Window(Instant availableAt, Instant deadlineAt) {

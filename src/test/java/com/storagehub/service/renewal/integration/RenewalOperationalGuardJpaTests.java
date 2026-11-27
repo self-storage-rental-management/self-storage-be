@@ -24,15 +24,6 @@ class RenewalOperationalGuardJpaTests {
     @Autowired EntityManager em;
     @Autowired RenewalOperationalGuard guard;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
-    @Autowired javax.sql.DataSource dataSource;
-
-    @org.junit.jupiter.api.BeforeEach
-    void provisionDisplayCodeFormulaFixtures() {
-        var jdbc=new org.springframework.jdbc.core.JdbcTemplate(dataSource);
-        jdbc.execute("create table if not exists business_record_codes (resource_key varchar(120) primary key, display_code varchar(16))");
-        jdbc.execute("create table if not exists money_receipt_codes (source_type varchar(24), source_id binary(16), receipt_code varchar(20))");
-        jdbc.execute("create alias if not exists bin_to_uuid for 'com.storagehub.service.ReturnClearanceConcurrencyTests.binaryUuid'");
-    }
 
     @Test void caughtEligibilityDenialDoesNotMarkReadProjectionRollbackOnly() {
         var rental = fixture();
@@ -65,31 +56,11 @@ class RenewalOperationalGuardJpaTests {
     @Test void absentContextIsUnknownNotAvailable() {
         assertThatThrownBy(()->guard.requireNoKnownConflict(null)).isInstanceOf(ApiException.class).hasMessageContaining("DEFERRED_SOURCE");
     }
-    @ParameterizedTest @EnumSource(value=StorageUnitStatus.class,names={"available","maintenance"})
+    @ParameterizedTest @EnumSource(value=StorageUnitStatus.class,names={"available","reserved","maintenance"})
     void nonOccupiedPhysicalUnitBlocksWithoutRepair(StorageUnitStatus status) {
         var r=fixture();r.getStorageUnit().setStatus(status);em.flush();
         assertThatThrownBy(()->guard.requireNoKnownConflict(r)).hasMessageContaining("no longer occupied");
         assertThat(r.getStorageUnit().getStatus()).isEqualTo(status);
-    }
-    @ParameterizedTest @EnumSource(value=StorageUnitStatus.class,names={"assigned","reserved"})
-    void pendingPhysicalIntakeHasItsOwnRenewalDenial(StorageUnitStatus status) {
-        var r=fixture();r.getStorageUnit().setStatus(status);em.flush();
-        assertThatThrownBy(()->guard.requireNoKnownConflict(r))
-            .hasMessageContaining(com.storagehub.service.RentalIntakePolicy.INCOMPLETE);
-        assertThat(r.getStorageUnit().getStatus()).isEqualTo(status);
-    }
-    @Test void startingPaidPeriodDoesNotBypassUnfinishedInventory() {
-        var r=fixture();r.setSetupStartedAt(NOW.minusSeconds(86400));r.setMoveInCompletedAt(NOW);
-        r.setInventoryPending(true);em.flush();
-        assertThatThrownBy(()->guard.requireNoKnownConflict(r))
-            .hasMessageContaining(com.storagehub.service.RentalIntakePolicy.INCOMPLETE);
-        r.setInventoryPending(false);
-        assertThatThrownBy(()->guard.requireNoKnownConflict(r))
-            .hasMessageContaining(com.storagehub.service.RentalIntakePolicy.INCOMPLETE);
-        r.setInventoryVerifiedAt(NOW);em.flush();
-        assertThatCode(()->guard.requireNoKnownConflict(r)).doesNotThrowAnyException();
-        assertThat(r.getStatus()).isEqualTo(RentalStatus.active);
-        assertThat(r.getContractEndDate()).isEqualTo(LocalDate.of(2026,11,1));
     }
     @Test void returnRequestedBlocksEvenWhenNoReturnRowExists() {
         var r=fixture();r.setStatus(RentalStatus.return_requested);em.flush();

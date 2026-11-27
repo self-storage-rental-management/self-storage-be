@@ -121,7 +121,7 @@ public class ManagerCashflowService {
                 events.add(new Event("refund-request:" + request.getId(), "REFUND", request.getAmount(), at, request.getGatewayRefundId()));
             var p = request.getPayment();
             var reservation = p.getReservation() != null ? p.getReservation() : p.getRenewal().getRental().getReservation();
-            lines.add(new RefundLine(request.getId(), reservation.getReservationCode(), reservation.getCustomerName(),
+            lines.add(new RefundLine(request.getId(), reservation.getReservationCode(), reservation.getCustomer().getFullName(),
                 request.getStatus().name(), request.getReason(), null, null, null, request.getAmount(), completed ? at : null, request.getGatewayRefundId(), completed, null));
         }
         for (Refund refund : refunds) {
@@ -139,7 +139,7 @@ public class ManagerCashflowService {
             if (!linkedRequest && !linkedReturn) {
                 var p = refund.getPayment();
                 var reservation = p.getReservation() != null ? p.getReservation() : p.getRenewal().getRental().getReservation();
-                lines.add(new RefundLine(refund.getId(), reservation.getReservationCode(), reservation.getCustomerName(),
+                lines.add(new RefundLine(refund.getId(), reservation.getReservationCode(), reservation.getCustomer().getFullName(),
                     refund.getStatus().name(), refund.getReason(), null, null, null, refund.getAmount(), completed ? at : null, refund.getGatewayRefundId(), completed, null));
             }
         }

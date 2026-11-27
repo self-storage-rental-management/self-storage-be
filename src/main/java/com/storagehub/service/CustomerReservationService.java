@@ -1263,7 +1263,7 @@ public class CustomerReservationService {
         }
         if (contract.getSentAt() == null) contract.setSentAt(now);
         contract.setSignedAt(now);
-        contract.setSignedBy(reservation.getCustomer() == null ? "Customer" : reservation.getCustomerName());
+        contract.setSignedBy(reservation.getCustomer() == null ? "Customer" : reservation.getCustomer().getFullName());
         contract.setExpiresAt(rental.getContractEndDate().atStartOfDay(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toInstant());
         contractRepository.save(contract);
     }
@@ -1728,10 +1728,12 @@ public class CustomerReservationService {
         }
         response.setVoucherCode(snapshot.getVoucherCode());
         response.setVoucherDiscountAmount(snapshot.getVoucherDiscountAmount());
-        response.setCustomerName(reservation.getCustomerName());
-        response.setCustomerEmail(reservation.getCustomerEmail());
-        response.setCustomerPhone(reservation.getCustomerPhone());
-        response.setCustomerAddress(reservation.getCustomerAddress());
+        response.setCustomerName(reservation.getCustomer().getFullName());
+        response.setCustomerEmail(reservation.getCustomer().getEmail());
+        response.setCustomerPhone(reservation.getCustomerPhone() != null
+            ? reservation.getCustomerPhone() : reservation.getCustomer().getPhone());
+        response.setCustomerAddress(reservation.getCustomerAddress() != null
+            ? reservation.getCustomerAddress() : reservation.getCustomer().getPermanentAddress());
         response.setIdentityDocumentNumber(reservation.getIdentityDocumentNumber());
         return response;
     }
@@ -1864,8 +1866,7 @@ public class CustomerReservationService {
             ReservationSnapshotView.facilityName(payment.getReservation(), snapshot),
             ReservationSnapshotView.facilityAddress(payment.getReservation(), snapshot),
             ReservationSnapshotView.unitTypeName(payment.getReservation(), snapshot),
-            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode(),
-            paymentProvenance == null ? null : paymentProvenance.manualReceiptFileId(payment)
+            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode()
         );
     }
 

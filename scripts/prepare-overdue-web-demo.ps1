@@ -1,11 +1,15 @@
 # Local fixtures only. Never copies gateway signatures or modifies existing business records.
-param([string]$Batch = ('QD' + (Get-Date -Format 'yyMMddHHmmss')))
+param(
+    [string]$Batch = ('QD' + (Get-Date -Format 'yyMMddHHmmss')),
+    [string]$CustomerEmail = 'customer@storagehub.demo',
+    [string]$Database = 'storagehub_local'
+)
 $ErrorActionPreference = 'Stop'
 if ($Batch -notmatch '^QD[0-9]{12}$') { throw 'Batch must be QD followed by 12 digits.' }
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $root
 function Query([string]$sql) {
-    $result = $sql | docker exec -i storagehub-mysql sh -c 'MYSQL_PWD=$MYSQL_ROOT_PASSWORD mysql --default-character-set=utf8mb4 -N -B -uroot storagehub_local'
+    $result = $sql | docker exec -i storagehub-mysql sh -c "MYSQL_PWD=`$MYSQL_ROOT_PASSWORD mysql --default-character-set=utf8mb4 -N -B -uroot $Database"
     if ($LASTEXITCODE -ne 0) { throw 'Local database query failed.' }
     return $result
 }
@@ -14,19 +18,22 @@ function Bin([string]$id) { return "UUID_TO_BIN('" + $id + "')" }
 $today = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow,'SE Asia Standard Time').Date
 $now = [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss.fff')
 $sqlNow = Quoted $now
-$templateJson = Query @'
+$templateJson = Query (@'
 SELECT JSON_OBJECT('rental',BIN_TO_UUID(r.id),'reservation',BIN_TO_UUID(r.reservation_id),
  'unit',BIN_TO_UUID(r.storage_unit_id),'customer',BIN_TO_UUID(r.customer_id),'facility',BIN_TO_UUID(r.facility_id),
  'quote',BIN_TO_UUID(v.source_quote_id),'checkin',BIN_TO_UUID(c.id),'pricing',BIN_TO_UUID(p.id),
  'staff',BIN_TO_UUID(c.performed_by),'unitType',BIN_TO_UUID(v.unit_type_id))
 FROM rentals r JOIN reservations v ON v.id=r.reservation_id JOIN check_ins c ON c.rental_id=r.id
 JOIN reservation_pricing_snapshots p ON p.reservation_id=v.id JOIN users u ON u.id=r.customer_id
-WHERE u.email='customer@storagehub.demo' AND v.status='COMPLETED' AND c.status='completed'
+WHERE u.email='customer@storagehub.demo'
 AND NOT EXISTS(SELECT 1 FROM storage_units s WHERE s.id=r.storage_unit_id AND s.code LIKE 'QD%')
 ORDER BY r.id LIMIT 1;
-'@
-if (-not $templateJson) { throw 'A demo customer Rental with completed check-in and pricing is required.' }
+'@)
+if (-not $templateJson) { throw 'A completed demo Rental template is required.' }
 $t = $templateJson | ConvertFrom-Json
+$customerId = Query ("SELECT BIN_TO_UUID(id) FROM users WHERE email=" + (Quoted $CustomerEmail) + " LIMIT 1;")
+if (-not $customerId) { throw "Customer not found: $CustomerEmail" }
+$t.customer = $customerId
 $target = Query @'
 SELECT JSON_OBJECT('facility',BIN_TO_UUID(f.id),'unitType',BIN_TO_UUID(ut.id),'staff',BIN_TO_UUID(u.id))
 FROM facilities f JOIN unit_types ut ON ut.facility_id=f.id
@@ -42,7 +49,7 @@ if ([int](Query "SELECT COUNT(*) FROM storage_units WHERE code LIKE '$Batch%';")
 $tables = @('storage_units','reservation_quotes','reservations','rentals','reservation_pricing_snapshots','check_ins')
 $columns = @{}
 foreach ($table in $tables) {
-    $columns[$table] = @(Query "SELECT column_name FROM information_schema.columns WHERE table_schema='storagehub_local' AND table_name='$table' AND extra NOT LIKE '%GENERATED%' ORDER BY ordinal_position;")
+    $columns[$table] = @(Query "SELECT column_name FROM information_schema.columns WHERE table_schema='$Database' AND table_name='$table' AND extra NOT LIKE '%GENERATED%' ORDER BY ordinal_position;")
 }
 $sql = [Collections.Generic.List[string]]::new()
 $sql.Add("SET NAMES utf8mb4; SET time_zone='+00:00'; START TRANSACTION;")
@@ -53,6 +60,7 @@ function Clone([string]$table,[string]$source,[hashtable]$changes) {
         if ($changes.ContainsKey($column)) { $values += $changes[$column] }
         elseif ($column -eq 'facility_id') { $values += (Bin $t.facility) }
         elseif ($column -eq 'unit_type_id') { $values += (Bin $t.unitType) }
+        elseif ($column -eq 'customer_id') { $values += (Bin $t.customer) }
         elseif ($column -eq 'performed_by') { $values += (Bin $t.staff) }
         elseif ($column -in @('created_at','updated_at')) { $values += $sqlNow }
         else { $values += ('`' + $column + '`') }
@@ -60,19 +68,20 @@ function Clone([string]$table,[string]$source,[hashtable]$changes) {
     $sql.Add("INSERT INTO $table (" + ($names -join ',') + ') SELECT ' + ($values -join ',') + " FROM $table WHERE id=" + (Bin $source) + ';')
 }
 $cases = @(
-    @('01-CON-HAN',-15,'Chua qua han / TC-01'),
-    @('02-GIA-HAN',1,'Canh bao; gia han thanh cong / TC-02,03'),
-    @('03-THANH-TOAN',1,'Quay lai VNPay, coc chua ky / TC-04,05'),
-    @('04-NGHIEM-TRONG',4,'Nghiem trong; gia han / TC-02,03'),
-    @('05-KHAN-CAP',7,'Ngay 7; trang thai phu thuoc gio hien tai / TC-02,06'),
-    @('06-THU-THEM',8,'Thu hoi; quyet toan thu them / TC-07..12'),
-    @('07-HOAN-TIEN',8,'Thu hoi; quyet toan hoan coc / TC-07..12'),
-    @('08-KHONG-CHENH',8,'Thu hoi; quyet toan khong chenh lech / TC-07..12'),
-    @('09-TRANH-CHAP',8,'Thu hoi; khach khieu nai / TC-13'),
-    @('10-THIEU-BIEN-LAI',8,'Thu hoi; thu chan thieu chung tu / TC-11,12'),
-    @('11-GUI-TRUNG',8,'Thu hoi; hai phien thao tac / TC-17,18,19,21'),
-    @('12-NGAY-6',6,'Ngay qua han thu 6 / TC-02'),
-    @('13-TRA-KHO',1,'Tra kho thuong truoc thu hoi / TC-22')
+    @('01-THANH-CONG',-30,'GH-TC01 Gia han thanh cong'),
+    @('02-CHUA-TRA-20',-30,'GH-TC02 Chua tra truoc 20 phan tram'),
+    @('03-QUA-HAN-TT',-30,'GH-TC03 Qua han thanh toan tra truoc'),
+    @('04-IPN-TRUNG',-30,'GH-TC04 VNPay goi lai hai lan'),
+    @('05-DOI-LICH',-30,'GH-TC05 Doi lich hen hop le'),
+    @('06-LICH-SAU-HAN',-2,'GH-TC06 Lich hen sau ngay het han'),
+    @('07-KHONG-DEN',-30,'GH-TC07 Khach khong den'),
+    @('08-DEN-TRE',-30,'GH-TC08 Khach den tre'),
+    @('09-THU-CON-LAI',-30,'GH-TC09 Thu phan con lai'),
+    @('10-THIEU-PHU-LUC',-30,'GH-TC10 Hoan tat thieu phu luc'),
+    @('11-TU-CHOI-KY',-30,'GH-TC11 Khach tu choi ky'),
+    @('12-HD-QUA-HAN',3,'GH-TC12 Hop dong da qua han'),
+    @('13-HAI-STAFF',-30,'GH-TC13 Hai nhan vien cung xu ly'),
+    @('14-HOAN-TAT-2-LAN',-30,'GH-TC14 Bam hoan tat hai lan')
 )
 $manifest = @()
 Add-Type -AssemblyName System.Drawing
@@ -124,7 +133,7 @@ foreach($name in @('bien-ban-kiem-ke-demo','bien-lai-quyet-toan-demo','bien-ban-
     $graphics.Dispose();$sampleFont.Dispose();$image.Dispose()
 }
 $backup=Join-Path $local "$Batch-before.sql"
-docker exec storagehub-mysql sh -c 'MYSQL_PWD=$MYSQL_ROOT_PASSWORD mysqldump -uroot --hex-blob --single-transaction --routines --triggers --no-tablespaces storagehub_local > /tmp/storagehub-before-demo.sql'
+docker exec storagehub-mysql sh -c "MYSQL_PWD=`$MYSQL_ROOT_PASSWORD mysqldump -uroot --hex-blob --single-transaction --routines --triggers --no-tablespaces $Database > /tmp/storagehub-before-demo.sql"
 if ($LASTEXITCODE -ne 0) { throw 'Backup failed; fixtures were not inserted.' }
 docker cp storagehub-mysql:/tmp/storagehub-before-demo.sql $backup
 if($LASTEXITCODE -ne 0){throw 'Backup copy failed; fixtures were not inserted.'}

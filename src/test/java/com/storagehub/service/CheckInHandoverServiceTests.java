@@ -436,11 +436,7 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void allowsStaffToCorrectHandoverIdentityWithoutChangingCustomerAccount() {
-        var profile = reservation.getCustomer().getProfileDetails();
-        profile.setIdentityDocumentNumber("074204005899");
-        profile.setIdentityVerifiedAt(Instant.parse("2026-01-01T00:00:00Z"));
-        reservation.getCustomer().setIdentityDocumentHash(CustomerIdentityPolicy.hash("074204005899"));
+    void allowsStaffToUpdateAndVerifyIdentityWhenMismatchedWithDeclared() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         reservation.setIdentityDocumentNumber("074204005899");
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
@@ -458,10 +454,6 @@ class CheckInHandoverServiceTests {
         assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.identity_verified);
         assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("074204005212");
         assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("074204005212");
-        assertThat(profile.getIdentityDocumentNumber()).isEqualTo("074204005899");
-        assertThat(profile.getIdentityVerifiedAt()).isEqualTo(Instant.parse("2026-01-01T00:00:00Z"));
-        assertThat(reservation.getCustomer().getIdentityDocumentHash()).isEqualTo(CustomerIdentityPolicy.hash("074204005899"));
-        verify(userRepository, never()).saveAndFlush(reservation.getCustomer());
         assertThat(checkIn.getIdentityVerificationNote()).contains("Đã đối chiếu giấy tờ gốc");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
     }
@@ -631,7 +623,6 @@ class CheckInHandoverServiceTests {
 
         var first = service.recordArrival(actor, checkIn.getId()).attendance().arrivedAt();
         assertThat(first).isNotNull();
-        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isEqualTo(first.plusSeconds(72 * 3600));
         assertThat(service.recordArrival(actor, checkIn.getId()).attendance().arrivedAt()).isEqualTo(first);
 
         Instant afterDeadline = ReservationCheckInPolicy.attendanceDeadline(reservation.getAppointmentAt()).plusSeconds(1);
@@ -1001,7 +992,7 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void rejectsHandoverAfterSevenElapsedDaysAndArrivalReview() {
+    void rejectsHandoverFromTheEighthCalendarDayInVietnam() {
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
         reservation.setAppointmentAt(Instant.parse("2026-11-21T08:00:00Z"));
         checkIn.setStatus(CheckInStatus.payment_collected);
@@ -1009,7 +1000,7 @@ class CheckInHandoverServiceTests {
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         var request = new com.storagehub.api.checkin.StartCheckInSetupRequest(
             "TEST-LOCK", null, "Kho trống và sạch", List.of(UUID.randomUUID().toString()));
-        var cutoff = Instant.parse("2026-11-28T08:30:00Z").plusNanos(1000);
+        var cutoff = Instant.parse("2026-11-27T17:30:00Z").plusNanos(1000);
         assertThat(ReservationCheckInPolicy.handoverExpired(reservation.getAppointmentAt(), cutoff.minusNanos(1000))).isFalse();
         try (var time = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
             time.when(Instant::now).thenReturn(cutoff);

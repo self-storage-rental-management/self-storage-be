@@ -17,7 +17,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
     String CUSTOMER_QUEUE_ORDER = " order by case "
-        + "when reservation.status in (AWAITING_EMAIL, AWAITING_PAYMENT, PAYMENT_GRACE, PAYMENT_REVIEW, AWAITING_CUSTOMER_RECEIPT, UNIT_RESERVED, READY_FOR_CHECKIN) then 0 "
+        + "when reservation.status in (AWAITING_EMAIL, AWAITING_PAYMENT, PAYMENT_GRACE, AWAITING_CUSTOMER_RECEIPT, UNIT_RESERVED, READY_FOR_CHECKIN) then 0 "
         + "when reservation.status in (COMPLETED, EXPIRED, CANCELLED, REJECTED) then 2 else 1 end, "
         + "case when reservation.status in (AWAITING_PAYMENT, PAYMENT_GRACE) then coalesce(reservation.paymentExpiresAt, reservation.holdExpiresAt) "
         + "when reservation.status = AWAITING_EMAIL then reservation.holdExpiresAt "
@@ -33,13 +33,13 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and r.handoverArrivedAt is null and r.arrivalReviewOpenedAt is null
           and (c.id is null or c.status = scheduled)
           and (r.appointmentAt < :expired or (r.appointmentAt >= :currentWindow and r.appointmentAt < :oneDay
-                   and r.attendanceReminderHours <> 2)
+                   and r.attendanceReminderHours <> :currentMarker and r.attendanceReminderHours <> 2)
                or (r.handoverTermsVersion = :currentVersion and r.appointmentAt <= :firstReminder and r.attendanceReminderHours = 0))
         order by r.appointmentAt, r.id
         """)
     List<UUID> findAttendanceDue(@Param("versions") List<String> versions,
         @Param("currentVersion") String currentVersion, @Param("expired") Instant expired,
-        @Param("currentWindow") Instant currentWindow, @Param("oneDay") Instant oneDay,
+        @Param("currentWindow") Instant currentWindow, @Param("currentMarker") int currentMarker, @Param("oneDay") Instant oneDay,
         @Param("firstReminder") Instant firstReminder);
 
     @Query("""
@@ -81,10 +81,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         select reservation from Reservation reservation
         where reservation.customer.id = :customerId
           and reservation.customerArchivedAt is null
+          and reservation.status <> com.storagehub.domain.model.ReservationStatus.REJECTED
           and (
             reservation.archivedAt is null
             or reservation.status = com.storagehub.domain.model.ReservationStatus.EXPIRED
-            or reservation.status = com.storagehub.domain.model.ReservationStatus.REJECTED
           )
         """ + CUSTOMER_QUEUE_ORDER)
     Page<Reservation> findCustomerVisibleReservations(
@@ -252,8 +252,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and (:scoped = false or reservation.facility.id in :facilityIds)
           and (:q is null
                or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
-               or lower(reservation.customerEmail) like lower(concat('%', :q, '%'))
-               or lower(reservation.customerName) like lower(concat('%', :q, '%'))
+               or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
+               or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
                or lower(coalesce(assignedUnit.code, '')) like lower(concat('%', :q, '%')))
         order by case when :order = 'createdAt,desc' then reservation.createdAt end desc,
                  case when :order = 'createdAt,asc' then reservation.createdAt end asc,
@@ -301,8 +301,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and (:scoped = false or reservation.facility.id in :facilityIds)
           and (:q is null
                or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
-               or lower(reservation.customerEmail) like lower(concat('%', :q, '%'))
-               or lower(reservation.customerName) like lower(concat('%', :q, '%')))
+               or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
+               or lower(reservation.customer.fullName) like lower(concat('%', :q, '%')))
         order by reservation.appointmentAt asc nulls last, reservation.confirmedAt asc nulls last,
           reservation.createdAt asc, reservation.id asc
         """)
@@ -347,8 +347,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and (:scoped = false or r.facility.id in :facilityIds)
           and (:q is null
                or lower(r.reservationCode) like lower(concat('%', :q, '%'))
-               or lower(r.customerEmail) like lower(concat('%', :q, '%'))
-               or lower(r.customerName) like lower(concat('%', :q, '%'))
+               or lower(r.customer.email) like lower(concat('%', :q, '%'))
+               or lower(r.customer.fullName) like lower(concat('%', :q, '%'))
                or lower(a.storageUnit.code) like lower(concat('%', :q, '%')))
           and (:statusFilter = false
             or (:recoveryTransferred = true and exists (select 1 from Rental recoveryRental
