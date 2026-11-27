@@ -65,7 +65,7 @@ public class RentalQueryService {
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(), s.canConfirmRentalStart(), inventory(r),
             contracts == null ? null : contracts.findAllByRentalIdOrderByCreatedAtDesc(id).stream()
                 .filter(contract -> contract.getStatus() == ContractStatus.SIGNED).map(Contract::getContractNumber)
-                .findFirst().orElse(null), ReturnSettlementService.inSetupReturnWindow(r), s.inventoryMismatchReturn());
+                .findFirst().orElse(null), ReturnSettlementService.inSetupReturnWindow(r), s.inventoryMismatchReturn(), s.intakeCompleted());
     }
 
     private RentalDetailResponse.Inventory inventory(Rental rental) {
@@ -215,7 +215,8 @@ public class RentalQueryService {
                 .orElseGet(() -> new RentalSummaryResponse.DateSemantics("UNKNOWN",null,null,null)),
             r.isInventoryPending(), r.getInventoryDueAt(), r.getInventoryFinalDeadlineAt(), setupStartedAt, setupEndsAt,
             r.getMoveInCompletedAt(), r.getInventoryVerifiedAt(), r.isSetupExitReviewRequired(),
-            RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()), inventoryMismatchReturn);
+            RentalSetupLifecycleService.customerCanStartAfterInventory(r, java.time.Instant.now()), inventoryMismatchReturn,
+            !RentalIntakePolicy.isPending(r));
     }
 
     /**

@@ -16,13 +16,12 @@ import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
 import static com.storagehub.service.renewal.operations.RenewalOperationSources.*;
 
 /** Deposit disposition and staff-attested refunds share the original Payment, Ledger and Rental lock. */
-@Service @RequiredArgsConstructor @Profile("shared-payment-schema")
+@Service @RequiredArgsConstructor
 @ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-simple-payment.enabled"},havingValue="true")
 @Transactional(isolation=Isolation.READ_COMMITTED)
 public class RenewalDepositSettlementService implements RefundSource {
@@ -59,10 +58,112 @@ public class RenewalDepositSettlementService implements RefundSource {
         LedgerStore.Obligation obligation,LedgerStore.Receipt receipt,String environment) {}
     @Override public boolean atomic(){return true;}
 
+    @Transactional(propagation=Propagation.MANDATORY)
+    public void forfeitCustomerCancellation(Renewal n,User customer) {
+        if (n.getStatus()==RenewalStatus.completed || !n.getRental().getCustomer().getId().equals(customer.getId()))
+            throw ApiExceptions.conflict("Không thể tự hủy gia hạn đã hoàn tất hoặc của khách hàng khác.");
+        var p=proof(n,true);requireReconciled(n);
+        if (p.state()==null || p.state().getFullRentPaidAt()!=null || faultGuard.holdReason(n,p.state())!=null)
+            throw ApiExceptions.conflict("Hồ sơ cần cơ sở đối soát trước khi hủy gia hạn.");
+        if (payments.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId()).stream()
+            .anyMatch(other->other.getStatus()==PaymentStatus.PAID && !other.getId().equals(p.payment().getId())))
+            throw ApiExceptions.conflict("Đã thu thêm tiền gia hạn; cần cơ sở đối soát trước khi hủy.");
+        if (p.payment().getRefundedAmount().signum()!=0 || refundRows(p.payment()).stream()
+            .anyMatch(r->Set.of(RefundStatus.PENDING,RefundStatus.PROCESSING,RefundStatus.COMPLETED).contains(r.getStatus())))
+            throw ApiExceptions.conflict("Khoản cọc đang được hoàn hoặc đối soát, không thể tự hủy.");
+        var accounting=forfeitures.getIfAvailable();
+        if (accounting==null) throw ApiExceptions.conflict("Chưa thể ghi nhận cọc gia hạn không hoàn lại.");
+        accounting.record(n.getId(),p.payment().getId(),p.account(),p.obligation(),p.receipt(),p.environment(),now(),"CUSTOMER_CANCELLED");
+        cancelRemainder(n,p);
+        p.state().expire(true);
+        var data=Map.of("status","FORFEITED","amount",p.payment().getAmount(),"currency","VND",
+            "paymentId",p.payment().getId(),"environment",p.environment(),"reason","CUSTOMER_CANCELLED");
+        em.persist(new RenewalOperationEvent(n,"DEPOSIT_DISPOSITION",now(),customer.getId(),store.canonical(data)));
+        audit.recordMutation(customer,"RENEWAL_CUSTOMER_CANCELLED_DEPOSIT_FORFEITED","Renewal",n.getId(),n.getRental().getFacility().getId(),null,data);
+        notifications.createNotification(customer.getId(),NotificationType.RENEWAL,"Đã hủy yêu cầu gia hạn",
+            "Bạn đã tự hủy gia hạn. Tiền cọc gia hạn không được hoàn lại; hợp đồng thuê hiện tại giữ nguyên thời hạn.",n.getId());
+    }
+
+    @Transactional(propagation=Propagation.MANDATORY)
+    public void forfeitFullyPaidCustomerCancellation(Renewal n,User customer) {
+        if(n.getStatus()==RenewalStatus.completed||!n.getRental().getCustomer().getId().equals(customer.getId()))
+            throw ApiExceptions.conflict("Không thể tự hủy gia hạn đã hoàn tất hoặc của khách hàng khác.");
+        var state=em.find(RenewalOperationState.class,n.getId());
+        var workflow=em.find(RenewalWorkflow.class,n.getId());
+        if(state==null||!state.hasVerifiedPayment()||state.getCompletedAt()!=null||workflow==null||workflow.getAcceptedRevision()==null
+            ||faultGuard.holdReason(n,state)!=null)
+            throw ApiExceptions.conflict("Hồ sơ cần cơ sở đối soát trước khi hủy gia hạn.");
+        requireReconciled(n);
+        final RenewalQuoteResponse.Terms terms;
+        try {terms=mapper.readValue(workflow.getAcceptedRevision().getQuote().getTermsJson(),RenewalQuoteResponse.Terms.class);}
+        catch(Exception invalid){throw ApiExceptions.conflict("Điều khoản gia hạn đã lưu không hợp lệ.");}
+        var specs=FinancialContractSpecifications.accepted(workflow.getAcceptedRevision(),terms);
+        var account=ledger.read(n.getRental().getId()).orElseThrow(()->ApiExceptions.conflict("Chưa có sổ thanh toán gia hạn."));
+        if(!account.customerId().equals(customer.getId())||!account.facilityId().equals(n.getRental().getFacility().getId()))
+            throw ApiExceptions.conflict("Thông tin thanh toán gia hạn không khớp hồ sơ.");
+        var received=payments.findRenewalPaymentsForUpdate(n.getId()).stream().filter(p->p.getStatus()==PaymentStatus.PAID).toList();
+        var allAllocations=ledger.renewalAllocations(account.rentalId(),n.getId());
+        var dispositions=new ArrayList<RenewalDepositForfeitures.PaidReceipt>();
+        for(var payment:received) {
+            if(!Set.of(PaymentType.RENEWAL,PaymentType.RENTAL_BALANCE).contains(payment.getPurpose())||payment.getRenewalRevision()==null
+                ||!workflow.getAcceptedRevision().getId().equals(payment.getRenewalRevision().getId())
+                ||payment.getRenewalAllocatedAt()==null||payment.getPaidAt()==null||payment.getPaidAt().isAfter(now())
+                ||payment.getRefundedAmount()==null||payment.getRefundedAmount().signum()!=0
+                ||refundRows(payment).stream().anyMatch(r->Set.of(RefundStatus.PENDING,RefundStatus.PROCESSING,RefundStatus.COMPLETED).contains(r.getStatus())))
+                throw ApiExceptions.conflict("Khoản thanh toán đang cần đối soát hoặc hoàn tiền, không thể tự hủy.");
+            var receipt=account.receipts().stream().filter(r->r.id().equals(payment.getRenewalLedgerReceiptRef())
+                &&r.amount().compareTo(payment.getAmount())==0&&r.receivedAt().toEpochMilli()==payment.getPaidAt().toEpochMilli())
+                .findFirst().orElseThrow(()->ApiExceptions.conflict("Chưa xác minh được biên nhận tiền gia hạn."));
+            var allocation=allAllocations.stream().filter(a->a.receiptId().equals(receipt.id())).toList();
+            var classification=provenance.classify(payment);
+            if(classification==PaymentProvenance.Classification.SANDBOX) {
+                if(allocation.size()!=1||payment.getRenewalEvidenceRef()==null)
+                    throw ApiExceptions.conflict("Chưa xác minh được phân bổ thanh toán gia hạn.");
+                var obligation=account.obligations().stream().filter(o->o.id().equals(allocation.getFirst().obligationId())).findFirst().orElseThrow();
+                if(!ledger.renewalReceiptMatches(account.rentalId(),receipt,new LedgerStore.GatewayProof(payment.getId(),payment.getRenewalEvidenceRef(),payment.getGatewayTransactionNo()),obligation))
+                    throw ApiExceptions.conflict("Bằng chứng thanh toán gia hạn chưa hợp lệ.");
+            } else if(classification==PaymentProvenance.Classification.VERIFIED) {
+                var manual=ledger.renewalManualAllocations(account.rentalId(),receipt);
+                if(manual.isEmpty()||manual.size()!=allocation.size()||allocation.stream().anyMatch(a->manual.get(a.obligationId())==null||manual.get(a.obligationId()).compareTo(a.amount())!=0))
+                    throw ApiExceptions.conflict("Bằng chứng thu tiền gia hạn chưa hợp lệ.");
+            } else throw ApiExceptions.conflict("Khoản thanh toán gia hạn chưa được xác minh.");
+            dispositions.add(new RenewalDepositForfeitures.PaidReceipt(payment.getId(),receipt,
+                classification==PaymentProvenance.Classification.SANDBOX?"SANDBOX":"PRODUCTION"));
+        }
+        var receipts=dispositions.stream().map(p->p.receipt().id()).collect(java.util.stream.Collectors.toSet());
+        if(receipts.size()!=received.size()||received.isEmpty())throw ApiExceptions.conflict("Biên nhận gia hạn không đầy đủ.");
+        for(var spec:specs) {
+            if(spec.amount().signum()==0)continue;
+            var obligation=account.obligations().stream().filter(o->n.getId().equals(o.renewalId())&&o.kind()==spec.kind()
+                &&o.sourceRef().equals(spec.sourceReference())&&o.amount().compareTo(spec.amount())==0).findFirst()
+                .orElseThrow(()->ApiExceptions.conflict("Chưa ghi nhận đủ tiền gia hạn theo điều khoản đã chấp nhận."));
+            var allocated=allAllocations.stream().filter(a->a.obligationId().equals(obligation.id())&&receipts.contains(a.receiptId()))
+                .map(LedgerStore.Allocation::amount).reduce(BigDecimal.ZERO,BigDecimal::add);
+            if(obligation.refunded().signum()!=0||obligation.outstanding().signum()!=0||allocated.compareTo(spec.amount())!=0)
+                throw ApiExceptions.conflict("Tiền gia hạn chưa được thanh toán đủ hoặc đang được hoàn.");
+        }
+        var accounting=forfeitures.getIfAvailable();
+        if(accounting==null)throw ApiExceptions.conflict("Chưa thể ghi nhận tiền gia hạn không hoàn lại.");
+        accounting.recordFullyPaid(n.getId(),account,dispositions,now());
+        state.expire(true);
+        var total=received.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO,BigDecimal::add);
+        var data=Map.of("status","FORFEITED","amount",total,"currency","VND","reason","CUSTOMER_CANCELLED");
+        em.persist(new RenewalOperationEvent(n,"PAYMENT_DISPOSITION",now(),customer.getId(),store.canonical(data)));
+        audit.recordMutation(customer,"RENEWAL_CUSTOMER_CANCELLED_PAYMENT_FORFEITED","Renewal",n.getId(),n.getRental().getFacility().getId(),null,data);
+        notifications.createNotification(customer.getId(),NotificationType.RENEWAL,"Đã hủy yêu cầu gia hạn",
+            "Bạn đã tự hủy gia hạn và xác nhận toàn bộ tiền gia hạn đã thanh toán không được hoàn lại. Hợp đồng thuê hiện tại giữ nguyên thời hạn.",n.getId());
+    }
+
     @Transactional(readOnly=true)
     public View read(UUID id) {
         var n=em.find(Renewal.class,id);if(n==null)throw ApiExceptions.notFound("Renewal not found");
         var s=em.find(RenewalOperationState.class,id);var w=em.find(RenewalWorkflow.class,id);Instant now=now();
+        var accounting=forfeitures.getIfAvailable();
+        var cancelledPayment=accounting==null?Optional.<RenewalDepositForfeitures.FullDisposition>empty():accounting.fullDisposition(id);
+        if(n.getStatus()==RenewalStatus.cancelled&&cancelledPayment.isPresent()) {
+            var disposition=cancelledPayment.get();
+            return new View(id,w==null?null:w.getVersion(),"PAYMENT_FORFEITED",disposition.amount(),BigDecimal.ZERO,"VND",disposition.environment(),null,s==null?null:s.getEffectiveSigningDeadline(),now);
+        }
         if((s==null||!s.hasVerifiedPayment())&&payments.findAllByRenewal_IdOrderByCreatedAtAsc(id).stream().anyMatch(RenewalPreparationResolution::blocked)) {
             var p=proof(n,false);
             var refund=refundRows(p.payment()).stream().filter(r->Set.of(RefundStatus.PENDING,RefundStatus.PROCESSING,RefundStatus.COMPLETED).contains(r.getStatus())).findFirst().orElse(null);
@@ -91,11 +192,17 @@ public class RenewalDepositSettlementService implements RefundSource {
     @Transactional(readOnly=true)
     public List<UUID> candidates() {
         return em.createQuery("select s.renewal.id from RenewalOperationState s where s.depositPaidAt is not null "
-            +"and s.effectiveSigningDeadline<:now and s.phase<>:completed order by s.effectiveSigningDeadline,s.renewal.id",UUID.class)
+            +"and s.effectiveSigningDeadline<:now and s.phase<>:completed "
+            +"and not exists (select e.id from RenewalOperationEvent e where e.renewal=s.renewal and e.kind='PAYMENT_DISPOSITION') "
+            +"order by s.effectiveSigningDeadline,s.renewal.id",UUID.class)
             .setParameter("now",now()).setParameter("completed",RenewalOperationState.Phase.COMPLETED).getResultList();
     }
     public boolean reconcile(UUID id) {
         var n=lock(id);var s=em.find(RenewalOperationState.class,id,LockModeType.PESSIMISTIC_WRITE);
+        if(n.getStatus()==RenewalStatus.cancelled&&forfeitures!=null) {
+            var disposed=forfeitures.getIfAvailable();
+            if(disposed!=null&&disposed.fullDisposition(id).isPresent())return false;
+        }
         if(n.getStatus()==RenewalStatus.completed||s==null||s.getDepositPaidAt()==null||s.getEffectiveSigningDeadline()==null||!now().isAfter(s.getEffectiveSigningDeadline()))return false;
         var source=overdueTerms.getIfAvailable();
         var term=source==null?null:source.term(n.getRental(),now()).orElse(null);

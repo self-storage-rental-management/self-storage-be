@@ -29,6 +29,8 @@ public class RenewalLocalPaymentChecks {
     public void requireRental(Rental rental) {
         if(rental==null||rental.getStatus()!=RentalStatus.active||rental.getActualReturnedAt()!=null||rental.getCompletedAt()!=null)
             throw ApiExceptions.conflict("Only an active, unreturned Rental can renew");
+        if(com.storagehub.service.RentalIntakePolicy.isPending(rental))
+            throw ApiExceptions.conflict(com.storagehub.service.RentalIntakePolicy.INCOMPLETE);
         if(rental.getStorageUnit()==null||rental.getStorageUnit().getStatus()!=StorageUnitStatus.occupied||rental.getReservation()==null)
             throw ApiExceptions.conflict("Rental unit is no longer occupied or booking binding missing");
         if(em.createQuery("select count(t) from ReturnCase t where t.rental.id=:id",Long.class).setParameter("id",rental.getId()).getSingleResult()>0)

@@ -10,7 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.*;
 
-@RestController @RequiredArgsConstructor @Profile("shared-payment-schema")
+@RestController @RequiredArgsConstructor
 @ConditionalOnProperty(name={"storagehub.integration.ledger.enabled","storagehub.integration.renewal-simple-payment.enabled"},havingValue="true")
 public class RenewalDepositSettlementController {
     private final ActorContext actors;

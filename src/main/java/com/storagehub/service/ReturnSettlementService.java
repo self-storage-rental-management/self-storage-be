@@ -74,6 +74,21 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class ReturnSettlementService {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.storagehub.service.renewal.RenewalReturnPolicy renewalReturnPolicy;
+
+    @org.springframework.transaction.annotation.Transactional(readOnly=true)
+    public com.storagehub.service.renewal.RenewalReturnPolicy.View customerReturnEligibility(ActorPrincipal actor, UUID rentalId) {
+        if (renewalReturnPolicy==null) throw ApiExceptions.conflict("Chưa thể kiểm tra điều kiện gia hạn và trả kho. Vui lòng thử lại.");
+        return renewalReturnPolicy.customer(actor,rentalId);
+    }
+
+    private void requireRenewalResolved(Rental rental) {
+        if (renewalReturnPolicy!=null) {
+            rentalRepository.findByIdForUpdate(rental.getId()).orElseThrow(()->ApiExceptions.notFound("Rental not found"));
+            renewalReturnPolicy.requireAllowed(rental);
+        }
+    }
     private static final String NO_SHOW_RECOVERY_TASK_TITLE = "Thu hồi hàng do khách không đến ngày trả kho";
     @org.springframework.beans.factory.annotation.Value("${app.refund.processing-days:7}")
     private int refundProcessingDays = 7;
@@ -176,6 +191,7 @@ public class ReturnSettlementService {
     }
 
     private ReturnCaseResponse createReturnRequest(Rental rental, CustomerCreateReturnRequest request, User staff) {
+        requireRenewalResolved(rental);
         if (staff == null && inventoryCheckInRepository != null && rental.getReservation() != null
             && inventoryCheckInRepository.findByReservation_Id(rental.getReservation().getId())
                 .map(com.storagehub.domain.model.CheckIn::hasPendingInventoryRefusal).orElse(false))
@@ -325,6 +341,7 @@ public class ReturnSettlementService {
         Rental rental = rentalRepository.findByIdForUpdate(rentalId)
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
         facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
+        requireRenewalResolved(rental);
         if (request == null || request.returnType() != ReturnType.INVENTORY_MISMATCH || request.scheduledDate() == null) {
             throw ApiExceptions.validation("Yêu cầu trả kho do sai lệch cần có ngày trả dự kiến.", null);
         }
@@ -412,6 +429,7 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
         boolean fixedDeadline = record.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && record.getRental().getInventoryRemovalDeadlineAt() != null;
+        requireRenewalResolved(record.getRental());
         if (ReturnAttendancePolicy.applies(record)
             && (record.getReturnArrivedAt() != null || record.getReturnLateArrivalClaimedAt() != null
                 || IntakeTimelineCalculator.REVIEW_PENDING.equals(record.getReturnArrivalReviewStatus())))
@@ -477,6 +495,7 @@ public class ReturnSettlementService {
         if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
             throw ApiExceptions.conflict("Chỉ áp dụng đặt lịch bàn giao cho hồ sơ trả kho do kiểm kê sai lệch.");
         }
+        requireRenewalResolved(rental);
         if (appointmentAt == null) {
             throw ApiExceptions.validation("Vui lòng chọn ngày giờ hẹn bàn giao.", null);
         }
@@ -558,6 +577,7 @@ public class ReturnSettlementService {
         if (rc.getReturnType() != ReturnType.INVENTORY_MISMATCH) {
             throw ApiExceptions.conflict("Chỉ áp dụng gia hạn cho hồ sơ trả kho do kiểm kê sai lệch.");
         }
+        requireRenewalResolved(rental);
         String idem = idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.trim();
         if (idem != null && idem.equals(rc.getLastExtensionIdempotencyKey())) {
             return toResponse(rc);
@@ -626,6 +646,7 @@ public class ReturnSettlementService {
         var rc = returnCaseRepository.findByIdAndCustomer_Id(id, actor.userId())
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy yêu cầu trả kho của bạn."));
         lockRecoveryReturn(rc);
+        requireRenewalResolved(rc.getRental());
         requireEditableCheck(rc);
         if ((rc.getCustomerClearedAt() != null) == cleared) return toResponse(rc);
         requireCurrentCheck(rc, revision);
@@ -1769,6 +1790,7 @@ public class ReturnSettlementService {
             .orElseThrow(() -> ApiExceptions.notFound("Return case was not found"));
 
         lockRecoveryReturn(returnCase);
+        requireRenewalResolved(returnCase.getRental());
         if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH
             && !java.util.Objects.equals(request.settlementVersion(), returnCase.getSettlementVersion()))
             throw ApiExceptions.conflict("Bảng kê đã thay đổi. Vui lòng tải lại và kiểm tra phiên bản hiện tại.");
