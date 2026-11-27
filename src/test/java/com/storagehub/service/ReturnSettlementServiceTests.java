@@ -1740,4 +1740,27 @@ class ReturnSettlementServiceTests {
             assertThat(smallEarlyResponse.earlyTerminationPolicy().totalRentalCharge()).isEqualByComparingTo("300000");
         }
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"VNPAY", "VNPAY_GATEWAY", "CARD", ""})
+    void refundRejectsUnsupportedMethodsWithoutSettlement(String method) {
+        var rc = setupReturn(ReturnCaseStatus.refund_pending);
+        rc.setNetRefundAmount(new BigDecimal("100"));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, rc.getId(),
+            new StaffCompleteRefundRequest("ref", "test", UUID.randomUUID(), method, true, new BigDecimal("100"))))
+            .hasMessageContaining(method.startsWith("VNPAY") ? "Không hỗ trợ hoàn tiền qua VNPay" : "chuyển khoản hoặc tiền mặt");
+        verify(returnFinance, never()).receipt(any(), any(), any(), any(), any());
+        verify(returnFinance, never()).settle(any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+        assertThat(rc.getStatus()).isEqualTo(ReturnCaseStatus.refund_pending);
+    }
+
+    @Test void cashRefundRequiresReceipt() {
+        var rc = setupReturn(ReturnCaseStatus.refund_pending);
+        rc.setNetRefundAmount(new BigDecimal("100"));
+        when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
+        assertThatThrownBy(() -> service.staffCompleteRefund(staffActor, rc.getId(),
+            new StaffCompleteRefundRequest(null, "test", null, "CASH", true, new BigDecimal("100"))))
+            .hasMessageContaining("biên lai");
+        verify(returnFinance, never()).receipt(any(), any(), any(), any(), any());
+    }
 }
