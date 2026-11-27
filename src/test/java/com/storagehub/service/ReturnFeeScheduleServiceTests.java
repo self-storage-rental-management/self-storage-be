@@ -62,6 +62,29 @@ class ReturnFeeScheduleServiceTests {
     }
 
     @Test
+    void addsEditsAndRemovesFeesOnlyForNewReservations() {
+        String custom = "custom_minor_" + "a".repeat(32);
+        var prices = new LinkedHashMap<>(service.get().prices());
+        var details = new LinkedHashMap<>(service.get().details());
+        String cleaning = "custom_cleaning_" + "b".repeat(32);
+        prices.put(cleaning, BigDecimal.valueOf(50000));
+        details.put(cleaning, new ReturnFeeScheduleService.Detail("Vệ sinh kệ", "Kệ bẩn", "Khách thuê"));
+        prices.put(custom, BigDecimal.valueOf(125000));
+        details.put(custom, new ReturnFeeScheduleService.Detail("Phí mới", "Nghiệm thu", "Khách thuê"));
+        var added = service.save(new ReturnFeeScheduleService.Schedule(0, prices, details, null), null);
+        var items = List.of(new ReturnInspectionRequest.DamageItem(custom, BigDecimal.valueOf(2)));
+        assertEquals(BigDecimal.valueOf(250000), ReturnDamagePricing.calculate(items, added.prices()));
+        prices.put(custom, BigDecimal.valueOf(150000));
+        var edited = service.save(new ReturnFeeScheduleService.Schedule(1, prices, details, null), null);
+        assertEquals(BigDecimal.valueOf(300000), ReturnDamagePricing.calculate(items, edited.prices()));
+        service.save(new ReturnFeeScheduleService.Schedule(2, Map.of(), Map.of(), null), null);
+        em.clear();
+        assertTrue(service.get().prices().isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> ReturnDamagePricing.calculate(items, service.get().prices()));
+        assertEquals(added.prices(), service.applicableAt(Instant.parse(edited.publishedAt())).prices());
+    }
+
+    @Test
     void exactPublicationBoundaryAndMissingReservationStayOnPreviousVersion() {
         var first = service.save(edited(service.get(), 345000, "New label"), UUID.randomUUID());
         var boundary = Instant.parse(first.publishedAt());
@@ -74,12 +97,27 @@ class ReturnFeeScheduleServiceTests {
     @Test
     void importsLegacyPriceOnlyBaselineWithoutResettingConfiguredAmounts() throws Exception {
         versions.deleteAllInBatch(); em.clear();
+        var oldPrices = new LinkedHashMap<>(configured.prices());
+        oldPrices.remove(ReturnDamagePricing.FRAME_DAMAGE);
         versions.saveAndFlush(new ReturnFeeScheduleVersion(0, null,
-            mapper.writeValueAsString(Map.of("revision", 9, "prices", configured.prices())), null));
+            mapper.writeValueAsString(Map.of("revision", 9, "prices", oldPrices)), null));
         assertEquals(configured.prices(), service.get().prices());
         assertEquals(service.defaults().details(), service.get().details());
         service.save(edited(service.get(), 400000, "Published"), UUID.randomUUID());
         assertEquals(configured.prices(), service.applicableAt(Instant.EPOCH).prices());
+    }
+
+    @Test
+    void frameInventoryUsesThePublishedRateForTheReservation() {
+        var baseline = service.get();
+        var rates = new LinkedHashMap<>(baseline.prices());
+        rates.put(ReturnDamagePricing.FRAME_DAMAGE, BigDecimal.valueOf(250000));
+        var published = service.save(new ReturnFeeScheduleService.Schedule(
+            baseline.revision(), rates, baseline.details(), null), UUID.randomUUID());
+        var items = List.of(new ReturnInspectionRequest.DamageItem(ReturnDamagePricing.FRAME_DAMAGE, BigDecimal.valueOf(2)));
+        var after = Instant.parse(published.publishedAt()).plusNanos(1000);
+        assertEquals(BigDecimal.ZERO, ReturnDamagePricing.calculate(items, service.applicableAt(Instant.EPOCH).prices()));
+        assertEquals(BigDecimal.valueOf(500000), ReturnDamagePricing.calculate(items, service.applicableAt(after).prices()));
     }
 
     @Test
