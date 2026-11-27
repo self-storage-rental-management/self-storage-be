@@ -66,6 +66,15 @@ public class ReservationGoodsReviewService {
     public PageResponse<ReservationReviewResponse> listReviews(
         ActorPrincipal actor, UUID facilityId, int page, int size, String correlationId, boolean completed
     ) {
+        return listReviews(actor, facilityId, page, size, correlationId, completed, "priority");
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<ReservationReviewResponse> listReviews(
+        ActorPrincipal actor, UUID facilityId, int page, int size, String correlationId, boolean completed, String sort
+    ) {
+        if (!java.util.Set.of("priority", "createdAt,asc", "createdAt,desc", "appointmentAt,asc").contains(sort))
+            throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.", null);
         requireStaffActor(actor);
         authorizationService.require(actor, SystemPermission.VIEW_RESERVATIONS);
         if (facilityId != null) {
@@ -76,8 +85,8 @@ public class ReservationGoodsReviewService {
             ? List.of(new UUID(0, 0))
             : actor.facilityScopes().keySet().stream().toList();
         Page<ReservationReviewResponse> result = (completed
-            ? reservationRepository.findCompletedGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size))
-            : reservationRepository.findPendingGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size)))
+            ? (sort.equals("priority") ? reservationRepository.findCompletedGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size)) : reservationRepository.findCompletedGoodsReviewsOrdered(facilityId, scoped, facilityIds, sort, pageRequest(page, size)))
+            : (sort.equals("priority") ? reservationRepository.findPendingGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size)) : reservationRepository.findPendingGoodsReviewsOrdered(facilityId, scoped, facilityIds, sort, pageRequest(page, size))))
             .map(this::toResponse);
         return PageResponse.from(result, correlationId);
     }

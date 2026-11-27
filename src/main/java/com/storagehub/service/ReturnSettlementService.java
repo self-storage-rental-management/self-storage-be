@@ -2386,6 +2386,20 @@ public class ReturnSettlementService {
         int pageSize,
         String correlationId
     ) {
+        return listReturns(actor, facilityId, status, q, page, pageSize, "priority", correlationId);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<ReturnCaseResponse> listReturns(
+        ActorPrincipal actor,
+        UUID facilityId,
+        ReturnCaseStatus status,
+        String q,
+        int page,
+        int pageSize,
+        String sort,
+        String correlationId
+    ) {
         authorizationService.require(actor, SystemPermission.VIEW_RETURNS);
 
         Collection<UUID> allowedFacilityIds = null;
@@ -2396,9 +2410,15 @@ public class ReturnSettlementService {
             }
         }
 
+        if (!java.util.Set.of("priority", "createdAt,desc", "createdAt,asc").contains(sort))
+            throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.", null);
         Pageable pageable = pageable(page, pageSize);
+        if (!sort.equals("priority")) pageable = PageRequest.of(page, pageSize,
+            Sort.by(sort.endsWith("asc") ? Sort.Direction.ASC : Sort.Direction.DESC, "createdAt").and(Sort.by("id")));
+
+
         String search = q != null ? q.trim() : null;
-        Page<ReturnCase> cases = actor.hasRole(RoleCode.STAFF)
+        Page<ReturnCase> cases = actor.hasRole(RoleCode.STAFF) && sort.equals("priority")
             ? returnCaseRepository.searchReturnCases(facilityId, status, allowedFacilityIds, search,
                 PageRequest.of(page, pageSize), LocalDate.now(BusinessTime.ZONE))
             : returnCaseRepository.searchReturnCases(facilityId, status, allowedFacilityIds, search, pageable);

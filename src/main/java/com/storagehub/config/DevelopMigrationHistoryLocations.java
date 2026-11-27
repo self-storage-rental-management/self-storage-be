@@ -199,7 +199,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         Applied at2602 = applied.get("2026112602");
         Applied at2603 = applied.get("2026112603");
 
-        if (at2601 != null) {
+        if (at2601 != null && !"V2026112601__inspection_clock_starts_on_arrival.sql".equals(at2601.script())) {
             require(at2601, legacyViolation);
             selected.add("classpath:db/migration-history/legacy-2601");
             if (at2602 == null) {
@@ -222,6 +222,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             return;
         }
 
+        if (at2601 != null) require(at2601, "V2026112601__inspection_clock_starts_on_arrival.sql");
         if (at2602 != null && legacyReturn.equals(at2602.script()))
             throw new IllegalStateException("2026112602 has legacy history without 2026112601; no repair performed");
         if (at2602 != null) require(at2602, currentViolation);

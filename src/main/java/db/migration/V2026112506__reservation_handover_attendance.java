@@ -3,7 +3,7 @@ package db.migration;
 import org.flywaydb.core.api.migration.BaseJavaMigration;
 import org.flywaydb.core.api.migration.Context;
 
-public class V2026112506_1__reservation_handover_attendance extends BaseJavaMigration {
+public class V2026112506__reservation_handover_attendance extends BaseJavaMigration {
     @Override
     public void migrate(Context context) throws Exception {
         try (var statement = context.getConnection().createStatement()) {

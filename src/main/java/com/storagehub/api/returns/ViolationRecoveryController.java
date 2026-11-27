@@ -20,11 +20,12 @@ public class ViolationRecoveryController {
     @GetMapping
     public ApiResponse<List<ViolationRecoveryWorkflow.Entry>> list(@RequestParam(defaultValue = "0") int page,
         @RequestParam(required = false) UUID sourceReturnId, @RequestParam(defaultValue = "false") boolean activeOnly,
-        @RequestParam(defaultValue = "false") boolean escalatedOnly) {
+        @RequestParam(defaultValue = "false") boolean escalatedOnly,
+        @RequestParam(defaultValue = "priority") String sort) {
         var actor = actors.required();
         var entries = escalatedOnly ? workflow.listEscalatedOperations(actor, page)
             : sourceReturnId != null ? workflow.listForReturn(actor, sourceReturnId)
-            : activeOnly ? workflow.listActiveOperations(actor, page) : workflow.list(actor, page);
+            : activeOnly ? workflow.listActiveOperations(actor, page) : workflow.list(actor, page, sort);
         return new ApiResponse<>(entries, CorrelationIdContext.current());
     }
 

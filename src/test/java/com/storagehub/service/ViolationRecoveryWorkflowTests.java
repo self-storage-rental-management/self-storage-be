@@ -1251,4 +1251,17 @@ class ViolationRecoveryWorkflowTests {
         ReflectionTestUtils.setField(entity, "id", UUID.randomUUID());
         return entity;
     }
+
+    @Test
+    void staffCreationSortUsesAssignedQueueBeforePagination() {
+        var actor = new ActorPrincipal(staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of(), Map.of());
+        when(cases.findByTask_AssignedTo_Id(eq(staff.getId()), any())).thenReturn(List.of());
+        workflow.list(actor, 1, "createdAt,asc");
+        workflow.list(actor, 1, "createdAt,desc");
+        var pages = org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(cases, times(2)).findByTask_AssignedTo_Id(eq(staff.getId()), pages.capture());
+        assertThat(pages.getAllValues().get(0).getSort().getOrderFor("createdAt").isAscending()).isTrue();
+        assertThat(pages.getAllValues().get(1).getSort().getOrderFor("createdAt").isDescending()).isTrue();
+        assertThat(pages.getAllValues().get(0).getPageNumber()).isEqualTo(1);
+    }
 }

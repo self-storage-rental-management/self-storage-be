@@ -1763,4 +1763,21 @@ class ReturnSettlementServiceTests {
             .hasMessageContaining("biên lai");
         verify(returnFinance, never()).receipt(any(), any(), any(), any(), any());
     }
+
+    @Test
+    void staffDateSortIsAppliedByRepositoryBeforePagination() {
+        when(returnCaseRepository.searchReturnCases(any(), any(), any(), any(), any()))
+            .thenReturn(org.springframework.data.domain.Page.empty());
+        for (String sort : List.of("createdAt,desc", "createdAt,asc")) {
+            service.listReturns(staffActor, null, null, null, 1, 20, sort, "test");
+        }
+        var pages = org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        org.mockito.Mockito.verify(returnCaseRepository, org.mockito.Mockito.times(2))
+            .searchReturnCases(any(), any(), any(), any(), pages.capture());
+        assertThat(pages.getAllValues()).allSatisfy(p -> assertThat(p.getPageNumber()).isEqualTo(1));
+        assertThat(pages.getAllValues().get(0).getSort().getOrderFor("createdAt").isDescending()).isTrue();
+        assertThat(pages.getAllValues().get(1).getSort().getOrderFor("createdAt").isAscending()).isTrue();
+        assertThatThrownBy(() -> service.listReturns(staffActor, null, null, null, 0, 20, "bad", "test"))
+            .hasMessageContaining("không hợp lệ");
+    }
 }

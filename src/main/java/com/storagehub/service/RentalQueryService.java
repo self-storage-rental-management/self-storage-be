@@ -269,7 +269,7 @@ public class RentalQueryService {
         int rentalMonths = quote == null ? 0 : quote.getRentalMonths();
         if (rentalMonths < 1) return null;
 
-        java.time.Instant appointmentAt = reservation.getAppointmentAt();
+        java.time.Instant appointmentAt = rental.isStaffHandoverPreparation() ? rental.getSetupStartedAt() : reservation.getAppointmentAt();
         if (appointmentAt == null && checkIns != null) {
             appointmentAt = checkIns.findByReservation_Id(reservation.getId())
                 .map(com.storagehub.domain.model.CheckIn::getScheduledAt)
