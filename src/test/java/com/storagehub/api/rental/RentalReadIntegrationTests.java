@@ -81,6 +81,23 @@ class RentalReadIntegrationTests {
         assertThat(repo.existsActiveRental(own.getReservation().getId(),own.getStorageUnit().getId(),RentalStatus.active)).isTrue();
     }
 
+    @Test void staffQueueIncludesOnlyPendingProhibitedRecoveriesInPermittedFacility() {
+        var own = fixture("A", "Unit-A", "Customer A", LocalDate.of(2026, 11, 30));
+        var other = fixture("B", "Unit-B", "Customer B", LocalDate.of(2026, 11, 30));
+        for (var rental : List.of(own, other)) {
+            var recovery = new ViolationRecovery();
+            recovery.setRental(rental);
+            recovery.setReason(ViolationRecovery.Reason.CONFIRMED_PROHIBITED_GOODS);
+            recovery.setStage(ViolationRecovery.Stage.AWAITING_ASSIGNMENT);
+            recovery.setSourceDeadlineAt(Instant.now());
+            em.persist(recovery);
+        }
+        em.flush();
+        var entries = recoveryRepository.staffQueue(UUID.randomUUID(), List.of(own.getFacility().getId()),
+            org.springframework.data.domain.PageRequest.of(0, 30));
+        assertThat(entries).extracting(v -> v.getRental().getId()).containsExactly(own.getId());
+    }
+
     @Test void staffRentalReadsAreLimitedToAssignedFacilities() {
         var own = fixture("A", "Unit-A", "Customer A", LocalDate.of(2026, 11, 30));
         var other = fixture("B", "Unit-B", "Customer B", LocalDate.of(2026, 11, 30));

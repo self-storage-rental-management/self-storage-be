@@ -96,6 +96,44 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
+    void unassignedProhibitedRecoveryIsVisibleToStaffInFacilityButCannotBeOperated() {
+        recovery.setReason(Reason.CONFIRMED_PROHIBITED_GOODS);
+        recovery.setStage(Stage.AWAITING_ASSIGNMENT);
+        recovery.setTask(null);
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(workflow, "canRead", staff(), recovery)).isTrue();
+        var details = new ViolationRecoveryWorkflow.Details();
+        List<?> actions = ReflectionTestUtils.invokeMethod(workflow, "allowed", staff(), recovery, details, Instant.now());
+        assertThat(actions).isEmpty();
+        var foreignStaff = new ActorPrincipal(staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
+            Set.of(SystemPermission.PROCESS_RETURNS.code()), Map.of(UUID.randomUUID(), FacilityScopeLevel.OPERATE));
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(workflow, "canRead", foreignStaff, recovery)).isFalse();
+        recovery.setReason(Reason.SETUP_OVERDUE);
+        assertThat((Boolean) ReflectionTestUtils.invokeMethod(workflow, "canRead", staff(), recovery)).isFalse();
+    }
+
+    @Test
+    void inventoryProhibitedGoodsStartsRecoveryFromSetupWithEvidenceAndCannotRepeat() throws Exception {
+        rental.setStatus(RentalStatus.setup);
+        staff.setFullName("Nhân viên kiểm kê");
+        when(users.getReferenceById(staff.getId())).thenReturn(staff);
+        UUID evidence = UUID.randomUUID();
+        UUID id = workflow.openInventoryProhibitedGoodsRecovery(staff(), rental, "Hàng cấm: bình hóa chất", List.of(evidence));
+        var captor = org.mockito.ArgumentCaptor.forClass(ViolationRecovery.class);
+        verify(cases, atLeastOnce()).saveAndFlush(captor.capture());
+        var opened = captor.getValue();
+        assertThat(opened.getId()).isEqualTo(id);
+        assertThat(opened.getReason()).isEqualTo(Reason.CONFIRMED_PROHIBITED_GOODS);
+        assertThat(opened.getStage()).isEqualTo(Stage.AWAITING_ASSIGNMENT);
+        assertThat(opened.getPreviousRentalStatus()).isEqualTo(RentalStatus.setup);
+        assertThat(rental.getStatus()).isEqualTo(RentalStatus.closing);
+        var details = mapper.readTree(opened.getDetailsJson());
+        assertThat(details.path("report").asText()).contains("bình hóa chất");
+        assertThat(details.path("inventoryEvidenceIds").get(0).asText()).isEqualTo(evidence.toString());
+        assertThatThrownBy(() -> workflow.openInventoryProhibitedGoodsRecovery(staff(), rental, "Hàng cấm", List.of(evidence)))
+            .isInstanceOf(ApiException.class);
+    }
+
+    @Test
     void confirmedProhibitedGoodsEntersOrdinaryAssignmentAndOpensOnlyOnce() {
         rental.setStatus(RentalStatus.active);
         UUID id = workflow.openConfirmedProhibitedGoodsRecovery(manager(), rental.getId());

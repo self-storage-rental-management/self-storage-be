@@ -26,6 +26,12 @@ public class CheckInController {
     private final ActorContext actorContext;
     private final CheckInHandoverService service;
 
+    @PostMapping("/{checkInId}/prohibited-goods-recovery")
+    public ApiResponse<UUID> prohibitedGoodsRecovery(@PathVariable UUID checkInId,
+        @Valid @RequestBody CheckInHandoverService.ProhibitedGoodsRequest request) {
+        return new ApiResponse<>(service.transferProhibitedGoods(actorContext.required(), checkInId, request), CorrelationIdContext.current());
+    }
+
     @GetMapping("/{checkInId}/inventory-alternatives")
     public ApiResponse<java.util.List<CheckInHandoverService.InventoryAlternative>> inventoryAlternatives(@PathVariable UUID checkInId) {
         return new ApiResponse<>(service.inventoryAlternatives(actorContext.required(), checkInId), CorrelationIdContext.current());

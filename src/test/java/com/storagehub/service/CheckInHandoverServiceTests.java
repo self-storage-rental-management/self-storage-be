@@ -1301,6 +1301,20 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
+    void prohibitedGoodsRecoveryRequiresVerifiedInventoryVisitBeforeEvidenceOrRecovery() {
+        prepareDraft();
+        reservation.setStatus(ReservationStatus.PREPARING);
+        checkIn.setInventoryAppointmentAt(Instant.now().plusSeconds(3600));
+        checkIn.setInventoryIdentityVerifiedAt(null);
+        var rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElseThrow();
+        rental.setInventoryPending(true);
+        var request = new CheckInHandoverService.ProhibitedGoodsRequest("Hàng cấm", List.of(UUID.randomUUID()));
+        assertThatThrownBy(() -> service.transferProhibitedGoods(actor, checkIn.getId(), request))
+            .isInstanceOf(ApiException.class).hasMessageContaining("xác minh danh tính");
+        verify(fileAssetRepository, never()).findAllById(any());
+    }
+
+    @Test
     void savesAndReadsDraftWithoutPublishingOrChangingOriginalHandover() {
         prepareDraft();
         var request = validCompletionRequest();
