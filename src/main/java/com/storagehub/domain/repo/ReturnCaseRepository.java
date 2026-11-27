@@ -107,17 +107,27 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
             if (staffQueueDate != null && query != null && !Long.class.equals(query.getResultType())) {
                 var state = root.<ReturnCaseStatus>get("status");
                 var completed = cb.equal(state, ReturnCaseStatus.completed);
-                var actionable = state.in(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled,
-                    ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending, ReturnCaseStatus.recovery_required);
+                Instant now = Instant.now();
+                var inspecting = state.in(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled);
+                var reviewed = cb.isTrue(root.get("returnArrivalReviewAccepted"));
+                var inSession = cb.greaterThan(root.<Instant>get("returnArrivedAt"), now.minusSeconds(30 * 60));
+                var extendedSession = cb.and(reviewed, cb.greaterThanOrEqualTo(root.<Instant>get("postReviewHandoverDueAt"), now));
+                var present = cb.and(inspecting, cb.isNotNull(root.get("returnArrivedAt")), cb.or(inSession, extendedSession));
+                var reviewPending = cb.and(inspecting, cb.isNotNull(root.get("returnArrivedAt")), cb.not(cb.or(inSession, extendedSession)));
+                var actionable = cb.or(cb.and(inspecting, cb.not(reviewPending)), state.in(
+                    ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending, ReturnCaseStatus.recovery_required));
                 var group = cb.<Integer>selectCase().when(actionable, 0).when(completed, 2).otherwise(1);
                 var date = root.<LocalDate>get("scheduledDate");
-                var urgency = cb.<Integer>selectCase().when(cb.not(actionable), 0)
-                    .when(cb.lessThan(date, staffQueueDate), 0).when(cb.equal(date, staffQueueDate), 1)
-                    .when(cb.isNotNull(date), 2).otherwise(3);
+                var urgency = cb.<Integer>selectCase().when(present, 0).otherwise(1);
                 var created = root.<Instant>get("createdAt");
                 var recent = cb.<Instant>selectCase()
-                    .when(completed, cb.coalesce(root.<Instant>get("completedAt"), created)).otherwise(created);
-                query.orderBy(cb.asc(group), cb.asc(urgency), cb.desc(recent), cb.asc(root.get("id")));
+                    .when(completed, cb.coalesce(root.<Instant>get("completedAt"), created)).otherwise(cb.nullLiteral(Instant.class));
+                var deadline = cb.<Instant>selectCase().when(inspecting, root.get("postReviewHandoverDueAt"))
+                    .when(cb.equal(state, ReturnCaseStatus.payment_due), root.get("settlementPaymentDueAt"))
+                    .otherwise(cb.nullLiteral(Instant.class));
+                query.orderBy(cb.asc(group), cb.asc(urgency), cb.desc(recent),
+                    cb.asc(cb.<Integer>selectCase().when(cb.isNull(deadline), 1).otherwise(0)), cb.asc(deadline),
+                    cb.asc(date), cb.asc(created), cb.asc(root.get("id")));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         }, pageable);

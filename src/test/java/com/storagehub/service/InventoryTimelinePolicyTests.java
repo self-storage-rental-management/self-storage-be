@@ -89,31 +89,31 @@ class InventoryTimelinePolicyTests {
     @Test void extendsRemovalWindowStepwiseUpToTwoTimesPerUnitSize() {
         Instant publishedAt = Instant.parse("2026-11-20T08:00:00Z");
 
-        // XL: 10 -> +5 = 15 -> +5 = 20 (3rd extension blocked)
+        // XL: 10 -> +2 = 12 -> +2 = 14 (3rd extension blocked)
         Rental xl = rentalWithSize("XL");
         InventoryTimelinePolicy.initializeRemovalWindow(xl, publishedAt);
         assertThat(xl.getInventoryReturnWindowDays()).isEqualTo(10);
-        assertThat(xl.getInventoryReturnExtensionDays()).isEqualTo(5);
+        assertThat(xl.getInventoryReturnExtensionDays()).isEqualTo(2);
         assertThat(xl.getInventoryReturnExtensionCount()).isZero();
         assertThat(InventoryTimelinePolicy.canExtendRemovalWindow(xl, publishedAt.plusSeconds(60))).isTrue();
 
         InventoryTimelinePolicy.extendRemovalWindow(xl, publishedAt.plusSeconds(60));
         assertThat(xl.getInventoryReturnExtensionCount()).isEqualTo(1);
-        assertThat(xl.getInventoryReturnWindowDays()).isEqualTo(15);
-        assertThat(xl.getInventoryRemovalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.removalDeadline(publishedAt, 15));
+        assertThat(xl.getInventoryReturnWindowDays()).isEqualTo(12);
+        assertThat(xl.getInventoryRemovalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.removalDeadline(publishedAt, 12));
 
         InventoryTimelinePolicy.extendRemovalWindow(xl, publishedAt.plusSeconds(120));
         assertThat(xl.getInventoryReturnExtensionCount()).isEqualTo(2);
-        assertThat(xl.getInventoryReturnWindowDays()).isEqualTo(20);
-        assertThat(xl.getInventoryRemovalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.removalDeadline(publishedAt, 20));
+        assertThat(xl.getInventoryReturnWindowDays()).isEqualTo(14);
+        assertThat(xl.getInventoryRemovalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.removalDeadline(publishedAt, 14));
         assertThat(InventoryTimelinePolicy.canExtendRemovalWindow(xl, publishedAt.plusSeconds(180))).isFalse();
         assertThatThrownBy(() -> InventoryTimelinePolicy.extendRemovalWindow(xl, publishedAt.plusSeconds(180)))
             .hasMessageContaining("hết số lần gia hạn");
 
-        // S: 3 -> 5 -> 7; M: 5 -> 8 -> 11; L: 7 -> 11 -> 15
+        // S: 3 -> 5 -> 7; M: 5 -> 7 -> 9; L: 7 -> 9 -> 11
         assertExtensionProgression("S", publishedAt, 3, 5, 7);
-        assertExtensionProgression("M", publishedAt, 5, 8, 11);
-        assertExtensionProgression("L", publishedAt, 7, 11, 15);
+        assertExtensionProgression("M", publishedAt, 5, 7, 9);
+        assertExtensionProgression("L", publishedAt, 7, 9, 11);
     }
 
     private static void assertExtensionProgression(String size, Instant publishedAt, int d0, int d1, int d2) {

@@ -29,9 +29,13 @@ public class RenewalReadService {
     public PageResponse<RenewalResponse> list(ActorPrincipal actor,RenewalListQuery filter,boolean manager,String correlation) {
         authorize(actor,manager,false);
         if(manager && filter.facilityId()!=null) requireScope(actor,filter.facilityId(),FacilityScopeLevel.READ);
-        var page=readCore(()->PageResponse.from(repository.findAll(scope(actor,manager).and(filters(filter,manager)),filter.pageable())
+        var spec=scope(actor,manager).and(filters(filter,manager));
+        if(filter.priorityOrder())spec=spec.and(com.storagehub.service.BusinessQueueOrder.renewals(manager));
+        var orderedSpec=spec;
+        var page=readCore(()->PageResponse.from(repository.findAll(orderedSpec,filter.pageable())
             .map(n->project(n,actor,manager)),correlation));
-        return new PageResponse<>(page.data().stream().map(this::withStatuses).toList(),page.pagination(),page.correlationId());
+        var result=new PageResponse<>(page.data().stream().map(this::withStatuses).toList(),page.pagination(),page.correlationId());
+        return filter.priorityOrder()?result.withSort("priority,asc"):result;
     }
     @Transactional(readOnly=true,propagation=org.springframework.transaction.annotation.Propagation.SUPPORTS)
     public RenewalResponse detail(ActorPrincipal actor,UUID id,boolean manager) {

@@ -28,7 +28,7 @@ public class StorageUnitController {
         @RequestParam(required = false) UUID facilityId,
         @RequestParam(required = false) StorageUnitStatus status,
         @RequestParam(required = false) UUID unitTypeId,
-        @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+        @PageableDefault(size = 20, sort = {"code", "id"}, direction = Sort.Direction.ASC) Pageable pageable
     ) {
         return facilityQueryService.searchUnits(
             actorContext.required(), facilityId, status, unitTypeId, pageable, CorrelationIdContext.current()

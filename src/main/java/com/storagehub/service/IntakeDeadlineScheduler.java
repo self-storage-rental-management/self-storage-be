@@ -77,7 +77,7 @@ public class IntakeDeadlineScheduler {
                 var c = checkIns.findByReservation_Id(r.getReservation().getId()).orElse(null);
                 if (c != null && c.getInventoryResolutionStatus() == InventoryResolutionStatus.PENDING_CUSTOMER) {
                     if (!now.isBefore(r.getInventoryResultPublishedAt().plus(48, ChronoUnit.HOURS)))
-                        notify(r, "Đã quá hạn xác nhận kiểm kê", "Kết quả đang chờ xác nhận. Vui lòng xem hồ sơ hoặc gửi ý kiến. Không tự động xác nhận thay bạn.");
+                        recoverUnconfirmedInventory(r, now);
                     else if (!now.isBefore(r.getInventoryResultPublishedAt().plus(24, ChronoUnit.HOURS)))
                         notify(r, "Nhắc xác nhận kết quả kiểm kê", "Vui lòng xác nhận hoặc gửi ý kiến về kết quả kiểm kê trong 48 giờ.");
                 }
@@ -372,6 +372,22 @@ public class IntakeDeadlineScheduler {
                     notifications.createNotificationOnce(bo.getId(), NotificationType.CHECKIN, "Nhiệm vụ thu hồi đã quá hạn",
                         "Vui lòng mở hồ sơ nhiệm vụ để theo dõi xử lý.", t.getId());
         }
+    }
+
+    private void recoverUnconfirmedInventory(Rental rental, Instant now) {
+        if (entityManager != null) entityManager.refresh(rental, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        var checkIn = checkIns.findByReservation_Id(rental.getReservation().getId()).orElse(null);
+        if (checkIn == null || checkIn.getInventoryResolutionStatus() != InventoryResolutionStatus.PENDING_CUSTOMER
+            || rental.getInventoryResultPublishedAt() == null
+            || rental.getCompletedAt() != null || rental.getActualReturnedAt() != null
+            || !List.of(RentalStatus.setup, RentalStatus.active).contains(rental.getStatus())) return;
+        Instant deadline = rental.getInventoryResultPublishedAt().plus(48, ChronoUnit.HOURS);
+        if (now.isBefore(deadline)) return;
+        if (violationRecovery != null) {
+            if (violationRecovery.detect(rental, null, ViolationRecovery.Reason.INVENTORY_CONFIRMATION_OVERDUE, deadline, now, false))
+                notify(rental, "Chuyển sang thu hồi kho",
+                    "Đã hết 48 giờ phản hồi kết quả kiểm kê. Hồ sơ đã chuyển sang thu hồi kho.");
+        } else recovery(rental, now, "Quá hạn 48 giờ phản hồi kết quả kiểm kê");
     }
 
     private void recoverMismatchWithoutReturn(Rental rental, Instant now) {
