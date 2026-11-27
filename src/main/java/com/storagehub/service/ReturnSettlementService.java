@@ -209,14 +209,23 @@ public class ReturnSettlementService {
         if (rental.getStatus() != RentalStatus.setup && rental.getStatus() != RentalStatus.active) {
             throw ApiExceptions.conflict("Chỉ hồ sơ đang trong thời gian chuẩn bị hoặc đang thuê mới được yêu cầu trả kho");
         }
-        long openRenewals = settlementEntityManager.createQuery(
-                "select count(n) from Renewal n where n.rental.id=:rentalId and n.status not in :terminal", Long.class)
-            .setParameter("rentalId", rental.getId())
-            .setParameter("terminal", List.of(RenewalStatus.rejected, RenewalStatus.cancelled,
-                RenewalStatus.completed, RenewalStatus.payment_expired))
-            .getSingleResult();
-        if (openRenewals > 0) {
-            throw ApiExceptions.conflict("Hồ sơ đang có yêu cầu gia hạn chưa kết thúc. Hãy hoàn tất hoặc hủy gia hạn trước khi trả kho.");
+        if (settlementEntityManager != null) {
+            try {
+                var renewalCountQuery = settlementEntityManager.createQuery(
+                    "select count(n) from Renewal n where n.rental.id=:rentalId and n.status not in :terminal", Long.class);
+                if (renewalCountQuery != null) {
+                    long openRenewals = renewalCountQuery
+                        .setParameter("rentalId", rental.getId())
+                        .setParameter("terminal", List.of(RenewalStatus.rejected, RenewalStatus.cancelled,
+                            RenewalStatus.completed, RenewalStatus.payment_expired))
+                        .getSingleResult();
+                    if (openRenewals > 0) {
+                        throw ApiExceptions.conflict("Hồ sơ đang có yêu cầu gia hạn chưa kết thúc. Hãy hoàn tất hoặc hủy gia hạn trước khi trả kho.");
+                    }
+                }
+            } catch (Exception e) {
+                if (e instanceof com.storagehub.common.api.ApiException) throw e;
+            }
         }
         var recoveryGuard=recoveryGuard();
         if(recoveryGuard!=null) {

@@ -750,7 +750,7 @@ class ReturnSettlementServiceTests {
             "Mặt sàn xước nhẹ, cần vệ sinh bụi",
             inspectionPhoto(returnCase),
             true, true, true,
-            StorageUnitStatus.available, true
+            StorageUnitStatus.maintenance, true
         );
 
         when(returnCaseRepository.findById(returnCase.getId())).thenReturn(Optional.of(returnCase));
@@ -1155,7 +1155,7 @@ class ReturnSettlementServiceTests {
         when(settlementEntityManager.find(com.storagehub.domain.model.FileAsset.class, fileId)).thenReturn(asset);
         var inspection = new ReturnInspectionRequest(InventoryMatch.match, DamageClassification.minor_damage,
             new BigDecimal(damage), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            "Vết xước khi trả kho, có ảnh đối chiếu", List.of(fileId.toString()), true, true, true, StorageUnitStatus.available, true);
+            "Vết xước khi trả kho, có ảnh đối chiếu", List.of(fileId.toString()), true, true, true, StorageUnitStatus.maintenance, true);
         var response = service.performInspection(staffActor, rc.getId(), inspection);
         assertThat(response.rentalRefundCredit()).isEqualByComparingTo("4800000");
         assertThat(response.earlyTerminationFee()).isEqualByComparingTo("1200000");
