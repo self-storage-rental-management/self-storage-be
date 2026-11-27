@@ -293,6 +293,23 @@ public class NotificationService {
     }
 
     @Transactional
+    public void notifyManagersOfRenewalIncident(
+        UUID facilityId,
+        String title,
+        String content,
+        UUID renewalId
+    ) {
+        userRepository.findEligibleStaff(
+            UserStatus.ACTIVE,
+            RoleCode.MANAGER,
+            facilityId,
+            List.of(FacilityScopeLevel.MANAGE)
+        ).forEach(manager -> createNotification(
+            manager.getId(), NotificationType.RENEWAL, title, content, renewalId
+        ));
+    }
+
+    @Transactional
     public void createBusinessNotifications(
         NotificationType type, String title, String content, UUID relatedEntityId
     ) {
@@ -390,6 +407,7 @@ public class NotificationService {
     private static String displayTitle(String title) {
         if (title == null) return null;
         return switch (title) {
+            case "Đã bàn giao kho, chờ bạn xác nhận" -> "Đã ghi nhận bàn giao kho";
             case "Nhắc nhở: Hợp đồng thuê kho sắp hết hạn (còn 14 ngày)" -> "Hợp đồng thuê kho còn 14 ngày";
             case "Cảnh báo: Hợp đồng thuê kho sắp hết hạn (còn 3 ngày)" -> "Hợp đồng thuê kho còn 3 ngày";
             case "Thông báo: Hợp đồng thuê kho đã hết hạn" -> "Hợp đồng thuê kho đã hết hạn";
@@ -405,6 +423,10 @@ public class NotificationService {
     }
 
     private static String displayContent(String content, String title) {
+        if ("Đã bàn giao kho, chờ bạn xác nhận".equals(title)) {
+            return "Nhân viên đã ghi nhận bàn giao kho. Bạn không cần xác nhận nhận kho. "
+                + "Theo dõi thời gian chuẩn bị hàng trong chi tiết đơn; khi chuẩn bị xong, báo cho nhân viên kiểm kê.";
+        }
         if (content == null) return null;
         if ("CẢNH BÁO BÀN GIAO: Hợp đồng hết hạn nhưng kho chưa được bàn giao".equals(title)) {
             content = content.replaceFirst("^Kho (.+) đã hết hạn vào ngày (\\d{4}-\\d{2}-\\d{2}) nhưng chưa được bàn giao\\. Cần theo dõi kiểm tra hiện trạng\\.$",
