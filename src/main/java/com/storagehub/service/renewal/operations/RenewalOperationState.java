@@ -51,6 +51,7 @@ public class RenewalOperationState {
     public void arrival(UUID ref) {arrivalRef=ref;}
     public void noShow() {phase=Phase.NO_SHOW;}
     public void resumeSigning() {phase=Phase.SIGNING;}
+    public void processingDeadline(Instant deadline) {effectiveSigningDeadline=deadline;}
     public void proposedException(UUID ref) {pendingExceptionRef=ref;}
     public void exception(UUID decision,Instant deadline,Instant cutoff,UUID appointment,Instant start,Instant end) {
         confirmedExceptionRef=decision;pendingExceptionRef=null;effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;

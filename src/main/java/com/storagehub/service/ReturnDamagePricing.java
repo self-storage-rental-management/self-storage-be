@@ -54,6 +54,10 @@ public final class ReturnDamagePricing {
     }
 
     public static BigDecimal calculate(List<ReturnInspectionRequest.DamageItem> damageItems) {
+        return calculate(damageItems, null);
+    }
+
+    public static BigDecimal calculate(List<ReturnInspectionRequest.DamageItem> damageItems, Map<String, BigDecimal> prices) {
         BigDecimal total = BigDecimal.ZERO;
         if (damageItems == null) return total.setScale(0);
         for (ReturnInspectionRequest.DamageItem item : damageItems) {
@@ -66,17 +70,27 @@ public final class ReturnDamagePricing {
             if (quantity == null || quantity.signum() <= 0 || quantity.compareTo(BigDecimal.valueOf(100_000)) > 0) {
                 throw new IllegalArgumentException("Số lượng hư hỏng phải lớn hơn 0 và không vượt quá 100.000.");
             }
-            total = total.add(price.unitPrice().multiply(quantity));
+            total = total.add((prices == null ? price.unitPrice() : prices.get(item.code())).multiply(quantity));
         }
         return total.setScale(0, RoundingMode.HALF_UP);
     }
 
     public static String describe(List<ReturnInspectionRequest.DamageItem> damageItems) {
+        return describe(damageItems, null);
+    }
+
+    public static String describe(List<ReturnInspectionRequest.DamageItem> damageItems, Map<String, BigDecimal> prices) {
+        return describe(damageItems, prices, null);
+    }
+
+    public static String describe(List<ReturnInspectionRequest.DamageItem> damageItems, Map<String, BigDecimal> prices,
+                                  Map<String, ReturnFeeScheduleService.Detail> details) {
         if (damageItems == null || damageItems.isEmpty()) return "";
         return damageItems.stream().map(item -> {
             Item price = CATALOG.get(item.code());
-            return price == null ? item.code() : price.label() + " x " + item.quantity().stripTrailingZeros().toPlainString()
-                + " " + price.unit() + " (" + price.unitPrice().toPlainString() + " đ/" + price.unit() + ")";
+            String label = details != null && details.containsKey(item.code()) ? details.get(item.code()).label() : (price == null ? item.code() : price.label());
+            return price == null ? item.code() : label + " x " + item.quantity().stripTrailingZeros().toPlainString()
+                + " " + price.unit() + " (" + (prices == null ? price.unitPrice() : prices.get(item.code())).toPlainString() + " đ/" + price.unit() + ")";
         }).reduce((left, right) -> left + "; " + right).orElse("");
     }
 }
