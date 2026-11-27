@@ -246,7 +246,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         service.confirmReceipt(f.actor(), f.reservationId());
         var rental = rentals.findByReservation_Id(f.reservationId()).orElseThrow();
         assertThatThrownBy(() -> returns.createCustomerReturnRequest(f.actor(), rental.getId(),
-            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "TEST missing receipt")))
+            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now(com.storagehub.time.BusinessTime.ZONE).plusDays(2), "TEST missing receipt")))
             .hasMessageContaining("Chưa xác minh được cọc thực thu");
         // Persist a real manual-payment proof, rather than bypassing deposit reconciliation.
         var reservation = em.find(Reservation.class, f.reservationId());
@@ -268,7 +268,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         catch(com.fasterxml.jackson.core.JsonProcessingException invalid){throw new IllegalStateException(invalid);}
         em.persist(log);em.flush();
         var requested = returns.createCustomerReturnRequest(f.actor(), rental.getId(),
-            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now().plusDays(1), "TEST search"));
+            new com.storagehub.api.returns.CustomerCreateReturnRequest(LocalDate.now(com.storagehub.time.BusinessTime.ZONE).plusDays(2), "TEST search"));
         em.flush();
         var page = org.springframework.data.domain.PageRequest.of(0, 20);
         assertThat(returnCases.searchReturnCases(null, null, List.of(f.facilityId()), null, page).getContent())

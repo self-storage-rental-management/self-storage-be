@@ -332,6 +332,10 @@ class RenewalPaymentTransactionTests {
         var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
         var manualPayments = new ManualRentalPaymentService(payments, audit);
         org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptCodes", mock(com.storagehub.service.MoneyReceiptCodes.class));
+        var mockRenewalIdentity = mock(com.storagehub.service.renewal.RenewalDisplayIdentity.class);
+        when(mockRenewalIdentity.resolve(any())).thenReturn(new com.storagehub.service.renewal.RenewalDisplayIdentity.Identity(
+            "SH-100001", 1));
+        org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "renewalIdentity", mockRenewalIdentity);
         org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptEmails",
             mock(com.storagehub.service.email.TransactionalEmailService.class));
         org.springframework.test.util.ReflectionTestUtils.setField(accounting, "manualPayments", manualPayments);

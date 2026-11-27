@@ -41,13 +41,13 @@ class RecoveryTaskReadServiceTests {
     }
 
     @Test void queueUsesPersistedTasksAndKeepsFacilityScopeBeforePagination() {
-        task(facility,now.minusSeconds(1),"Older");
+        var older=task(facility,now.minusSeconds(1),"Older");
         var newer=task(facility,now,"Newer");
         task(otherFacility,now.plusSeconds(1),"Other facility");
         var page=service.list(actor,RoleCode.MANAGER,facility,0,1,"test");
         assertThat(page.data()).hasSize(1);
-        assertThat(page.data().getFirst().id()).isEqualTo(newer.id());
-        assertThat(page.data().getFirst().customerName()).isEqualTo("Newer");
+        assertThat(page.data().getFirst().id()).isEqualTo(older.id());
+        assertThat(page.data().getFirst().customerName()).isEqualTo("Older");
         assertThat(page.data().getFirst().storageUnitCode()).isEqualTo("UNIT-01");
         assertThat(page.pagination().totalItems()).isEqualTo(2);
         verify(access).require(actor,RoleCode.MANAGER,facility,FacilityScopeLevel.READ,SystemPermission.VIEW_RENTALS);
