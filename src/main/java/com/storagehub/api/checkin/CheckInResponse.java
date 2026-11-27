@@ -124,7 +124,12 @@ public record CheckInResponse(
         }
     }
 
-    public record InventoryAccess(Instant completionDeadlineAt, boolean writable, String blockedReason) {}
+    public record InventoryAccess(Instant completionDeadlineAt, boolean writable, String blockedReason,
+                                  boolean recoveryTransferred) {
+        public InventoryAccess(Instant completionDeadlineAt, boolean writable, String blockedReason) {
+            this(completionDeadlineAt, writable, blockedReason, false);
+        }
+    }
 
     public record StorageCapacity(
         BigDecimal volumeM3,

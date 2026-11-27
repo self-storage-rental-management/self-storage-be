@@ -34,6 +34,16 @@ final class ReturnAttendancePolicy {
             && (record.getStatus() == ReturnCaseStatus.requested || record.getStatus() == ReturnCaseStatus.scheduled);
     }
 
+    static boolean isPendingArrivalReview(ReturnCase record) {
+        return record != null && IntakeTimelineCalculator.REVIEW_PENDING.equals(record.getReturnArrivalReviewStatus());
+    }
+
+    static boolean isFacilityExceptionAllowed(ReturnCase record) {
+        return record != null
+            && IntakeTimelineCalculator.REVIEW_FACILITY_EXCEPTION.equals(record.getReturnArrivalReviewStatus())
+            && !Boolean.FALSE.equals(record.getReturnArrivalReviewAccepted());
+    }
+
     static Instant expiresAt(ReturnCase record) {
         Instant start = record.getReturnReverificationStartedAt();
         if (start == null) start = record.getReturnArrivedAt();
@@ -41,7 +51,12 @@ final class ReturnAttendancePolicy {
     }
 
     static Instant reviewStartsAt(ReturnCase record) {
-        if (!applies(record) || !isOpen(record) || record.getReturnArrivedAt() == null) return null;
+        if (!applies(record) || !isOpen(record)) return null;
+        if (isPendingArrivalReview(record)) {
+            return record.getReturnArrivalRecordedAt() != null
+                ? record.getReturnArrivalRecordedAt() : record.getReturnLateArrivalClaimedAt();
+        }
+        if (record.getReturnArrivedAt() == null) return null;
         if (Boolean.TRUE.equals(record.getReturnArrivalReviewAccepted())) {
             return record.getPostReviewHandoverDueAt() == null ? record.getReturnArrivalReviewedAt() : record.getPostReviewHandoverDueAt();
         }
@@ -52,9 +67,10 @@ final class ReturnAttendancePolicy {
     }
 
     static boolean protectsFromRecovery(ReturnCase record) {
-        return applies(record) && isOpen(record) && record.getReturnArrivedAt() != null
-            && canRecordArrivalAt(record, record.getReturnArrivedAt())
-            && !Boolean.FALSE.equals(record.getReturnArrivalReviewAccepted());
+        if (!applies(record) || !isOpen(record)) return false;
+        if (Boolean.FALSE.equals(record.getReturnArrivalReviewAccepted())) return false;
+        if (isPendingArrivalReview(record) || isFacilityExceptionAllowed(record)) return true;
+        return record.getReturnArrivedAt() != null && canRecordArrivalAt(record, record.getReturnArrivedAt());
     }
 
     static boolean canInspect(ReturnCase record, Instant now) {

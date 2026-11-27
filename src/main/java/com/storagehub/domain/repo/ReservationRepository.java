@@ -293,11 +293,15 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             (r.status in (UNIT_RESERVED, READY_FOR_CHECKIN, AWAITING_CUSTOMER_RECEIPT, PREPARING, COMPLETED)
               and r.assignedUnit is not null and a.status in (ACTIVE, COMPLETED))
             or c.inventoryDecisionJson is not null
+            or exists (select 1 from Rental recoveryRental where recoveryRental.reservation = r
+                       and recoveryRental.inventoryEscalatedAt is not null)
             or r.cancellationType in (HANDOVER_ATTENDANCE_TIMEOUT, HANDOVER_COMPLETION_TIMEOUT)
             or (:workGroup = 'PROCESSED' and c.status in (completed, rejected, no_show, cancelled))
           )
           and (:workGroup = 'ALL' or :workGroup = case
-            when r.cancellationType = HANDOVER_ATTENDANCE_TIMEOUT or c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED
+            when exists (select 1 from Rental recoveryRental where recoveryRental.reservation = r
+                         and recoveryRental.inventoryEscalatedAt is not null)
+              or r.cancellationType = HANDOVER_ATTENDANCE_TIMEOUT or c.status in (completed, rejected, no_show, cancelled) or r.status = COMPLETED
               or (c.inventoryDecisionJson is not null and c.inventoryResolutionStatus in (RETURN_REQUESTED, TRANSFER_REQUESTED, ACCEPTED)) then 'PROCESSED'
             else 'ONGOING' end)
           and (:facilityId is null or r.facility.id = :facilityId)
@@ -307,7 +311,12 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                or lower(r.customer.email) like lower(concat('%', :q, '%'))
                or lower(r.customer.fullName) like lower(concat('%', :q, '%'))
                or lower(a.storageUnit.code) like lower(concat('%', :q, '%')))
-          and (:statusFilter = false or (:unscheduled = true and c.id is null) or c.status = :checkInStatus)
+          and (:statusFilter = false
+            or (:recoveryTransferred = true and exists (select 1 from Rental recoveryRental
+                where recoveryRental.reservation = r and recoveryRental.inventoryEscalatedAt is not null))
+            or (:recoveryTransferred = false and not exists (select 1 from Rental recoveryRental
+                where recoveryRental.reservation = r and recoveryRental.inventoryEscalatedAt is not null)
+              and ((:unscheduled = true and c.id is null) or c.status = :checkInStatus)))
           and (:scheduledFrom is null or coalesce(r.appointmentAt, c.scheduledAt) >= :scheduledFrom)
           and (:scheduledTo is null or coalesce(r.appointmentAt, c.scheduledAt) < :scheduledTo)
         """;
@@ -343,6 +352,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         @Param("q") String q,
         @Param("statusFilter") boolean statusFilter,
         @Param("unscheduled") boolean unscheduled,
+        @Param("recoveryTransferred") boolean recoveryTransferred,
         @Param("checkInStatus") com.storagehub.domain.model.CheckInStatus checkInStatus,
         @Param("scheduledFrom") Instant scheduledFrom,
         @Param("scheduledTo") Instant scheduledTo,

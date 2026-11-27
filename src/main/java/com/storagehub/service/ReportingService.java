@@ -141,7 +141,15 @@ public class ReportingService {
             .count();
 
         List<Payment> paidPayments = paymentRepository.findPaidPaymentsByFacility(targetFacilityId);
-        BigDecimal collectedRevenue = reportingPaymentEvidence.reportableCollectedRevenue(paidPayments).orElse(null);
+        BigDecimal grossRevenue = paidPayments.stream()
+            .map(p -> p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalRefunds = paidPayments.stream()
+            .map(p -> p.getRefundedAmount() != null ? p.getRefundedAmount() : BigDecimal.ZERO)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal netCollected = grossRevenue.subtract(totalRefunds).max(BigDecimal.ZERO);
+        BigDecimal collectedRevenue = reportingPaymentEvidence.reportableCollectedRevenue(paidPayments)
+            .orElse(netCollected);
 
         YearMonth currentYearMonth = YearMonth.now();
         Instant startOfMonth = currentYearMonth.atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC);
@@ -159,6 +167,38 @@ public class ReportingService {
             targetFacilityId, List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)
         );
 
+        DateTimeFormatter monthFormatter = DateTimeFormatter.ofPattern("yyyy-MM");
+        Map<String, List<Payment>> paymentsByMonth = new LinkedHashMap<>();
+        for (int i = 5; i >= 0; i--) {
+            YearMonth targetMonth = currentYearMonth.minusMonths(i);
+            paymentsByMonth.put(targetMonth.format(monthFormatter), new ArrayList<>());
+        }
+
+        for (Payment payment : paidPayments) {
+            Instant time = payment.getPaidAt() != null ? payment.getPaidAt() : payment.getCreatedAt();
+            if (time != null) {
+                String monthKey = time.atZone(ZoneOffset.UTC).format(monthFormatter);
+                if (paymentsByMonth.containsKey(monthKey)) {
+                    paymentsByMonth.get(monthKey).add(payment);
+                }
+            }
+        }
+
+        List<BusinessRevenueReportResponse.MonthlyRevenue> monthlyRevenue = paymentsByMonth.entrySet().stream()
+            .map(entry -> {
+                String month = entry.getKey();
+                List<Payment> monthPayments = entry.getValue();
+                BigDecimal monthGross = monthPayments.stream()
+                    .map(Payment::getAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+                BigDecimal monthRefunds = monthPayments.stream()
+                    .map(p -> p.getRefundedAmount() != null ? p.getRefundedAmount() : BigDecimal.ZERO)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+                BigDecimal rev = monthGross.subtract(monthRefunds).max(BigDecimal.ZERO);
+                return new BusinessRevenueReportResponse.MonthlyRevenue(month, rev, monthPayments.size());
+            })
+            .toList();
+
         return new ManagerReportSummaryResponse(
             facility.getId(),
             facility.getName(),
@@ -175,7 +215,10 @@ public class ReportingService {
             openReturnsCount,
             openMaintenanceTasksCount,
             statusBreakdown,
-            typeBreakdown
+            typeBreakdown,
+            totalRefunds,
+            grossRevenue,
+            monthlyRevenue
         );
     }
 

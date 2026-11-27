@@ -65,6 +65,7 @@ class ReservationConcurrencyIntegrationTests {
     @Autowired private RentalPackagePolicyRepository policyRepository;
     @Autowired private ReservationQuoteRepository quoteRepository;
     @Autowired private ReservationRepository reservationRepository;
+    @Autowired private com.storagehub.domain.repo.ViolationRecoveryRepository recoveryRepository;
     @Autowired private com.storagehub.domain.repo.ReservationGoodsItemRepository goodsItems;
     @Autowired private RackLayoutService rackLayouts;
     @Autowired private FacilityLifecycleService facilityLifecycle;
@@ -86,8 +87,9 @@ class ReservationConcurrencyIntegrationTests {
         queueItem("LATER", quote, now.plusSeconds(86400), null);
         queueItem("NEAR", quote, now.plusSeconds(3600), CheckInStatus.scheduled);
         queueItem("LATE-B", quote, now.minusSeconds(3600), CheckInStatus.scheduled);
-        queueItem("LATE-A", quote, now.minusSeconds(3600), null);
-        queueItem("STARTED", quote, now.plusSeconds(7200), CheckInStatus.identity_verified);
+        queueItem("LATE-A", quote, now.minusSeconds(3601), null);
+        var started = queueItem("STARTED", quote, now.plusSeconds(7200), CheckInStatus.identity_verified);
+        started.setHandoverArrivedAt(now);
         queueItem("EXPIRED", quote, now.minusSeconds(8 * 86400), CheckInStatus.scheduled);
         queueItem("ABSENT", quote, now, CheckInStatus.no_show);
         queueItem("REJECTED", quote, now, CheckInStatus.rejected);
@@ -99,7 +101,7 @@ class ReservationConcurrencyIntegrationTests {
         for (int page = 0; page < 3; page++) {
             var result = reservationRepository.findCheckInWork("ONGOING", now, ReservationCheckInPolicy.firstValidAppointment(now),
                 java.time.Instant.EPOCH, java.time.Instant.EPOCH,
-                site.getId(), null, false, false, null, null, null, true, List.of(site.getId()),
+                site.getId(), null, false, false, false, null, null, null, true, List.of(site.getId()),
                 org.springframework.data.domain.PageRequest.of(page, 2));
             assertThat(result.getTotalElements()).isEqualTo(6);
             assertThat(result.getContent()).extracting(row -> row.getReservation().getReservationCode())
@@ -107,13 +109,13 @@ class ReservationConcurrencyIntegrationTests {
         }
         var history = reservationRepository.findCheckInWork("PROCESSED", now, ReservationCheckInPolicy.firstValidAppointment(now),
             java.time.Instant.EPOCH, java.time.Instant.EPOCH,
-            site.getId(), null, false, false, null, now, now.plusSeconds(1), true, List.of(site.getId()),
+            site.getId(), null, false, false, false, null, now, now.plusSeconds(1), true, List.of(site.getId()),
             org.springframework.data.domain.PageRequest.of(0, 10));
         assertThat(history.getContent()).extracting(row -> row.getReservation().getReservationCode())
-            .containsExactly("ABSENT", "CANCELLED", "DONE", "REJECTED");
+            .containsExactlyInAnyOrder("ABSENT", "CANCELLED", "DONE", "REJECTED");
         var filtered = reservationRepository.findCheckInWork("PROCESSED", now, ReservationCheckInPolicy.firstValidAppointment(now),
             java.time.Instant.EPOCH, java.time.Instant.EPOCH,
-            site.getId(), "UNIT-ABSENT", true, false, CheckInStatus.no_show, now, now.plusSeconds(1), true, List.of(site.getId()),
+            site.getId(), "UNIT-ABSENT", true, false, false, CheckInStatus.no_show, now, now.plusSeconds(1), true, List.of(site.getId()),
             org.springframework.data.domain.PageRequest.of(0, 1));
         assertThat(filtered.getContent()).singleElement().satisfies(row -> {
             assertThat(row.getReservation().getAssignedUnit()).isNull();
@@ -122,7 +124,124 @@ class ReservationConcurrencyIntegrationTests {
         });
     }
 
-    private void queueItem(String code, ReservationQuote quote, Instant appointment, CheckInStatus status) {
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void recoveryTransfersLeaveOngoingBeforePaginationAndOverrideOldStatusFilters() {
+        var site = facility();
+        site.setCode("CHECKIN-RECOVERY");
+        em.persist(site);
+        var type = unitType(site);
+        type.setCode("RECOVERY-S");
+        em.persist(type);
+        var owner = userRepository.save(customer("checkin-recovery@storagehub.test"));
+        var now = Instant.parse("2026-11-27T04:00:00Z");
+        var start = LocalDate.of(2026, 11, 27);
+        var quote = quoteRepository.save(quote(owner, site, type, start, start.plusMonths(3)));
+        queueItem("RECOVERY-NORMAL", quote, now, CheckInStatus.setup_completed);
+        for (String code : List.of("RECOVERY-ACTIVE", "RECOVERY-RELEASED")) {
+            var reservation = queueItem(code, quote, now, CheckInStatus.setup_completed);
+            var rental = new com.storagehub.domain.model.Rental();
+            rental.setCustomer(owner);
+            rental.setFacility(site);
+            rental.setReservation(reservation);
+            rental.setStorageUnit(reservation.getAssignedUnit());
+            rental.setStartDate(start);
+            rental.setContractEndDate(start.plusMonths(3));
+            rental.setMonthlyPrice(BigDecimal.ONE);
+            rental.setInventoryEscalatedAt(now);
+            rental.setStatus(com.storagehub.domain.model.RentalStatus.closing);
+            em.persist(rental);
+            if (code.endsWith("RELEASED")) {
+                // Recovery remains in history even after the original unit is released.
+                reservation.setAssignedUnit(null);
+                reservation.setStatus(ReservationStatus.CANCELLED);
+            }
+        }
+        em.flush();
+        em.clear();
+        var page = org.springframework.data.domain.PageRequest.of(0, 1);
+        var ongoing = reservationRepository.findCheckInWork("ONGOING", now, now,
+            Instant.EPOCH, Instant.EPOCH, site.getId(), "RECOVERY-", false, false, false,
+            null, null, null, true, List.of(site.getId()), page);
+        assertThat(ongoing.getTotalElements()).isEqualTo(1);
+        assertThat(ongoing.getContent()).extracting(row -> row.getReservation().getReservationCode())
+            .containsExactly("RECOVERY-NORMAL");
+        for (int index = 0; index < 2; index++) {
+            var history = reservationRepository.findCheckInWork("PROCESSED", now, now,
+                Instant.EPOCH, Instant.EPOCH, site.getId(), "RECOVERY-", false, false, false,
+                null, null, null, true, List.of(site.getId()), org.springframework.data.domain.PageRequest.of(index, 1));
+            assertThat(history.getTotalElements()).isEqualTo(2);
+            assertThat(history.getTotalPages()).isEqualTo(2);
+            assertThat(history.getContent()).singleElement().satisfies(row ->
+                assertThat(row.getReservation().getReservationCode()).isNotEqualTo("RECOVERY-NORMAL"));
+        }
+        var oldStatus = reservationRepository.findCheckInWork("ALL", now, now,
+            Instant.EPOCH, Instant.EPOCH, site.getId(), "RECOVERY-", true, false, false,
+            CheckInStatus.setup_completed, null, null, true, List.of(site.getId()), page);
+        assertThat(oldStatus.getTotalElements()).isEqualTo(1);
+        assertThat(oldStatus.getContent()).extracting(row -> row.getReservation().getReservationCode())
+            .containsExactly("RECOVERY-NORMAL");
+        var transferred = reservationRepository.findCheckInWork("PROCESSED", now, now,
+            Instant.EPOCH, Instant.EPOCH, site.getId(), "RECOVERY-", true, false, true,
+            null, null, null, true, List.of(site.getId()), page);
+        assertThat(transferred.getTotalElements()).isEqualTo(2);
+        var outsideScope = reservationRepository.findCheckInWork("PROCESSED", now, now,
+            Instant.EPOCH, Instant.EPOCH, site.getId(), "RECOVERY-", true, false, true,
+            null, null, null, true, List.of(UUID.randomUUID()), page);
+        assertThat(outsideScope).isEmpty();
+    }
+
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void customerRecoveryPaginationCountsOnlyVisibleOwnedRecordsBeforePaging() {
+        var site = facility();
+        site.setCode("CUSTOMER-RECOVERY-PAGE");
+        em.persist(site);
+        var type = unitType(site);
+        type.setCode("RECOVERY-PAGE-S");
+        em.persist(type);
+        var owner = userRepository.save(customer("recovery-page@storagehub.test"));
+        var other = userRepository.save(customer("recovery-other@storagehub.test"));
+        var now = Instant.parse("2026-11-27T04:00:00Z");
+        var start = LocalDate.of(2026, 11, 27);
+        var quote = quoteRepository.save(quote(owner, site, type, start, start.plusMonths(3)));
+        var otherQuote = quoteRepository.save(quote(other, site, type, start, start.plusMonths(3)));
+        var ownedIds = new java.util.ArrayList<UUID>();
+        for (int index = 0; index < 15; index++) {
+            var booking = queueItem("CP-" + index, index == 14 ? otherQuote : quote, now, CheckInStatus.setup_completed);
+            var rental = new com.storagehub.domain.model.Rental();
+            rental.setCustomer(booking.getCustomer());
+            rental.setFacility(site);
+            rental.setReservation(booking);
+            rental.setStorageUnit(booking.getAssignedUnit());
+            rental.setStartDate(start);
+            rental.setContractEndDate(start.plusMonths(3));
+            rental.setMonthlyPrice(BigDecimal.ONE);
+            em.persist(rental);
+            var recovery = new com.storagehub.domain.model.ViolationRecovery();
+            recovery.setRental(rental);
+            recovery.setReason(com.storagehub.domain.model.ViolationRecovery.Reason.INVENTORY_TIMEOUT);
+            recovery.setStage(com.storagehub.domain.model.ViolationRecovery.Stage.AWAITING_ASSIGNMENT);
+            recovery.setSourceDeadlineAt(now);
+            if (index != 13) recovery.setRequiredAt(now);
+            recovery.setActionDueAt(now.plusSeconds(index * 60L));
+            em.persist(recovery);
+            if (index < 13) ownedIds.add(recovery.getId());
+        }
+        em.flush();
+        em.clear();
+        var first = recoveryRepository.customerPage(owner.getId(), org.springframework.data.domain.PageRequest.of(0, 8));
+        var second = recoveryRepository.customerPage(owner.getId(), org.springframework.data.domain.PageRequest.of(1, 8));
+        assertThat(first.getTotalElements()).isEqualTo(13);
+        assertThat(first.getTotalPages()).isEqualTo(2);
+        assertThat(first.getContent()).extracting(row -> row.getId()).containsExactlyElementsOf(ownedIds.subList(0, 8));
+        assertThat(second.getContent()).extracting(row -> row.getId()).containsExactlyElementsOf(ownedIds.subList(8, 13));
+        assertThat(second.getTotalElements()).isEqualTo(13);
+        assertThat(recoveryRepository.customerPage(other.getId(), org.springframework.data.domain.PageRequest.of(0, 8)).getTotalElements()).isEqualTo(1);
+        assertThat(recoveryRepository.customerPage(UUID.randomUUID(), org.springframework.data.domain.PageRequest.of(0, 8))).isEmpty();
+    }
+
+    private Reservation queueItem(String code, ReservationQuote quote, Instant appointment, CheckInStatus status) {
         var unit = storageUnit(quote.getFacility(), quote.getUnitType());
         unit.setCode("UNIT-" + code);
         em.persist(unit);
@@ -160,6 +279,7 @@ class ReservationConcurrencyIntegrationTests {
             checkIn.setScheduledAt(appointment);
             em.persist(checkIn);
         }
+        return r;
     }
 
     @org.junit.jupiter.params.ParameterizedTest

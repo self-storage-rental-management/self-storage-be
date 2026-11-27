@@ -53,6 +53,37 @@ public class CustomerReturnController {
             request.cleared(), request.clearanceRevision()), CorrelationIdContext.current());
     }
 
+    public record MismatchAppointmentRequest(
+        @jakarta.validation.constraints.NotNull(message = "Vui lòng chọn ngày giờ hẹn bàn giao.")
+        java.time.Instant appointmentAt,
+        Long expectedVersion,
+        String idempotencyKey
+    ) {}
+
+    @PostMapping("/returns/{returnId}/appointment")
+    public ApiResponse<ReturnCaseResponse> scheduleMismatchAppointment(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody MismatchAppointmentRequest request
+    ) {
+        return new ApiResponse<>(returnSettlementService.scheduleMismatchReturnAppointment(
+            actorContext.required(), returnId, request.appointmentAt(), request.expectedVersion(), request.idempotencyKey()),
+            CorrelationIdContext.current());
+    }
+
+    public record ExtendRemovalWindowRequest(Long expectedVersion, String idempotencyKey) {}
+
+    @PostMapping("/returns/{returnId}/extend-removal-window")
+    public ApiResponse<ReturnCaseResponse> extendRemovalWindow(
+        @PathVariable UUID returnId,
+        @RequestBody(required = false) ExtendRemovalWindowRequest request
+    ) {
+        return new ApiResponse<>(returnSettlementService.extendMismatchReturnWindow(
+            actorContext.required(), returnId,
+            request == null ? null : request.expectedVersion(),
+            request == null ? null : request.idempotencyKey()),
+            CorrelationIdContext.current());
+    }
+
     @GetMapping("/returns")
     public PageResponse<ReturnCaseResponse> listReturns(
         @RequestParam(defaultValue = "0") int page,

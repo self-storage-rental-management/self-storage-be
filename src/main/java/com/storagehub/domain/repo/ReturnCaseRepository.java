@@ -110,10 +110,12 @@ public interface ReturnCaseRepository extends JpaRepository<ReturnCase, UUID>, J
                 Instant now = Instant.now();
                 var inspecting = state.in(ReturnCaseStatus.requested, ReturnCaseStatus.scheduled);
                 var reviewed = cb.isTrue(root.get("returnArrivalReviewAccepted"));
-                var inSession = cb.greaterThan(root.<Instant>get("returnArrivedAt"), now.minusSeconds(30 * 60));
+                var inSession = cb.greaterThan(cb.coalesce(root.<Instant>get("returnReverificationStartedAt"), root.<Instant>get("returnArrivedAt")), now.minusSeconds(30 * 60));
                 var extendedSession = cb.and(reviewed, cb.greaterThanOrEqualTo(root.<Instant>get("postReviewHandoverDueAt"), now));
-                var present = cb.and(inspecting, cb.isNotNull(root.get("returnArrivedAt")), cb.or(inSession, extendedSession));
-                var reviewPending = cb.and(inspecting, cb.isNotNull(root.get("returnArrivedAt")), cb.not(cb.or(inSession, extendedSession)));
+                var arrivedOrReopened = cb.or(cb.isNotNull(root.get("returnArrivedAt")), cb.isNotNull(root.get("returnReverificationStartedAt")));
+                var pendingLateReview = cb.equal(root.get("returnArrivalReviewStatus"), "PENDING");
+                var present = cb.and(inspecting, arrivedOrReopened, cb.or(inSession, extendedSession));
+                var reviewPending = cb.and(inspecting, cb.or(pendingLateReview, cb.and(arrivedOrReopened, cb.not(cb.or(inSession, extendedSession)))));
                 var actionable = cb.or(cb.and(inspecting, cb.not(reviewPending)), state.in(
                     ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending, ReturnCaseStatus.recovery_required));
                 var group = cb.<Integer>selectCase().when(actionable, 0).when(completed, 2).otherwise(1);

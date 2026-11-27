@@ -47,7 +47,7 @@ WHERE u.email IN ('business@storagehub.demo', 'demo_business@storagehub.test') A
 ON DUPLICATE KEY UPDATE role_id=VALUES(role_id);
 
 -- ------------------------------------------------------------------------------
--- 3. CẬP NHẬT TRẠNG THÁI GIAN KHO TẠO TỶ LỆ LẤP ĐẦY THỰC TẾ
+-- 3. CẬP NHẬT TRẠNG THÁI GIAN KHO TẠO CÔNG SUẤT SỬ DỤNG THỰC TẾ
 -- ------------------------------------------------------------------------------
 -- Q1: 20 gian kho -> 12 occupied (60%), 1 maintenance, 1 reserved, 6 available
 UPDATE storage_units SET status = 'occupied'

@@ -530,7 +530,9 @@ public class WorkflowSlaScheduler {
                 schedule.afterWorkingHours(start, 4), TWO_HOURS, RoleCode.STAFF, RoleCode.MANAGER, null,
                 NotificationType.RETURN, "nghiệm thu gian đã bàn giao");
         }
-        if (returned.getScheduledDate() != null) {
+        if (returned.getScheduledAppointmentAt() != null) {
+            if (returned.getScheduledAppointmentAt().isAfter(start)) start = returned.getScheduledAppointmentAt();
+        } else if (returned.getScheduledDate() != null) {
             Instant appointmentDay = returned.getScheduledDate().atStartOfDay(BusinessTime.ZONE).toInstant();
             if (appointmentDay.isAfter(start)) start = appointmentDay;
         }
