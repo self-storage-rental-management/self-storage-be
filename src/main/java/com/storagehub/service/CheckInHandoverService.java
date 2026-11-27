@@ -199,6 +199,7 @@ public class CheckInHandoverService {
         return list(actor, facilityId, q, status, group, scheduledFrom, scheduledTo, page, pageSize, "priority", correlationId);
     }
 
+    @Transactional(readOnly = true)
     public PageResponse<CheckInResponse> list(
         ActorPrincipal actor,
         UUID facilityId,
