@@ -252,7 +252,7 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void storedItemsCanBeReleasedOnlyOnceWithSeparatePickupVerification() throws Exception {
+    void earlyPickupCanReleaseStoredItemsOnlyOnceAfterSeparateVerification() throws Exception {
         readyForAbsentHandover();
         workflow.execute(staff(), recovery.getId(), command(ViolationRecoveryWorkflow.Action.START,
             null, witness.getId(), photo(), "TEMP-A", null));
@@ -266,12 +266,14 @@ class ViolationRecoveryWorkflowTests {
             ViolationRecoveryWorkflow.Action.RELEASE_ITEM);
         var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
         workflow.execute(customerActor, recovery.getId(), new ViolationRecoveryWorkflow.Command(
-            ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, Instant.now(),
+            ViolationRecoveryWorkflow.Action.SCHEDULE_PICKUP, null, null, null, null, Instant.now().plus(Duration.ofHours(1)),
             null, null, null, null, null, null, null));
         workflow.execute(manager(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
             ViolationRecoveryWorkflow.Action.ASSIGN_PICKUP, staff.getId(), null, null, null, null,
             null, null, null, null, null, null, null));
-        execute(staff(), ViolationRecoveryWorkflow.Action.OPEN_PICKUP, null, null);
+        var opened = execute(staff(), ViolationRecoveryWorkflow.Action.OPEN_PICKUP, null, null);
+        assertThat(opened.actions()).contains(ViolationRecoveryWorkflow.Action.VERIFY_PICKUP)
+            .doesNotContain(ViolationRecoveryWorkflow.Action.RELEASE_ITEM);
         workflow.execute(staff(), recovery.getId(), new ViolationRecoveryWorkflow.Command(
             ViolationRecoveryWorkflow.Action.VERIFY_PICKUP, null, null, null, UUID.randomUUID(), null,
             null, "TEST99999", null, null, null, null, null));

@@ -913,7 +913,7 @@ public class ViolationRecoveryWorkflow {
             || !isAssigned(v, actor) || !scopes.canAccessFacility(actor, facility, FacilityScopeLevel.OPERATE)) return actions;
         if (terminal(v) && hasStoredItems(d)) {
             if (d.pickupAssignedStaffId != null && actor.userId().equals(d.pickupAssignedStaffId)
-                && d.pickupAppointmentAt != null && !now.isBefore(d.pickupAppointmentAt)
+                && d.pickupAppointmentAt != null
                 && !session(d.pickupOpenedAt, now) && d.pickupAttempts.size() < 2) {
                 actions.add(Action.OPEN_PICKUP);
             }
