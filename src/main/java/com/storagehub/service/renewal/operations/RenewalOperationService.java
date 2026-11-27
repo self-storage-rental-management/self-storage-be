@@ -250,16 +250,17 @@ public class RenewalOperationService {
         return finish(c,op,key,body,e,200);
     }
     public Result arrival(ActorPrincipal actor,UUID id,Arrival body,String key) {
-        if(!Boolean.TRUE.equals(body.identityVerified()))throw ApiExceptions.validation("Cần đối chiếu giấy tờ và xác minh đúng khách trước khi ghi nhận đã đến.",null);
         var c=context(actor,id,Audience.STAFF,Capability.ARRIVAL,key,"d3_arrival",body,body.expectedVersion());var old=replay(c,"d3_arrival",key,body);if(old.isPresent())return old.get();
         var s=signing(c,true);currentAppointment(c,s,body.appointmentRef());
         if(s.getArrivalRef()!=null)throw ApiExceptions.conflict("Arrival already recorded for this appointment");
         requireAppointmentStart(s);
         evidence(actor,c.renewal(),"ARRIVAL",body.evidenceFileIds());
-        requireAppointmentStart(s);
+        if(!Boolean.TRUE.equals(body.identityVerified()))throw ApiExceptions.validation("Cần đối chiếu giấy tờ và xác minh đúng khách trước khi ghi nhận đã đến.",null);
         var e=event(c,"ARRIVAL",Map.of("appointmentRef",body.appointmentRef(),"evidenceFileIds",body.evidenceFileIds()));s.arrival(e.getId());
         // Once arrival is recorded, staff have a bounded processing window, including last-minute arrivals.
-        Instant processingEnd=min(now().plus(Duration.ofMinutes(30)),s.getRecoveryCutoff());
+        Instant candidateEnd = s.getEffectiveSigningDeadline() != null && s.getEffectiveSigningDeadline().isAfter(now().plus(Duration.ofMinutes(30)))
+            ? s.getEffectiveSigningDeadline() : now().plus(Duration.ofMinutes(30));
+        Instant processingEnd=min(candidateEnd,s.getRecoveryCutoff());
         safety().retain(c.renewal(),c.workflow().getExtensionHoldRef(),processingEnd);
         s.processingDeadline(processingEnd);
         return finish(c,"d3_arrival",key,body,e,201);
@@ -521,6 +522,12 @@ public class RenewalOperationService {
     }
     @Transactional(readOnly=true)
     public PageResponse<RenewalOperationResponse> appointments(ActorPrincipal actor,UUID facilityId,LocalDate date,String phase,int page,int size,String correlation) {
+        return appointments(actor,facilityId,date,phase,page,size,"priority",correlation);
+    }
+
+    @Transactional(readOnly=true)
+    public PageResponse<RenewalOperationResponse> appointments(ActorPrincipal actor,UUID facilityId,LocalDate date,String phase,int page,int size,String sort,String correlation) {
+        if(!Set.of("priority","appointmentStart,asc","createdAt,asc","createdAt,desc").contains(sort))throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.",null);
         if(actor==null)throw ApiExceptions.unauthorized("Authentication required");if(!actor.hasRole(RoleCode.STAFF))throw ApiExceptions.forbidden("Staff role required");
         if(page<0||size<1||size>100||(long)page*size>Integer.MAX_VALUE||phase!=null&&!Set.of("SIGNING","NO_SHOW","SIGNING_EXPIRED","COMPLETED").contains(phase))throw ApiExceptions.validation("Invalid appointment query",null);
         var scopeIds=actor.facilityScopes().entrySet().stream().filter(e->e.getValue()!=null&&e.getValue().includes(FacilityScopeLevel.OPERATE)).map(Map.Entry::getKey).toList();if(scopeIds.isEmpty())throw ApiExceptions.forbidden("Staff OPERATE scope required");if(facilityId!=null&&!scopeIds.contains(facilityId))throw ApiExceptions.forbidden("Staff OPERATE scope required");
@@ -530,7 +537,13 @@ public class RenewalOperationService {
         String from=" from Renewal n left join RenewalOperationState s on s.id=n.id";
         String pendingRefund="exists (select f.id from Refund f where f.payment.renewal.id=n.id and f.status=com.storagehub.domain.model.RefundStatus.PENDING and f.payment.failureCode='RENEWAL_SIGNING_PREPARATION_BLOCKED')";
         String filter=" where (s.appointmentRef is not null or "+pendingRefund+") and n.id in :ids and n.rental.facility.id in :facilities"+(facilityId==null?"":" and n.rental.facility.id=:facility")+(phase==null?"":" and s.phase=:phase")+(date==null?"":" and s.appointmentStart>=:start and s.appointmentStart<:end");
-        var query=em.createQuery("select n"+from+filter+" order by case when s.phase = COMPLETED then 3 when s.arrivalRef is not null then 0 when s.appointmentEnd < instant then 2 else 1 end, s.appointmentStart asc nulls last, n.createdAt asc, n.id",Renewal.class);var count=em.createQuery("select count(n)"+from+filter,Long.class);
+        String order=switch(sort){
+            case "createdAt,asc" -> "n.createdAt asc, n.id asc";
+            case "createdAt,desc" -> "n.createdAt desc, n.id asc";
+            case "appointmentStart,asc" -> "s.appointmentStart asc nulls last, n.createdAt asc, n.id asc";
+            default -> "case when s.phase = COMPLETED then 3 when s.arrivalRef is not null then 0 when s.appointmentEnd < instant then 2 else 1 end, s.appointmentStart asc nulls last, n.createdAt asc, n.id";
+        };
+        var query=em.createQuery("select n"+from+filter+" order by "+order,Renewal.class);var count=em.createQuery("select count(n)"+from+filter,Long.class);
         for(var q:List.of(query,count)){q.setParameter("ids",ids);q.setParameter("facilities",scopeIds);if(facilityId!=null)q.setParameter("facility",facilityId);if(phase!=null)q.setParameter("phase",RenewalOperationState.Phase.valueOf(phase));if(date!=null){var zone=BusinessTime.ZONE;q.setParameter("start",date.atStartOfDay(zone).toInstant());q.setParameter("end",date.plusDays(1).atStartOfDay(zone).toInstant());}}
         var rows=query.setFirstResult(page*size).setMaxResults(size).getResultList().stream().map(n->{
             auth.require(actor,n,Capability.READ);

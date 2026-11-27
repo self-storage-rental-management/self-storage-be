@@ -28,18 +28,8 @@ public final class InventoryTimelinePolicy {
     }
 
     private static int[] returnWindowPolicyForUnitType(UnitType unitType) {
-        String code = unitType == null ? null : unitType.getCode();
-        if (code == null || code.isBlank()) {
-            throw ApiExceptions.conflict("Cỡ kho chưa được cấu hình hạn trả kho do kiểm kê sai lệch. Vui lòng cấu hình cỡ kho trước khi áp dụng.");
-        }
-        return switch (code.trim().toUpperCase(java.util.Locale.ROOT)) {
-            case "S" -> new int[]{3, 2};
-            case "M" -> new int[]{5, 2};
-            case "L" -> new int[]{7, 2};
-            case "XL" -> new int[]{10, 2};
-            default -> throw ApiExceptions.conflict(
-                "Cỡ kho \"" + code.trim() + "\" chưa được cấu hình hạn trả kho do kiểm kê sai lệch. Vui lòng cấu hình trước khi áp dụng.");
-        };
+        if (unitType == null) throw ApiExceptions.conflict("Chưa cấu hình loại kho cho hạn trả kho.");
+        return new int[]{unitType.getMismatchReturnDays(), unitType.getMismatchReturnMaxExtensionDays()};
     }
 
     public static Instant reminderAt(Instant ready) { return dayStart(ready, 4); }
@@ -93,11 +83,10 @@ public final class InventoryTimelinePolicy {
         }
         int nextCount = rental.getInventoryReturnExtensionCount() + 1;
         Instant nextDeadline = rental.getInventoryRemovalDeadlineAt().atZone(ZONE)
-            .plusDays(2).toInstant();
+            .plusDays(rental.getInventoryReturnExtensionDays()).toInstant();
         int nextWindowDays = Math.toIntExact(ChronoUnit.DAYS.between(
             removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
             nextDeadline.atZone(ZONE).toLocalDate()));
-        rental.setInventoryReturnExtensionDays(2);
         rental.setInventoryReturnExtensionCount(nextCount);
         rental.setInventoryReturnWindowDays(nextWindowDays);
         rental.setInventoryRemovalDeadlineAt(nextDeadline);

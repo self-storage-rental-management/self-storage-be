@@ -957,14 +957,14 @@ public class CustomerReservationService {
 
     @Transactional
     public ReservationDetailResponse confirmReceipt(ActorPrincipal actor, UUID reservationId) {
-        if (!actor.hasRole(RoleCode.CUSTOMER)) {
-            throw ApiExceptions.forbidden("Only customer actors can confirm unit receipt");
-        }
+        throw ApiExceptions.conflict("Không còn bước khách xác nhận nhận kho. Staff hoàn tất bàn giao sẽ bắt đầu thời gian chuẩn bị.");
+    }
 
-        Reservation reservation = reservationRepository.findOwnedByIdForUpdate(
-            reservationId, actor.userId()
-        ).orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
-
+    @Transactional
+    public ReservationDetailResponse startPreparationAfterHandover(UUID reservationId, Instant handedOverAt, User operator) {
+        if (handedOverAt == null || operator == null) throw ApiExceptions.conflict("Thiếu thời điểm hoặc nhân viên bàn giao.");
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         // Repeated confirmation never recreates a rental, ledger or notifications.
         // Older early receipts may still need their verified setup rental activated.
         if (reservation.getStatus() == ReservationStatus.COMPLETED) {
@@ -1000,8 +1000,8 @@ public class CustomerReservationService {
             if (ledgerStores != null && ledgerStores.getIfAvailable() != null) {
                 com.storagehub.service.ledger.FinancialContractSpecifications.validateInitial(snapshot);
             }
-            Instant startedAt = nowInstant();
-            Instant appointmentAt = resolveCustomerAppointment(reservation, checkIn, null, setupDays);
+            Instant startedAt = handedOverAt;
+            Instant appointmentAt = handedOverAt;
             if (appointmentAt == null) {
                 throw ApiExceptions.conflict("Hồ sơ chưa có ngày nhận kho khách đã chọn.");
             }
@@ -1029,6 +1029,7 @@ public class CustomerReservationService {
                 rental.setMonthlyPrice(snapshot.getMonthlyPrice());
             }
             rental.setStatus(paidRentalStart.isAfter(startedAt.atZone(zone).toLocalDate()) ? RentalStatus.setup : RentalStatus.active);
+            rental.setStaffHandoverPreparation(true);
             rental.setSetupStartedAt(appointmentAt);
             rental.setSetupEndsAt(setupEndsAt);
             if (intakeTimelineCalculator != null) {
@@ -1053,8 +1054,10 @@ public class CustomerReservationService {
             ReservationStatus previousStatus = reservation.getStatus();
             reservation.setStatus(ReservationStatus.PREPARING);
             Reservation saved = reservationRepository.saveAndFlush(reservation);
+            saved.getAssignedUnit().setStatus(StorageUnitStatus.occupied);
+            storageUnitRepository.saveAndFlush(saved.getAssignedUnit());
             checkIn.setStatus(CheckInStatus.setup_in_progress);
-            checkIn.setCustomerReceiptConfirmedAt(startedAt);
+            checkIn.setCustomerReceiptConfirmedAt(null);
             checkIn.setSetupStartedAt(appointmentAt);
             checkIn.setSetupDueAt(setupEndsAt);
             checkIn.setRental(rental);
@@ -1071,7 +1074,7 @@ public class CustomerReservationService {
                     ).orElseThrow(() -> ApiExceptions.conflict("Kỳ thuê bàn giao chưa đủ dữ liệu xác nhận.")));
             }
             auditLogService.recordMutation(
-                saved.getCustomer(), "CUSTOMER_RECEIPT_CONFIRMED", "Reservation", saved.getId(),
+                operator, "STAFF_HANDOVER_PREPARATION_STARTED", "Reservation", saved.getId(),
                 saved.getFacility().getId(),
                 Map.of("status", previousStatus, "checkInStatus", CheckInStatus.handover_pending_receipt),
                 Map.of("status", saved.getStatus(), "checkInStatus", CheckInStatus.setup_in_progress,
@@ -1079,7 +1082,7 @@ public class CustomerReservationService {
             );
             notificationService.createNotification(
                 saved.getCustomer().getId(), NotificationType.CHECKIN,
-                "Đã xác nhận nhận kho",
+                "Đã hoàn tất bàn giao, bắt đầu chuẩn bị hàng",
                 "Thời gian chuẩn bị miễn phí kết thúc lúc "
                     + java.time.format.DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy").withZone(zone).format(setupEndsAt)
                     + ". Kỳ thuê tính tiền bắt đầu từ " + paidRentalStart
@@ -1088,7 +1091,7 @@ public class CustomerReservationService {
             );
             notificationService.createFacilityOperationsNotifications(
                 saved.getFacility().getId(), NotificationType.CHECKIN,
-                "Khách đã xác nhận nhận kho",
+                "Staff đã hoàn tất bàn giao",
                 "Đơn " + saved.getReservationCode()
                     + " đã chuyển sang thời gian chuẩn bị hàng.",
                 saved.getId()
@@ -1128,7 +1131,7 @@ public class CustomerReservationService {
                 com.storagehub.service.rental.period.RentalPeriod.Convention.EXCLUSIVE,"confirmed-handover:"+checkIn.getId())
                 .orElseThrow(() -> ApiExceptions.conflict("Kỳ thuê bàn giao chưa đủ dữ liệu xác nhận.")));
         auditLogService.recordMutation(
-            saved.getCustomer(), "CUSTOMER_RECEIPT_CONFIRMED", "Reservation", saved.getId(),
+            operator, "STAFF_HANDOVER_PREPARATION_STARTED", "Reservation", saved.getId(),
             saved.getFacility().getId(),
             Map.of("status", previousStatus),
             Map.of("status", saved.getStatus(), "rentalId", rental.getId(), "rentalPeriodEvidence",
@@ -1136,7 +1139,7 @@ public class CustomerReservationService {
         );
         notificationService.createNotification(
             saved.getCustomer().getId(), NotificationType.CHECKIN,
-            "Đã xác nhận nhận kho",
+            "Đã hoàn tất bàn giao, bắt đầu chuẩn bị hàng",
             "Đơn " + saved.getReservationCode() + " đã được xác nhận nhận kho theo hồ sơ bàn giao đã lưu.",
             saved.getId()
         );
@@ -1341,6 +1344,7 @@ public class CustomerReservationService {
     private Instant resolveCustomerAppointment(
         Reservation reservation, CheckIn checkIn, Rental rental, int freeSetupDays
     ) {
+        if (rental != null && rental.isStaffHandoverPreparation()) return rental.getSetupStartedAt();
         if (reservation.getAppointmentAt() != null) return reservation.getAppointmentAt();
         if (checkIn != null && checkIn.getScheduledAt() != null) return checkIn.getScheduledAt();
         if (rental != null && rental.getSetupStartedAt() != null) return rental.getSetupStartedAt();
@@ -1781,18 +1785,10 @@ public class CustomerReservationService {
             response.setIdentityCorrectedAtHandover(Boolean.TRUE.equals(checkIn.getIdentityCorrected()));
             response.setHandoverCompletedAt(checkIn.getCheckedInAt());
             response.setLockReference(checkIn.getCheckedInAt() == null ? null : checkIn.getLockReference());
-            Instant receiptDueAt = checkIn.getStatus() == CheckInStatus.handover_pending_receipt
-                ? ReservationCheckInPolicy.customerReceiptConfirmationDueAt(checkIn.getCheckedInAt())
-                : null;
-            response.setReceiptConfirmationDueAt(receiptDueAt);
-            response.setReceiptConfirmationOverdue(receiptDueAt != null
-                && !receiptDueAt.isAfter(Instant.now()));
-            Instant receiptReleaseAt = checkIn.getStatus() == CheckInStatus.handover_pending_receipt
-                ? ReservationCheckInPolicy.customerReceiptReleaseAt(checkIn.getCheckedInAt())
-                : null;
-            response.setReceiptConfirmationReleaseAt(receiptReleaseAt);
-            response.setReceiptReleaseEligible(receiptReleaseAt != null
-                && !receiptReleaseAt.isAfter(Instant.now()));
+            response.setReceiptConfirmationDueAt(null);
+            response.setReceiptConfirmationOverdue(false);
+            response.setReceiptConfirmationReleaseAt(null);
+            response.setReceiptReleaseEligible(false);
             response.setSetupStartedAt(checkIn.getSetupStartedAt());
             response.setSetupDueAt(checkIn.getSetupDueAt());
         });
@@ -1870,7 +1866,8 @@ public class CustomerReservationService {
             ReservationSnapshotView.facilityName(payment.getReservation(), snapshot),
             ReservationSnapshotView.facilityAddress(payment.getReservation(), snapshot),
             ReservationSnapshotView.unitTypeName(payment.getReservation(), snapshot),
-            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode()
+            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode(),
+            paymentProvenance == null ? null : paymentProvenance.manualReceiptFileId(payment)
         );
     }
 

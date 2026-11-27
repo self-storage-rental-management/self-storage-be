@@ -318,6 +318,7 @@ class ReservationCreationServiceTests {
         existing.setTotalGoodsVolumeM3(new BigDecimal("0.180000"));
         existing.setTotalGoodsWeightKg(new BigDecimal("36.00"));
         existing.setHoldExpiresAt(Instant.now().plusSeconds(600));
+        existing.setHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
         existing.setIdentityDocumentNumber(request().getIdentityDocumentNumber());
         existing.setCustomerPhone(request().getCustomerPhone());
         existing.setCustomerAddress(request().getCustomerAddress());
@@ -467,6 +468,7 @@ class ReservationCreationServiceTests {
         request.setCustomerPhone("0908123456");
         request.setCustomerAddress("Quận 1, TP. Hồ Chí Minh");
         request.setAcceptedSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        request.setAcceptedHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
         quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(List.of(item)));
         quote.setUnitTypeSnapshotJson("{\"name\":\"Kho tại lúc báo giá\"}");
         return request;

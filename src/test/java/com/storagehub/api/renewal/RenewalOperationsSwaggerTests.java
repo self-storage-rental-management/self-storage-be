@@ -18,7 +18,7 @@ class RenewalOperationsSwaggerTests {
         String base="http://localhost:"+environment.getProperty("local.server.port");var client=HttpClient.newHttpClient();
         var response=client.send(HttpRequest.newBuilder(URI.create(base+"/v3/api-docs")).GET().build(),HttpResponse.BodyHandlers.ofString());assertThat(response.statusCode()).isEqualTo(200);
         var paths=mapper.readTree(response.body()).path("paths");
-        for(String path:List.of("/api/customer/renewals/{id}/appointment","/api/customer/renewals/{id}/exception-confirmations","/api/staff/renewals/{id}/arrival","/api/staff/renewals/{id}/cash-receipts","/api/staff/renewals/{id}/refund-executions","/api/staff/renewals/{id}/completion","/api/manager/renewals/{id}/exception-decisions","/api/manager/renewals/{id}/refund-decisions","/api/manager/overdue-cases/{id}/follow-ups","/api/manager/overdue-cases/{id}/recovery-handoffs")){
+        for(String path:List.of("/api/customer/renewals/{id}/appointment","/api/customer/renewals/{id}/exception-confirmations","/api/staff/renewals/{id}/arrival","/api/staff/renewals/{id}/cash-receipts","/api/staff/renewals/{id}/refund-executions","/api/staff/renewals/{id}/completion","/api/manager/renewals/{id}/exception-decisions","/api/manager/renewals/{id}/refund-decisions","/api/manager/overdue-cases/{id}/recovery-handoffs")){
             var operation=paths.path(path).path("post");assertThat(operation.isMissingNode()).isFalse();assertThat(operation.path("security").toString()).contains("bearerAuth");assertThat(operation.path("parameters").toString()).contains("Idempotency-Key");assertThat(operation.path("responses").has("409")).isTrue();
             String actual=path.replace("{id}",path.contains("overdue-cases")?"RENTAL_TERM:"+UUID.randomUUID():UUID.randomUUID().toString());
             var unauthorized=client.send(HttpRequest.newBuilder(URI.create(base+actual)).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString("{}")).build(),HttpResponse.BodyHandlers.ofString());assertThat(unauthorized.statusCode()).isEqualTo(401);
@@ -27,6 +27,9 @@ class RenewalOperationsSwaggerTests {
             var operation=paths.path(path).path("post");assertThat(operation.isMissingNode()).isFalse();assertThat(operation.path("security").toString()).contains("bearerAuth");assertThat(operation.path("parameters").toString()).contains("Idempotency-Key");
             var unauthorized=client.send(HttpRequest.newBuilder(URI.create(base+path.replace("{id}",UUID.randomUUID().toString()))).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString("{}")).build(),HttpResponse.BodyHandlers.ofString());assertThat(unauthorized.statusCode()).isEqualTo(401);
         }
+        var followUps=paths.path("/api/manager/overdue-cases/{id}/follow-ups");
+        assertThat(followUps.has("get")).isTrue();
+        assertThat(followUps.has("post")).isFalse();
         var assignment=paths.path("/api/manager/renewals/{id}/staff-assignment");
         assertThat(assignment.has("post")).isFalse();
         assertThat(assignment.path("get").path("security").toString()).contains("bearerAuth");

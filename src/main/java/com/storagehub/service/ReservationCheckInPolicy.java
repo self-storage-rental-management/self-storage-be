@@ -33,7 +33,8 @@ final class ReservationCheckInPolicy {
     static final Duration HANDOVER_COMPLETION = Duration.ofHours(72);
 
     static Instant completionDeadline(Reservation reservation) {
-        Instant start = reservation.getFirstHandoverComparisonAt();
+        Instant start = reservation.getHandoverArrivedAt();
+        if (start == null) start = reservation.getFirstHandoverComparisonAt();
         return start == null ? null : start.plus(HANDOVER_COMPLETION);
     }
 
