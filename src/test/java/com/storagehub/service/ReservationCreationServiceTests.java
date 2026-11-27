@@ -91,6 +91,8 @@ class ReservationCreationServiceTests {
         User customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
         customer.setStatus(UserStatus.ACTIVE);
+        customer.setFullName("Tên khi đặt kho");
+        customer.setEmail("booking@example.com");
         lenient().when(bookingUsers.findByIdForUpdate(customer.getId())).thenReturn(Optional.of(customer));
         heldUnit = new StorageUnit();
         heldUnit.setUnitType(unitType);
@@ -207,6 +209,12 @@ class ReservationCreationServiceTests {
             quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate, expectedEnd);
         order.verify(compatibilityService).checkQuotedSnapshot(eq(actor), any());
         org.mockito.Mockito.verify(snapshotRepository).saveAndFlush(savedSnapshot.capture());
+        quote.getCustomer().setFullName("Tên đã sửa");
+        quote.getCustomer().setEmail("changed@example.com");
+        var bookingResponse = (com.storagehub.api.reservation.ReservationResponse) ReflectionTestUtils.invokeMethod(
+            service, "toResponse", savedReservation.getValue(), savedSnapshot.getValue());
+        assertThat(bookingResponse.getCustomerName()).isEqualTo("Tên khi đặt kho");
+        assertThat(bookingResponse.getCustomerEmail()).isEqualTo("booking@example.com");
         var captured=savedSnapshot.getValue();var originalSetup=captured.getFreeSetupDays();var originalPrice=captured.getMonthlyPrice();var originalVersion=captured.getPricingPolicyVersion();
         policy.setFreeSetupDays(99);policy.setPolicyVersion("TEST-NEW-POLICY");policy.setDiscountRate(new BigDecimal("0.9"));
         quote.getUnitType().setMonthlyPrice(new BigDecimal("99999999"));
@@ -351,6 +359,7 @@ class ReservationCreationServiceTests {
 
         var legacyRequest = request();
         legacyRequest.setAppointmentAt(null);
+        legacyRequest.setAcceptedHandoverTermsVersion(null);
         var response = service.create(actor, legacyRequest, "create-retry");
 
         assertThat(response.getId()).isEqualTo(existing.getId());
@@ -467,6 +476,7 @@ class ReservationCreationServiceTests {
         request.setCustomerPhone("0908123456");
         request.setCustomerAddress("Quận 1, TP. Hồ Chí Minh");
         request.setAcceptedSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        request.setAcceptedHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
         quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(List.of(item)));
         quote.setUnitTypeSnapshotJson("{\"name\":\"Kho tại lúc báo giá\"}");
         return request;

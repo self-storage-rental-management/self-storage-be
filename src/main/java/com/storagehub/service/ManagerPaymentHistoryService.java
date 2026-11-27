@@ -84,7 +84,7 @@ public class ManagerPaymentHistoryService {
         var transactionReader=renewalTransactions==null?null:renewalTransactions.getIfAvailable();
         var transaction=payment.getRenewal()==null||transactionReader==null?null:transactionReader.read(payment,Instant.now());
         String customerName = payment.getReservation() != null
-            ? payment.getReservation().getCustomer().getFullName()
+            ? payment.getReservation().getCustomerName()
             : payment.getRenewal().getRental().getCustomer().getFullName();
         String reference = firstNonBlank(
             payment.getGatewayIntentId(), payment.getGatewayTransactionNo(), payment.getId().toString()

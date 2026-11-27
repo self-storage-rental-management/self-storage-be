@@ -228,8 +228,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and (:scoped = false or reservation.facility.id in :facilityIds)
           and (:q is null
                or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
-               or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
-               or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
+               or lower(reservation.customerEmail) like lower(concat('%', :q, '%'))
+               or lower(reservation.customerName) like lower(concat('%', :q, '%'))
                or lower(coalesce(assignedUnit.code, '')) like lower(concat('%', :q, '%')))
         order by case
                    when reservation.status in (AWAITING_REVIEW, PAYMENT_REVIEW) then 0
@@ -262,8 +262,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and (:scoped = false or reservation.facility.id in :facilityIds)
           and (:q is null
                or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
-               or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
-               or lower(reservation.customer.fullName) like lower(concat('%', :q, '%')))
+               or lower(reservation.customerEmail) like lower(concat('%', :q, '%'))
+               or lower(reservation.customerName) like lower(concat('%', :q, '%')))
         order by reservation.appointmentAt asc nulls last, reservation.confirmedAt asc nulls last,
           reservation.createdAt asc, reservation.id asc
         """)
@@ -308,8 +308,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and (:scoped = false or r.facility.id in :facilityIds)
           and (:q is null
                or lower(r.reservationCode) like lower(concat('%', :q, '%'))
-               or lower(r.customer.email) like lower(concat('%', :q, '%'))
-               or lower(r.customer.fullName) like lower(concat('%', :q, '%'))
+               or lower(r.customerEmail) like lower(concat('%', :q, '%'))
+               or lower(r.customerName) like lower(concat('%', :q, '%'))
                or lower(a.storageUnit.code) like lower(concat('%', :q, '%')))
           and (:statusFilter = false
             or (:recoveryTransferred = true and exists (select 1 from Rental recoveryRental
