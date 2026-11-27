@@ -75,6 +75,9 @@ public class RenewalOperationService {
             throw ApiExceptions.conflict("Renewal customer identity binding is incomplete");
         }
         var number = reservation.getIdentityDocumentNumber();
+        if (number == null || number.isBlank()) {
+            number = customer.getProfileDetails() == null ? null : customer.getProfileDetails().getIdentityDocumentNumber();
+        }
         return new CustomerIdentity(id, customer.getId(), customer.getFullName(),
             number == null || number.isBlank() ? null : number.trim());
     }
@@ -534,12 +537,22 @@ public class RenewalOperationService {
         if(s!=null&&s.getPhase()==RenewalOperationState.Phase.SIGNING&&s.getEffectiveSigningDeadline()!=null&&now().isAfter(s.getEffectiveSigningDeadline()))phase="SIGNING_EXPIRY_PENDING";
         if((s==null||!s.hasVerifiedPayment())&&appointmentPayments.findAllByRenewal_IdOrderByCreatedAtAsc(n.getId()).stream()
             .anyMatch(com.storagehub.service.renewal.RenewalPreparationResolution::blocked))phase="PREPARATION_BLOCKED";
+        var customer=n.getRental()==null?null:n.getRental().getCustomer();
+        var details=customer==null?null:new RenewalOperationResponse.AppointmentDetails(customer.getFullName(),customer.getEmail(),n.getNewEndDate());
+        var sequence=renewalSequence(n);
         return new RenewalOperationResponse(n.getId(),w==null?null:w.getVersion(),phase,
             s==null?null:s.getDepositPaymentRef(),s==null?null:s.getDepositPaidAt(),s==null?null:s.getOriginalSigningDeadline(),
             s==null?null:s.getEffectiveSigningDeadline(),s==null?null:s.getRecoveryCutoff(),s==null?null:s.getAppointmentRef(),
             s==null?null:s.getArrivalRef(),s==null?null:s.getConfirmedExceptionRef(),s==null?null:s.getCompletedBy(),s==null?null:s.getCompletedAt(),
             missing,s==null?null:s.getAppointmentStart(),s==null?null:s.getAppointmentEnd(),s==null?null:s.getPendingExceptionRef(),
-            s==null?null:s.getFullRentPaymentRef(),s==null?null:s.getFullRentPaidAt(),displayCodes==null?null:displayCodes.find("GH:"+n.getId()));
+            s==null?null:s.getFullRentPaymentRef(),s==null?null:s.getFullRentPaidAt(),displayCodes==null?null:displayCodes.find("GH:"+n.getId()),
+            displayCodes==null||n.getRental()==null?null:displayCodes.find("SH:"+n.getRental().getId()),sequence,details);
+    }
+    private Integer renewalSequence(Renewal n) {
+        if(n==null||n.getRental()==null||n.getCreatedAt()==null)return null;
+        Long count=em.createQuery("select count(x) from Renewal x where x.rental.id=:rental and x.createdAt<=:created",Long.class)
+            .setParameter("rental",n.getRental().getId()).setParameter("created",n.getCreatedAt()).getSingleResult();
+        return count==null?null:Math.toIntExact(count);
     }
     private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
         if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
