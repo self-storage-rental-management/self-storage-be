@@ -572,13 +572,16 @@ public class FacilityLifecycleService {
         List<UUID> categoryIds = distinct(request.acceptedGoodsCategoryIds());
         List<UUID> materialIds = distinct(request.acceptedGoodsMaterialIds());
         // Backward-compatible requests created before scoped goods existed mean "all active".
-        if (categoryIds.isEmpty()) categoryIds = goodsTypes.findAllByStatusOrderByCodeAsc(com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
-            .stream().map(com.storagehub.domain.model.GoodsTypeCatalog::getId).sorted().toList();
+        if (request.acceptedGoodsCategoryIds() == null && request.acceptedGoodsMaterialIds() == null) {
+            categoryIds = goodsTypes.findAllByStatusOrderByCodeAsc(com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
+                .stream().map(com.storagehub.domain.model.GoodsTypeCatalog::getId).sorted().toList();
+            List<UUID> selectedCategoryIds = categoryIds;
+            materialIds = goodsMaterials.findAll().stream()
+                .filter(value -> value.getStatus() == com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
+                .filter(value -> selectedCategoryIds.contains(value.getGoodsType().getId()))
+                .map(com.storagehub.domain.model.GoodsMaterialCatalog::getId).sorted().toList();
+        }
         List<UUID> selectedCategoryIds = categoryIds;
-        if (materialIds.isEmpty()) materialIds = goodsMaterials.findAll().stream()
-            .filter(value -> value.getStatus() == com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
-            .filter(value -> selectedCategoryIds.contains(value.getGoodsType().getId()))
-            .map(com.storagehub.domain.model.GoodsMaterialCatalog::getId).sorted().toList();
         var categories = goodsTypes.findAllById(categoryIds);
         var materials = goodsMaterials.findAllById(materialIds);
         if (categories.size() != categoryIds.size() || categories.stream().anyMatch(v -> v.getStatus() != com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)) {
