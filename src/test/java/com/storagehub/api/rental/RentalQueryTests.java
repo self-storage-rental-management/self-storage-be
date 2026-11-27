@@ -12,7 +12,9 @@ class RentalQueryTests {
     @Test void defaultsAndStableSort() {
         var q = RentalQuery.parse(new LinkedMultiValueMap<>(), false);
         assertThat(q.page()).isZero(); assertThat(q.size()).isEqualTo(20);
-        assertThat(q.sort().toString()).isEqualTo("createdAt: DESC,id: ASC");
+        assertThat(q.sort().toString()).isEqualTo("priority: ASC,id: ASC");
+        assertThat(q.priorityOrder()).isTrue();
+        assertThat(q.pageable().getSort().isUnsorted()).isTrue();
     }
     static Stream<String[]> invalidQueries() { return Stream.of(
         new String[]{"page","-1"}, new String[]{"size","101"}, new String[]{"size","0"},

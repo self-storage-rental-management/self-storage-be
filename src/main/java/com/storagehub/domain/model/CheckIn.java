@@ -1,12 +1,15 @@
 package com.storagehub.domain.model;
 
 import jakarta.persistence.Column;
+import jakarta.persistence.ConstraintMode;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
+import jakarta.persistence.ForeignKey;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.SecondaryTable;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
@@ -16,6 +19,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
+@SecondaryTable(name = "check_in_identity_display", foreignKey = @ForeignKey(ConstraintMode.NO_CONSTRAINT))
 @Table(
     name = "check_ins",
     uniqueConstraints = @UniqueConstraint(
@@ -69,6 +73,12 @@ public class CheckIn extends BaseEntity {
 
     @Column(length = 30)
     private String verifiedIdentityDocument;
+
+    @Column(table = "check_in_identity_display", length = 12)
+    private String declaredIdentityMasked;
+
+    @Column(table = "check_in_identity_display")
+    private Boolean identityCorrected;
 
     @Column(length = 1000)
     private String identityVerificationNote;
@@ -137,6 +147,11 @@ public class CheckIn extends BaseEntity {
 
     @Column(name = "inventory_decision_note", length = 2000)
     private String inventoryDecisionNote;
+
+    public boolean hasPendingInventoryRefusal() {
+        return inventoryConfirmation != null && inventoryConfirmation.getInventoryRefusalSubmittedAt() != null
+            && inventoryConfirmation.getInventoryRefusalApproved() == null;
+    }
 
     @Column(name = "inventory_full_fit", nullable = false)
     private boolean inventoryFullFit;

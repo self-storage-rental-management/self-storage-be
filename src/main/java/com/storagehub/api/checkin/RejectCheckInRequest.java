@@ -1,6 +1,7 @@
 package com.storagehub.api.checkin;
 
 import com.storagehub.domain.model.UnitReleaseDisposition;
+import com.storagehub.validation.ValidCccd;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -10,6 +11,10 @@ import java.util.List;
 public record RejectCheckInRequest(
     @NotBlank @Size(max = 1000) String reason,
     @NotNull UnitReleaseDisposition disposition,
-    @NotEmpty @Size(max = 10) List<@NotBlank @Size(max = 500) String> evidenceReferences
+    @NotEmpty @Size(max = 10) List<@NotBlank @Size(max = 500) String> evidenceReferences,
+    @ValidCccd String mismatchedIdentityDocument
 ) {
+    public RejectCheckInRequest(String reason, UnitReleaseDisposition disposition, List<String> evidenceReferences) {
+        this(reason, disposition, evidenceReferences, null);
+    }
 }

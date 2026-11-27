@@ -97,8 +97,62 @@ public record ReturnCaseResponse(
     Instant inventoryRemovalDeadlineAt,
     LockInspectionResult lockInspectionResult,
     Integer returnWindowDays,
-    String returnPolicyVersion
+    String returnPolicyVersion,
+    Equipment equipment,
+    Instant customerClearedAt,
+    Boolean warehouseEmptyVerified,
+    Instant warehouseEmptyVerifiedAt,
+    UUID warehouseEmptyVerifiedBy,
+    long clearanceRevision,
+    String displayCode,
+    String rentalDisplayCode,
+    Attendance attendance,
+    long settlementVersion,
+    Instant settlementPublishedAt,
+    Instant settlementPaymentDueAt,
+    List<SettlementReceipt> settlementReceipts,
+    Integer missingPalletCount,
+    BigDecimal palletLossFee,
+    Instant scheduledAppointmentAt,
+    Instant inventoryRemovalPublishedAt,
+    Integer returnExtensionDays,
+    int returnExtensionCount,
+    int maxReturnExtensions,
+    boolean canExtendReturnWindow,
+    long returnVersion
 ) {
+    public record Attendance(
+        Instant arrivedAt,
+        UUID evidenceId,
+        Instant expiresAt,
+        int attempts,
+        Instant verifiedAt,
+        Instant reviewStartsAt,
+        Boolean reviewAccepted,
+        Instant handoverDueAt,
+        UUID handoverStaffId,
+        Instant reverificationStartedAt,
+        UUID reverificationStaffId,
+        Instant handoverAppointmentAt,
+        Instant recordedAt,
+        UUID recordedBy,
+        String evidenceNote,
+        Instant lateArrivalClaimedAt,
+        String reviewStatus,
+        Instant reviewDeadlineAt,
+        String reviewReason,
+        UUID reviewedBy,
+        Instant reviewedAt
+    ) {
+        public Attendance(Instant arrivedAt, UUID evidenceId, Instant expiresAt, int attempts, Instant verifiedAt,
+            Instant reviewStartsAt, Boolean reviewAccepted, Instant handoverDueAt, UUID handoverStaffId,
+            Instant reverificationStartedAt, UUID reverificationStaffId, Instant handoverAppointmentAt) {
+            this(arrivedAt, evidenceId, expiresAt, attempts, verifiedAt, reviewStartsAt, reviewAccepted,
+                handoverDueAt, handoverStaffId, reverificationStartedAt, reverificationStaffId, handoverAppointmentAt,
+                null, null, null, null, null, null, null, null, null);
+        }
+    }
+    public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
             && (returnType == ReturnType.INVENTORY_MISMATCH || returnType == ReturnType.RETURN_IN_SETUP || returnType == ReturnType.CANCELLED_IN_SETUP);
@@ -178,7 +232,8 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, 0, null, null, List.of(), null, null,
+            null, null, null, 0, 0, false, 0L
         );
     }
 

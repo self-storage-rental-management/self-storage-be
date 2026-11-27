@@ -35,6 +35,9 @@ public class RentalSetupLifecycleService {
     @Autowired(required = false)
     private MaintenanceTaskRepository maintenanceTaskRepository;
 
+    @Autowired
+    private ViolationRecoveryWorkflow violationRecovery;
+
     @Value("${storagehub.inventory.recovery-sla-hours:24}")
     private long inventoryRecoverySlaHours = 24;
 
@@ -88,6 +91,8 @@ public class RentalSetupLifecycleService {
 
         for (Rental rental : rentalRepository.findByInventoryPendingTrueAndStatusIn(
             java.util.List.of(RentalStatus.setup, RentalStatus.active))) {
+            // Unified-policy rentals are owned exclusively by IntakeDeadlineScheduler.
+            if (IntakePolicyProperties.POLICY_VERSION.equals(rental.getIntakePolicyVersion())) continue;
             // A published removal window replaces the inventory attendance clock.
             if (rental.getInventoryRemovalPublishedAt() != null) continue;
             if (rental.getInventoryArrivedAt() != null || rental.getInventoryResultPublishedAt() != null) continue;
@@ -153,6 +158,7 @@ public class RentalSetupLifecycleService {
     }
 
     private void escalateInventory(Rental rental, Instant now, boolean removalOverdue) {
+        if (violationRecovery != null) return; // IntakeDeadlineScheduler owns violation requests.
         String title = removalOverdue ? "Đã hết hạn đưa hàng sai lệch ra khỏi kho" : "Đã quá hạn kiểm kê hàng hóa";
         createInventoryRecoveryTask(rental, now, title);
         notifyCustomer(rental, title,
