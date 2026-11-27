@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.domain.model.*;
 import com.storagehub.domain.repo.*;
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -17,14 +18,50 @@ public class RecoveryReviewService {
     private final ReturnCaseRepository returns;
     private final FileAssetRepository files;
     private final ObjectMapper mapper;
+    private final ReservationGoodsItemRepository declaredGoods;
 
     public record Evidence(UUID id, String name, String contentType) {}
-    public record Goods(String name, int quantity) {}
+    public record Goods(String name, int quantity, String condition, String material, String note) {
+        public Goods(String name, int quantity) { this(name, quantity, null, null, null); }
+    }
+    public record DeclaredGood(String code, String name, String material, int quantity, BigDecimal lengthCm,
+        BigDecimal widthCm, BigDecimal heightCm, BigDecimal weightKg, boolean fragile, String description, String note,
+        String categoryName, GoodsCategory category, boolean stackable, int maxStackLayers, boolean allowHorizontalPlacement,
+        List<Evidence> images) {}
+    public record Preparation(List<DeclaredGood> declared, Report inventory, String packaging) {}
     public record Report(boolean available, String recordedBy, Instant publishedAt, String mismatchSummary,
         String decisionNote, String notes, String goodsCondition, String unitCondition,
         Integer packageCount, List<Goods> goods, List<Evidence> evidence) {}
     public record Review(Report report, Instant removalDeadlineAt, String remediationStatus,
         Instant remediationAt, String remediationNote, boolean openingAllowed, String blockingReason) {}
+
+    public Preparation preparation(ViolationRecovery recovery) {
+        var rental = recovery.getRental();
+        var declared = declaredGoods.findAllByReservation_IdOrderByCreatedAtAsc(rental.getReservation().getId());
+        var checkIn = checkIns.findByReservation_Id(rental.getReservation().getId()).orElse(null);
+        return new Preparation(declared.stream().map(item -> new DeclaredGood(item.getGoodsCode(), goodsName(item),
+            material(item), item.getQuantity(), item.getLengthCm(), item.getWidthCm(), item.getHeightCm(), item.getWeightKg(),
+            item.isFragile(), item.getDescription(), item.getCustomerNote(), item.getCategoryName(), item.getCategory(),
+            item.isStackable(), item.getMaxStackLayers(), item.isAllowHorizontalPlacement(),
+            files.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("RESERVATION_GOODS_ITEM", item.getId()).stream()
+                .filter(file -> file.getStatus() == FileAssetStatus.ACTIVE && file.getContentType() != null
+                    && file.getContentType().startsWith("image/"))
+                .map(file -> new Evidence(file.getId(), file.getOriginalName(), file.getContentType())).toList())).toList(),
+            report(rental, checkIn, null, declared), rental.getReservation().getGoodsCondition());
+    }
+
+    public Preparation customerPreparation(ViolationRecovery recovery) {
+        var preparation = preparation(recovery);
+        var inventory = preparation.inventory();
+        // Customers see their own declared goods and published results, without operational notes or evidence.
+        boolean published = inventory.available() && inventory.publishedAt() != null;
+        return new Preparation(preparation.declared(), published
+            ? new Report(true, inventory.recordedBy(), inventory.publishedAt(), inventory.mismatchSummary(),
+                inventory.decisionNote(), null, inventory.goodsCondition(), null, inventory.packageCount(),
+                inventory.goods().stream().map(item -> new Goods(item.name(), item.quantity(), item.condition(), item.material(), null)).toList(),
+                List.of())
+            : new Report(false, null, null, null, null, null, null, null, null, List.of(), List.of()), preparation.packaging());
+    }
 
     public Review read(ViolationRecovery recovery, Instant now) {
         var rental = recovery.getRental();
@@ -75,6 +112,10 @@ public class RecoveryReviewService {
     }
 
     private Report report(Rental rental, CheckIn checkIn, ReturnCase returned) {
+        return report(rental, checkIn, returned, null);
+    }
+
+    private Report report(Rental rental, CheckIn checkIn, ReturnCase returned, List<ReservationGoodsItem> declared) {
         JsonNode checklist = json(checkIn == null ? null : checkIn.getChecklistJson());
         JsonNode actual = json(checkIn == null ? null : checkIn.getInventoryActualJson());
         var goods = new ArrayList<Goods>();
@@ -84,19 +125,51 @@ public class RecoveryReviewService {
                 if (item.path("name").isTextual()) goods.add(new Goods(item.path("name").asText(), item.path("quantity").asInt()));
             }
         }
+        if (actual != null && actual.path("lines").isArray()) {
+            if (declared == null) declared = declaredGoods.findAllByReservation_IdOrderByCreatedAtAsc(rental.getReservation().getId());
+            var byId = new HashMap<String, ReservationGoodsItem>();
+            for (var item : declared) byId.put(item.getId().toString(), item);
+            for (var line : actual.path("lines")) {
+                var original = byId.get(line.path("goodsItemId").asText());
+                var measured = line.path("actualGoods");
+                String name = first(text(measured, "customGoodsName"), text(measured, "categoryName"),
+                    original == null ? null : goodsName(original), "Hàng hóa đã kiểm kê");
+                String condition = switch (line.path("condition").asText()) {
+                    case "INTACT" -> "Nguyên vẹn";
+                    case "DAMAGED" -> "Hư hỏng";
+                    case "NOT_PRESENT" -> "Không có tại kho";
+                    default -> null;
+                };
+                goods.add(new Goods(name, line.path("actualQuantity").asInt(), condition,
+                    first(text(measured, "customMaterial"), text(measured, "materialName"),
+                        original == null ? null : material(original)), text(line, "note")));
+            }
+        }
         var evidence = new ArrayList<Evidence>();
         if (checkIn != null) addEvidence(evidence, "CHECK_IN", checkIn.getId(),
             references(checkIn.getChecklistJson()));
         if (returned != null) addEvidence(evidence, "RETURN_CASE", returned.getId(), references(returned.getEvidencePhotosJson()));
         var published = rental.getInventoryResultPublishedAt();
         if (published == null && checkIn != null) published = checkIn.getInventoryVerifiedAt();
-        boolean available = checklist != null || actual != null;
+        boolean available = actual != null || checklist != null && published != null;
         var performer = !available || checkIn == null ? null : checkIn.getPerformedBy();
+        Integer packageCount = null;
+        if (actual != null && actual.path("packageCount").isIntegralNumber()) packageCount = actual.path("packageCount").asInt();
+        else if (checklist != null && checklist.path("packageCount").isIntegralNumber()) packageCount = checklist.path("packageCount").asInt();
         return new Report(available, performer == null ? null : performer.getFullName(), published,
             checkIn == null ? null : checkIn.getInventoryMismatchSummary(), checkIn == null ? null : checkIn.getInventoryDecisionNote(),
             text(checklist, "notes"), text(checklist, "goodsCondition"), text(checklist, "initialUnitCondition"),
-            checklist != null && checklist.path("packageCount").isIntegralNumber() ? checklist.path("packageCount").asInt() : null,
-            goods, evidence);
+            packageCount, goods, evidence);
+    }
+
+    private String goodsName(ReservationGoodsItem item) {
+        return first(item.getCustomGoodsName(), item.getCategoryName(), "Hàng hóa đã khai báo");
+    }
+
+    private String material(ReservationGoodsItem item) { return first(item.getCustomMaterial(), item.getMaterialName()); }
+
+    private String first(String... values) {
+        return Arrays.stream(values).filter(value -> value != null && !value.isBlank()).findFirst().orElse(null);
     }
 
     private void addEvidence(List<Evidence> output, String type, UUID id, Set<UUID> references) {

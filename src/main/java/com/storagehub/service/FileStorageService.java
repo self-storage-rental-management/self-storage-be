@@ -43,6 +43,9 @@ public class FileStorageService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.domain.repo.ReturnCaseRepository returnCaseRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.storagehub.domain.repo.ViolationRecoveryRepository violationRecoveryRepository;
+
     private static final Set<String> ALLOWED_TYPES = Set.of("image/jpeg", "image/png", "image/webp", "application/pdf");
     private static final Set<CheckInStatus> ACTIVE_CHECK_IN_EVIDENCE_STATUSES = Set.of(
         CheckInStatus.scheduled,
@@ -235,6 +238,22 @@ public class FileStorageService {
             );
             return;
         }
+
+        if ("VIOLATION_RECOVERY".equals(asset.getEntityType())
+            && asset.getEntityId() != null
+            && violationRecoveryRepository != null) {
+            var recovery = violationRecoveryRepository.findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            if (actor.hasRole(RoleCode.CUSTOMER)) {
+                if (recovery.getRequiredAt() == null
+                    || !recovery.getRental().getCustomer().getId().equals(actor.userId())) {
+                    throw ApiExceptions.forbidden("Bạn không có quyền truy cập tệp đính kèm này.");
+                }
+                return;
+            }
+            facilityScopeService.assertCanRead(actor, recovery.getRental().getFacility().getId());
+            return;
+        }
         throw ApiExceptions.notFound("File was not found");
     }
 
@@ -264,7 +283,7 @@ public class FileStorageService {
         }
         String normalized = entityType.trim().toUpperCase(java.util.Locale.ROOT);
         if(com.storagehub.service.integration.DuongFileEvidence.handles(normalized))return normalized;
-        if (!Set.of("CHECK_IN", INVENTORY_IDENTITY_ENTITY, "RETURN_CASE", "RESERVATION_GOODS_ITEM", "MAINTENANCE_TASK").contains(normalized)) {
+        if (!Set.of("CHECK_IN", INVENTORY_IDENTITY_ENTITY, "RETURN_CASE", "RESERVATION_GOODS_ITEM", "MAINTENANCE_TASK", "VIOLATION_RECOVERY").contains(normalized)) {
             throw ApiExceptions.validation("entityType is not supported", null);
         }
         return normalized;
@@ -351,6 +370,22 @@ public class FileStorageService {
             if (task.getStatus() == MaintenanceTaskStatus.completed || task.getStatus() == MaintenanceTaskStatus.cancelled) {
                 throw ApiExceptions.conflict("Evidence can only be uploaded while the maintenance task is active");
             }
+            return;
+        }
+        if ("VIOLATION_RECOVERY".equals(entityType)) {
+            if (entityId == null || violationRecoveryRepository == null) {
+                throw ApiExceptions.validation("entityId is required for recovery attachment", null);
+            }
+            var recovery = violationRecoveryRepository.findById(entityId)
+                .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thu hồi."));
+            if (actor.hasRole(RoleCode.CUSTOMER)) {
+                if (recovery.getRequiredAt() == null
+                    || !recovery.getRental().getCustomer().getId().equals(actor.userId())) {
+                    throw ApiExceptions.forbidden("Bạn không có quyền tải tệp lên hồ sơ thu hồi này.");
+                }
+                return;
+            }
+            facilityScopeService.assertCanOperate(actor, recovery.getRental().getFacility().getId());
             return;
         }
         if (entityType == null) {

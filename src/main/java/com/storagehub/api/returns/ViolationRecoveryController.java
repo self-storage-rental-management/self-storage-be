@@ -19,21 +19,35 @@ public class ViolationRecoveryController {
 
     @GetMapping
     public ApiResponse<List<ViolationRecoveryWorkflow.Entry>> list(@RequestParam(defaultValue = "0") int page,
-        @RequestParam(required = false) UUID sourceReturnId, @RequestParam(defaultValue = "false") boolean activeOnly) {
+        @RequestParam(required = false) UUID sourceReturnId, @RequestParam(defaultValue = "false") boolean activeOnly,
+        @RequestParam(defaultValue = "false") boolean escalatedOnly) {
         var actor = actors.required();
-        var entries = sourceReturnId != null ? workflow.listForReturn(actor, sourceReturnId)
+        var entries = escalatedOnly ? workflow.listEscalatedOperations(actor, page)
+            : sourceReturnId != null ? workflow.listForReturn(actor, sourceReturnId)
             : activeOnly ? workflow.listActiveOperations(actor, page) : workflow.list(actor, page);
         return new ApiResponse<>(entries, CorrelationIdContext.current());
     }
 
     @GetMapping("/{id}/staff")
-    public ApiResponse<List<ViolationRecoveryWorkflow.StaffOption>> staff(@PathVariable UUID id) {
-        return new ApiResponse<>(workflow.staff(actors.required(), id), CorrelationIdContext.current());
+    public ApiResponse<List<ViolationRecoveryWorkflow.StaffOption>> staff(@PathVariable UUID id,
+        @RequestParam(defaultValue = "false") boolean pickup, @RequestParam(defaultValue = "false") boolean witness) {
+        return new ApiResponse<>(workflow.staff(actors.required(), id, pickup, witness), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/customer")
+    public com.storagehub.common.api.PageResponse<ViolationRecoveryWorkflow.Entry> customerPage(
+        @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "8") int pageSize) {
+        return workflow.customerPage(actors.required(), page, pageSize, CorrelationIdContext.current());
     }
 
     @GetMapping("/{id}")
     public ApiResponse<ViolationRecoveryWorkflow.Entry> get(@PathVariable UUID id) {
         return new ApiResponse<>(workflow.get(actors.required(), id), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/{id}/preparation")
+    public ApiResponse<com.storagehub.service.RecoveryReviewService.Preparation> preparation(@PathVariable UUID id) {
+        return new ApiResponse<>(workflow.preparation(actors.required(), id), CorrelationIdContext.current());
     }
 
     @PostMapping("/{id}/actions")

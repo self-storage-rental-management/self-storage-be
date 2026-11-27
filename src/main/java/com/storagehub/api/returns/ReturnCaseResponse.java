@@ -99,8 +99,6 @@ public record ReturnCaseResponse(
     Integer returnWindowDays,
     String returnPolicyVersion,
     Equipment equipment,
-    Integer missingPalletCount,
-    BigDecimal palletLossFee,
     Instant customerClearedAt,
     Boolean warehouseEmptyVerified,
     Instant warehouseEmptyVerifiedAt,
@@ -112,11 +110,48 @@ public record ReturnCaseResponse(
     long settlementVersion,
     Instant settlementPublishedAt,
     Instant settlementPaymentDueAt,
-    List<SettlementReceipt> settlementReceipts
+    List<SettlementReceipt> settlementReceipts,
+    Integer missingPalletCount,
+    BigDecimal palletLossFee,
+    Instant scheduledAppointmentAt,
+    Instant inventoryRemovalPublishedAt,
+    Integer returnExtensionDays,
+    int returnExtensionCount,
+    int maxReturnExtensions,
+    boolean canExtendReturnWindow,
+    long returnVersion
 ) {
-    public record Attendance(Instant arrivedAt, UUID evidenceId, Instant expiresAt, int attempts, Instant verifiedAt,
-        Instant reviewStartsAt, Boolean reviewAccepted, Instant handoverDueAt, UUID handoverStaffId,
-        Instant reverificationStartedAt, UUID reverificationStaffId, Instant handoverAppointmentAt) {}
+    public record Attendance(
+        Instant arrivedAt,
+        UUID evidenceId,
+        Instant expiresAt,
+        int attempts,
+        Instant verifiedAt,
+        Instant reviewStartsAt,
+        Boolean reviewAccepted,
+        Instant handoverDueAt,
+        UUID handoverStaffId,
+        Instant reverificationStartedAt,
+        UUID reverificationStaffId,
+        Instant handoverAppointmentAt,
+        Instant recordedAt,
+        UUID recordedBy,
+        String evidenceNote,
+        Instant lateArrivalClaimedAt,
+        String reviewStatus,
+        Instant reviewDeadlineAt,
+        String reviewReason,
+        UUID reviewedBy,
+        Instant reviewedAt
+    ) {
+        public Attendance(Instant arrivedAt, UUID evidenceId, Instant expiresAt, int attempts, Instant verifiedAt,
+            Instant reviewStartsAt, Boolean reviewAccepted, Instant handoverDueAt, UUID handoverStaffId,
+            Instant reverificationStartedAt, UUID reverificationStaffId, Instant handoverAppointmentAt) {
+            this(arrivedAt, evidenceId, expiresAt, attempts, verifiedAt, reviewStartsAt, reviewAccepted,
+                handoverDueAt, handoverStaffId, reverificationStartedAt, reverificationStaffId, handoverAppointmentAt,
+                null, null, null, null, null, null, null, null, null);
+        }
+    }
     public record Equipment(int rackCount, int frameCount, Integer palletCount, BigDecimal palletUnitPrice) {}
     public boolean isManagerApprovalRequired() {
         return status == ReturnCaseStatus.awaiting_business_review && !legacyPricingReviewRequired
@@ -219,8 +254,6 @@ public record ReturnCaseResponse(
             null, // returnWindowDays
             null, // returnPolicyVersion
             null, // equipment
-            null, // missingPalletCount
-            null, // palletLossFee
             null, // customerClearedAt
             null, // warehouseEmptyVerified
             null, // warehouseEmptyVerifiedAt
@@ -232,7 +265,8 @@ public record ReturnCaseResponse(
             0L, // settlementVersion
             null, // settlementPublishedAt
             null, // settlementPaymentDueAt
-            List.of() // settlementReceipts
+            List.of(), // settlementReceipts
+            null, null, null, null, null, 0, 0, false, 0L
         );
     }
 

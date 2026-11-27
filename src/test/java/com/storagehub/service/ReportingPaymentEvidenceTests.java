@@ -81,4 +81,16 @@ class ReportingPaymentEvidenceTests {
         payment.setGatewayTransactionNo(null);
         assertThat(evidence.isRealCollected(payment)).isFalse();
     }
+
+    @Test
+    void reportableCollectedRevenue_subtractsRefundsCorrectly() {
+        var p1 = paidGatewayPayment();
+        p1.setAmount(new java.math.BigDecimal("2000000"));
+        p1.setRefundedAmount(new java.math.BigDecimal("500000"));
+
+        var evidence = new ReportingPaymentEvidence(classifier(), false);
+        var result = evidence.reportableCollectedRevenue(java.util.List.of(p1));
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualByComparingTo("1500000");
+    }
 }

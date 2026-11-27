@@ -61,4 +61,10 @@ class RenewalOverdueFeeServiceTests {
         var next=new Renewal();next.setRental(rental);ReflectionTestUtils.setField(next,"id",UUID.randomUUID());
         assertThat(fees.quote(next,snapshot(List.of(paid)),Instant.parse("2026-10-12T09:00:00Z")).outstanding()).isZero();
     }
+    @Test void overdueFeeCalculatedFromMonthlyPriceMultipliedByOnePointFive() {
+        // monthlyPrice = 3.000.000 -> 1 ngày = 100.000 -> mỗi ngày quá hạn nhân 1.5 = 150.000
+        rental.setMonthlyPrice(new BigDecimal("3000000"));
+        assertThat(fees.estimate(rental, Instant.parse("2026-10-10T17:00:00Z"))).isEqualByComparingTo("150000");
+        assertThat(fees.estimate(rental, Instant.parse("2026-10-12T16:59:59Z"))).isEqualByComparingTo("300000");
+    }
 }

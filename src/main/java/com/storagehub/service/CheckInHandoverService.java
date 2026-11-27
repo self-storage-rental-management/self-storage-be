@@ -219,7 +219,7 @@ public class CheckInHandoverService {
             now.minus(java.time.Duration.ofHours(
                 ReservationCheckInPolicy.CUSTOMER_RECEIPT_CONFIRMATION_HOURS
                     - ReservationCheckInPolicy.CUSTOMER_RECEIPT_REMINDER_HOURS)),
-            facilityId, clean(q), statusFilter.enabled(), statusFilter.unscheduled(),
+            facilityId, clean(q), statusFilter.enabled(), statusFilter.unscheduled(), statusFilter.recoveryTransferred(),
             statusFilter.checkInStatus(), scheduledFrom, scheduledTo, scoped, facilityIds,
             pageRequest(page, pageSize)
         ).map(row -> toResponse(actor, row.getReservation(), row.getCheckIn(), row.getAssignment()));
@@ -388,18 +388,23 @@ public class CheckInHandoverService {
     private record CheckInListFilter(
         boolean enabled,
         boolean unscheduled,
+        boolean recoveryTransferred,
         CheckInStatus checkInStatus
     ) {
         private static CheckInListFilter parse(String value) {
             if (value == null || value.isBlank()) {
-                return new CheckInListFilter(false, false, null);
+                return new CheckInListFilter(false, false, false, null);
             }
             if ("UNSCHEDULED".equalsIgnoreCase(value.trim())) {
-                return new CheckInListFilter(true, true, null);
+                return new CheckInListFilter(true, true, false, null);
+            }
+            if ("RECOVERY_TRANSFERRED".equalsIgnoreCase(value.trim())) {
+                return new CheckInListFilter(true, false, true, null);
             }
             try {
                 return new CheckInListFilter(
                     true,
+                    false,
                     false,
                     CheckInStatus.valueOf(value.trim().toLowerCase())
                 );
@@ -2327,7 +2332,8 @@ public class CheckInHandoverService {
         if (rental == null) return null;
         var restriction = InventoryDeadlinePolicy.restriction(rental, Instant.now());
         return new CheckInResponse.InventoryAccess(InventoryDeadlinePolicy.completionDeadline(rental),
-            restriction == null, restriction == null ? null : restriction.message);
+            restriction == null, restriction == null ? null : restriction.message,
+            rental.getInventoryEscalatedAt() != null);
     }
 
     private CheckInResponse toResponse(
@@ -2338,6 +2344,7 @@ public class CheckInHandoverService {
     ) {
         StorageUnit unit = assignment.getStorageUnit();
         Rental rental = checkIn == null ? null : checkIn.getRental();
+        if (rental == null) rental = rentalRepository.findByReservation_Id(reservation.getId()).orElse(null);
         var pricing=pricingSnapshotRepository==null?null:pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
         Integer setupDays=ReservationSnapshotView.pricingComplete(reservation,pricing)?pricing.getFreeSetupDays():null;
         var goodsItems = goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId());
@@ -2375,12 +2382,12 @@ public class CheckInHandoverService {
         Instant inventoryAppointmentAt = checkIn != null && checkIn.getInventoryAppointmentAt() != null
             ? checkIn.getInventoryAppointmentAt()
             : rental == null ? null : rental.getInventoryAppointmentAt();
-        CheckInResponse.InventoryVisit inventoryVisit = checkIn == null ? null : new CheckInResponse.InventoryVisit(
+        CheckInResponse.InventoryVisit inventoryVisit = checkIn == null && rental == null ? null : new CheckInResponse.InventoryVisit(
             inventoryAppointmentAt,
-            checkIn.getInventoryArrivedAt(),
-            checkIn.getInventoryIdentityVerifiedAt(),
-            checkIn.getInventoryIdentityVerifiedBy() == null ? null : checkIn.getInventoryIdentityVerifiedBy().getFullName(),
-            checkIn.getInventoryIdentityPhotoId(), inventoryAccess(rental)
+            checkIn == null ? null : checkIn.getInventoryArrivedAt(),
+            checkIn == null ? null : checkIn.getInventoryIdentityVerifiedAt(),
+            checkIn == null || checkIn.getInventoryIdentityVerifiedBy() == null ? null : checkIn.getInventoryIdentityVerifiedBy().getFullName(),
+            checkIn == null ? null : checkIn.getInventoryIdentityPhotoId(), inventoryAccess(rental)
         );
         return new CheckInResponse(
             checkIn == null ? null : checkIn.getId(),
@@ -2432,7 +2439,8 @@ public class CheckInHandoverService {
                     item.getCatalogCategoryId(), item.getCatalogMaterialId(), item.getCategory(), item.isFragile(), item.isStackable(),
                     item.isAllowHorizontalPlacement(), item.getMaxStackLayers()))
                 .toList(),
-            intakeAction(actor, reservation, checkIn, assignment),
+            rental != null && rental.getInventoryEscalatedAt() != null ? IntakeAction.NONE
+                : intakeAction(actor, reservation, checkIn, assignment),
             rental == null ? null : rental.getInventoryFinalDeadlineAt(),
             checkIn == null ? null : checkIn.getInventoryResolutionStatus(),
             checkIn == null || checkIn.getInventoryConfirmation() == null
