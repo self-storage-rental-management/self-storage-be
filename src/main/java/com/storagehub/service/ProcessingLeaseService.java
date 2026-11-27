@@ -50,9 +50,15 @@ public class ProcessingLeaseService {
 
     @Transactional
     public View acquire(ActorPrincipal actor, Target type, UUID id, UUID token) {
+        return acquire(actor, type, id, token, false);
+    }
+
+    @Transactional
+    public View acquire(ActorPrincipal actor, Target type, UUID id, UUID token, boolean reclaimSameOwner) {
         Resource resource = lockedResource(actor, type, id);
         ProcessingLease lease = lease(resource);
-        if (active(lease) && !owns(actor, token, lease) && !sameUserNewerSession(actor, lease)) return view(actor, token, resource, lease);
+        boolean reclaim = reclaimSameOwner && actor.userId().equals(lease.getOwnerId());
+        if (active(lease) && !owns(actor, token, lease) && !sameUserNewerSession(actor, lease) && !reclaim) return view(actor, token, resource, lease);
         if (lease.getOwnerId() != null && !active(lease)) {
             auditLogService.recordMutation("PROCESSING_LEASE_EXPIRED", "ProcessingLease",
                 resource.reservation().getId(), resource.reservation().getFacility().getId(),

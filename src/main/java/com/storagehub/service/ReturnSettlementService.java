@@ -1488,14 +1488,25 @@ public class ReturnSettlementService {
 
         var equipment = returnEquipment(returnCase);
         int missingPallets = request.missingPalletCount() == null ? 0 : request.missingPalletCount();
-        if (equipment.palletCount() == null)
+        if (equipment == null || equipment.palletCount() == null)
             throw ApiExceptions.validation("Thiếu cấu hình thiết bị bàn giao; cần đối soát trước khi nghiệm thu.", null);
+        if (request.damageItems() != null) {
+            boolean frameCountRecorded = false;
+            for (var item : request.damageItems()) {
+                if (item == null || !ReturnDamagePricing.FRAME_DAMAGE.equals(item.code())) continue;
+                if (frameCountRecorded || item.quantity() == null || item.quantity().signum() <= 0
+                    || item.quantity().stripTrailingZeros().scale() > 0
+                    || item.quantity().compareTo(BigDecimal.valueOf(equipment.frameCount())) > 0)
+                    throw ApiExceptions.validation("Số khung hư phải là số nguyên và không vượt số khung đã bàn giao.", null);
+                frameCountRecorded = true;
+            }
+        }
         if (missingPallets < 0 || missingPallets > equipment.palletCount())
             throw ApiExceptions.validation("Số tấm kê thiếu phải nằm trong số lượng đã bàn giao.", null);
         if (missingPallets > 0 && equipment.palletUnitPrice().signum() <= 0)
             throw ApiExceptions.validation("Chưa cấu hình đơn giá bồi thường tấm kê.", null);
         boolean goodsLeft = request.damageClassification() == com.storagehub.domain.model.DamageClassification.abandoned_goods;
-        if (goodsLeft && safeFee(request.cleaningFee()).compareTo(returnFeePrices(returnCase) == null ? BigDecimal.valueOf(200000) : returnFeePrices(returnCase).get("major")) < 0)
+        if (goodsLeft && safeFee(request.cleaningFee()).compareTo(returnFeePrices(returnCase) == null ? BigDecimal.valueOf(200000) : returnFeePrices(returnCase).getOrDefault("major", BigDecimal.ZERO)) < 0)
             throw ApiExceptions.validation("Kho còn hàng phải tính ít nhất phí tổng vệ sinh theo biểu phí hiện hành.", null);
         boolean requiresMaintenance = goodsLeft || safeFee(request.cleaningFee()).signum() > 0
             || request.damageClassification() != com.storagehub.domain.model.DamageClassification.no_damage || missingPallets > 0;
@@ -1506,8 +1517,9 @@ public class ReturnSettlementService {
         returnCase.setPalletLossFee(palletFee);
         BigDecimal safeDamage = calculatedDamageFee(request, returnCase);
         BigDecimal safeCleaning = safeFee(request.cleaningFee());
-        if (returnFeeScheduleService != null && request.damageItems() != null && java.util.stream.Stream.of("clean", "minor", "major")
-            .noneMatch(key -> returnFeePrices(returnCase).get(key).compareTo(safeCleaning) == 0))
+        var cleaningPrices = returnFeePrices(returnCase);
+        if (cleaningPrices != null && safeCleaning.signum() != 0 && request.damageItems() != null && cleaningPrices.entrySet().stream()
+            .noneMatch(entry -> ReturnFeeScheduleService.isCleaningFee(entry.getKey()) && entry.getValue().compareTo(safeCleaning) == 0))
             throw ApiExceptions.conflict("Phí vệ sinh đã thay đổi. Vui lòng tải lại trước khi nghiệm thu.");
         BigDecimal safeLostItem = (request.returnedLock() ? BigDecimal.ZERO : BigDecimal.valueOf(150000)).add(palletFee);
         BigDecimal safeOverdue = safeFee(request.overdueFee());
@@ -2689,7 +2701,8 @@ public class ReturnSettlementService {
     private BigDecimal calculatedDamageFee(ReturnInspectionRequest request, ReturnCase returnCase) {
         if (request.damageItems() == null) return safeFee(request.damageFee());
         try {
-            BigDecimal calculated = ReturnDamagePricing.calculate(request.damageItems(), returnFeePrices(returnCase));
+            var prices = returnFeePrices(returnCase);
+            BigDecimal calculated = ReturnDamagePricing.calculate(request.damageItems(), prices);
             if (returnFeeScheduleService != null && calculated.compareTo(safeFee(request.damageFee())) != 0)
                 throw ApiExceptions.conflict("Biểu phí đã thay đổi. Vui lòng tải lại trước khi nghiệm thu.");
             if (!request.damageItems().isEmpty()
@@ -2701,8 +2714,8 @@ public class ReturnSettlementService {
                     || request.damageClassification() == com.storagehub.domain.model.DamageClassification.major_damage)) {
                 String expectedCategory = request.damageClassification() == com.storagehub.domain.model.DamageClassification.major_damage ? "major" : "minor";
                 boolean wrongCategory = request.damageItems().stream().anyMatch(item -> {
-                    var price = ReturnDamagePricing.catalog().get(item.code());
-                    return price == null || !expectedCategory.equals(price.category());
+                    var price = ReturnDamagePricing.lookup(item.code(), prices);
+                    return price == null || (!ReturnDamagePricing.FRAME_DAMAGE.equals(item.code()) && !expectedCategory.equals(price.category()));
                 });
                 if (wrongCategory) throw new IllegalArgumentException("Hạng mục không khớp mức độ hư hỏng đã chọn.");
             }

@@ -212,7 +212,10 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             } else {
                 throw new IllegalStateException("Mixed 2026112601/2026112602 migration history; no repair performed");
             }
-            if (at2603 != null) {
+            if (at2603 != null && "V2026112603__allow_violation_recovery_notifications.sql".equals(at2603.script())) {
+                require(at2603, at2603.script());
+                selected.add("classpath:db/migration-history/legacy-notifications-2603");
+            } else if (at2603 != null) {
                 require(at2603, currentReturn);
                 selected.add("classpath:db/migration-history/develop-2603");
             }
