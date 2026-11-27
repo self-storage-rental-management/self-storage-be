@@ -35,5 +35,8 @@ public class ProcessingLeaseController {
         @Valid @RequestBody TokenRequest request) {
         return envelope(leases.release(actors.required(), type, id, request.token()));
     }
+    @PostMapping("/force-release") public ApiResponse<View> forceRelease(@PathVariable Target type, @PathVariable UUID id) {
+        return envelope(leases.forceRelease(actors.required(), type, id));
+    }
     private ApiResponse<View> envelope(View view) { return new ApiResponse<>(view, CorrelationIdContext.current()); }
 }

@@ -13,6 +13,7 @@ import jakarta.persistence.ManyToMany;
 import jakarta.persistence.Table;
 import java.util.HashSet;
 import java.util.Set;
+import java.time.Instant;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -76,6 +77,16 @@ public class User extends BaseEntity {
 
     @Column(nullable = false, columnDefinition = "boolean default false")
     private boolean mustChangePassword = false;
+
+    /** Temporary credentials are valid only for a bounded first-login window. */
+    @Column(name = "temporary_password_expires_at")
+    private Instant temporaryPasswordExpiresAt;
+
+    @Column(name = "failed_login_attempts", nullable = false)
+    private int failedLoginAttempts = 0;
+
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
 
     /**
      * Monotonic authorization version. Any role or facility-scope mutation
