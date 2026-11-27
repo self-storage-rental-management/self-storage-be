@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.reservation.ReservationResponse;
 import com.storagehub.common.api.ApiExceptions;
+import com.storagehub.common.text.TextEncodingRepair;
 import com.storagehub.domain.model.Reservation;
 import com.storagehub.domain.model.ReservationPricingSnapshot;
 import java.math.BigDecimal;
@@ -251,7 +252,9 @@ public final class ReservationSnapshotView {
     private static String text(JsonNode node, String field, String fallback) {
         if (node == null) return fallback;
         JsonNode value = node.get(field);
-        return value != null && value.isTextual() && !value.asText().isBlank() ? value.asText() : fallback;
+        return value != null && value.isTextual() && !value.asText().isBlank()
+            ? TextEncodingRepair.repairUtf8Mojibake(value.asText())
+            : fallback;
     }
 
     private static BigDecimal decimal(JsonNode node, String field) {
