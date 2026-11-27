@@ -3,10 +3,14 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.lenient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.storagehub.api.returns.CustomerConfirmSettlementRequest;
@@ -159,6 +163,12 @@ class ReturnSettlementServiceTests {
         ReflectionTestUtils.setField(service, "reservationPricingSnapshotRepository", pricingSnapshotRepository);
         ReflectionTestUtils.setField(service, "userFacilityScopeRepository", userFacilityScopeRepository);
         ReflectionTestUtils.setField(service, "settlementEntityManager", settlementEntityManager);
+        @SuppressWarnings("unchecked")
+        jakarta.persistence.TypedQuery<Long> renewals = mock(jakarta.persistence.TypedQuery.class);
+        lenient().when(settlementEntityManager.createQuery(
+            startsWith("select count(n) from Renewal"), eq(Long.class))).thenReturn(renewals);
+        lenient().when(renewals.setParameter(anyString(), any())).thenReturn(renewals);
+        lenient().when(renewals.getSingleResult()).thenReturn(0L);
         var pallets = org.mockito.Mockito.mock(PalletInventoryService.class);
         org.mockito.Mockito.lenient().when(pallets.equipment(unit)).thenReturn(new com.storagehub.api.checkin.CheckInResponse.Equipment(1, 1, 2));
         ReflectionTestUtils.setField(service, "palletInventoryService", pallets);
@@ -166,6 +176,21 @@ class ReturnSettlementServiceTests {
         org.mockito.Mockito.lenient().when(returnFinance.deposit(rental)).thenReturn(new BigDecimal("2000000.00"));
         org.mockito.Mockito.lenient().when(returnFinance.capture(any(ReturnCase.class))).thenReturn(
             new com.storagehub.service.ledger.ReturnFinancialReconciliation.View(new BigDecimal("2000000.00"), BigDecimal.ZERO, BigDecimal.ZERO, 1L, BigDecimal.ZERO));
+    }
+
+    @Test
+    void renewalReadFailurePreventsReturnCreation() {
+        rental.setStatus(RentalStatus.setup);
+        rental.setInventoryPending(true);
+        var request = new CustomerCreateReturnRequest(LocalDate.now(BusinessTime.ZONE).plusDays(1),
+            "Trả kho", com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH);
+        when(returnCaseRepository.findByRental_Id(rental.getId())).thenReturn(Collections.emptyList());
+        when(settlementEntityManager.createQuery(startsWith("select count(n) from Renewal"), eq(Long.class)))
+            .thenThrow(new IllegalStateException("Database unavailable"));
+
+        assertThatThrownBy(() -> service.createInventoryReturnAtSite(staffActor, rental.getId(), request))
+            .isInstanceOf(IllegalStateException.class);
+        verify(returnCaseRepository, never()).save(any(ReturnCase.class));
     }
 
     @Test

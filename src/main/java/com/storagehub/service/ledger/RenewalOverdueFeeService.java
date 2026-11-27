@@ -21,6 +21,8 @@ public class RenewalOverdueFeeService {
     private final EntityManager em;
     private final RentalPeriodResolver periods;
     private final RenewalPolicyPublicationService policies;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.ReturnFeeScheduleService returnFeeSchedule;
     public record Quote(long overdueDays,BigDecimal accrued,BigDecimal outstanding,BigDecimal unposted,
         Instant dueAt,Instant nextChangeAt,String sourceRef,List<LedgerStore.Obligation> posted) {}
     private record Daily(long days,BigDecimal accrued,Instant dayStart,Instant nextDay,String source,LocalDate lastPermittedDate) {}
@@ -81,10 +83,14 @@ public class RenewalOverdueFeeService {
         if (monthlyRent.precision() > 12) throw ApiExceptions.conflict("Monthly rental price amount is unsupported");
         BigDecimal dailyRent = monthlyRent.divide(BigDecimal.valueOf(30), 2, RoundingMode.HALF_UP);
         if (dailyRent.signum() < 0 || dailyRent.precision() > 12) throw ApiExceptions.conflict("Daily overdue fee amount is unsupported");
-        BigDecimal overdueDailyRate = dailyRent.multiply(new BigDecimal("1.5")).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal multiplier = returnFeeSchedule == null ? new BigDecimal("1.5")
+            : returnFeeSchedule.applicableTo(rental).overdueMultiplier();
+        BigDecimal overdueDailyRate = dailyRent.multiply(multiplier).setScale(2, RoundingMode.HALF_UP);
         BigDecimal accrued = overdueDailyRate.multiply(BigDecimal.valueOf(days)).setScale(2, RoundingMode.HALF_UP);
         if(accrued.precision()>12)throw ApiExceptions.conflict("Accrued overdue fee amount is unsupported");
-        String version=period.lastPermittedDate()+":"+overdueDailyRate.toPlainString()+":MONTHLY_RENT_DIV_30_X_1_5:"+zone.getId();
+        String formula = multiplier.compareTo(new BigDecimal("1.5")) == 0 ? "MONTHLY_RENT_DIV_30_X_1_5"
+            : "MONTHLY_RENT_DIV_30_X_" + multiplier.stripTrailingZeros().toPlainString();
+        String version=period.lastPermittedDate()+":"+overdueDailyRate.toPlainString()+":"+formula+":"+zone.getId();
         return new Daily(days,accrued,today.atStartOfDay(zone).toInstant(),today.plusDays(1).atStartOfDay(zone).toInstant(),version,period.lastPermittedDate());
     }
 

@@ -61,6 +61,16 @@ class RenewalOverdueFeeServiceTests {
         var next=new Renewal();next.setRental(rental);ReflectionTestUtils.setField(next,"id",UUID.randomUUID());
         assertThat(fees.quote(next,snapshot(List.of(paid)),Instant.parse("2026-10-12T09:00:00Z")).outstanding()).isZero();
     }
+    @Test void usesReservationScheduleMultiplierAndKeepsOldFormulaStable() {
+        var schedule = mock(com.storagehub.service.ReturnFeeScheduleService.class);
+        var configured = new com.storagehub.service.ReturnFeeScheduleService.Schedule(1, Map.of(), Map.of(), null, true, new BigDecimal("2.25"));
+        when(schedule.applicableTo(rental)).thenReturn(configured);
+        ReflectionTestUtils.setField(fees, "returnFeeSchedule", schedule);
+        rental.setMonthlyPrice(new BigDecimal("3000000"));
+        var quote = fees.quote(renewal, snapshot(List.of()), Instant.parse("2026-10-11T17:00:00Z"));
+        assertThat(quote.accrued()).isEqualByComparingTo("225000");
+        assertThat(quote.sourceRef()).contains("MONTHLY_RENT_DIV_30_X_2.25");
+    }
     @Test void overdueFeeCalculatedFromMonthlyPriceMultipliedByOnePointFive() {
         // monthlyPrice = 3.000.000 -> 1 ngày = 100.000 -> mỗi ngày quá hạn nhân 1.5 = 150.000
         rental.setMonthlyPrice(new BigDecimal("3000000"));

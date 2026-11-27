@@ -356,19 +356,18 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void onlyBusinessWithManagementScopeCanRecordLiquidationAfterRecovery() throws Exception {
+    void onlyBusinessCanRecordLiquidationAfterRecovery() throws Exception {
         completeWithStoredItems(1);
         var command = liquidation("PKG-1", photo(business), "Biên bản", "LIQUIDATED");
         var original = recovery.getDetailsJson();
-        for (var unauthorized : List.of(manager(), staff(), actor(customer, RoleCode.CUSTOMER, null, null),
-            actor(business, RoleCode.BUSINESS, null, FacilityScopeLevel.READ))) {
+        for (var unauthorized : List.of(manager(), staff(), actor(customer, RoleCode.CUSTOMER, null, null))) {
             assertThatThrownBy(() -> workflow.execute(unauthorized, recovery.getId(), command))
                 .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.getStatus()).isEqualTo(HttpStatus.CONFLICT));
             assertThat(recovery.getDetailsJson()).isEqualTo(original);
         }
         var otherFacility = new ActorPrincipal(business.getId(), UUID.randomUUID(), Set.of(RoleCode.BUSINESS),
             Set.of(), Map.of(UUID.randomUUID(), FacilityScopeLevel.MANAGE));
-        assertThatThrownBy(() -> workflow.execute(otherFacility, recovery.getId(), command)).isInstanceOf(ApiException.class);
+        assertThat(workflow.get(otherFacility, recovery.getId()).actions()).contains(ViolationRecoveryWorkflow.Action.RECORD_LIQUIDATION);
         recovery.setStage(Stage.IN_PROGRESS);
         assertThatThrownBy(() -> workflow.execute(business(), recovery.getId(), command)).isInstanceOf(ApiException.class);
         assertThat(recovery.getDetailsJson()).isEqualTo(original);
@@ -477,16 +476,16 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void businessQueueQueriesOnlyEscalatedManagerStagesBeforePaginationAndKeepsFacilityScope() {
+    void businessQueueQueriesOnlyEscalatedManagerStagesBeforePagination() {
         activateRecovery();
         recovery.setEscalated(true);
-        when(cases.findByRental_Facility_IdInAndEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), anyCollection(), any()))
+        when(cases.findByEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), any()))
             .thenReturn(List.of(recovery));
         var queue = workflow.listEscalatedOperations(business(), 2);
         assertThat(queue).extracting(ViolationRecoveryWorkflow.Entry::id).containsExactly(recovery.getId());
         assertThat(queue.getFirst().actions()).contains(ViolationRecoveryWorkflow.Action.ASSIGN);
-        verify(cases).findByRental_Facility_IdInAndEscalatedTrueAndStageInOrderByCreatedAtDesc(
-            eq(Set.of(facility.getId())), argThat(stages -> stages.contains(Stage.AWAITING_ASSIGNMENT)
+        verify(cases).findByEscalatedTrueAndStageInOrderByCreatedAtDesc(
+            argThat(stages -> stages.contains(Stage.AWAITING_ASSIGNMENT)
                 && stages.contains(Stage.BLOCKED) && !stages.contains(Stage.IN_PROGRESS)
                 && !stages.contains(Stage.AWAITING_ATTENDANCE) && !stages.contains(Stage.COMPLETED)),
             argThat(page -> page.getPageNumber() == 2 && page.getPageSize() == 30));
@@ -506,7 +505,7 @@ class ViolationRecoveryWorkflowTests {
     @Test
     void businessQueueAppearsAfterManagerDeadlineAndLeavesAfterAssignment() {
         activateRecovery();
-        when(cases.findByRental_Facility_IdInAndEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), anyCollection(), any()))
+        when(cases.findByEscalatedTrueAndStageInOrderByCreatedAtDesc(anyCollection(), any()))
             .thenAnswer(call -> recovery.isEscalated() && recovery.getStage() == Stage.AWAITING_ASSIGNMENT ? List.of(recovery) : List.of());
         var due = recovery.getActionDueAt();
         workflow.processDue(recovery.getId(), due.minusNanos(1));
@@ -575,7 +574,7 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void businessCannotTakeOverBeforeEscalationOrWithoutManagementScope() {
+    void businessCannotTakeOverBeforeEscalationAndHasGlobalScope() {
         activateRecovery();
         var assign = new ViolationRecoveryWorkflow.Command(ViolationRecoveryWorkflow.Action.ASSIGN,
             staff.getId(), null, null, null, null, null, null, null, null, null, null, null);
@@ -584,9 +583,9 @@ class ViolationRecoveryWorkflowTests {
         assertThatThrownBy(() -> workflow.execute(business(), recovery.getId(), assign)).isInstanceOf(ApiException.class);
         recovery.setEscalated(true);
         var readOnlyBusiness = actor(business, RoleCode.BUSINESS, null, FacilityScopeLevel.READ);
-        assertThat(workflow.get(readOnlyBusiness, recovery.getId()).actions()).doesNotContain(ViolationRecoveryWorkflow.Action.ASSIGN);
-        assertThatThrownBy(() -> workflow.execute(readOnlyBusiness, recovery.getId(), assign)).isInstanceOf(ApiException.class);
-        assertThat(recovery.getTask()).isNull();
+        assertThat(workflow.get(readOnlyBusiness, recovery.getId()).actions()).contains(ViolationRecoveryWorkflow.Action.ASSIGN);
+        workflow.execute(readOnlyBusiness, recovery.getId(), assign);
+        assertThat(recovery.getTask().getAssignedTo()).isEqualTo(staff);
     }
 
     @Test

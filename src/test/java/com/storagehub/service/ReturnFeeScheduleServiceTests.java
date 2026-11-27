@@ -40,6 +40,19 @@ class ReturnFeeScheduleServiceTests {
     }
 
     @Test
+    void overdueMultiplierIsVersionedAndLegacyClientsPreserveIt() {
+        var initial = service.get();
+        assertEquals(0, initial.overdueMultiplier().compareTo(new BigDecimal("1.5")));
+        var published = service.save(new ReturnFeeScheduleService.Schedule(initial.revision(), initial.prices(),
+            initial.details(), null, true, new BigDecimal("2.25")), UUID.randomUUID());
+        assertEquals(0, service.applicableAt(Instant.parse(published.publishedAt())).overdueMultiplier().compareTo(new BigDecimal("1.5")));
+        assertEquals(0, service.applicableAt(Instant.parse(published.publishedAt()).plusNanos(1000)).overdueMultiplier().compareTo(new BigDecimal("2.25")));
+        var next = service.save(new ReturnFeeScheduleService.Schedule(published.revision(), published.prices(), published.details(), null), UUID.randomUUID());
+        assertEquals(0, next.overdueMultiplier().compareTo(new BigDecimal("2.25")));
+        assertThrows(RuntimeException.class, () -> service.save(new ReturnFeeScheduleService.Schedule(next.revision(), next.prices(),
+            next.details(), null, true, new BigDecimal("10.01")), UUID.randomUUID()));
+    }
+    @Test
     void existingUninspectedOrdersKeepConfiguredPricesAndDetailsAcrossTwoPublications() {
         var oldOrder = rentalAt(Instant.now().minusSeconds(100));
         var baselinePayload = versions.findById(0L).orElseThrow().getPayload();

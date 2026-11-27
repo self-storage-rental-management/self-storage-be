@@ -22,9 +22,9 @@ public class ReturnFeeScheduleService {
     private final ReturnFeeScheduleVersionRepository versions;
     private final ObjectMapper mapper;
     public record Detail(String label, String trigger, String applies) {}
-    public record Schedule(long revision, Map<String, BigDecimal> prices, Map<String, Detail> details, String publishedAt, Boolean editableCatalog) {
+    public record Schedule(long revision, Map<String, BigDecimal> prices, Map<String, Detail> details, String publishedAt, Boolean editableCatalog, BigDecimal overdueMultiplier) {
         public Schedule(long revision, Map<String, BigDecimal> prices, Map<String, Detail> details, String publishedAt) {
-            this(revision, prices, details, publishedAt, false);
+            this(revision, prices, details, publishedAt, false, null);
         }
         public Schedule {
             if (prices != null) prices = Collections.unmodifiableMap(new LinkedHashMap<>(prices));
@@ -94,7 +94,8 @@ public class ReturnFeeScheduleService {
                 compatibleDetails.putIfAbsent(ReturnDamagePricing.FRAME_DAMAGE, defaults().details().get(ReturnDamagePricing.FRAME_DAMAGE));
             }
             return new Schedule(version.getRevision(), prices, compatibleDetails,
-                version.getPublishedAt() == null ? null : version.getPublishedAt().toString(), value.editableCatalog());
+                version.getPublishedAt() == null ? null : version.getPublishedAt().toString(), value.editableCatalog(),
+                value.overdueMultiplier() == null ? new BigDecimal("1.5") : value.overdueMultiplier());
         }
         catch (Exception e) { throw ApiExceptions.conflict("Không thể đọc biểu phí trả kho."); }
     }
@@ -122,10 +123,14 @@ public class ReturnFeeScheduleService {
             if (detail == null || !validText(detail.label(), 160) || !validText(detail.trigger(), 1000) || !validText(detail.applies(), 1000))
                 throw ApiExceptions.validation("Tên (160 ký tự), điều kiện và đối tượng áp dụng (1000 ký tự) không được để trống.", null);
         }
+        var multiplier = input.overdueMultiplier() == null ? current.overdueMultiplier() : input.overdueMultiplier();
+        if (multiplier == null || multiplier.signum() < 0 || multiplier.compareTo(BigDecimal.TEN) > 0
+            || multiplier.stripTrailingZeros().scale() > 2)
+            throw ApiExceptions.validation("Hệ số phí quá hạn phải từ 0 đến 10 và tối đa 2 chữ số thập phân.", null);
         var publishedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
         if (current.publishedAt() != null && !publishedAt.isAfter(Instant.parse(current.publishedAt())))
             publishedAt = Instant.parse(current.publishedAt()).plus(1, ChronoUnit.MICROS);
-        var next = new Schedule(current.revision() + 1, input.prices(), input.details(), publishedAt.toString(), true);
+        var next = new Schedule(current.revision() + 1, input.prices(), input.details(), publishedAt.toString(), true, multiplier);
         try {
             versions.saveAndFlush(new ReturnFeeScheduleVersion(next.revision(), publishedAt,
                 mapper.writeValueAsString(next), publisherId == null ? null : publisherId.toString()));
