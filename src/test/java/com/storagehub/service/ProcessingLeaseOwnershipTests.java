@@ -16,7 +16,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 class ProcessingLeaseOwnershipTests {
 
     private final ProcessingLeaseService service = new ProcessingLeaseService(
-        null, null, null, null, null, null, null, null, null);
+        null, null, null, null, null, null, null, null, null, null);
 
     private ProcessingLease heldBy(UUID userId, UUID sessionId) {
         ProcessingLease lease = new ProcessingLease();

@@ -234,9 +234,9 @@ class CheckInHandoverServiceTests {
         when(row.getReservation()).thenReturn(reservation);
         when(row.getCheckIn()).thenReturn(checkIn);
         when(row.getAssignment()).thenReturn(assignment);
-        when(reservationRepository.findCheckInWork(eq("PROCESSED"), any(), any(), any(), any(),
+        when(reservationRepository.findCheckInWorkOrdered(eq("PROCESSED"), any(), any(), any(), any(),
             isNull(), isNull(), eq(true), eq(false), eq(true), isNull(), isNull(), isNull(),
-            eq(false), any(), any())).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(row)));
+            eq(false), any(), eq("priority"), isNull(), any())).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(row)));
 
         var result = service.list(actor, null, null, "RECOVERY_TRANSFERRED",
             CheckInHandoverService.WorkGroup.PROCESSED, null, null, 0, 20, "test");
@@ -456,6 +456,65 @@ class CheckInHandoverServiceTests {
         assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("074204005212");
         assertThat(checkIn.getIdentityVerificationNote()).contains("Đã đối chiếu giấy tờ gốc");
         assertThat(checkIn.getIdentityVerifiedAt()).isNotNull();
+    }
+
+    @Test
+    void correctionAfterVerificationChangesOnlyHandoverRecord() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        var customer = reservation.getCustomer();
+        customer.getProfileDetails().setIdentityDocumentNumber("079203009988");
+        customer.getProfileDetails().setIdentityVerifiedAt(Instant.parse("2026-01-01T00:00:00Z"));
+        customer.setIdentityDocumentHash(CustomerIdentityPolicy.hash("079203009988"));
+        checkIn.setStatus(CheckInStatus.identity_verified);
+        checkIn.setIdentityVerifiedAt(Instant.now());
+        checkIn.setVerifiedIdentityDocument("079203009988");
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findByIdForUpdate(customer.getId())).thenReturn(Optional.of(customer));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+
+        assertThat(service.checkIdentityCorrection(actor, checkIn.getId(), new VerifyCheckInIdentityRequest("079203009989", null)).valid()).isTrue();
+        service.correctIdentity(actor, checkIn.getId(), new VerifyCheckInIdentityRequest("079203009989", "Đã đối chiếu giấy tờ gốc", false, true));
+
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("079203009989");
+        assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("079203009989");
+        assertThat(checkIn.getIdentityCorrected()).isTrue();
+        assertThat(customer.getProfileDetails().getIdentityDocumentNumber()).isEqualTo("079203009988");
+        assertThat(customer.getProfileDetails().getIdentityVerifiedAt()).isEqualTo(Instant.parse("2026-01-01T00:00:00Z"));
+        assertThat(customer.getIdentityDocumentHash()).isEqualTo(CustomerIdentityPolicy.hash("079203009988"));
+        verify(userRepository, never()).saveAndFlush(customer);
+        assertThatThrownBy(() -> service.correctIdentity(actor, checkIn.getId(), new VerifyCheckInIdentityRequest("079203009980", "Sửa lần hai", false, true)))
+            .hasMessageContaining("đã sử dụng lượt sửa");
+    }
+
+    @Test
+    void signsContractUsingCorrectedHandoverIdentityWhileAccountRemainsUnchanged() {
+        reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);
+        reservation.getCustomer().getProfileDetails().setIdentityDocumentNumber("079203009988");
+        reservation.setIdentityDocumentNumber("079203009989");
+        checkIn.setVerifiedIdentityDocument("079203009989");
+        checkIn.setStatus(CheckInStatus.identity_verified);
+        var evidence = entityWithId(new FileAsset());
+        evidence.setStatus(FileAssetStatus.ACTIVE);
+        evidence.setContentType("application/pdf");
+        evidence.setEntityType("CHECK_IN");
+        evidence.setEntityId(checkIn.getId());
+        when(fileAssetRepository.findById(evidence.getId())).thenReturn(Optional.of(evidence));
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(staff));
+        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
+        when(assignmentRepository.findFirstByReservation_IdOrderByAssignedAtDesc(reservation.getId())).thenReturn(Optional.of(assignment));
+
+        var signed = service.signContract(actor, checkIn.getId(), new com.storagehub.api.checkin.SignCheckInContractRequest(evidence.getId()));
+        assertThat(signed.contractEvidenceCode()).isEqualTo("HD-" + reservation.getReservationCode());
+        assertThat(signed.contractEvidenceReference()).isEqualTo(evidence.getId().toString());
+
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.contract_signed);
+        assertThat(checkIn.getVerifiedIdentityDocument()).isEqualTo("079203009989");
+        assertThat(reservation.getCustomer().getProfileDetails().getIdentityDocumentNumber()).isEqualTo("079203009988");
+        verify(userRepository, never()).saveAndFlush(reservation.getCustomer());
     }
 
     @Test
@@ -730,7 +789,7 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void recordsHandoverWithoutStartingPreparation() {
+    void recordsHandoverAndStartsPreparationWithoutCustomerConfirmation() {
         var at=Instant.parse("2026-10-30T03:00:00Z");
         var snapshot=pricingSnapshotRepository.findByReservation_Id(reservation.getId()).orElseThrow();
         reservation.setStatus(ReservationStatus.READY_FOR_CHECKIN);checkIn.setStatus(CheckInStatus.payment_collected);
@@ -751,58 +810,50 @@ class CheckInHandoverServiceTests {
         evidence.setEntityType("CHECK_IN");
         evidence.setEntityId(checkIn.getId());
         when(fileAssetRepository.findAllById(List.of(evidenceId))).thenReturn(List.of(evidence));
+        var preparation = org.mockito.Mockito.mock(CustomerReservationService.class);
+        ReflectionTestUtils.setField(service, "customerReservations", preparation);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            reservation.setStatus(ReservationStatus.PREPARING);
+            checkIn.setStatus(CheckInStatus.setup_in_progress);
+            checkIn.setSetupStartedAt(at);
+            checkIn.setSetupDueAt(at.plusSeconds(86400));
+            return null;
+        }).when(preparation).startPreparationAfterHandover(reservation.getId(), at, staff);
         try(var time=org.mockito.Mockito.mockStatic(Instant.class,org.mockito.Mockito.CALLS_REAL_METHODS)) {
             time.when(Instant::now).thenReturn(at);
             service.startSetup(actor, checkIn.getId(), new com.storagehub.api.checkin.StartCheckInSetupRequest(
                 "TEST-LOCK", "TEST handover", "Kho trống và sạch", List.of(evidenceId.toString())));
         }
         assertThat(checkIn.getCheckedInAt()).isEqualTo(at);
-        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.handover_pending_receipt);
-        assertThat(checkIn.getSetupStartedAt()).isNull();
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_in_progress);
+        assertThat(checkIn.getSetupStartedAt()).isEqualTo(at);
+        verify(preparation).startPreparationAfterHandover(reservation.getId(), at, staff);
         assertThat(checkIn.getRental()).isNull();
-        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.PREPARING);
         assertThat(reservation.getStartDate()).isEqualTo(LocalDate.of(2025, 1, 1));
         verify(rentalRepository, never()).saveAndFlush(any());
     }
 
     @Test
     void releasesAssignedUnitAfterThreeDaysWithoutCustomerReceiptConfirmation() {
-        Instant handoverAt = Instant.parse("2026-10-12T03:00:00Z");
-        Instant releaseAt = handoverAt.plusSeconds(3 * 86_400L);
         reservation.setStatus(ReservationStatus.AWAITING_CUSTOMER_RECEIPT);
         checkIn.setStatus(CheckInStatus.handover_pending_receipt);
-        checkIn.setCheckedInAt(handoverAt);
         unit.setStatus(StorageUnitStatus.assigned);
-        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
-        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
-        when(userRepository.findById(managerActor.userId())).thenReturn(Optional.of(manager));
-        when(checkInRepository.saveAndFlush(checkIn)).thenReturn(checkIn);
-        when(assignmentRepository.saveAndFlush(assignment)).thenReturn(assignment);
-        when(storageUnitRepository.saveAndFlush(unit)).thenReturn(unit);
-
-        try (var time = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
-            time.when(Instant::now).thenReturn(releaseAt);
-            var response = service.releaseAfterCustomerReceiptTimeout(managerActor, checkIn.getId());
-
-            assertThat(response.checkInStatus()).isEqualTo(CheckInStatus.cancelled);
-            assertThat(response.reservationStatus()).isEqualTo(ReservationStatus.CANCELLED);
-            assertThat(response.assignmentStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
-        }
-        assertThat(reservation.getAssignedUnit()).isNull();
-        assertThat(reservation.getCancellationType())
-            .isEqualTo(com.storagehub.domain.model.ReservationCancellationType.CUSTOMER_RECEIPT_TIMEOUT);
-        assertThat(assignment.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
-        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.available);
+        assertThatThrownBy(() -> service.releaseAfterCustomerReceiptTimeout(managerActor, checkIn.getId()))
+            .hasMessageContaining("Đã bỏ giải phóng");
+        assertThat(reservation.getAssignedUnit()).isNotNull();
+        assertThat(unit.getStatus()).isEqualTo(StorageUnitStatus.assigned);
+        verify(storageUnitRepository, never()).saveAndFlush(any());
     }
 
     @Test
     void staffCannotReleaseAssignedUnitAfterCustomerReceiptTimeout() {
         assertThatThrownBy(() -> service.releaseAfterCustomerReceiptTimeout(actor, checkIn.getId()))
-            .hasMessageContaining("Chỉ Manager");
+            .hasMessageContaining("Đã bỏ giải phóng");
         var admin = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.ADMIN),
             Set.of(SystemPermission.MANAGE_RENTALS.code()), Map.of());
         assertThatThrownBy(() -> service.releaseAfterCustomerReceiptTimeout(admin, checkIn.getId()))
-            .hasMessageContaining("Chỉ Manager");
+            .hasMessageContaining("Đã bỏ giải phóng");
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -960,18 +1011,18 @@ class CheckInHandoverServiceTests {
     }
 
     @Test
-    void deadlineStartsOnFirstComparisonIncludingMismatchAndDoesNotRestart() {
+    void deadlineStartsOnArrivalAndComparisonsDoNotRestartIt() {
         reservation.setHandoverArrivedAt(Instant.now().minusSeconds(86400));
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
         when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
-        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isNull();
+        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isEqualTo(reservation.getHandoverArrivedAt().plusSeconds(72 * 3600));
         assertThatThrownBy(() -> service.compareIdentity(actor, checkIn.getId(), "079203009989", false))
             .hasMessageContaining("xác nhận đúng người đặt kho");
-        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isNull();
+        assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isEqualTo(reservation.getHandoverArrivedAt().plusSeconds(72 * 3600));
         assertThat(service.compareIdentity(actor, checkIn.getId(), "079203009989", true))
             .isEqualTo(CheckInHandoverService.IdentityComparison.CORRECTABLE);
-        Instant first = reservation.getFirstHandoverComparisonAt();
+        Instant first = reservation.getHandoverArrivedAt();
         service.compareIdentity(actor, checkIn.getId(), "079203009988", true);
         assertThat(ReservationCheckInPolicy.completionDeadline(reservation)).isEqualTo(first.plusSeconds(72 * 3600));
     }
@@ -985,7 +1036,7 @@ class CheckInHandoverServiceTests {
         when(checkInRepository.attendanceCheckInId(reservation.getId())).thenReturn(Optional.of(checkIn.getId()));
         when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
         when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
-        Instant cutoff = start.plusSeconds(72 * 3600);
+        Instant cutoff = reservation.getHandoverArrivedAt().plusSeconds(72 * 3600);
         Instant expired = cutoff.plusNanos(1000);
         try (var clock = org.mockito.Mockito.mockStatic(Instant.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
             clock.when(Instant::now).thenReturn(cutoff);
@@ -1233,6 +1284,20 @@ class CheckInHandoverServiceTests {
         Rental rental = entityWithId(new Rental());
         rental.setInventoryFinalDeadlineAt(Instant.now().plusSeconds(86400));
         when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+    }
+
+    @Test
+    void prohibitedGoodsRecoveryRequiresVerifiedInventoryVisitBeforeEvidenceOrRecovery() {
+        prepareDraft();
+        reservation.setStatus(ReservationStatus.PREPARING);
+        checkIn.setInventoryAppointmentAt(Instant.now().plusSeconds(3600));
+        checkIn.setInventoryIdentityVerifiedAt(null);
+        var rental = rentalRepository.findByReservationIdForUpdate(reservation.getId()).orElseThrow();
+        rental.setInventoryPending(true);
+        var request = new CheckInHandoverService.ProhibitedGoodsRequest("Hàng cấm", List.of(UUID.randomUUID()));
+        assertThatThrownBy(() -> service.transferProhibitedGoods(actor, checkIn.getId(), request))
+            .isInstanceOf(ApiException.class).hasMessageContaining("xác minh danh tính");
+        verify(fileAssetRepository, never()).findAllById(any());
     }
 
     @Test
@@ -1593,5 +1658,48 @@ class CheckInHandoverServiceTests {
     private <T> T entityWithId(T entity) {
         ReflectionTestUtils.setField(entity, "id", UUID.randomUUID());
         return entity;
+    }
+
+    @Test
+    void thirdMismatchBlocksFurtherComparisonAndVerification() {
+        reservation.setHandoverArrivedAt(Instant.now());
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
+        for (int n = 0; n < 3; n++) service.compareIdentity(actor, checkIn.getId(), "079203009989", true);
+        assertThat(checkIn.getIdentityFailedAttempts()).isEqualTo(3);
+        assertThatThrownBy(() -> service.compareIdentity(actor, checkIn.getId(), "079203009988", true)).hasMessageContaining("3 lần");
+        assertThatThrownBy(() -> service.verifyIdentity(actor, checkIn.getId(), new VerifyCheckInIdentityRequest("079203009988", null, false, true))).hasMessageContaining("3 lần");
+    }
+
+    @Test
+    void correctionRequiresCheckAndLocksAfterTwoInvalidChecks() {
+        checkIn.setIdentityVerifiedAt(Instant.now());
+        checkIn.setVerifiedIdentityDocument("079203009988");
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
+        var valid = new VerifyCheckInIdentityRequest("079203009989", "Giấy tờ gốc", false, true);
+        assertThatThrownBy(() -> service.correctIdentity(actor, checkIn.getId(), valid)).hasMessageContaining("kiểm tra CCCD hợp lệ");
+        assertThat(service.checkIdentityCorrection(actor, checkIn.getId(), valid).valid()).isTrue();
+        assertThat(checkIn.getIdentityCorrectionFailedAttempts()).isZero();
+        var invalid = new VerifyCheckInIdentityRequest("abc", null);
+        assertThat(service.checkIdentityCorrection(actor, checkIn.getId(), invalid).failedAttempts()).isEqualTo(1);
+        assertThat(checkIn.getApprovedIdentityCorrection()).isNull();
+        assertThat(service.checkIdentityCorrection(actor, checkIn.getId(), invalid).failedAttempts()).isEqualTo(2);
+        assertThatThrownBy(() -> service.checkIdentityCorrection(actor, checkIn.getId(), valid)).hasMessageContaining("2 lần");
+        assertThatThrownBy(() -> service.correctIdentity(actor, checkIn.getId(), valid)).hasMessageContaining("2 lần");
+    }
+
+    @Test
+    void malformedComparisonConsumesAttemptButMatchDoesNot() {
+        reservation.setHandoverArrivedAt(Instant.now());
+        when(checkInRepository.findByIdForUpdate(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(userRepository.findByIdForUpdate(reservation.getCustomer().getId())).thenReturn(Optional.of(reservation.getCustomer()));
+        assertThat(service.compareIdentity(actor, checkIn.getId(), "invalid", true)).isEqualTo(CheckInHandoverService.IdentityComparison.REJECT);
+        assertThat(checkIn.getIdentityFailedAttempts()).isEqualTo(1);
+        assertThat(service.compareIdentity(actor, checkIn.getId(), "079203009988", true)).isEqualTo(CheckInHandoverService.IdentityComparison.MATCH);
+        assertThat(checkIn.getIdentityFailedAttempts()).isEqualTo(1);
     }
 }

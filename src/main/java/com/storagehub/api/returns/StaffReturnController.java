@@ -31,10 +31,11 @@ public class StaffReturnController {
         @RequestParam(required = false) ReturnCaseStatus status,
         @RequestParam(required = false) String q,
         @RequestParam(defaultValue = "0") int page,
-        @RequestParam(defaultValue = "20") int pageSize
+        @RequestParam(defaultValue = "20") int pageSize,
+        @RequestParam(defaultValue = "priority") String sort
     ) {
         return returnSettlementService.listReturns(
-            actorContext.required(), facilityId, status, q, page, pageSize, CorrelationIdContext.current()
+            actorContext.required(), facilityId, status, q, page, pageSize, sort, CorrelationIdContext.current()
         );
     }
 
@@ -76,13 +77,6 @@ public class StaffReturnController {
     public ApiResponse<ReturnCaseResponse> verifyIdentity(@PathVariable UUID returnId, @Valid @RequestBody IdentityRequest request) {
         return new ApiResponse<>(returnSettlementService.verifyReturnIdentity(actorContext.required(), returnId,
             request.attemptId(), request.documentNumber(), request.reverificationStartedAt(), request.evidenceId()), CorrelationIdContext.current());
-    }
-
-    @PostMapping("/{returnId}/property-check")
-    public ApiResponse<ReturnCaseResponse> savePropertyCheck(@PathVariable UUID returnId,
-        @Valid @RequestBody ReturnPropertyCheckRequest request) {
-        return new ApiResponse<>(returnSettlementService.savePropertyCheck(actorContext.required(), returnId, request),
-            CorrelationIdContext.current());
     }
 
     @PostMapping("/{returnId}/inspection")

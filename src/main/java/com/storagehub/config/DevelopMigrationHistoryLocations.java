@@ -30,7 +30,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                     if (result.next() && result.getInt(1) > 0) {
                         boolean clean2402 = false;
                         boolean clean2404 = false;
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402','2026112402','2026112403','2026112404')")) {
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101411','2026101603','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402','2026112402','2026112403','2026112404','2026112502','2026112502.1','2026112503','2026112503.1','2026112517','2026112515','2026112505','2026112516','2026112506','2026112601','2026112605','2026112602','2026112603','2026112603.1','2026112604','2026112606','2026112702','2026112709','2026112702.1','2026112703','2026112704','2026112705','2026112708','2026112715','2026112711','2026112706','2026112707','2026112714')")) {
                             while (rows.next()) {
                                 String version = rows.getString("version");
                                 boolean success = rows.getBoolean("success");
@@ -61,6 +61,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             }
         } catch (SQLException error) { throw new IllegalStateException("Cannot inspect actual Flyway history; no migration performed", error); }
         var selected = new ArrayList<>(locations.stream().filter(location -> !location.startsWith("classpath:db/migration-history/")).toList());
+        selectNovemberHistory(selected, applied);
         selected.add(select(applied, "2026112403", "V2026112403__ensure_money_receipt_codes.sql", "receipt-checked-2403",
             "V2026112403__register_money_receipt_codes.sql", "receipt-original-2403"));
         selected.add(select(applied, "2026102401", "V2026102401__support_handoff_retention.sql", "develop-support-2401",
@@ -128,7 +129,16 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             if(gateway!=null)require(gateway,"V2026101302__add_facility_operating_details.sql");
             selected.add("classpath:db/migration-history/develop-1302");
         }
-        boolean enableGateway=locations.contains("classpath:db/sandboxpaymentmigration");
+        boolean enableGateway = locations.contains("classpath:db/sandboxpaymentmigration");
+        boolean gatewayBridgeApplied = appliedJava(applied, "2026101411",
+            "db.renewalpaymentmigration.V2026101411__ensure_gateway_ledger_evidence");
+        boolean depositBridgeApplied = appliedJava(applied, "2026101603",
+            "db.renewalrecoverymigration.V2026101603__ensure_renewal_deposit_forfeitures");
+        boolean sqlGatewayApplied = historicalGateway != null
+            && "V2026101202__sandbox_gateway_ledger_evidence.sql".equals(historicalGateway.script());
+        if (!sqlGatewayApplied && (enableGateway || gatewayBridgeApplied || legacyGateway || legacyBinding)) {
+            selected.remove("classpath:db/ledger-sandbox-migration");
+        }
         boolean enableRecovery=locations.contains("classpath:db/recovery-migration");
         selected.remove("classpath:db/renewal-deposit-migration");
         // Keep the SQL identity already recorded at each colliding version. Unique
@@ -176,8 +186,8 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         selected.remove("classpath:db/renewalcalendarmigration");
         selected.remove("classpath:db/renewalpaymentmigration");
         javaMigrations.add(new db.renewalcalendarmigration.V2026101410__ensure_staff_signing_calendar());
-        if(enableGateway) javaMigrations.add(new db.renewalpaymentmigration.V2026101411__ensure_gateway_ledger_evidence());
-        if(enableGateway) javaMigrations.add(new db.renewalrecoverymigration.V2026101603__ensure_renewal_deposit_forfeitures());
+        if(enableGateway || gatewayBridgeApplied) javaMigrations.add(new db.renewalpaymentmigration.V2026101411__ensure_gateway_ledger_evidence());
+        if(enableGateway || depositBridgeApplied) javaMigrations.add(new db.renewalrecoverymigration.V2026101603__ensure_renewal_deposit_forfeitures());
         if(enableRecovery) javaMigrations.add(new db.renewalrecoverymigration.V2026101604__ensure_recovery_task_operations());
         configuration.javaMigrations(javaMigrations.toArray(JavaMigration[]::new));
         if(legacyBinding||legacyGateway||legacySequenceAt1901||applied.containsKey("2026101301")&&"V2026101301__create_staff_renewal_signing_calendar.sql".equals(applied.get("2026101301").script()))
@@ -188,6 +198,73 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         }
         return configuration.locations(selected.toArray(String[]::new));
     }
+    private static final java.util.List<NovemberMigration> NOVEMBER_MIGRATIONS = java.util.List.of(
+        new NovemberMigration("add_inventory_return_reminder_at", "2502 2502.1"),
+        new NovemberMigration("unify_setup_inspection_workflow", "2503 2503.1"),
+        new NovemberMigration("persist_inventory_intake_decision", "2517 @2503"),
+        new NovemberMigration("return_pallet_inventory", "2515 2505"),
+        new NovemberMigration("processing_leases", "2516 2506"),
+        new NovemberMigration("inspection_clock_starts_on_arrival", "2601 2605"),
+        new NovemberMigration("violation_recovery_workflow", "2602 2601"),
+        new NovemberMigration("return_reverification_and_handover_appointment", "2603 2602 2603.1"),
+        new NovemberMigration("allow_violation_recovery_notifications", "@2603"),
+        new NovemberMigration("allow_unscheduled_inventory_returns", "2604 2606"),
+        new NovemberMigration("account_lifecycle_and_lease_limits", "2702 2709 @2604 @2502"),
+        new NovemberMigration("renewal_customer_cancellation_accounting", "2702 2702.1"),
+        new NovemberMigration("fully_paid_renewal_cancellation", "2703"),
+        new NovemberMigration("unit_type_deadline_policy", "2704"),
+        new NovemberMigration("payment_complaint_querydr", "2705 2708 2715"),
+        new NovemberMigration("immutable_return_fee_schedule", "2711 @2705"),
+        new NovemberMigration("payment_complaint_reminders", "2706"),
+        new NovemberMigration("payment_gateway_create_date", "2707"),
+        new NovemberMigration("reservation_customer_snapshot", "2708 2714")
+    );
+
+    private record NovemberMigration(String name, String versions) {
+        String script(String version) {
+            return "V202611" + version.replace('.', '_') + "__" + name + ".sql";
+        }
+    }
+
+    private static void selectNovemberHistory(ArrayList<String> selected, Map<String, Applied> applied) {
+        // Reserve applied identities first. A renumbered script is only pending if
+        // none of its original identities has already been applied.
+        var occupied = new java.util.HashSet<>(applied.keySet());
+        var matched = new java.util.HashSet<String>();
+        for (var migration : NOVEMBER_MIGRATIONS) {
+            var choices = migration.versions().split(" ");
+            boolean installed = false;
+            for (String choice : choices) {
+                String version = choice.replace("@", "");
+                String script = migration.script(version);
+                var entry = applied.get("202611" + version);
+                if (entry != null && script.equals(entry.script())) {
+                    require(entry, script);
+                    selected.add(novemberLocation(script));
+                    matched.add("202611" + version);
+                    installed = true;
+                }
+            }
+            if (installed) continue;
+            var pending = Arrays.stream(choices).filter(choice -> !choice.startsWith("@")).toList();
+            if (pending.isEmpty()) continue;
+            String version = pending.stream().filter(choice -> occupied.add("202611" + choice)).findFirst()
+                .orElseThrow(() -> new IllegalStateException("No compatible Flyway version for " + migration.name()));
+            selected.add(novemberLocation(migration.script(version)));
+        }
+        for (var migration : NOVEMBER_MIGRATIONS) {
+            for (String choice : migration.versions().split(" ")) {
+                String key = "202611" + choice.replace("@", "");
+                if (applied.containsKey(key) && !matched.contains(key))
+                    throw new IllegalStateException("Unrecognized or failed migration history at " + key);
+            }
+        }
+    }
+
+    private static String novemberLocation(String script) {
+        return "classpath:db/migration-history/november/" + script.substring(0, script.length() - 4);
+    }
+
     private static void selectRenumbered(ArrayList<String> selected, Map<String,Applied> applied,
         String oldVersion, String newVersion, String name, String oldFolder, String newFolder) {
         if (applied.containsKey(oldVersion)) {
@@ -216,6 +293,14 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         if(developScript.equals(value.script())) {require(value,developScript);return "classpath:db/migration-history/"+developFolder;}
         require(value,legacyScript);return "classpath:db/migration-history/"+legacyFolder;
     }
+    private static boolean appliedJava(Map<String, Applied> applied, String version, String script) {
+        var migration = applied.get(version);
+        if (migration == null) return false;
+        if (!migration.success() || !"JDBC".equals(migration.type()) || !script.equals(migration.script()))
+            throw new IllegalStateException("Unrecognized or failed Java migration history at " + version);
+        return true;
+    }
+
     private static void require(Applied value,String script) {
         if(!value.success()||!"SQL".equals(value.type())||!script.equals(value.script()))
             throw new IllegalStateException("Unrecognized or failed applied migration history; stop rollout without repair/reset");

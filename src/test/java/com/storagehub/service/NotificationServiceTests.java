@@ -154,6 +154,26 @@ class NotificationServiceTests {
         verify(notificationRepository, org.mockito.Mockito.never()).save(any());
     }
 
+    @Test
+    void legacyHandoverNoticeDoesNotAskCustomerToConfirmOrExposeLockReference() {
+        var notice = new Notification();
+        notice.setUser(staff);
+        notice.setType(NotificationType.CHECKIN);
+        notice.setTitle("Đã bàn giao kho, chờ bạn xác nhận");
+        notice.setContent("RSV-TEST · Gian kho TEST-S-001 đã được bàn giao. Mã ổ khóa đã bàn giao: LOCK-001. Vui lòng kiểm tra mã và xác nhận đã nhận kho trên tài khoản khách hàng để bắt đầu thời gian chuẩn bị.");
+        notice.setRelatedEntityId(reservationId);
+        when(notificationRepository.search(any(), any(), any()))
+            .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(notice)));
+        var actor = new com.storagehub.security.ActorPrincipal(staff.getId(), null,
+            java.util.Set.of(RoleCode.CUSTOMER), java.util.Set.of(), java.util.Map.of());
+        var response = service.list(actor, null, 0, 20, "corr").data().getFirst();
+        assertThat(response.title()).isEqualTo("Đã ghi nhận bàn giao kho");
+        assertThat(response.content()).contains("Bạn không cần xác nhận nhận kho", "chuẩn bị xong")
+            .doesNotContain("LOCK-001", "Vui lòng kiểm tra mã", "để bắt đầu thời gian chuẩn bị");
+        assertThat(notice.getTitle()).isEqualTo("Đã bàn giao kho, chờ bạn xác nhận");
+        verify(notificationRepository, org.mockito.Mockito.never()).save(any());
+    }
+
     private User user(RoleCode role) {
         User user = new User();
         ReflectionTestUtils.setField(user, "id", UUID.randomUUID());

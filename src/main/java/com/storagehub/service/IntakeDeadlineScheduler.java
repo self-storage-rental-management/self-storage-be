@@ -20,11 +20,11 @@ public class IntakeDeadlineScheduler {
     private final ReturnCaseRepository returns;
     private final NotificationService notifications;
     private final UserRepository users;
+    @org.springframework.beans.factory.annotation.Autowired
+    private ViolationRecoveryWorkflow violationRecovery;
     private final Clock clock;
     private final IntakePolicyProperties policy;
     private final IntakeTimelineCalculator timeline;
-    @org.springframework.beans.factory.annotation.Autowired
-    private ViolationRecoveryWorkflow violationRecovery;
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
@@ -80,6 +80,21 @@ public class IntakeDeadlineScheduler {
                         recoverUnconfirmedInventory(r, now);
                     else if (!now.isBefore(r.getInventoryResultPublishedAt().plus(24, ChronoUnit.HOURS)))
                         notify(r, "Nhắc xác nhận kết quả kiểm kê", "Vui lòng xác nhận hoặc gửi ý kiến về kết quả kiểm kê trong 48 giờ.");
+                }
+            }
+            // Customer never arrived for the inventory visit: escalate once the final
+            // deadline passes, as long as nothing else already owns the case.
+            if (r.getMoveInCompletedAt() != null && r.isInventoryPending()
+                && (violationRecovery != null || r.getInventoryArrivedAt() == null) && r.getInventoryResultPublishedAt() == null
+                && r.getInventoryRemovalPublishedAt() == null && r.getInventoryEscalatedAt() == null
+                && r.getInventoryFinalDeadlineAt() != null && !now.isBefore(r.getInventoryFinalDeadlineAt())
+                && List.of(RentalStatus.setup, RentalStatus.active).contains(r.getStatus())) {
+                if (violationRecovery == null) recovery(r, now, "Quá hạn đến kiểm kê");
+                else {
+                    var reason = r.getInventoryArrivedAt() == null ? ViolationRecovery.Reason.INVENTORY_NO_SHOW
+                        : r.getInventoryIdentityVerifiedAt() == null ? ViolationRecovery.Reason.INVENTORY_IDENTITY_FAILED
+                        : ViolationRecovery.Reason.INVENTORY_TIMEOUT;
+                    detect(r, reason, r.getInventoryFinalDeadlineAt(), now, true);
                 }
             }
             // Once the unit has actually been handed back empty, no further goods-movement

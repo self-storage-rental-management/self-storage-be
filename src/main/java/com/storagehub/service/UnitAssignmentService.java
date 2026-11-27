@@ -153,7 +153,10 @@ public class UnitAssignmentService {
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
         Instant now = Instant.now();
         current.setStatus(UnitAssignmentStatus.CANCELLED);
-        if (previousUnit.getStatus() == StorageUnitStatus.reserved) {
+        if (Boolean.TRUE.equals(request.previousUnitNeedsMaintenance())) {
+            previousUnit.setStatus(StorageUnitStatus.maintenance);
+            previousUnit.setAvailableFrom(null);
+        } else if (previousUnit.getStatus() == StorageUnitStatus.reserved) {
             previousUnit.setStatus(StorageUnitStatus.available);
         }
         UnitAssignment replacement = new UnitAssignment();
@@ -183,7 +186,9 @@ public class UnitAssignmentService {
             Map.of(
                 "storageUnitId", nextUnit.getId(),
                 "assignmentStatus", UnitAssignmentStatus.ACTIVE,
-                "reason", request.reason().trim()
+                "reason", request.reason().trim(),
+                "previousStorageUnitStatus", previousUnit.getStatus(),
+                "previousUnitNeedsMaintenance", Boolean.TRUE.equals(request.previousUnitNeedsMaintenance())
             )
         );
         notificationService.createNotification(

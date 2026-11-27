@@ -28,7 +28,7 @@ public class OverdueService {
     private static final ZoneId ZONE=BusinessTime.ZONE;
     private final EntityManager em;private final ObjectMapper mapper;private final RenewalPersistence store;private final AuditLogService audit;
     private final ObjectProvider<Clock> clocks;private final ObjectProvider<FinancialSource> finances;
-    private final ObjectProvider<TermSource> terms;private final ObjectProvider<ReminderSource> reminders;private final ObjectProvider<RecoverySource> recoveries;
+    private final ObjectProvider<TermSource> terms;private final ObjectProvider<RecoverySource> recoveries;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
     @org.springframework.beans.factory.annotation.Autowired
@@ -64,21 +64,6 @@ public class OverdueService {
     public OverdueResponse detail(ActorPrincipal actor,String id){
         id=resolveCaseRef(id);
         var ref=parse(id);var rental=visible(actor,ref,false);return current(rental,ref);
-    }
-    public OverdueResponse.FollowUp followUp(ActorPrincipal actor,String id,OverdueCommands.FollowUp body,String key) {
-        id=resolveCaseRef(id);
-        var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
-        Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_follow_up",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
-        var current=current(r,ref);
-        if(body.type()==OverdueCommands.Type.REMINDER&&"COMPLETED".equals(current.workflowStatus()))throw ApiExceptions.conflict("Hồ sơ thu hồi đã hoàn tất, không thể gửi nhắc quá hạn.");
-        var state=stream(id,body.expectedVersion());UUID notification=null;String policyRef=null,version=null;
-        if(body.type()==OverdueCommands.Type.REMINDER){var source=reminders.getIfAvailable();if(source==null||!source.atomic())throw deferred("Reminder policy/delivery unavailable");var policy=source.policy(r).orElseThrow(()->deferred("Reminder policy UNKNOWN"));
-            if(policy.reference()==null||policy.reference().isBlank()||policy.version()==null||policy.version().isBlank()||policy.cooldown()==null||policy.cooldown().isNegative()||policy.cooldown().isZero())throw deferred("Reminder policy incomplete");
-            var previous=em.createQuery("select f from OverdueFollowUp f where f.caseRef=:id and f.type='REMINDER' order by f.recordedAt desc",OverdueFollowUp.class).setParameter("id",id).setMaxResults(1).getResultList();
-            if(!previous.isEmpty()&&now().isBefore(previous.getFirst().getRecordedAt().plus(policy.cooldown())))throw ApiExceptions.conflict("Reminder throttled by shared policy");
-            notification=source.enqueue(r,id,body.content(),key,now());if(notification==null)throw deferred("No persisted notification reference");policyRef=policy.reference();version=policy.version();
-        }
-        var event=new OverdueFollowUp(id,r,body.type().name(),body.content(),actor.userId(),now(),notification,policyRef,version);return finish(user,r,state,event,"overdue_follow_up",key,payload);
     }
     public OverdueResponse.FollowUp recovery(ActorPrincipal actor,String id,OverdueCommands.Recovery body,String key) {
         id=resolveCaseRef(id);
