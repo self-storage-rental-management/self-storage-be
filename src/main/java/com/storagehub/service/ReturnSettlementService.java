@@ -2189,59 +2189,34 @@ public class ReturnSettlementService {
         if (recoveryGuard != null) {
             recoveryGuard.requireManualSettlement(returnCase);
         }
-        boolean vnpay = "VNPAY".equalsIgnoreCase(request.paymentMethod())
-            || "VNPAY_GATEWAY".equalsIgnoreCase(request.paymentMethod());
+        String method = request.paymentMethod();
+        if ("VNPAY".equalsIgnoreCase(method) || "VNPAY_GATEWAY".equalsIgnoreCase(method)) {
+            throw ApiExceptions.conflict("Không hỗ trợ hoàn tiền qua VNPay. Vui lòng hoàn bằng chuyển khoản hoặc tiền mặt kèm biên lai.");
+        }
+        if (!"CASH".equals(method) && !"BANK_TRANSFER".equals(method)) {
+            throw ApiExceptions.validation("Vui lòng chọn hoàn tiền bằng chuyển khoản hoặc tiền mặt.", null);
+        }
         if (returnCase.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
             if (returnCase.getStatus() != ReturnCaseStatus.refund_pending || zeroIfNull(returnCase.getNetRefundAmount()).signum() <= 0)
                 throw ApiExceptions.conflict("Hồ sơ chưa có khoản hoàn tiền đang chờ xử lý.");
-            if (vnpay)
-                throw ApiExceptions.conflict("Vui lòng ghi nhận hoàn tiền đã đối chiếu bằng biên lai cho hồ sơ sai lệch kiểm kê.");
             requireFinance().requireCurrent(returnCase);
         }
         if (hasTwoMismatchObligations(returnCase) && !requireFinance().hasCollectionReceipt(returnCase))
             throw ApiExceptions.conflict("Hồ sơ cần đủ biên lai thực thu và thực hoàn. Vui lòng đối soát thu tiền trước và ghi hoàn bằng biên lai.");
-        String settlementReference;
-        if (vnpay) {
-            if (vnpayService == null || paymentRepository == null || request.originalPaymentId() == null) {
-                throw ApiExceptions.conflict("Original VNPay payment is required for a gateway refund");
-            }
-            var originalPayment = paymentRepository.findById(request.originalPaymentId())
-                .orElseThrow(() -> ApiExceptions.notFound("Original payment was not found"));
-            if (originalPayment.getReservation() == null
-                || !originalPayment.getReservation().getId().equals(returnCase.getRental().getReservation().getId())) {
-                throw ApiExceptions.conflict("Original payment does not belong to this rental");
-            }
-            settlementReference = vnpayService.executeApprovedReturnRefund(
-                actor, originalPayment.getId(), returnCase.getNetRefundAmount(),
-                request.notes() == null || request.notes().isBlank() ? "StorageHub return refund" : request.notes(),
-                "127.0.0.1"
-            );
-            if (finance() != null) {
-                finance().requireCurrent(returnCase);
-                finance().settle(returnCase, actor.userId(), settlementReference, true);
-            }
-        } else {
-            if (!Boolean.TRUE.equals(request.confirmed()) || request.amount() == null) {
-                throw ApiExceptions.validation("Vui lòng xác nhận số tiền thực hoàn và đối chiếu biên lai trước khi ghi nhận.", null);
-            }
-            if (request.receiptFileId() == null) {
-                throw ApiExceptions.validation("Vui lòng đính kèm biên lai thực hoàn.", null);
-            }
-            if (returnCase.getStatus() != ReturnCaseStatus.refund_pending
-                || returnCase.getNetRefundAmount() == null || returnCase.getNetRefundAmount().signum() <= 0
-                || returnCase.getNetRefundAmount().compareTo(request.amount()) != 0) {
-                throw ApiExceptions.conflict("Số tiền thực hoàn không khớp với bảng kê đang chờ hoàn tiền.");
-            }
-            String method = request.paymentMethod() != null && !request.paymentMethod().isBlank()
-                ? request.paymentMethod() : "BANK_TRANSFER";
-            String txRef = returnSettlementReference(returnCase, method, request.transactionReference());
-
-            if (finance() != null) {
-                finance().receipt(actor, returnCase, method, txRef, request.receiptFileId());
-                finance().settle(returnCase, actor.userId(), txRef, true);
-            }
-            settlementReference = txRef;
+        if (!Boolean.TRUE.equals(request.confirmed()) || request.amount() == null) {
+            throw ApiExceptions.validation("Vui lòng xác nhận số tiền thực hoàn và đối chiếu biên lai trước khi ghi nhận.", null);
         }
+        if (request.receiptFileId() == null) {
+            throw ApiExceptions.validation("Vui lòng đính kèm biên lai thực hoàn.", null);
+        }
+        if (returnCase.getStatus() != ReturnCaseStatus.refund_pending
+            || returnCase.getNetRefundAmount() == null || returnCase.getNetRefundAmount().signum() <= 0
+            || returnCase.getNetRefundAmount().compareTo(request.amount()) != 0) {
+            throw ApiExceptions.conflict("Số tiền thực hoàn không khớp với bảng kê đang chờ hoàn tiền.");
+        }
+        String settlementReference = returnSettlementReference(returnCase, method, request.transactionReference());
+        requireFinance().receipt(actor, returnCase, method, settlementReference, request.receiptFileId());
+        requireFinance().settle(returnCase, actor.userId(), settlementReference, true);
 
         returnCase.setStatus(ReturnCaseStatus.completed);
         returnCase.setCompletedAt(Instant.now());
