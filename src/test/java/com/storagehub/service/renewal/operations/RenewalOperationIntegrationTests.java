@@ -582,4 +582,18 @@ class RenewalOperationIntegrationTests {
         var terms=new RenewalQuoteResponse.Terms(r.getContractEndDate(),LocalDate.of(2026,10,7),LocalDate.of(2026,11,7),LocalDate.of(2026,11,6),t.getId(),"TEST",UUID.randomUUID(),"v1",1,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),BigDecimal.ZERO,new BigDecimal("100"),new BigDecimal("20"),new BigDecimal("80"),"VND","TEST","v1",unit.getId(),f.getId(),exclusive?"EXCLUSIVE":"INCLUSIVE",r.getStartDate());
         var quote=store.storeQuote(r,u,terms,NOW,NOW.plusSeconds(1800));var n=new Renewal();n.setRental(r);n.setRequestedBy(u);n.setAmount(terms.totalAfterDiscount());n.setNewEndDate(terms.newEndDate());em.persist(n);var wf=store.acceptInitial(r,n,quote,NOW,"TEST");n.setStatus(RenewalStatus.approved);wf.reviewed(u,NOW,"TEST",NOW.plusSeconds(1800),UUID.randomUUID());em.flush();return n;
     }
+
+    @Test void signingAppointmentSortKeepsAssignmentScopeAndPagination() {
+        em.createNativeQuery("create table if not exists business_record_codes (resource_key varchar(120) primary key, display_code varchar(16))").executeUpdate();
+        em.createNativeQuery("create table if not exists money_receipt_codes (source_type varchar(24), source_id binary(16), receipt_code varchar(20))").executeUpdate();
+        em.createNativeQuery("create alias if not exists bin_to_uuid for 'com.storagehub.service.ReturnClearanceConcurrencyTests.binaryUuid'").executeUpdate();
+        var n=scheduled(); scheduled(); ops.assignedIds=Set.of(n.getId());
+        for(String sort:List.of("appointmentStart,asc","createdAt,asc","createdAt,desc")) {
+            var list=service.appointments(actor(n,RoleCode.STAFF),null,LocalDate.of(2026,10,8),"SIGNING",0,1,sort,"test");
+            assertThat(list.pagination().totalItems()).isEqualTo(1);
+            assertThat(list.data()).extracting(row -> row.renewalId()).containsExactly(n.getId());
+        }
+        assertThatThrownBy(()->service.appointments(actor(n,RoleCode.STAFF),null,null,null,0,1,"invalid","test"))
+            .hasMessageContaining("không hợp lệ");
+    }
 }

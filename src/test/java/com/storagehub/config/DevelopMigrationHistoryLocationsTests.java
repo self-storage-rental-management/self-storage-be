@@ -29,6 +29,24 @@ class DevelopMigrationHistoryLocationsTests {
             verify(statement,never()).execute(anyString());verify(statement,never()).executeUpdate(anyString());
         }
     }
+    @Test void inspectionClockAt2601KeepsDevelopCheckinHistoryWithoutReplayingLegacyScripts() throws Exception {
+        var datasource=mock(DataSource.class);var connection=mock(Connection.class);var query=mock(PreparedStatement.class);
+        var exists=mock(ResultSet.class);var statement=mock(Statement.class);var rows=mock(ResultSet.class);
+        when(datasource.getConnection()).thenReturn(connection);when(connection.prepareStatement(anyString())).thenReturn(query);
+        when(query.executeQuery()).thenReturn(exists);when(exists.next()).thenReturn(true);when(exists.getInt(1)).thenReturn(1);
+        when(connection.createStatement()).thenReturn(statement);when(statement.executeQuery(anyString())).thenReturn(rows);
+        when(rows.next()).thenReturn(true,true,true,false);
+        when(rows.getString("version")).thenReturn("2026112601","2026112602","2026112603");
+        when(rows.getString("script")).thenReturn("V2026112601__inspection_clock_starts_on_arrival.sql",
+            "V2026112602__violation_recovery_workflow.sql","V2026112603__return_reverification_and_handover_appointment.sql");
+        when(rows.getString("type")).thenReturn("SQL");when(rows.getBoolean("success")).thenReturn(true);
+        var config=Flyway.configure().dataSource(datasource).locations("classpath:db/migration");
+        DevelopMigrationHistoryLocations.configure(config);
+        assertThat(config.getLocations()).extracting(Object::toString)
+            .contains("classpath:db/migration-history/develop-2602","classpath:db/migration-history/develop-2603")
+            .doesNotContain("classpath:db/migration-history/legacy-2601","classpath:db/migration-history/legacy-2602");
+        verify(statement,never()).execute(anyString());verify(statement,never()).executeUpdate(anyString());
+    }
     @Test void paymentOnlyLocationDoesNotInspectOrAlterDatasource(){
         var datasource=mock(DataSource.class);var config=Flyway.configure().dataSource(datasource).locations("classpath:db/paymentmigration");
         DevelopMigrationHistoryLocations.configure(config);

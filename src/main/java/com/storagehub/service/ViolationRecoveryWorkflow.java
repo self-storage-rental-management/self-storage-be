@@ -192,6 +192,19 @@ public class ViolationRecoveryWorkflow {
     }
 
     @Transactional(readOnly = true)
+    public List<Entry> list(ActorPrincipal actor, int page, String sort) {
+        if (sort.equals("priority")) return list(actor, page);
+        if (!java.util.Set.of("createdAt,desc", "createdAt,asc").contains(sort))
+            throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.", null);
+        if (!actor.hasRole(RoleCode.STAFF)) throw ApiExceptions.forbidden("Chỉ nhân viên được xem danh sách công việc được phân công.");
+        var paging = PageRequest.of(Math.max(0, page), 30,
+            org.springframework.data.domain.Sort.by(sort.endsWith("asc") ? org.springframework.data.domain.Sort.Direction.ASC
+                : org.springframework.data.domain.Sort.Direction.DESC, "createdAt").and(org.springframework.data.domain.Sort.by("id")));
+        return recoveries.findByTask_AssignedTo_Id(actor.userId(), paging).stream()
+            .filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<Entry> list(ActorPrincipal actor, int page) {
         var paging = PageRequest.of(Math.max(0, page), 30);
         List<ViolationRecovery> rows;

@@ -101,7 +101,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         when(rentals.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
         actor = new ActorPrincipal(user.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of());
 
-        when(reservations.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+        when(reservations.findByIdForUpdate(reservation.getId()))
             .thenReturn(Optional.of(reservation));
         when(checkIns.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
         when(snapshots.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(snapshot));
@@ -118,7 +118,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     @SuppressWarnings("unchecked")
     private Map<String, Object> evidence(Rental rental) {
         var after = ArgumentCaptor.forClass(Object.class);
-        verify(audit).recordMutation(eq(reservation.getCustomer()), eq("CUSTOMER_RECEIPT_CONFIRMED"),
+        verify(audit).recordMutation(eq(reservation.getCustomer()), eq("STAFF_HANDOVER_PREPARATION_STARTED"),
             eq("Reservation"), eq(reservation.getId()), eq(reservation.getFacility().getId()), any(), after.capture());
         var payload = (Map<String, Object>) after.getValue();
         assertThat(payload).containsEntry("status", ReservationStatus.COMPLETED)
@@ -133,7 +133,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         var paidStart = rental.getStartDate();
         var contractEnd = rental.getContractEndDate();
 
-        var response = service.confirmReceipt(actor, reservation.getId());
+        var response = service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer());
 
         assertThat(response.getReservation().getStatus()).isEqualTo(ReservationStatus.COMPLETED);
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.setup);
@@ -152,7 +152,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         var paidStart = rental.getStartDate();
         reservation.setStatus(ReservationStatus.COMPLETED);
 
-        service.confirmReceipt(actor, reservation.getId());
+        service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer());
 
         assertThat(rental.getStatus()).isEqualTo(RentalStatus.setup);
         assertThat(rental.getStartDate()).isEqualTo(paidStart);
@@ -193,7 +193,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     void missingInventoryStillBlocksEarlyReceipt() {
         var rental = earlyInventoryRental();
         rental.setInventoryVerifiedAt(null);
-        assertThatThrownBy(() -> service.confirmReceipt(actor, reservation.getId()))
+        assertThatThrownBy(() -> service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer()))
             .isInstanceOf(com.storagehub.common.api.ApiException.class);
         verifyNoInteractions(units, audit, notifications, ledger);
     }
@@ -202,7 +202,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     void mismatchedInventoryStillBlocksEarlyReceipt() {
         earlyInventoryRental();
         checkIn.setInventoryVerifiedAt(checkIn.getInventoryVerifiedAt().minusSeconds(1));
-        assertThatThrownBy(() -> service.confirmReceipt(actor, reservation.getId()))
+        assertThatThrownBy(() -> service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer()))
             .isInstanceOf(com.storagehub.common.api.ApiException.class);
         verifyNoInteractions(units, audit, notifications, ledger);
     }
@@ -211,7 +211,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     void returnedRentalStillBlocksEarlyReceipt() {
         var rental = earlyInventoryRental();
         rental.setStatus(RentalStatus.completed);
-        assertThatThrownBy(() -> service.confirmReceipt(actor, reservation.getId()))
+        assertThatThrownBy(() -> service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer()))
             .isInstanceOf(com.storagehub.common.api.ApiException.class);
         verifyNoInteractions(units, audit, notifications, ledger);
     }
@@ -246,7 +246,7 @@ class CustomerReceiptPeriodCompatibilityTests {
 
     @Test
     void newReceiptPreservesExistingHandoverWithoutCreatingRentalOrLedger() {
-        var response = service.confirmReceipt(actor, reservation.getId());
+        var response = service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer());
         var rental = checkIn.getRental();
         assertThat(response.getReservation().getStatus()).isEqualTo(ReservationStatus.COMPLETED);
         assertThat(rental.getStartDate()).isEqualTo(reservation.getStartDate());
@@ -275,7 +275,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         existing.setFacility(reservation.getFacility());
         when(rentals.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(existing));
 
-        assertThatThrownBy(()->service.confirmReceipt(actor, reservation.getId())).hasMessageContaining("Thiếu hoặc lệch chứng cứ bàn giao/thời gian chuẩn bị");
+        assertThatThrownBy(()->service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer())).hasMessageContaining("Thiếu hoặc lệch chứng cứ bàn giao/thời gian chuẩn bị");
 
         assertThat(checkIn.getRental()).isNotSameAs(existing);
         assertThat(existing.getContractEndDate()).isEqualTo(LocalDate.of(2026, 10, 31));
@@ -288,7 +288,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     @Test
     void completedCheckInWithoutHandoverRentalCannotInventRentalOrLedger() {
         when(rentals.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.empty());
-        assertThatThrownBy(()->service.confirmReceipt(actor,reservation.getId()))
+        assertThatThrownBy(()->service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer()))
             .hasMessageContaining("Thiếu hồ sơ thuê từ bàn giao thực tế");
         verify(rentals,never()).saveAndFlush(any());
         verifyNoInteractions(ledger,units,audit,notifications);
@@ -298,7 +298,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     void completedReplayDoesNotCreateRentalOrOpenAnotherLedgerAccount() {
         reservation.setStatus(ReservationStatus.COMPLETED);
 
-        service.confirmReceipt(actor, reservation.getId());
+        service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer());
 
         verify(rentals, atLeastOnce()).findByReservation_Id(reservation.getId());
         verifyNoInteractions(audit, notifications, units, ledger, ledgerStores);
@@ -309,7 +309,7 @@ class CustomerReceiptPeriodCompatibilityTests {
     void pendingHandoverRemainsBlockedWithoutLedgerWrites() {
         checkIn.setStatus(CheckInStatus.scheduled);
 
-        assertThatThrownBy(() -> service.confirmReceipt(actor, reservation.getId()))
+        assertThatThrownBy(() -> service.startPreparationAfterHandover(reservation.getId(), Instant.now(), reservation.getCustomer()))
             .hasMessageContaining("handover is not completed");
 
         verifyNoInteractions(rentals, audit, notifications, units, ledger, ledgerStores);
@@ -320,7 +320,7 @@ class CustomerReceiptPeriodCompatibilityTests {
         var staff = new ActorPrincipal(actor.userId(), actor.sessionId(), Set.of(RoleCode.STAFF), Set.of(), Map.of());
 
         assertThatThrownBy(() -> service.confirmReceipt(staff, reservation.getId()))
-            .hasMessageContaining("Only customer");
+            .hasMessageContaining("Không còn bước");
 
         verifyNoInteractions(reservations, rentals, audit, notifications, units, ledger, ledgerStores);
     }

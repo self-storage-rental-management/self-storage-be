@@ -7,6 +7,10 @@ import java.util.UUID;
 
 public record ChangeUnitAssignmentRequest(
     @NotNull UUID storageUnitId,
-    @NotBlank @Size(max = 1000) String reason
+    @NotBlank @Size(max = 1000) String reason,
+    Boolean previousUnitNeedsMaintenance
 ) {
+    public ChangeUnitAssignmentRequest(UUID storageUnitId, String reason) {
+        this(storageUnitId, reason, false);
+    }
 }
