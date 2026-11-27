@@ -8,16 +8,16 @@ import java.util.*;
 public record OverdueResponse(String caseRef,UUID rentalId,UUID facilityId,UUID customerId,String customerName,
     String storageUnitCode,String kind,long overdueDays,String priority,UUID obligationRef,
     Instant dueAt,BigDecimal outstanding,String currency,String policyRef,String policyVersion,
-    Instant recoveryCutoff,boolean recoveryEligible,long followUpVersion,String workflowStatus,UUID recoveryTaskId,String displayCode) {
+    Instant recoveryCutoff,boolean recoveryEligible,long followUpVersion,String workflowStatus,UUID recoveryTaskId,String displayCode,String rentalDisplayCode) {
     public OverdueResponse(String caseRef,UUID rentalId,UUID facilityId,UUID customerId,String customerName,
         String storageUnitCode,String kind,long overdueDays,String priority,UUID obligationRef,
         Instant dueAt,BigDecimal outstanding,String currency,String policyRef,String policyVersion,
         Instant recoveryCutoff,boolean recoveryEligible,long followUpVersion) {
         this(caseRef,rentalId,facilityId,customerId,customerName,storageUnitCode,kind,overdueDays,priority,obligationRef,
-            dueAt,outstanding,currency,policyRef,policyVersion,recoveryCutoff,recoveryEligible,followUpVersion,null,null,null);
+            dueAt,outstanding,currency,policyRef,policyVersion,recoveryCutoff,recoveryEligible,followUpVersion,null,null,null,null);
     }
     public record ListResult(List<OverdueResponse> data,PageResponse.Pagination pagination,String correlationId,
         Instant asOf,String completeness,List<String> missingSources) {}
     public record FollowUp(UUID id,String caseRef,String type,String content,UUID actorId,Instant recordedAt,
-        UUID externalRef,String policyRef,String policyVersion,long followUpVersion) {}
+        UUID externalRef,String policyRef,String policyVersion,long followUpVersion,String actorName) {}
 }

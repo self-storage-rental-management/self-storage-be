@@ -54,7 +54,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 @RequiredArgsConstructor
 @Slf4j
 public class LocalDemoDataInitializer {
-    private static final Set<String> PALLET_DEMO_FACILITIES = Set.of("BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01");
+    private static final Set<String> PALLET_DEMO_FACILITIES = Set.of(
+        "BD-F01", "HCM-Q1-F01", "FPT-TD-F01", "GEMINI-01", "FPT-GEMINI-GPT", "HTP-F01", "FPT-TV-F01"
+    );
+    private static final Set<String> FIVE_UNIT_FACILITIES = Set.of();
     // v6 demo pallet: it is supported by both beams and may overhang each side
     // by at most five centimetres.
     private static final RackLayout.Pallet DEMO_PALLET = new RackLayout.Pallet(
@@ -227,7 +230,9 @@ public class LocalDemoDataInitializer {
                 unitType.setWidthM(decimal(definition.widthM()));
                 unitType.setHeightM(decimal(definition.heightM()));
                 if (unitType.getMonthlyPrice() == null || unitType.getMonthlyPrice().signum() <= 0) unitType.setMonthlyPrice(decimal(definition.monthlyPrice()));
-                unitType.setSecurityDepositAmount(BigDecimal.ZERO);
+                if (unitType.getSecurityDepositAmount() == null || unitType.getSecurityDepositAmount().signum() <= 0) {
+                    unitType.setSecurityDepositAmount(decimal(definition.monthlyPrice()));
+                }
                 unitType.setMaxLoadKg(decimal(definition.maxLoadKg()));
                 unitType.setMaxStoredLoadKg(decimal(definition.maxStoredLoadKg()));
                 unitType.setStorageAisleWidthM(decimal(definition.storageAisleWidthM()));
@@ -278,20 +283,6 @@ public class LocalDemoDataInitializer {
         return unitTypeDefinitions().stream().filter(d -> d.code().equals("S")).findFirst().orElse(null);
     }
 
-    private boolean matchesDemoType(UnitType type, UnitTypeDefinition definition) {
-        return type.getStatus() == UnitTypeStatus.active && definition.name().equals(type.getName())
-            && decimal(definition.lengthM()).compareTo(type.getLengthM()) == 0
-            && decimal(definition.widthM()).compareTo(type.getWidthM()) == 0
-            && decimal(definition.heightM()).compareTo(type.getHeightM()) == 0
-            && decimal(definition.maxLoadKg()).compareTo(type.getMaxLoadKg()) == 0
-            && type.getMaxStoredLoadKg() != null
-            && decimal(definition.maxStoredLoadKg()).compareTo(type.getMaxStoredLoadKg()) == 0
-            && type.getRackCount() == definition.rackCount()
-            && decimal(4).compareTo(type.getRackLengthM()) == 0
-            && decimal(2).compareTo(type.getRackWidthM()) == 0
-            && decimal(4.5).compareTo(type.getRackHeightM()) == 0;
-    }
-
     private boolean isSeedDemoType(UnitType type, UnitTypeDefinition definition) {
         return type.getStatus() == UnitTypeStatus.active && definition.name().equals(type.getName())
             && type.getRackCount() == definition.rackCount()
@@ -304,6 +295,9 @@ public class LocalDemoDataInitializer {
         type.setLengthM(decimal(definition.lengthM()));
         type.setWidthM(decimal(definition.widthM()));
         type.setHeightM(decimal(definition.heightM()));
+        if (type.getSecurityDepositAmount() == null || type.getSecurityDepositAmount().signum() <= 0) {
+            type.setSecurityDepositAmount(decimal(definition.monthlyPrice()));
+        }
         type.setMaxLoadKg(decimal(definition.maxLoadKg()));
         type.setMaxStoredLoadKg(decimal(definition.maxStoredLoadKg()));
         type.setStorageAisleWidthM(decimal(definition.storageAisleWidthM()));
@@ -390,7 +384,8 @@ public class LocalDemoDataInitializer {
                 UnitType unitType = unitTypes.get(unitTypeKey(facilityCode, definition.code()));
                 if (unitType.getStatus() != UnitTypeStatus.active) continue;
                 boolean palletDemo = PALLET_DEMO_FACILITIES.contains(facilityCode);
-                int physicalUnitCount = palletDemo ? definition.demoPhysicalUnitCount() : 5;
+                int physicalUnitCount = palletDemo && !FIVE_UNIT_FACILITIES.contains(facilityCode)
+                    ? definition.demoPhysicalUnitCount() : 5;
                 for (int number = 1; number <= physicalUnitCount; number++) {
                     String code = "%s-%s-%03d".formatted(facilityCode, definition.code(), number);
                     if (existing.containsKey(code)) {
@@ -434,11 +429,11 @@ public class LocalDemoDataInitializer {
     private int seedUsers(Map<String, Facility> facilities) {
         int seededCount = 0;
         for (DemoUserDefinition definition : List.of(
-            new DemoUserDefinition("customer@storagehub.demo", "Demo Customer", "+84 908 123 456", RoleCode.CUSTOMER, "Customer@1234!", "HTP-F01", FacilityScopeLevel.READ),
-            new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "HTP-F01", FacilityScopeLevel.OPERATE),
-            new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "HTP-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", "HTP-F01", FacilityScopeLevel.MANAGE),
-            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", "HTP-F01", FacilityScopeLevel.MANAGE)
+            new DemoUserDefinition("customer@storagehub.demo", "Demo Customer", "+84 908 123 456", RoleCode.CUSTOMER, "Customer@1234!", "FPT-TV-F01", FacilityScopeLevel.READ),
+            new DemoUserDefinition("staff@storagehub.demo", "Demo Staff", "+84 905 550 101", RoleCode.STAFF, "Staff@1234!", "FPT-TV-F01", FacilityScopeLevel.OPERATE),
+            new DemoUserDefinition("manager@storagehub.demo", "Demo Manager", "+84 903 444 888", RoleCode.MANAGER, "Manager@1234!", "FPT-TV-F01", FacilityScopeLevel.MANAGE),
+            new DemoUserDefinition("business@storagehub.demo", "Demo Operations", "+84 28 3999 1111", RoleCode.BUSINESS, "Business@1234!", "FPT-TV-F01", FacilityScopeLevel.MANAGE),
+            new DemoUserDefinition("admin@storagehub.demo", "StorageHub Admin", "+84 900 000 001", RoleCode.ADMIN, "Admin@1234!", "FPT-TV-F01", FacilityScopeLevel.MANAGE)
         )) {
             Role role = roleRepository.findByCode(definition.role())
                 .orElseThrow(() -> new IllegalStateException("Role has not been initialized: " + definition.role()));
@@ -530,15 +525,6 @@ public class LocalDemoDataInitializer {
         );
     }
 
-    private List<RentalPackageDefinition> rentalPackageDefinitions() {
-        return List.of(
-            new RentalPackageDefinition("DEMO_3M", "Gói thuê 3 tháng", 3, BigDecimal.ZERO),
-            new RentalPackageDefinition("DEMO_6M", "Gói thuê 6 tháng", 6, new BigDecimal("0.05")),
-            new RentalPackageDefinition("DEMO_12M", "Gói thuê 12 tháng", 12, new BigDecimal("0.10")),
-            new RentalPackageDefinition("DEMO_24M", "Gói thuê 24 tháng", 24, new BigDecimal("0.15"))
-        );
-    }
-
     private String unitTypeKey(String facilityCode, String unitTypeCode) {
         return facilityCode + ":" + unitTypeCode;
     }
@@ -546,17 +532,6 @@ public class LocalDemoDataInitializer {
     private static BigDecimal decimal(double value) {
         return BigDecimal.valueOf(value);
     }
-
-    private record FacilityDefinition(String code, String name, String address, String city, String phone,
-                                      String accessHours, String imageUrl, boolean climateControlled,
-                                      String securityDescription) {}
-
-    private record RentalPackageDefinition(
-        String code,
-        String name,
-        int rentalMonths,
-        BigDecimal discountRate
-    ) {}
 
     private record UnitTypeDefinition(
         String code,

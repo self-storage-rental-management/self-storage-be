@@ -21,6 +21,24 @@ public record CheckInPaymentResponse(
     String initiatedByName,
     String invoiceNumber,
     InvoiceStatus invoiceStatus,
-    Instant invoiceIssuedAt
+    Instant invoiceIssuedAt,
+    String receiptCode
 ) {
+    public CheckInPaymentResponse(UUID paymentId,
+    UUID reservationId,
+    BigDecimal amount,
+    String currency,
+    PaymentType purpose,
+    PaymentStatus status,
+    String transactionReference,
+    String paymentMethod,
+    Instant paidAt,
+    Instant processedAt,
+    String initiatedByName,
+    String invoiceNumber,
+    InvoiceStatus invoiceStatus,
+    Instant invoiceIssuedAt) {
+        this(paymentId, reservationId, amount, currency, purpose, status, transactionReference, paymentMethod, paidAt, processedAt, initiatedByName, invoiceNumber, invoiceStatus, invoiceIssuedAt, null);
+    }
+
 }

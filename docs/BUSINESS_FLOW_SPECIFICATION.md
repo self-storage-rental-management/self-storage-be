@@ -141,29 +141,36 @@ sequenceDiagram
     participant GW as Cổng VNPay
 
     C->>SYS: Mở hợp đồng, chọn "Yêu cầu gia hạn", chọn gói kỳ mới
-    SYS->>C: Trả Báo giá gia hạn (Tổng tiền, Cọc gia hạn 20%, Số còn lại)
-    C->>SYS: Xác nhận gia hạn & Chọn khung giờ hẹn đến ký phụ lục
-    C->>GW: Thanh toán cọc gia hạn 20% qua VNPay
-    GW-->>SYS: Webhook xác nhận cọc thành công
-    SYS-->>SYS: Tạo Renewal (AWAITING_SIGNATURE)
-
-    Note over C,S: Đến ngày hẹn ký phụ lục
-    C->>S: Đến quầy lễ tân cơ sở
-    S->>SYS: Mở hồ sơ gia hạn, xuất bảng kê thu phần tiền còn lại
-    C->>S: Nộp số tiền còn lại (Tiền mặt / Chuyển khoản)
-    S->>SYS: Xác nhận đã thu đủ tiền & Tải lên file Hợp đồng/Phụ lục đã ký
-    S->>SYS: Bấm "Hoàn tất gia hạn"
-    SYS-->>SYS: Rental: Cập nhật end_date mới<br/>Renewal: COMPLETED
-    SYS->>C: Gửi biên lai & Bản sao hợp đồng gia hạn qua email
+    SYS->>SYS: Kiểm tra điều kiện và lập báo giá
+    SYS-->>C: Báo giá gồm tổng tiền, trả trước 20% và phần còn lại
+    C->>SYS: Chấp nhận báo giá, gửi yêu cầu rồi lưu lịch ký
+    C->>SYS: Mở thanh toán VNPay
+    SYS->>SYS: Kiểm tra và giữ lượt ký 30 phút
+    SYS-->>C: URL thanh toán có hạn tối đa 15 phút
+    C->>GW: Thanh toán khoản trả trước
+    GW-->>SYS: Gửi kết quả giao dịch
+    SYS->>SYS: Xác thực, phân bổ khoản thu và xác lập hạn ký
+    opt Lỡ hẹn và còn hạn ký
+        C->>SYS: Lưu lịch ký mới
+    end
+    C->>S: Đến cơ sở ký phụ lục
+    S->>SYS: Ghi nhận khách đến, lấy bảng kê hiện hành
+    C->>S: Thanh toán phần còn lại
+    S->>SYS: Ghi nhận tiền và chứng từ, tải phụ lục đã ký
+    S->>SYS: Hoàn tất gia hạn
+    SYS->>SYS: Kiểm tra tài chính và phụ lục, cập nhật kỳ thuê
+    SYS-->>C: Hiển thị hồ sơ đã hoàn tất
 ```
 
 #### C. Bảng các bước Nhánh A (Renewal Matrix):
 | Bước | Tác nhân | Thao tác | Bảng DB tác động | Trạng thái chuyển đổi | Quy tắc nghiệp vụ |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **A1** | Customer | Chọn gói kỳ mới, lấy báo giá gia hạn | `renewal_quotes` | `GENERATED` | Kiểm tra hợp đồng không có tranh chấp hoặc lệnh quá hạn chặn luồng. |
-| **A2** | Customer | Chọn lịch hẹn ký, thanh toán cọc VNPay | `renewals`, `payments` | Renewal: `AWAITING_SIGNATURE`<br>Payment: `PAID` | Cọc 20% tiền gia hạn. Sau khi cọc, khung giờ hẹn ký được giữ chỗ. |
-| **A3** | Staff | Thu phần tiền còn lại tại quầy, tải bản ký phụ lục | `payments`, `renewals` | Renewal: `SETTLED` | Staff kiểm tra đúng số tiền còn lại trên bảng kê của hệ thống trước khi thu. |
-| **A4** | Staff | Bấm "Hoàn tất gia hạn" | `rentals`, `renewals` | Rental: `end_date` tăng lên<br>Renewal: `COMPLETED` | Cập nhật ngày kết thúc hợp đồng đúng 1 lần; không tạo mới Rental ID; kho giữ `OCCUPIED`. |
+| **A1** | Customer | Lấy và chấp nhận báo giá gia hạn | `renewal_quotes`, `renewals` | `accepted` | Kiểm tra hồ sơ đang hoạt động, cửa sổ gia hạn, công nợ và xung đột. Báo giá mới có `expiresAt: null`; điều khoản thay đổi thì cần xác nhận báo giá mới. |
+| **A2** | Customer | Lưu lịch hẹn, mở VNPay và thanh toán khoản trả trước | `renewal_operation_states`, `payments` | `appointment_scheduled` sau khi tiền được xác thực và phân bổ | Giữ lượt lúc mở thanh toán. Khoản trả trước bằng 20% tổng tiền thuê sau giảm giá. |
+| **A3** | Staff | Ghi nhận khách đến, thu phần còn lại và tải phụ lục đã ký | `payments`, `renewal_operation_events` | `SIGNING` | Staff dùng bảng kê hiện hành và lưu chứng từ thu tiền. |
+| **A4** | Staff | Hoàn tất gia hạn | `rentals`, `renewals` | `completed` | Có đủ tiền và phụ lục đã ký. Kỳ mới nối tiếp kỳ cũ nếu chưa quá hạn, hoặc bắt đầu ngày hoàn tất ký nếu đã quá hạn. Gian tiếp tục `occupied`. |
+
+Hết hạn thanh toán thì hệ thống đối soát VNPay trước khi đóng yêu cầu và nhả lượt. Lỡ hẹn thì khách có thể đổi lịch trong hạn ký hiện tại. Sau khi đã trả trước, hết hạn ký đưa giao dịch sang đối soát. Xử lý mất cọc từ ngày quá hạn thứ 8 và hoàn cọc ngoại lệ theo [hợp đồng API gia hạn](RENEWAL_API_CONTRACT.md). Các thao tác nghiệp vụ có nhật ký hoặc sự kiện gắn với hồ sơ.
 
 ---
 

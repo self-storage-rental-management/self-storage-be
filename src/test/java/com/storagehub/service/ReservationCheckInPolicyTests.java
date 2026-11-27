@@ -55,4 +55,22 @@ class ReservationCheckInPolicyTests {
             Instant.parse("2026-10-12T10:30:00Z")
         )).isEqualTo(Instant.parse("2026-10-12T16:30:00Z"));
     }
+
+    @Test
+    void customerReceiptConfirmationUsesOneDayWithTwoHourReminder() {
+        Instant handoverAt = Instant.parse("2026-10-12T10:30:00Z");
+
+        assertThat(ReservationCheckInPolicy.customerReceiptConfirmationDueAt(handoverAt))
+            .isEqualTo(Instant.parse("2026-10-13T10:30:00Z"));
+        assertThat(ReservationCheckInPolicy.customerReceiptConfirmationReminderAt(handoverAt))
+            .isEqualTo(Instant.parse("2026-10-13T08:30:00Z"));
+    }
+
+    @Test
+    void customerReceiptReleaseStartsAfterOneElapsedDay() {
+        Instant handoverAt = Instant.parse("2026-10-12T10:30:00Z");
+
+        assertThat(ReservationCheckInPolicy.customerReceiptReleaseAt(handoverAt))
+            .isEqualTo(Instant.parse("2026-10-13T10:30:00Z"));
+    }
 }

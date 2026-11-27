@@ -283,6 +283,48 @@ class CustomerReceiptLedgerActivationIntegrationTests {
             org.springframework.data.domain.PageRequest.of(1, 1))).isEmpty();
     }
 
+    @Autowired com.storagehub.domain.repo.ContractRepository contracts;
+    @Autowired org.springframework.transaction.support.TransactionTemplate transactions;
+
+    @Test @Order(11)
+    void concurrentHandoversKeepSearchableContractNumbersForFullLengthUnitCodes() throws Exception {
+        var start = new java.util.concurrent.CyclicBarrier(2);
+        java.util.concurrent.Callable<String> confirm = () -> transactions.execute(status -> {
+            status.setRollbackOnly();
+            var booking = fixture(ReservationStatus.AWAITING_CUSTOMER_RECEIPT, CheckInStatus.handover_pending_receipt, false);
+            String unitCode = UUID.randomUUID().toString().replace("-", "").repeat(2);
+            em.find(Reservation.class, booking.reservationId()).getAssignedUnit().setCode(unitCode);
+            em.flush();
+            try {
+                start.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            service.confirmReceipt(booking.actor(), booking.reservationId());
+            em.flush();
+            em.clear();
+            var rental = rentals.findByReservation_Id(booking.reservationId()).orElseThrow();
+            String codeQuery = "select display_code from business_record_codes where resource_key=?";
+            String codeKey = "TH:" + rental.getId();
+            String displayCode = jdbc.queryForObject(codeQuery, String.class, codeKey);
+            assertThat(displayCode).matches("SH-[1-9][0-9]{5}");
+            String number = contracts.findByRental_Id(rental.getId()).orElseThrow().getContractNumber();
+            assertThat(number).isEqualTo("HD-" + unitCode + "-" + rental.getId().toString().substring(0, 8).toUpperCase(java.util.Locale.ROOT));
+            service.confirmReceipt(booking.actor(), booking.reservationId());
+            em.flush();
+            em.clear();
+            assertThat(jdbc.queryForObject(codeQuery, String.class, codeKey)).isEqualTo(displayCode);
+            assertThat(contracts.findByContractNumber(number).orElseThrow().getRental().getId()).isEqualTo(rental.getId());
+            return number;
+        });
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(confirm);
+            var second = pool.submit(confirm);
+            assertThat(first.get(30, java.util.concurrent.TimeUnit.SECONDS))
+                .isNotEqualTo(second.get(30, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
     private Fixture fixture(ReservationStatus reservationStatus, CheckInStatus checkInStatus, boolean existingRental) {
         Facility facility = new Facility();
         facility.setCode("F-" + UUID.randomUUID().toString().substring(0, 8));

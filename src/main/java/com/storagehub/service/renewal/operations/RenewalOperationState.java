@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 @Entity @Table(name="renewal_operation_states") @Getter
 @NoArgsConstructor(access=lombok.AccessLevel.PROTECTED)
 public class RenewalOperationState {
-    public enum Phase { AWAITING_PAYMENT_INTENT, SIGNING, SIGNING_EXPIRED, PAYMENT_EXPIRED, COMPLETED }
+    public enum Phase { AWAITING_PAYMENT_INTENT, SIGNING, NO_SHOW, SIGNING_EXPIRED, PAYMENT_EXPIRED, COMPLETED }
     @Id private UUID id;
     @OneToOne(fetch=FetchType.LAZY,optional=false) @MapsId @JoinColumn(name="id") private Renewal renewal;
     @Enumerated(EnumType.STRING) @Column(nullable=false,length=24) private Phase phase;
@@ -50,6 +50,8 @@ public class RenewalOperationState {
     public void appointment(UUID ref,Instant start,Instant end) {appointmentRef=ref;appointmentStart=start;appointmentEnd=end;arrivalRef=null;}
     public void arrival(UUID ref) {arrivalRef=ref;}
     public void processingDeadline(Instant deadline) {effectiveSigningDeadline=deadline;}
+    public void noShow() {phase=Phase.NO_SHOW;}
+    public void resumeSigning() {phase=Phase.SIGNING;}
     public void proposedException(UUID ref) {pendingExceptionRef=ref;}
     public void exception(UUID decision,Instant deadline,Instant cutoff,UUID appointment,Instant start,Instant end) {
         confirmedExceptionRef=decision;pendingExceptionRef=null;effectiveSigningDeadline=deadline;recoveryCutoff=cutoff;

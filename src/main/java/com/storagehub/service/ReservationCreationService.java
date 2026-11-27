@@ -142,6 +142,14 @@ public class ReservationCreationService {
             return toResponse(existing, existingSnapshot);
         }
 
+        if (!ReservationCheckInPolicy.ATTENDANCE_TERMS.equals(request.getAcceptedHandoverTermsVersion())) {
+            throw ApiExceptions.validation("Vui lòng đọc và xác nhận điều khoản nhận kho trong 7 ngày.", null);
+        }
+        Instant appointmentAt = request.getAppointmentAt();
+        if (appointmentAt == null) {
+            String message = "Vui lòng chọn ngày và giờ nhận kho trước khi gửi đơn.";
+            throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
+        }
         if (bookingUsers != null) {
             var account = bookingUsers.findByIdForUpdate(actor.userId())
                 .orElseThrow(() -> ApiExceptions.unauthorized("Tài khoản không còn tồn tại."));
@@ -179,12 +187,11 @@ public class ReservationCreationService {
         ReservationCheckInPolicy.Window checkInWindow = ReservationCheckInPolicy.plannedWindow(
             now, quotedReviewRequired
         );
-        if (request.getAppointmentAt() != null
-            && !checkInWindow.contains(request.getAppointmentAt())) {
+        if (!checkInWindow.contains(appointmentAt)) {
             String message = "Ngày nhận kho nằm ngoài thời hạn cho phép. Vui lòng chọn lại ngày nhận kho.";
             throw ApiExceptions.validation(message, Map.of("appointmentAt", message));
         }
-        java.time.LocalDate rentalStartDate = (request.getAppointmentAt() != null ? request.getAppointmentAt() : checkInWindow.availableAt())
+        java.time.LocalDate rentalStartDate = appointmentAt
             .atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(quote.getFreeSetupDays());
         java.time.LocalDate handoverDate = rentalStartDate.minusDays(quote.getFreeSetupDays());
         java.time.LocalDate rentalEndDate = rentalStartDate.plusMonths(quote.getRentalMonths());
@@ -208,6 +215,7 @@ public class ReservationCreationService {
         Reservation reservation = new Reservation();
         reservation.setReservationCode(uniqueReservationCode(reservationRepository,
             ReservationCreationService::generateReservationCode));
+        reservation.setHandoverTermsVersion(request.getAcceptedHandoverTermsVersion());
         reservation.setCustomer(quote.getCustomer());
         reservation.setSourceQuote(quote);
         // Capture a per-booking copy while also keeping the account profile in sync
@@ -216,8 +224,8 @@ public class ReservationCreationService {
         String profileIdentity = profile == null ? null : com.storagehub.validation.CccdPolicy.normalize(profile.getIdentityDocumentNumber());
         String bookingIdentity = clean(request.getIdentityDocumentNumber()) == null ? profileIdentity
             : com.storagehub.validation.CccdPolicy.normalize(request.getIdentityDocumentNumber());
-        if (profile != null && profile.getIdentityVerifiedAt() != null && !java.util.Objects.equals(profileIdentity, bookingIdentity))
-            throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+        if (profileIdentity != null && !profileIdentity.isBlank() && !profileIdentity.equals(bookingIdentity))
+            throw ApiExceptions.conflict("CCCD đã lưu. Vui lòng liên hệ nhân viên cơ sở để chỉnh sửa.");
         reservation.setIdentityDocumentNumber(bookingIdentity);
         reservation.setCustomerPhone(clean(request.getCustomerPhone()) != null
             ? clean(request.getCustomerPhone()) : clean(quote.getCustomer().getPhone()));
@@ -234,7 +242,7 @@ public class ReservationCreationService {
         reservation.setStartDate(rentalStartDate);
         reservation.setEndDate(rentalStartDate.plusMonths(quote.getRentalMonths()));
         reservation.setSetupDaysSnapshot(quote.getFreeSetupDays());
-        reservation.setAppointmentAt(request.getAppointmentAt());
+        reservation.setAppointmentAt(appointmentAt);
         reservation.setAmount(quote.getTotalAfterDiscount());
         reservation.setGoodsCondition(clean(request.getGoodsCondition()));
         reservation.setTotalGoodsVolumeM3(compatibility.getTotalGoodsVolumeM3());
@@ -303,9 +311,8 @@ public class ReservationCreationService {
             String currentIdentity = profile == null
                 ? null
                 : com.storagehub.validation.CccdPolicy.normalize(profile.getIdentityDocumentNumber());
-            if (profile != null && profile.getIdentityVerifiedAt() != null
-                && !java.util.Objects.equals(currentIdentity, normalizedIdentity)) {
-                throw ApiExceptions.conflict("CCCD đã được Staff đối chiếu. Vui lòng liên hệ Staff nếu cần chỉnh sửa.");
+            if (currentIdentity != null && !currentIdentity.isBlank() && !currentIdentity.equals(normalizedIdentity)) {
+                throw ApiExceptions.conflict("CCCD đã lưu. Vui lòng liên hệ nhân viên cơ sở để chỉnh sửa.");
             }
             if (bookingUsers != null) {
                 CustomerIdentityPolicy.assign(customer, normalizedIdentity, bookingUsers);
@@ -523,6 +530,7 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, request.getAcceptedTerms());
         append(canonical, request.getQuoteId());
+        if (request.getAcceptedHandoverTermsVersion() != null) append(canonical, request.getAcceptedHandoverTermsVersion());
         if (request.getAcceptedSetupEarlyExitPolicyVersion() != null) append(canonical, request.getAcceptedSetupEarlyExitPolicyVersion());
         append(canonical, cleanValue(request.getIdentityDocumentNumber()));
         append(canonical, cleanValue(request.getCustomerPhone()));
@@ -564,6 +572,7 @@ public class ReservationCreationService {
         StringBuilder canonical = new StringBuilder();
         append(canonical, true);
         append(canonical, reservation.getSourceQuote().getId());
+        if (reservation.getHandoverTermsVersion() != null) append(canonical, reservation.getHandoverTermsVersion());
         if (reservation.getSourceQuote().getSetupEarlyExitPolicyVersion() != null) append(canonical, reservation.getSourceQuote().getSetupEarlyExitPolicyVersion());
         append(canonical, cleanValue(reservation.getIdentityDocumentNumber()));
         append(canonical, cleanValue(reservation.getCustomerPhone()));
@@ -600,7 +609,15 @@ public class ReservationCreationService {
 
     private String termsSnapshot(ReservationQuote quote) {
         Map<String, Object> terms = new LinkedHashMap<>();
-        terms.put("termsVersion", "RESERVATION_TERMS_V4_20261123");
+        terms.put("termsVersion", "RESERVATION_TERMS_V6_20261125");
+        terms.put("handoverTermsVersion", ReservationCheckInPolicy.ATTENDANCE_TERMS);
+        terms.put("handoverNotice", "Ngày hẹn là ngày 1. Khách có 7 ngày theo giờ Việt Nam để đến nhận kho và cung cấp CCCD gốc hợp lệ. "
+            + "Cơ sở có 30 phút để đối soát lượt đến đúng hạn. Bàn giao phải hoàn tất trong 72 giờ từ lần đối chiếu CCCD đầu tiên. "
+            + "CCCD phải có 12 chữ số, mã tỉnh/thành hợp lệ và thể hiện người thuê đủ 18 tuổi. "
+            + "CCCD sai lệch tối đa 3 chữ số chỉ được sửa một lần nếu nhân viên xác minh đúng người đặt kho. Nếu sai lệch từ 4 chữ số, cơ sở từ chối bàn giao. "
+            + "Nếu không đáp ứng điều kiện nhận kho đúng hạn hoặc bị từ chối do sai lệch CCCD vượt giới hạn, khoản trả trước giữ chỗ 20% không được hoàn lại. "
+            + "Khách cần đặt và thanh toán đơn mới nếu đơn cũ bị hủy hoặc bị từ chối.");
+        terms.put("handoverDepositAtRisk", quote.getReservationDepositAmount());
         terms.put("emailVerification", "Xác minh một lần khi kích hoạt tài khoản; không yêu cầu OTP ở mỗi đơn giữ kho.");
         terms.put("paymentWindowMinutes", paymentWindowMinutes);
         terms.put("complaintHoldWindowMinutes", complaintWindowMinutes);

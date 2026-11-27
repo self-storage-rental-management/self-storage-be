@@ -183,6 +183,22 @@ class RentalContractLifecycleServiceTests {
     }
 
     @Test
+    void verifiedPeriodUsesOnlyThePeriodAwareCustomerReminder() {
+        var resolver = mock(com.storagehub.service.rental.period.RentalPeriodResolver.class);
+        ReflectionTestUtils.setField(service, "rentalPeriods", resolver);
+        User customer = createCustomer("Customer", "customer@example.com");
+        Facility facility = createFacility("Facility");
+        Rental rental = createRental(customer, facility, createStorageUnit(facility, "A-01", StorageUnitStatus.occupied),
+            FIXED_TODAY.minusMonths(1), FIXED_TODAY.plusDays(3));
+        when(rentalRepository.findByStatus(RentalStatus.active)).thenReturn(List.of(rental));
+        when(resolver.read(rental)).thenReturn(com.storagehub.service.rental.period.RentalPeriod.verified(
+            rental.getId(), rental.getStartDate(), rental.getContractEndDate(),
+            com.storagehub.service.rental.period.RentalPeriod.Convention.INCLUSIVE, "test"));
+        assertThat(service.processContractExpirations().preExpirationRemindersSent()).isZero();
+        verifyNoInteractions(notificationService);
+    }
+
+    @Test
     @DisplayName("Pillar 3: Contract Expiration marks status EXPIRED and triggers handover alert when unreturned")
     void testContractExpiration_AndHandoverAlertWhenUnreturned() {
         User customer = createCustomer("Tran Van B", "b@example.com");
@@ -224,7 +240,7 @@ class RentalContractLifecycleServiceTests {
             eq(manager.getId()),
             eq(NotificationType.SYSTEM),
             contains("CẢNH BÁO BÀN GIAO: Hợp đồng hết hạn nhưng kho chưa được bàn giao"),
-            contains("chưa được bàn giao"),
+            contains("chưa trả kho"),
             eq(rental.getId())
         );
     }

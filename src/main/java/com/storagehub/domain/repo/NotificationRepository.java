@@ -2,6 +2,8 @@ package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.Notification;
 import com.storagehub.domain.model.NotificationType;
+import com.storagehub.domain.model.RoleCode;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -58,5 +60,41 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
         @Param("userId") UUID userId,
         @Param("relatedEntityId") UUID relatedEntityId,
         @Param("title") String title
+    );
+
+    @Query("""
+        select case when count(n) > 0 then true else false end
+        from Notification n
+        where n.user.id = :userId
+          and n.relatedEntityId = :relatedEntityId
+          and n.type = :type
+          and n.title = :title
+          and n.createdAt >= :since
+        """)
+    boolean existsMilestoneSince(
+        @Param("userId") UUID userId,
+        @Param("relatedEntityId") UUID relatedEntityId,
+        @Param("type") NotificationType type,
+        @Param("title") String title,
+        @Param("since") Instant since
+    );
+
+    @Query("""
+        select case when count(n) > 0 then true else false end
+        from Notification n
+        where n.user.id = :userId
+          and n.relatedEntityId = :relatedEntityId
+          and n.type = :type
+          and n.title = :title
+          and n.sourceRole = :sourceRole
+          and n.createdAt >= :since
+        """)
+    boolean existsMilestoneSinceForSourceRole(
+        @Param("userId") UUID userId,
+        @Param("relatedEntityId") UUID relatedEntityId,
+        @Param("type") NotificationType type,
+        @Param("title") String title,
+        @Param("sourceRole") RoleCode sourceRole,
+        @Param("since") Instant since
     );
 }

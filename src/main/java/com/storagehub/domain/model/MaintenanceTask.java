@@ -20,6 +20,9 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class MaintenanceTask extends BaseEntity {
+    @org.hibernate.annotations.Formula("(select c.display_code from business_record_codes c where c.resource_key = concat('NV:', lower(bin_to_uuid({alias}.id))))")
+    private String displayCode;
+
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "facility_id", nullable = false)
@@ -63,12 +66,27 @@ public class MaintenanceTask extends BaseEntity {
     @JoinColumn(name = "assigned_to")
     private User assignedTo;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "recovery_witness_id")
+    private User recoveryWitness;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 24)
     private MaintenanceTaskStatus status = MaintenanceTaskStatus.open;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "recovery_type", nullable = false, length = 32)
+    private MaintenanceRecoveryType recoveryType = MaintenanceRecoveryType.NONE;
+
     @Column
     private LocalDate dueAt;
+
+    /** Exact deadline used for countdown and escalation. dueAt remains for legacy date filters. */
+    @Column
+    private Instant deadlineAt;
+
+    @Column(name = "recovery_handover_location", length = 500)
+    private String recoveryHandoverLocation;
 
     @Column
     private Instant startedAt;

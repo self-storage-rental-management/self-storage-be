@@ -61,8 +61,16 @@ class SimulatedPaymentServiceTests {
             paymentRepository, reservationRepository, snapshotRepository, userRepository,
             properties, auditLogService, notificationService
         );
+        ReflectionTestUtils.setField(service, "receiptCodes", org.mockito.Mockito.mock(MoneyReceiptCodes.class));
         customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
+        customer.setPhone("0912345678");
+        customer.setPermanentAddress("123 Le Loi, Quan 1, TP HCM");
+        customer.setEmergencyContactName("Nguyen Van B");
+        customer.setEmergencyContactPhone("0987654321");
+        customer.getProfileDetails().setIdentityDocumentNumber("079204001234");
+        customer.getProfileDetails().setEmergencyContactRelationship("Bo me");
+        customer.getProfileDetails().setEmergencyContactConsent(true);
         actor = new ActorPrincipal(
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()
         );

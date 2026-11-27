@@ -36,16 +36,38 @@ public class PaymentReceiptEmailQueue {
     private final SecureRandom random = new SecureRandom();
     private static final String PROTECTED_PAYLOAD = "enc:v1:";
 
+    @org.springframework.beans.factory.annotation.Value("${spring.mail.host:}")
+    private String mailHost = "";
+    @org.springframework.beans.factory.annotation.Value("${app.mail.max-attempts:5}")
+    private int maxAttempts = 5;
+    @org.springframework.beans.factory.annotation.Value("${app.mail.skip-demo-domains:true}")
+    private boolean skipDemoDomains = true;
+
+    @org.springframework.beans.factory.annotation.Value("${app.mail.enabled:false}")
+    private boolean mailEnabled = false;
+
+    /**
+     * Renders messages to the local outbox while mail sending is disabled. Held through an
+     * ObjectProvider because TransactionalEmailService already depends on this queue, and a direct
+     * field would form a cycle Spring cannot construct.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<TransactionalEmailService> previewWriter;
+
     @Transactional
     public void enqueue(UUID userId, String recipient, Map<String, Object> payload) {
         enqueue(userId, recipient, "payment-bill", "StorageHub - Biên lai xác nhận thanh toán thành công",
-            "PAYMENT_BILL_EMAIL_SENT", recipient + ":" + payload.get("transactionNo") + ":" + payload.get("invoiceNumber") + ":" + payload.get("paymentPurpose"), payload);
+            "PAYMENT_BILL_EMAIL_SENT", "payment-bill:" + payload.get("paymentId"), payload);
     }
 
     @Transactional
     public void enqueue(UUID userId, String recipient, String template, String subject, String auditAction,
                         String eventKey, Map<String, Object> payload) {
         if (recipient == null || recipient.isBlank()) throw new IllegalArgumentException("Email recipient is required");
+        if (isNonRoutableDemoRecipient(recipient)) {
+            log.debug("Skipping email enqueue for non-routable demo recipient={} template={}", recipient, template);
+            return;
+        }
         try {
             String key = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest((recipient + ":" + eventKey).getBytes(StandardCharsets.UTF_8)));
@@ -56,43 +78,99 @@ public class PaymentReceiptEmailQueue {
             }
             String body = mapper.writeValueAsString(payload);
             if (java.util.Set.of("verify-email", "reset-password", "reservation-verification").contains(template)) body = protect(body);
-            jdbc.update("INSERT INTO payment_receipt_emails (receipt_key,user_id,recipient,payload,template_name,subject,audit_action,expires_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE receipt_key=receipt_key",
+            // TIMESTAMP(3) defaults may round a fresh row into the next millisecond.
+            // Explicitly floor the first attempt so an immediate worker sees committed mail as due.
+            jdbc.update("INSERT INTO payment_receipt_emails (receipt_key,user_id,recipient,payload,template_name,subject,audit_action,expires_at,next_attempt_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE receipt_key=receipt_key",
                 key, userId == null ? null : userId.toString(), recipient, body, template, subject, auditAction,
-                expiry == null ? null : Timestamp.from(expiry));
+                expiry == null ? null : Timestamp.from(expiry), Timestamp.from(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS)));
+            // With mail switched off the queue never reaches SMTP, so render the message to the local
+            // outbox here. Otherwise the code in a verification email existed only inside a log line.
+            if (!mailEnabled && previewWriter != null) {
+                var writer = previewWriter.getIfAvailable();
+                if (writer != null) writer.savePreview(recipient, subject, template, payload);
+            }
         } catch (GeneralSecurityException | com.fasterxml.jackson.core.JsonProcessingException exception) {
             throw new IllegalStateException("Cannot queue transactional email", exception);
         }
     }
 
     public void deliverPending(TransactionalEmailService sender) {
+        Instant current = Instant.now();
+        // A sender that is over its daily allowance rejects every message. Stop the whole batch on
+        // the first such rejection instead of trying the remaining entries and burning more quota.
         var ids = jdbc.query("SELECT id FROM payment_receipt_emails WHERE delivery_status='PENDING' AND next_attempt_at<=? AND (locked_until IS NULL OR locked_until<?) ORDER BY id LIMIT 20",
-            (rs, row) -> rs.getLong(1), Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            (rs, row) -> rs.getLong(1), Timestamp.from(current.plusSeconds(1)), Timestamp.from(current));
         for (Long id : ids) {
             Entry entry = transaction().execute(status -> claim(id));
             if (entry == null) continue;
             boolean sent = false;
+            boolean permanent = false;
             String failure = sender.deliveryUnavailableReason();
             try {
                 Map<String, Object> payload = mapper.readValue(unprotect(entry.payload()), new TypeReference<Map<String, Object>>() {});
                 if (failure == null) {
-                    sent = sender.deliverEmail(entry.userId() == null ? null : UUID.fromString(entry.userId()),
+                    if ("payment-bill".equals(entry.template())) {
+                        payload.put("invoiceNumber", issuedInvoiceNumber(entry.userId(), payload));
+                    }
+                    var outcome = sender.deliver(entry.userId() == null ? null : UUID.fromString(entry.userId()),
                         entry.recipient(), entry.subject(), entry.template(), payload, entry.auditAction());
-                    if (!sent) failure = "SMTP_FAILED";
+                    sent = outcome == TransactionalEmailService.DeliveryOutcome.SENT;
+                    permanent = outcome == TransactionalEmailService.DeliveryOutcome.PERMANENT_FAILURE;
+                    if (!sent) failure = permanent ? "PERMANENT_FAILURE" : "SMTP_FAILED";
+                } else if ("MAIL_DISABLED".equals(failure)) {
+                    // Mail is switched off on purpose. Render the message to the local outbox so the
+                    // verification code or receipt is still readable, then treat it as handled
+                    // rather than retrying forever.
+                    sender.savePreview(entry.recipient(), entry.subject(), entry.template(), payload);
+                    sent = true;
                 }
             } catch (Exception exception) {
                 failure = "DELIVERY_FAILED";
                 log.warn("Email delivery failed: queueId={}, exception={}", entry.id(), exception.getClass().getSimpleName());
             }
             final boolean delivered = sent;
+            final boolean nonRetryable = permanent;
             final String lastError = failure;
             transaction().executeWithoutResult(status -> {
                 Instant now = Instant.now();
+                int nextAttempts = entry.attempts() + 1;
+                // A permanent rejection (bad mailbox, sender over quota) must not be retried: each
+                // retry spends another slot of the sender's daily allowance and starves everything else.
+                boolean exhausted = !delivered && (nonRetryable || (maxAttempts > 0 && nextAttempts >= maxAttempts));
                 long retrySeconds = Math.min(3600, 30L << Math.min(entry.attempts(), 7));
                 jdbc.update("UPDATE payment_receipt_emails SET attempts=attempts+1,sent_at=?,delivery_status=?,next_attempt_at=?,last_error=?,locked_until=NULL,lock_token=NULL,payload=CASE WHEN ? AND template_name IN ('verify-email','reset-password','reservation-verification') THEN '{}' ELSE payload END WHERE id=? AND lock_token=?",
-                    delivered ? Timestamp.from(now) : null, delivered ? "SENT" : "PENDING", Timestamp.from(now.plusSeconds(retrySeconds)),
+                    delivered ? Timestamp.from(now) : null,
+                    delivered ? "SENT" : (exhausted ? "FAILED" : "PENDING"),
+                    Timestamp.from(now.plusSeconds(retrySeconds)),
                     lastError, delivered, entry.id(), entry.token());
             });
+            // The sender just refused a message for a sender-wide reason. Trying the rest of the
+            // batch only spends more of an allowance that is already exhausted, so leave them
+            // pending for the next run after the quota resets.
+            if (!delivered && nonRetryable) break;
         }
+    }
+
+    private String issuedInvoiceNumber(String userId, Map<String, Object> payload) {
+        if (payload.get("paymentId") instanceof String paymentId) {
+            return jdbc.query("SELECT invoice_number FROM payments WHERE id = ?",
+                rs -> rs.next() ? rs.getString(1) : null, HexFormat.of().parseHex(paymentId.replace("-", "")));
+        }
+        // Older queued receipts only carry a transaction reference and may contain a fabricated invoice number.
+        if (userId == null || !(payload.get("transactionNo") instanceof String reference)
+            || reference.isBlank() || "N/A".equals(reference)) return null;
+        return jdbc.queryForObject("""
+            SELECT CASE WHEN COUNT(*) = 1 THEN MAX(p.invoice_number)
+                        ELSE MAX(CASE WHEN p.invoice_number = ? THEN p.invoice_number END)
+                   END
+            FROM payments p
+            LEFT JOIN reservations b ON b.id = p.reservation_id
+            LEFT JOIN renewals n ON n.id = p.renewal_id
+            LEFT JOIN rentals r ON r.id = n.rental_id
+            WHERE (p.gateway_transaction_no = ? OR p.gateway_intent_id = ?)
+              AND COALESCE(b.customer_id, r.customer_id) = ?
+            """, String.class, payload.get("invoiceNumber"), reference, reference,
+            HexFormat.of().parseHex(userId.replace("-", "")));
     }
 
     private Entry claim(long id) {
@@ -101,15 +179,35 @@ public class PaymentReceiptEmailQueue {
             (rs, row) -> new Entry(rs.getLong("id"), rs.getString("user_id"), rs.getString("recipient"), rs.getString("payload"),
                 rs.getInt("attempts"), rs.getString("template_name"), rs.getString("subject"), rs.getString("audit_action"),
                 rs.getTimestamp("expires_at") == null ? null : rs.getTimestamp("expires_at").toInstant(), UUID.randomUUID().toString()),
-            id, Timestamp.from(now), Timestamp.from(now));
+            id, Timestamp.from(now.plusSeconds(1)), Timestamp.from(now));
         if (rows.isEmpty()) return null;
         Entry entry = rows.getFirst();
+        if (isNonRoutableDemoRecipient(entry.recipient())) {
+            jdbc.update("UPDATE payment_receipt_emails SET delivery_status='CANCELLED',last_error='SKIPPED_DEMO_DOMAIN',payload='{}',locked_until=NULL,lock_token=NULL WHERE id=?", id);
+            return null;
+        }
+        if (maxAttempts > 0 && entry.attempts() >= maxAttempts) {
+            jdbc.update("UPDATE payment_receipt_emails SET delivery_status='FAILED',last_error=COALESCE(last_error,'MAX_ATTEMPTS_EXCEEDED'),locked_until=NULL,lock_token=NULL WHERE id=?", id);
+            return null;
+        }
         if (entry.expiresAt() != null && !entry.expiresAt().isAfter(now)) {
             jdbc.update("UPDATE payment_receipt_emails SET delivery_status='EXPIRED',last_error='MESSAGE_EXPIRED',payload='{}',locked_until=NULL,lock_token=NULL WHERE id=?", id);
             return null;
         }
         if (entry.template().equals("customer-lifecycle")) try {
             var payload = mapper.readValue(entry.payload(), new TypeReference<Map<String, Object>>() {});
+            if (payload.get("_appointmentRef") != null) {
+                var current = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM renewal_operation_states s JOIN renewals r ON r.id=s.id
+                    WHERE s.appointment_ref=UNHEX(REPLACE(?,'-','')) AND s.phase='SIGNING'
+                      AND r.status='appointment_scheduled' AND s.arrival_ref IS NULL AND s.appointment_start>?
+                      AND (s.deposit_paid_at IS NOT NULL OR s.full_rent_paid_at IS NOT NULL)
+                    """, Integer.class, payload.get("_appointmentRef").toString(), Timestamp.from(now));
+                if (current == 0) {
+                    jdbc.update("UPDATE payment_receipt_emails SET delivery_status='CANCELLED',last_error='RESOURCE_STATE_CHANGED',locked_until=NULL,lock_token=NULL WHERE id=?", id);
+                    return null;
+                }
+            }
             if (payload.get("_requiredReservationStatus") != null && payload.get("_reservationId") != null) {
                 var states = jdbc.query("SELECT status FROM reservations WHERE id=UNHEX(REPLACE(?,'-',''))", (rs, row) -> rs.getString(1), payload.get("_reservationId").toString());
                 if (states.isEmpty() || !states.getFirst().equals(payload.get("_requiredReservationStatus"))) {
@@ -150,6 +248,19 @@ public class PaymentReceiptEmailQueue {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.DECRYPT_MODE, authMailKey(), new GCMParameterSpec(128, nonce));
         return new String(cipher.doFinal(content), StandardCharsets.UTF_8);
+    }
+
+    private boolean isNonRoutableDemoRecipient(String recipient) {
+        if (!skipDemoDomains || recipient == null || mailHost == null || mailHost.isBlank()) {
+            return false;
+        }
+        String host = mailHost.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("localhost".equals(host) || "127.0.0.1".equals(host) || "::1".equals(host)) {
+            return false;
+        }
+        String email = recipient.trim().toLowerCase(java.util.Locale.ROOT);
+        return email.endsWith(".demo") || email.endsWith(".local") || email.endsWith(".test")
+            || email.endsWith(".invalid") || email.endsWith(".example");
     }
 
     private TransactionTemplate transaction() {

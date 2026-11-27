@@ -85,7 +85,8 @@ public class RentalBookingEvidenceReader {
                     asset.getChecksumSha256(),asset.getEntityType(),asset.getEntityId(),asset.getStatus(),asset.getCreatedAt())).toList();
             return new RentalBookingEvidence.GoodsItem(item.getId(),item.getGoodsCode(),
                 item.getCategoryName(),item.getMaterialName(),item.getCustomGoodsName(),item.getDescription(),item.getQuantity(),
-                item.getLengthCm(),item.getWidthCm(),item.getHeightCm(),item.getWeightKg(),item.isFragile(),item.getCustomerNote(),images);
+                item.getLengthCm(),item.getWidthCm(),item.getHeightCm(),item.getWeightKg(),item.isFragile(),item.getCustomerNote(),images,
+                item.getCustomMaterial(),item.isStackable(),item.getMaxStackLayers(),item.isAllowHorizontalPlacement());
         }).toList();
         return Optional.of(new RentalBookingEvidence(rental.getId(),reservation.getId(),"VND",amounts,payments,rows.size()>20,customer,goods));
     }

@@ -18,6 +18,7 @@ import com.storagehub.domain.model.AccessCredentialType;
 import com.storagehub.domain.model.CheckIn;
 import com.storagehub.domain.model.CheckInStatus;
 import com.storagehub.domain.model.FacilityScopeLevel;
+import com.storagehub.domain.model.LockInspectionResult;
 import com.storagehub.domain.model.Rental;
 import com.storagehub.domain.model.RentalStatus;
 import com.storagehub.domain.model.Reservation;
@@ -34,6 +35,7 @@ import com.storagehub.domain.model.UnitAssignmentStatus;
 import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.AccessCredentialRepository;
 import com.storagehub.domain.repo.CheckInRepository;
+import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.ReturnCaseRepository;
@@ -61,8 +63,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AccessCredentialService {
 
-    @org.springframework.beans.factory.annotation.Autowired
-    private com.storagehub.domain.repo.FacilityRepository facilityRepository;
+    private final FacilityRepository facilityRepository;
     private final AccessCredentialRepository credentialRepository;
     private final CheckInRepository checkInRepository;
     private final ReservationRepository reservationRepository;
@@ -95,8 +96,7 @@ public class AccessCredentialService {
         if (request.type() != AccessCredentialType.LOCK) {
             throw ApiExceptions.validation("Only a lock credential can be handed over during check-in", null);
         }
-        String reference = request.reference().trim();
-        validateLockReference(reference);
+        String reference = resolveLockReference(reservation.getFacility().getId(), request.reference().trim());
         UnitAssignment assignment = assignmentRepository.findByReservation_IdAndStatus(
             reservation.getId(), UnitAssignmentStatus.ACTIVE
         ).orElseThrow(() -> ApiExceptions.conflict("Reservation has no active unit assignment"));
@@ -112,14 +112,11 @@ public class AccessCredentialService {
             reservation.getId(), AccessCredentialStatus.ACTIVE
         ).stream().filter(item -> item.getType() == request.type()).findFirst();
         if (existing.isPresent()) {
-            if (existing.get().getReference().equals(reference)) return toResponse(existing.get());
+            if (existing.get().getReference().trim().equalsIgnoreCase(reference)) return toResponse(existing.get());
             throw ApiExceptions.conflict("An active credential of this type already exists for the reservation");
         }
         lockFacilityForCredentialAssignment(reservation.getFacility().getId());
-        if (credentialRepository.existsByFacility_IdAndStatusAndReferenceIgnoreCase(
-            reservation.getFacility().getId(), AccessCredentialStatus.ACTIVE, reference)) {
-            throw ApiExceptions.conflict("Mã ổ khóa đang được sử dụng tại cơ sở này");
-        }
+        requireAvailableLockCode(reservation.getFacility().getId(), reference);
 
         User staff = requireActor(actor);
         AccessCredential credential = new AccessCredential();
@@ -130,6 +127,7 @@ public class AccessCredentialService {
         credential.setType(request.type());
         credential.setStatus(AccessCredentialStatus.ACTIVE);
         credential.setReference(reference);
+        credential.setLockCodeHeld(true);
         credential.setSecretHash(null);
         credential.setIssuedBy(staff);
         credential.setIssuedAt(Instant.now());
@@ -166,6 +164,32 @@ public class AccessCredentialService {
             saved.getFacility().getId(), Map.of("status", AccessCredentialStatus.ACTIVE), toResponse(saved)
         );
         return toResponse(saved);
+    }
+
+    @Transactional
+    public int revokeForReservation(ActorPrincipal actor, UUID reservationId, String reason) {
+        if (actor == null || !actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER)) {
+            throw ApiExceptions.forbidden("Staff or Manager role is required");
+        }
+        authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
+            .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        User operator = requireActor(actor);
+        List<AccessCredential> active = credentialRepository.findByReservation_IdAndStatus(
+            reservationId, AccessCredentialStatus.ACTIVE
+        );
+        for (AccessCredential credential : active) {
+            revokeEntity(credential, operator, reason);
+            AccessCredential saved = credentialRepository.save(credential);
+            auditLogService.recordMutation(
+                operator, "ACCESS_CREDENTIAL_REVOKED", "AccessCredential", saved.getId(),
+                reservation.getFacility().getId(),
+                Map.of("status", AccessCredentialStatus.ACTIVE),
+                toResponse(saved)
+            );
+        }
+        return active.size();
     }
 
     @Transactional
@@ -244,6 +268,7 @@ public class AccessCredentialService {
             throw ApiExceptions.conflict("Access credentials can only be reissued for an active or setup rental");
         }
 
+        lockFacilityForCredentialAssignment(rental.getFacility().getId());
         AccessCredential current = credentialRepository.findByIdForUpdate(request.credentialId())
             .orElseThrow(() -> ApiExceptions.notFound("Access credential was not found"));
         if (current.getRental() == null || !rental.getId().equals(current.getRental().getId())
@@ -255,12 +280,23 @@ public class AccessCredentialService {
             throw ApiExceptions.conflict("Access credential is no longer active");
         }
         if (current.getType() == AccessCredentialType.LOCK) {
-            validateLockReference(reference);
-            lockFacilityForCredentialAssignment(rental.getFacility().getId());
-            if (credentialRepository.existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
-                rental.getFacility().getId(), AccessCredentialStatus.ACTIVE, reference, current.getId())) {
-                throw ApiExceptions.conflict("Mã ổ khóa đang được sử dụng tại cơ sở này");
+            reference = resolveLockReference(rental.getFacility().getId(), reference);
+        }
+        String secret = clean(request.secret());
+        if (current.getType() == AccessCredentialType.PIN) {
+            if (secret == null) throw ApiExceptions.validation("Vui lòng nhập mã PIN mới", null);
+            if (reference.contains(secret) || reason.contains(secret)
+                || (request.note() != null && request.note().contains(secret))) {
+                throw ApiExceptions.validation("Không ghi mã PIN vào mã tham chiếu, lý do hoặc ghi chú", null);
             }
+        } else if (secret != null) {
+            throw ApiExceptions.validation("Chỉ quyền truy cập PIN được nhập mã bí mật", null);
+        }
+        if (current.getType() == AccessCredentialType.LOCK) {
+            requireAvailableLockCode(rental.getFacility().getId(), reference);
+        } else if (credentialRepository.existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
+            rental.getFacility().getId(), AccessCredentialStatus.ACTIVE, reference, current.getId())) {
+            throw ApiExceptions.conflict("Mã tham chiếu đang được sử dụng tại cơ sở này");
         }
 
         User staff = requireActor(actor);
@@ -276,6 +312,7 @@ public class AccessCredentialService {
         replacement.setType(current.getType());
         replacement.setStatus(AccessCredentialStatus.ACTIVE);
         replacement.setReference(reference);
+        replacement.setLockCodeHeld(current.getType() == AccessCredentialType.LOCK);
         replacement.setSecretHash(hashSecret(request.secret()));
         replacement.setIssuedBy(staff);
         replacement.setIssuedAt(Instant.now());
@@ -329,10 +366,14 @@ public class AccessCredentialService {
         String accessHours = "24/7";
         Rental rental = credential.getRental();
         boolean duringSetup = rental != null && rental.getStatus() == RentalStatus.setup;
-        boolean allowed = credential.getStatus() == AccessCredentialStatus.ACTIVE;
+        boolean recoveryLocked = rental != null && rental.getStatus() == RentalStatus.closing
+            && rental.getInventoryEscalatedAt() != null;
+        boolean allowed = credential.getStatus() == AccessCredentialStatus.ACTIVE && !recoveryLocked;
         String reason;
         if (credential.getStatus() != AccessCredentialStatus.ACTIVE) {
             reason = "Credential đã bị thu hồi";
+        } else if (recoveryLocked) {
+            reason = "Gian kho đang chờ xử lý thu hồi";
         } else {
             reason = "Được phép truy cập 24/24";
         }
@@ -363,14 +404,23 @@ public class AccessCredentialService {
         );
     }
 
-    /** Called by Staff return inspection to revoke every credential for the rental. */
     @Transactional
     public int revokeForRental(ActorPrincipal actor, Rental rental, String reason) {
+        return revokeRentalCredentials(actor, rental, reason, false);
+    }
+
+    @Transactional
+    public int revokeForReturnInspection(ActorPrincipal actor, Rental rental, String reason, LockInspectionResult result) {
+        return revokeRentalCredentials(actor, rental, reason, result == LockInspectionResult.RETURNED_USABLE);
+    }
+
+    private int revokeRentalCredentials(ActorPrincipal actor, Rental rental, String reason, boolean releaseLockCode) {
         requireStaff(actor);
         authorizationService.require(actor, SystemPermission.PROCESS_RETURNS);
         facilityScopeService.assertCanOperate(actor, rental.getFacility().getId());
+        lockFacilityForCredentialAssignment(rental.getFacility().getId());
         User staff = requireActor(actor);
-        List<AccessCredential> active = credentialRepository.findByRental_IdAndStatus(
+        List<AccessCredential> active = credentialRepository.findByRental_IdAndStatusOrderById(
             rental.getId(), AccessCredentialStatus.ACTIVE
         );
         int count = 0;
@@ -382,6 +432,19 @@ public class AccessCredentialService {
                 rental.getFacility().getId(), Map.of("status", AccessCredentialStatus.ACTIVE), toResponse(credential)
             );
             count++;
+        }
+        if (releaseLockCode) {
+            List<AccessCredential> activeLocks = active.stream()
+                .filter(credential -> credential.getType() == AccessCredentialType.LOCK)
+                .toList();
+            if (activeLocks.size() == 1) {
+                activeLocks.getFirst().setLockCodeHeld(false);
+            } else if (activeLocks.isEmpty()) {
+                // Earlier access revocation does not end the physical allocation.
+                credentialRepository.findFirstByRental_IdAndTypeOrderByIssuedAtDescIdDesc(
+                    rental.getId(), AccessCredentialType.LOCK
+                ).ifPresent(lock -> lock.setLockCodeHeld(false));
+            }
         }
         return count;
     }
@@ -471,11 +534,11 @@ public class AccessCredentialService {
                 ? List.of()
                 : returnCaseRepository.findByFacility_IdInAndStatusIn(allowed, List.of(
                     ReturnCaseStatus.requested, ReturnCaseStatus.scheduled, ReturnCaseStatus.inspected,
-                    ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
+                    ReturnCaseStatus.recovery_required, ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
                     ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending)))
             : returnCaseRepository.findByStatusIn(List.of(
                 ReturnCaseStatus.requested, ReturnCaseStatus.scheduled, ReturnCaseStatus.inspected,
-                ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
+                ReturnCaseStatus.recovery_required, ReturnCaseStatus.awaiting_customer_confirmation, ReturnCaseStatus.disputed,
                 ReturnCaseStatus.payment_due, ReturnCaseStatus.refund_pending));
         for (ReturnCase returnCase : returns) {
             if (facilityId != null && !facilityId.equals(returnCase.getFacility().getId())) continue;
@@ -487,7 +550,8 @@ public class AccessCredentialService {
                     rental.getId(), returnCase.getFacility().getId(), returnCase.getFacility().getName(),
                     rental.getStorageUnit().getId(), rental.getStorageUnit().getCode(),
                     rental.getCustomer().getId(), rental.getCustomer().getFullName(), credential.getType(),
-                    credential.getReference(), returnCase.getScheduledDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC),
+                    credential.getReference(), returnCase.getScheduledDate() == null ? returnCase.getRecoveryEligibleAt()
+                        : returnCase.getScheduledDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC),
                     "Có credential đang hoạt động cần thu hồi khi nghiệm thu trả kho"
                 ));
             }
@@ -537,12 +601,21 @@ public class AccessCredentialService {
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy cơ sở"));
     }
 
-    private void validateLockReference(String reference) {
+    private void requireAvailableLockCode(UUID facilityId, String reference) {
+        if (!credentialRepository.findLockCodeConflictsForUpdate(facilityId, reference).isEmpty()) {
+            throw ApiExceptions.conflict("Mã ổ khóa đang được sử dụng hoặc chưa đủ điều kiện cấp lại tại cơ sở này. Vui lòng chọn mã khác.");
+        }
+    }
+
+    private String resolveLockReference(UUID facilityId, String reference) {
         String normalized = reference.toLowerCase(java.util.Locale.ROOT);
         if (normalized.contains("password") || normalized.contains("mật khẩu")
             || normalized.matches(".*\\bpin\\b.*")) {
             throw ApiExceptions.validation("Mã ổ khóa chỉ được chứa mã/nhãn ổ khóa, không nhập mật khẩu hoặc PIN", null);
         }
+        String code = reference.toUpperCase(java.util.Locale.ROOT);
+        if (code.matches("LOCK-[0-9]{3}") && !code.equals("LOCK-000")) return code;
+        throw ApiExceptions.validation("Mã bộ khóa phải từ LOCK-001 đến LOCK-999.", java.util.Map.of("lockReference", "Nhập đủ 3 chữ số từ 001 đến 999."));
     }
 
     private AccessCredentialResponse toResponse(AccessCredential credential) {

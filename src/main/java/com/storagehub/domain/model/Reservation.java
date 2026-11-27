@@ -120,6 +120,17 @@ public class Reservation extends BaseEntity {
     @Column
     private Instant appointmentAt;
 
+    @Column(length = 40)
+    private String handoverTermsVersion;
+    private Instant handoverArrivedAt;
+    private Instant firstHandoverComparisonAt;
+    private Instant disputedArrivalAt;
+    private Instant arrivalReviewOpenedAt;
+    @Column(length = 500)
+    private String arrivalReviewEvidence;
+    @Column(nullable = false)
+    private int attendanceReminderHours;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount = BigDecimal.ZERO;
 

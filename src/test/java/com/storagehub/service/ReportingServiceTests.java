@@ -157,6 +157,8 @@ class ReportingServiceTests {
         assertThat(summary.occupancyRate()).isEqualTo(50.0);
         assertThat(summary.monthlyRecurringRevenue()).isEqualByComparingTo("1500000");
         assertThat(summary.collectedRevenue()).isEqualByComparingTo("1500000");
+        assertThat(summary.grossRevenue()).isEqualByComparingTo("1500000");
+        assertThat(summary.totalRefunds()).isEqualByComparingTo("0");
         assertThat(summary.monthCheckinsCount()).isEqualTo(5);
         assertThat(summary.openReturnsCount()).isEqualTo(1);
         assertThat(summary.openMaintenanceTasksCount()).isEqualTo(2);
@@ -225,7 +227,34 @@ class ReportingServiceTests {
         assertThat(resp.totalRefunds()).isEqualByComparingTo("500000");
         assertThat(resp.netRevenue()).isEqualByComparingTo("2500000");
         assertThat(resp.facilityBreakdown()).hasSize(1);
+        assertThat(resp.facilityBreakdown().get(0).revenue()).isEqualByComparingTo("2500000");
         verify(facilityScopeService).assertCanRead(businessActor, facilityId);
+    }
+
+    @Test
+    void getBusinessRevenueReport_reconciliationStatusVerification() {
+        Payment p1 = new Payment();
+        p1.setStatus(PaymentStatus.PAID);
+        p1.setPurpose(PaymentType.MONTHLY_RENT);
+        p1.setAmount(new BigDecimal("2000000"));
+        p1.setPaidAt(Instant.now());
+
+        Payment p2 = new Payment();
+        p2.setStatus(PaymentStatus.PAID);
+        p2.setPurpose(PaymentType.RESERVATION_DEPOSIT);
+        p2.setAmount(new BigDecimal("1000000"));
+        p2.setPaidAt(Instant.now());
+
+        when(paymentRepository.findByStatus(PaymentStatus.PAID)).thenReturn(List.of(p1, p2));
+        when(facilityRepository.findAll()).thenReturn(List.of(facility));
+        when(reportingPaymentEvidence.isRealCollected(p1)).thenReturn(true);
+        when(reportingPaymentEvidence.isRealCollected(p2)).thenReturn(false);
+
+        BusinessRevenueReportResponse resp = service.getBusinessRevenueReport(businessActor, 6);
+
+        assertThat(resp.reconciliationStatus()).isEqualTo("PARTIAL");
+        assertThat(resp.unverifiedAmount()).isEqualByComparingTo("1000000");
+        assertThat(resp.unverifiedTransactions()).isEqualTo(1L);
     }
 
     @Test

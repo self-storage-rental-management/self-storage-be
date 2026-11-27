@@ -3,6 +3,7 @@ package com.storagehub.api.maintenance;
 import com.storagehub.domain.model.DamageClassification;
 import com.storagehub.domain.model.MaintenanceTaskStatus;
 import com.storagehub.domain.model.MaintenanceTaskType;
+import com.storagehub.domain.model.MaintenanceRecoveryType;
 import com.storagehub.domain.model.TaskPriority;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -11,11 +12,13 @@ import java.util.UUID;
 
 public record MaintenanceTaskResponse(
     UUID id,
+    String displayCode,
     UUID facilityId,
     String facilityName,
     UUID storageUnitId,
     String unitCode,
     UUID rentalId,
+    String customerName,
     UUID returnCaseId,
     String title,
     MaintenanceTaskType taskType,
@@ -27,11 +30,18 @@ public record MaintenanceTaskResponse(
     UUID assignedStaffId,
     String assignedStaffName,
     MaintenanceTaskStatus status,
+    boolean recoveryRequired,
+    MaintenanceRecoveryType recoveryType,
     LocalDate dueAt,
+    Instant deadlineAt,
+    String recoveryHandoverLocation,
+    UUID recoveryWitnessStaffId,
+    String recoveryWitnessStaffName,
     Instant startedAt,
     Instant completedAt,
     String resultReport,
     List<String> evidencePhotos,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    boolean unitReadinessCheck
 ) {}

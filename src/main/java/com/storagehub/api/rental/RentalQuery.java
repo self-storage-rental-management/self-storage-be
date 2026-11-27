@@ -26,9 +26,10 @@ public record RentalQuery(int page, int size, RentalStatus status, String search
             LocalDate from = params.containsKey("endFrom") ? LocalDate.parse(params.getFirst("endFrom")) : null;
             LocalDate to = params.containsKey("endTo") ? LocalDate.parse(params.getFirst("endTo")) : null;
             if (from != null && to != null && from.isAfter(to)) throw invalid();
-            String[] order = value(params, "sort", "createdAt,desc").split(",", -1);
-            if (order.length != 2 || !Set.of("createdAt", "contractEndDate", "startDate", "monthlyPrice", "id").contains(order[0])
+            String[] order = value(params, "sort", "priority,asc").split(",", -1);
+            if (order.length != 2 || !Set.of("priority", "createdAt", "contractEndDate", "startDate", "monthlyPrice", "id").contains(order[0])
                 || !Set.of("asc", "desc").contains(order[1])) throw invalid();
+            if (order[0].equals("priority") && !order[1].equals("asc")) throw invalid();
             Sort sort = Sort.by(Sort.Direction.fromString(order[1]), order[0]);
             if (!order[0].equals("id")) sort = sort.and(Sort.by("id"));
             return new RentalQuery(page, size,
@@ -38,7 +39,8 @@ public record RentalQuery(int page, int size, RentalStatus status, String search
             throw invalid();
         }
     }
-    public PageRequest pageable() { return PageRequest.of(page, size, sort); }
+    public boolean priorityOrder() { return sort.getOrderFor("priority") != null; }
+    public PageRequest pageable() { return PageRequest.of(page, size, priorityOrder() ? Sort.unsorted() : sort); }
     public static void validateDetail(MultiValueMap<String, String> params) {
         if (!params.isEmpty()) throw invalid();
     }

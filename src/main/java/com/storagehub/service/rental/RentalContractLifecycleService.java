@@ -36,6 +36,8 @@ public class RentalContractLifecycleService {
     private final AuditLogService auditLogService;
     private final EntityManager em;
     private final ObjectProvider<Clock> clocks;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.rental.period.RentalPeriodResolver rentalPeriods;
 
     public record LifecycleExecutionSummary(
         int expirationsEvaluated,
@@ -94,8 +96,8 @@ public class RentalContractLifecycleService {
             User customer = rental.getCustomer();
             StorageUnit unit = rental.getStorageUnit();
             Facility facility = rental.getFacility();
-            String unitCode = unit != null ? unit.getCode() : "N/A";
-            String facilityName = facility != null ? facility.getName() : "N/A";
+            String unitCode = unit != null ? unit.getCode() : "Chưa xác định";
+            String facilityName = facility != null ? facility.getName() : "Chưa xác định";
 
             // Milestone 1: D-14 Pre-expiration reminder (within 14 days window)
             if (daysUntilExpiry == 14) {
@@ -105,7 +107,7 @@ public class RentalContractLifecycleService {
                         customer.getId(),
                         NotificationType.SYSTEM,
                         title,
-                        String.format("Hợp đồng thuê kho %s tại %s sẽ hết hạn vào ngày %s. Quý khách có thể yêu cầu gia hạn ngay hôm nay.",
+                        String.format("Hợp đồng thuê kho %s tại %s sẽ hết hạn vào ngày %s. Quý khách có thể gửi yêu cầu gia hạn.",
                             unitCode, facilityName, endDate),
                         rental.getId()
                     );
@@ -113,8 +115,12 @@ public class RentalContractLifecycleService {
                 }
             }
 
-            // Milestone 2: D-3 Pre-expiration reminder (3 days before expiration)
-            if (daysUntilExpiry == 3) {
+            // The period-aware scheduler owns customer expiry notices when its date is available.
+            boolean periodSchedulerOwnsNotice = customer != null && rental.getActualReturnedAt() == null
+                && rentalPeriods != null && rentalPeriods.read(rental).isPresent();
+
+            // Fallback for rentals without verified period evidence.
+            if (daysUntilExpiry == 3 && !periodSchedulerOwnsNotice) {
                 String title = "Cảnh báo: Hợp đồng thuê kho sắp hết hạn (còn 3 ngày)";
                 if (customer != null && !notificationRepository.existsMilestone(customer.getId(), rental.getId(), title)) {
                     notificationService.createNotification(
@@ -153,12 +159,12 @@ public class RentalContractLifecycleService {
 
                 // Customer expiration notification
                 String expTitle = "Thông báo: Hợp đồng thuê kho đã hết hạn";
-                if (customer != null && !notificationRepository.existsMilestone(customer.getId(), rental.getId(), expTitle)) {
+                if (customer != null && !periodSchedulerOwnsNotice && !notificationRepository.existsMilestone(customer.getId(), rental.getId(), expTitle)) {
                     notificationService.createNotification(
                         customer.getId(),
                         NotificationType.SYSTEM,
                         expTitle,
-                        String.format("Hợp đồng thuê kho %s tại %s đã hết hạn vào ngày %s. Quý khách vui lòng liên hệ ban quản lý để bàn giao kho hoặc hoàn tất thủ tục liên quan.",
+                        String.format("Hợp đồng thuê kho %s tại %s đã hết hạn vào ngày %s. Quý khách vui lòng liên hệ cơ sở để trả kho và được hướng dẫn các thủ tục cần thiết.",
                             unitCode, facilityName, endDate),
                         rental.getId()
                     );
@@ -179,8 +185,8 @@ public class RentalContractLifecycleService {
                                     staffUser.getId(),
                                     NotificationType.SYSTEM,
                                     alertTitle,
-                                    String.format("Kho %s tại %s của khách hàng %s đã hết hạn vào ngày %s nhưng chưa được bàn giao. Cần theo dõi kiểm tra hiện trạng.",
-                                        unitCode, facilityName, customer != null ? customer.getFullName() : "N/A", endDate),
+                                    String.format("Hợp đồng thuê kho %s tại %s của khách hàng %s đã hết hạn ngày %s. Khách hàng chưa trả kho. Vui lòng kiểm tra tình trạng kho.",
+                                        unitCode, facilityName, customer != null ? customer.getFullName() : "Chưa xác định", endDate),
                                     rental.getId()
                                 );
                                 handoverAlerts++;
@@ -238,7 +244,7 @@ public class RentalContractLifecycleService {
                         customer.getId(),
                         NotificationType.PAYMENT,
                         title,
-                        String.format("Khoản thanh toán số tiền %s %s của quý khách sẽ đến hạn vào ngày %s. Quý khách vui lòng thanh toán đúng hạn.",
+                        String.format("Khoản thanh toán %s %s sẽ đến hạn ngày %s. Quý khách vui lòng thanh toán đúng hạn.",
                             amount, currency, dueDate),
                         payment.getId()
                     );
@@ -254,7 +260,7 @@ public class RentalContractLifecycleService {
                         customer.getId(),
                         NotificationType.OVERDUE,
                         title,
-                        String.format("Khoản thanh toán số tiền %s %s đã quá hạn 1 ngày (hạn chót: %s). Quý khách vui lòng thanh toán trong thời gian gia hạn thanh toán 3 ngày lịch.",
+                        String.format("Khoản thanh toán %s %s đã quá hạn 1 ngày (hạn thanh toán: %s). Quý khách vui lòng thanh toán trong thời gian gia hạn 3 ngày, tính cả ngày nghỉ.",
                             amount, currency, dueDate),
                         payment.getId()
                     );
@@ -270,7 +276,7 @@ public class RentalContractLifecycleService {
                         customer.getId(),
                         NotificationType.OVERDUE,
                         title,
-                        String.format("Thời gian gia hạn thanh toán 3 ngày lịch cho khoản phí %s %s (hạn gốc: %s) đã kết thúc. Khoản phải thu đã được đưa vào diện theo dõi nội bộ.",
+                        String.format("Thời gian gia hạn thanh toán 3 ngày cho khoản phí %s %s (hạn thanh toán: %s) đã kết thúc. Khoản thanh toán đang được theo dõi.",
                             amount, currency, dueDate),
                         payment.getId()
                     );
@@ -289,7 +295,7 @@ public class RentalContractLifecycleService {
                                 NotificationType.OVERDUE,
                                 staffTitle,
                                 String.format("Khách hàng %s có khoản thanh toán %s %s quá hạn 3 ngày (hạn: %s). Đã đưa vào diện theo dõi.",
-                                    customer != null ? customer.getFullName() : "N/A", amount, currency, dueDate),
+                                    customer != null ? customer.getFullName() : "Chưa xác định", amount, currency, dueDate),
                                 payment.getId()
                             );
                         }
@@ -305,8 +311,8 @@ public class RentalContractLifecycleService {
                         customer.getId(),
                         NotificationType.OVERDUE,
                         title,
-                        String.format("Khoản thanh toán số tiền %s %s đã quá hạn 7 ngày. Hồ sơ đã được chuyển đến cấp Quản lý (Manager) để xem xét theo quy định.",
-                            amount, currency, dueDate),
+                        String.format("Khoản thanh toán %s %s đã quá hạn %d ngày. Hồ sơ cần được quản lý xem xét theo quy định.",
+                            amount, currency, diff),
                         payment.getId()
                     );
                     dPlus7Count++;
@@ -322,8 +328,8 @@ public class RentalContractLifecycleService {
                                 m.getId(),
                                 NotificationType.OVERDUE,
                                 managerTitle,
-                                String.format("Khách hàng %s có khoản phải thu %s %s đã quá hạn %d ngày (hạn gốc: %s). Cần Manager xem xét hướng xử lý theo hợp đồng.",
-                                    customer != null ? customer.getFullName() : "N/A", amount, currency, diff, dueDate),
+                                String.format("Khách hàng %s có khoản phải thu %s %s đã quá hạn %d ngày (hạn gốc: %s). Vui lòng xem xét cách xử lý theo hợp đồng.",
+                                    customer != null ? customer.getFullName() : "Chưa xác định", amount, currency, diff, dueDate),
                                 payment.getId()
                             );
                         }
@@ -352,7 +358,7 @@ public class RentalContractLifecycleService {
 
         StorageUnit unit = rental.getStorageUnit();
         UUID unitId = unit != null ? unit.getId() : null;
-        String unitCode = unit != null ? unit.getCode() : "N/A";
+        String unitCode = unit != null ? unit.getCode() : "Chưa xác định";
 
         if (contractStatus == ContractStatus.TERMINATED) {
             return new PostExpirationEligibility(

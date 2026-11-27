@@ -10,7 +10,7 @@ import java.util.*;
 /** Owner-supplied integration contracts. No runtime mocks/default BO policy are installed. */
 public final class RenewalOperationSources {
     private RenewalOperationSources() {}
-    public enum Capability { READ, ARRIVAL, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND, REFUND_EXECUTION }
+    public enum Capability { READ, ARRIVAL, NO_SHOW, INCIDENT, CASH, COMPLETE, EXCEPTION, REFUND, REFUND_EXECUTION }
     public interface AuthorizationSource {
         /** Checks current permission, facility scope and evidence visibility, not just role. */
         void require(ActorPrincipal actor, Renewal renewal, Capability capability);
@@ -35,7 +35,7 @@ public final class RenewalOperationSources {
         void reserve(Renewal renewal, Slot slot, Instant now);
         /** Stateful calendars prevent reassignment from silently orphaning a reserved slot. */
         default void beforeStaffAssignment(Renewal renewal,UUID nextStaff) {}
-        /** Called only after verified normal completion in the caller transaction. */
+        /** Releases only the Renewal signing reservation after completion or an explicit terminal operation. */
         default void release(Renewal renewal,Instant now) {}
     }
     public interface SafetySource {

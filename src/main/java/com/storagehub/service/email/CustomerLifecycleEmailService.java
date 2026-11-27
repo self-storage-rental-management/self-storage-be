@@ -17,16 +17,29 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CustomerLifecycleEmailService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.BusinessRecordCodes displayCodes;
     private final EntityManager em;
     private final TransactionalEmailService mail;
     private final EmailProperties properties;
     private final com.storagehub.service.rental.period.RentalPeriodResolver periods;
     private final ReservationPricingSnapshotRepository snapshotRepository;
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy").withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     public void notification(Notification notice) {
         User user = notice.getUser();
-        if (user.getRoles().stream().noneMatch(role -> role.getCode() == RoleCode.CUSTOMER)) return;
+        if (user.getRoles().stream().noneMatch(role -> role.getCode() == RoleCode.CUSTOMER)) {
+            boolean operations = user.getRoles().stream().anyMatch(role -> java.util.Set.of(RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS).contains(role.getCode()));
+            if (!operations || notice.getType() != NotificationType.CHECKIN && notice.getType() != NotificationType.RETURN) return;
+            var vars = new LinkedHashMap<String,Object>();
+            vars.put("fullName", user.getFullName()); vars.put("title", notice.getTitle());
+            vars.put("summary", safeSummary(notice.getContent())); vars.put("details", Map.of("Xử lý hồ sơ", "Đăng nhập và mở thông báo để xem công việc trong phạm vi cơ sở của bạn."));
+            vars.put("detailsUrl", properties.getFrontendBaseUrl().replaceAll("/+$", "") + "/login");
+            mail.queueTemplate(user.getId(), user.getEmail(), "StorageHub - " + notice.getTitle(), "customer-lifecycle", vars,
+                "OPERATIONS_TRANSACTIONAL_EMAIL_SENT", "notification:" + notice.getId());
+            return;
+        }
         // System messages may include promotions; those need a separate consent/unsubscribe flow.
         if (notice.getType() == NotificationType.SYSTEM) return;
         if (notice.getType() == NotificationType.PAYMENT && notice.getTitle().equals("Thanh toán thành công")) return;
@@ -34,6 +47,7 @@ public class CustomerLifecycleEmailService {
         Reservation reservation = resource == null ? null : em.find(Reservation.class, resource);
         Rental rental = null;
         ReturnCase returned = null;
+        ViolationRecovery recovery = null;
         if (reservation == null && resource != null && notice.getType() == NotificationType.CHECKIN) {
             CheckIn checkIn = em.find(CheckIn.class, resource);
             if (checkIn != null) reservation = checkIn.getReservation();
@@ -46,6 +60,10 @@ public class CustomerLifecycleEmailService {
             if (notice.getType() == NotificationType.RETURN) {
                 returned = em.find(ReturnCase.class, resource);
                 if (returned != null) rental = returned.getRental();
+                else {
+                    recovery = em.find(ViolationRecovery.class, resource);
+                    if (recovery != null) rental = recovery.getRental();
+                }
             } else if (rental == null && (notice.getType() == NotificationType.RENEWAL || notice.getType() == NotificationType.PAYMENT)) {
                 Renewal renewal = em.find(Renewal.class, resource);
                 if (renewal != null) rental = renewal.getRental();
@@ -59,23 +77,87 @@ public class CustomerLifecycleEmailService {
             }
             if (rental == null) rental = em.find(Rental.class, resource);
         }
-        if (rental == null && reservation != null && notice.getType() == NotificationType.CHECKIN) {
+        if (rental == null && reservation != null
+            && (notice.getType() == NotificationType.CHECKIN || notice.getType() == NotificationType.RETURN
+                || notice.getType() == NotificationType.OVERDUE || notice.getType() == NotificationType.RENEWAL)) {
             rental = em.createQuery("select r from Rental r where r.reservation.id=:id", Rental.class)
                 .setParameter("id", reservation.getId()).setMaxResults(1).getResultList().stream().findFirst().orElse(null);
         }
         if (rental != null && !rental.getCustomer().getId().equals(user.getId())) rental = null;
+        if (rental != null && returned == null && recovery == null && notice.getType() == NotificationType.RETURN) {
+            returned = em.createQuery(
+                "select rc from ReturnCase rc where rc.rental.id=:id order by rc.requestedAt desc", ReturnCase.class)
+                .setParameter("id", rental.getId()).setMaxResults(1).getResultList().stream().findFirst().orElse(null);
+        }
         if (rental != null) reservation = rental.getReservation();
         if (reservation != null && !reservation.getCustomer().getId().equals(user.getId())) reservation = null;
-        Map<String, String> details = reservation == null ? new LinkedHashMap<>() : reservationDetails(reservation);
-        if (reservation == null && resource != null) details.put("Mã hồ sơ liên quan", resource.toString());
+
+        boolean returnEmail = returned != null || notice.getType() == NotificationType.RETURN;
+        boolean recoveryEmail = recovery != null;
+        boolean inventoryEmail = !returnEmail && !recoveryEmail
+            && notice.getType() == NotificationType.CHECKIN
+            && rental != null && rental.getMoveInCompletedAt() != null;
+        boolean preHandoverCheckInEmail = !returnEmail && !recoveryEmail && !inventoryEmail
+            && (notice.getType() == NotificationType.RESERVATION || notice.getType() == NotificationType.CHECKIN);
+
+        Map<String, String> details = reservation == null
+            ? new LinkedHashMap<>()
+            : reservationDetails(reservation, preHandoverCheckInEmail, !returnEmail && !recoveryEmail && notice.getType() == NotificationType.CHECKIN);
+        if (rental != null && rental.getDisplayCode() != null) details.put("Mã hồ sơ thuê", rental.getDisplayCode());
         if (rental != null) {
-            details.put("Ngày bắt đầu thuê", rental.getStartDate().toString());
-            periods.read(rental).ifPresent(period -> details.put("Ngày cuối được sử dụng", period.lastPermittedDate().toString()));
-            if (rental.getSetupStartedAt() != null) details.put("Bắt đầu chuẩn bị", TIME.format(rental.getSetupStartedAt()));
-            if (rental.getSetupEndsAt() != null) details.put("Kết thúc chuẩn bị", TIME.format(rental.getSetupEndsAt()));
+            details.put("Ngày bắt đầu thuê", DATE.format(rental.getStartDate()));
+            periods.read(rental).ifPresent(period -> details.put("Ngày cuối được sử dụng", DATE.format(period.lastPermittedDate())));
+            if (inventoryEmail) {
+                details.put("Thời điểm nhận kho", TIME.format(rental.getMoveInCompletedAt()));
+                if (rental.getSetupStartedAt() != null) details.put("Bắt đầu chuẩn bị", TIME.format(rental.getSetupStartedAt()));
+                if (rental.getSetupEndsAt() != null) details.put("Kết thúc chuẩn bị", TIME.format(rental.getSetupEndsAt()));
+                if (rental.getInventoryFinalDeadlineAt() != null) details.put("Hạn đến kiểm kê", TIME.format(rental.getInventoryFinalDeadlineAt()));
+                if (com.storagehub.service.IntakeTimelineCalculator.APPT_MISSED.equals(rental.getAppointmentStatus())) {
+                    if (rental.getInventoryAppointmentAt() != null) {
+                        details.put("Lịch hẹn kiểm kê trước đó (đã bỏ lỡ)", TIME.format(rental.getInventoryAppointmentAt()));
+                    }
+                    details.put("Trạng thái lịch kiểm kê", "Đã bỏ lỡ - vui lòng đặt lại lịch mới trước hạn");
+                } else if (rental.getInventoryAppointmentAt() != null) {
+                    details.put("Lịch hẹn kiểm kê", TIME.format(rental.getInventoryAppointmentAt()));
+                }
+                if (rental.getInspectionCompletionDeadlineAt() != null
+                    && rental.getInventoryResultPublishedAt() == null
+                    && rental.getInventoryRemovalPublishedAt() == null) {
+                    details.put("Hạn hoàn tất kiểm kê (72 giờ)", TIME.format(rental.getInspectionCompletionDeadlineAt()));
+                }
+                if (rental.getInventoryIdentityVerifiedAt() == null && rental.getInventoryResultPublishedAt() == null) {
+                    details.put("Giấy tờ khi kiểm kê", "Mang giấy tờ định danh gốc trùng với hồ sơ; không gửi ảnh giấy tờ qua email.");
+                }
+            }
         }
         if (returned != null && returned.getCustomer().getId().equals(user.getId())) {
-            details.put("Lịch kiểm tra/trả kho dự kiến", returned.getScheduledDate().toString());
+            if (returned.getDisplayCode() != null) details.put("Mã hồ sơ trả kho", returned.getDisplayCode());
+            details.put("Hình thức trả kho", returnTypeLabel(returned.getReturnType()));
+            if (returned.getReturnType() == ReturnType.INVENTORY_MISMATCH) {
+                Instant removalDeadline = rental != null && rental.getInventoryRemovalDeadlineAt() != null
+                    ? rental.getInventoryRemovalDeadlineAt()
+                    : returned.getRecoveryEligibleAt();
+                if (removalDeadline != null) {
+                    details.put("Hạn cuối dọn hàng", TIME.format(removalDeadline) + " (giờ Việt Nam)");
+                }
+                if (returned.getScheduledAppointmentAt() != null) {
+                    details.put("Lịch hẹn bàn giao trả kho", TIME.format(returned.getScheduledAppointmentAt()));
+                } else if (returned.getScheduledDate() != null) {
+                    details.put("Lịch hẹn bàn giao trả kho", DATE.format(returned.getScheduledDate()) + " (chưa chọn giờ hẹn)");
+                } else {
+                    details.put("Lịch hẹn bàn giao trả kho", "Chưa đặt lịch");
+                }
+                int usedExtensions = rental != null
+                    ? Math.max(returned.getReturnExtensionCount(), rental.getInventoryReturnExtensionCount())
+                    : returned.getReturnExtensionCount();
+                details.put("Số lượt gia hạn dọn hàng", "Đã dùng " + usedExtensions + "/" + com.storagehub.service.InventoryTimelinePolicy.MAX_RETURN_EXTENSIONS + " lần");
+            } else if (returned.getScheduledDate() != null) {
+                details.put("Lịch kiểm tra/trả kho dự kiến", DATE.format(returned.getScheduledDate()));
+            }
+            if (returned.getReturnIdentityVerifiedAt() == null && returned.getInspectedAt() == null
+                && returned.getCompletedAt() == null && returned.getNoShowAt() == null) {
+                details.put("Giấy tờ khi trả kho", "Mang giấy tờ định danh gốc trùng với hồ sơ; không gửi ảnh giấy tờ qua email.");
+            }
             if (returned.getInspectedAt() != null || returned.getReviewedAt() != null || returned.getSettlementPaidAt() != null) {
                 details.put("Tổng khấu trừ theo bảng kê", money(returned.getTotalDeductions()));
                 details.put("Tiền hoàn theo bảng kê", money(returned.getNetRefundAmount()));
@@ -130,10 +212,32 @@ public class CustomerLifecycleEmailService {
             reservationDetails(reservation), "reservations", reservation.getId(), reservation.getPaymentExpiresAt());
     }
 
+    public void signingReminder(com.storagehub.service.renewal.operations.RenewalOperationState appointment, boolean finalReminder) {
+        var rental = appointment.getRenewal().getRental();
+        var customer = rental.getCustomer();
+        var start = appointment.getAppointmentStart();
+        var details = new LinkedHashMap<String, String>();
+        details.put("Giờ ký (giờ Việt Nam)", TIME.format(start));
+        details.put("Cơ sở", rental.getFacility().getName());
+        details.put("Địa chỉ", rental.getFacility().getAddress());
+        String title = "Nhắc lịch ký phụ lục gia hạn kho";
+        var vars = new LinkedHashMap<String, Object>();
+        vars.put("fullName", customer.getFullName());
+        vars.put("title", title);
+        vars.put("summary", "Bạn có lịch ký phụ lục gia hạn kho. Vui lòng đến cơ sở theo giờ hẹn bên dưới.");
+        vars.put("details", details);
+        vars.put("detailsUrl", properties.getFrontendBaseUrl().replaceAll("/+$", "") + "/login?emailSection=rental-records");
+        vars.put("_appointmentRef", appointment.getAppointmentRef().toString());
+        vars.put("_expiresAt", (finalReminder ? start : start.minus(java.time.Duration.ofHours(2))).toString());
+        String key = "renewal-signing:" + appointment.getAppointmentRef() + (finalReminder ? ":2h" : ":24h");
+        mail.queueTemplate(customer.getId(), customer.getEmail(), "StorageHub - " + title, "customer-lifecycle",
+            vars, "CUSTOMER_TRANSACTIONAL_EMAIL_SENT", key);
+    }
+
     public void billingReminder(Rental rental, com.storagehub.service.RentalReadSources.Financial financial, long remainingDays) {
-        var details = reservationDetails(rental.getReservation());
+        var details = reservationDetails(rental.getReservation(), false, false);
         details.put("Tổng nghĩa vụ còn phải trả đã đối soát", money(financial.outstandingAmount()));
-        if (financial.nextDueDate() != null) details.put("Hạn thanh toán tiếp theo", financial.nextDueDate().toString());
+        if (financial.nextDueDate() != null) details.put("Hạn thanh toán tiếp theo", DATE.format(financial.nextDueDate()));
         send(rental.getCustomer(), "billing:" + rental.getId() + ":" + financial.nextDueDate() + ":" + remainingDays,
             remainingDays < 0 ? "Có khoản thanh toán quá hạn" : "Nhắc thanh toán trước hạn " + remainingDays + " ngày",
             "Vui lòng mở bảng kê khoản phải trả và biên lai trong hồ sơ. Chỉ các khoản phí có căn cứ theo điều khoản đã chấp nhận mới được áp dụng; trạng thái đối soát có thể cập nhật sau giao dịch ngân hàng.",
@@ -151,6 +255,14 @@ public class CustomerLifecycleEmailService {
     }
 
     private Map<String, String> reservationDetails(Reservation reservation) {
+        return reservationDetails(reservation, true, true);
+    }
+
+    private Map<String, String> reservationDetails(
+        Reservation reservation,
+        boolean includePreHandoverCheckIn,
+        boolean includeCheckInStaff
+    ) {
         var snapshot = snapshotRepository.findByReservation_Id(reservation.getId()).orElse(null);
         var rows = new LinkedHashMap<String, String>();
         rows.put("Mã đơn giữ kho", reservation.getReservationCode());
@@ -160,17 +272,34 @@ public class CustomerLifecycleEmailService {
         rows.put("Kích thước kho (D × R × C)", historicalUnitDimensions(reservation, snapshot));
         String assignedUnitCode = com.storagehub.service.ReservationSnapshotView.assignedUnitCode(reservation, snapshot);
         if (assignedUnitCode != null) rows.put("Mã gian kho", assignedUnitCode);
-        if (reservation.getPaymentStartedAt() != null) rows.put("Bắt đầu hạn thanh toán", TIME.format(reservation.getPaymentStartedAt()));
-        if (reservation.getPaymentExpiresAt() != null) rows.put("Hạn thanh toán trước 20% (giữ chỗ)", TIME.format(reservation.getPaymentExpiresAt()));
-        else if (reservation.getHoldExpiresAt() != null) rows.put("Hạn giữ hồ sơ", TIME.format(reservation.getHoldExpiresAt()));
-        if (reservation.getStatus() == ReservationStatus.AWAITING_PAYMENT && snapshot != null) {
-            rows.put("Số tiền thanh toán trước 20% (giữ chỗ)", money(snapshot.getReservationDepositAmount()));
+        if (includePreHandoverCheckIn) {
+            if (reservation.getPaymentStartedAt() != null) rows.put("Bắt đầu hạn thanh toán", TIME.format(reservation.getPaymentStartedAt()));
+            if (reservation.getPaymentExpiresAt() != null) rows.put("Hạn thanh toán trước 20% (giữ chỗ)", TIME.format(reservation.getPaymentExpiresAt()));
+            else if (reservation.getHoldExpiresAt() != null) rows.put("Hạn giữ hồ sơ", TIME.format(reservation.getHoldExpiresAt()));
+            if (reservation.getStatus() == ReservationStatus.AWAITING_PAYMENT && snapshot != null) {
+                rows.put("Số tiền thanh toán trước 20% (giữ chỗ)", money(snapshot.getReservationDepositAmount()));
+            }
+            if (reservation.getAppointmentAt() != null) rows.put("Lịch nhận kho", TIME.format(reservation.getAppointmentAt()));
         }
-        if (reservation.getAppointmentAt() != null) rows.put("Lịch nhận kho", TIME.format(reservation.getAppointmentAt()));
-        var checkIns = em.createQuery("select c from CheckIn c where c.reservation.id=:id", CheckIn.class).setParameter("id", reservation.getId()).setMaxResults(1).getResultList();
-        if (!checkIns.isEmpty() && checkIns.getFirst().getAssignedStaff() != null) rows.put("Nhân viên phụ trách", checkIns.getFirst().getAssignedStaff().getFullName());
-        rows.put("Giấy tờ khi nhận kho", "Mang giấy tờ định danh gốc trùng với hồ sơ và biên lai thanh toán; không gửi ảnh giấy tờ qua email.");
+        if (includeCheckInStaff) {
+            var checkIns = em.createQuery("select c from CheckIn c where c.reservation.id=:id", CheckIn.class).setParameter("id", reservation.getId()).setMaxResults(1).getResultList();
+            if (!checkIns.isEmpty() && checkIns.getFirst().getAssignedStaff() != null) rows.put("Nhân viên phụ trách", checkIns.getFirst().getAssignedStaff().getFullName());
+        }
+        if (includePreHandoverCheckIn) {
+            rows.put("Giấy tờ khi nhận kho", "Mang giấy tờ định danh gốc trùng với hồ sơ và biên lai thanh toán; không gửi ảnh giấy tờ qua email.");
+        }
         return rows;
+    }
+
+    private static String returnTypeLabel(ReturnType type) {
+        if (type == null) return "Trả kho";
+        return switch (type) {
+            case INVENTORY_MISMATCH -> "Trả do kiểm kê sai lệch";
+            case RETURN_IN_SETUP -> "Trả trong thời gian chuẩn bị";
+            case CANCELLED_IN_SETUP -> "Hủy trong thời gian chuẩn bị";
+            case EARLY_RETURN -> "Trả trước hạn";
+            case NORMAL -> "Trả đúng hạn";
+        };
     }
 
     private String historicalUnitDimensions(Reservation reservation, ReservationPricingSnapshot snapshot) {
@@ -207,7 +336,7 @@ public class CustomerLifecycleEmailService {
 
     private String safeSummary(String value) {
         if (value == null) return "Vui lòng mở hồ sơ trên web để xem chi tiết.";
-        return value.replaceAll("(?iu)(mật khẩu|mã (?:ra vào|truy cập|ổ khóa)|số (?:tài khoản|thẻ)|CCCD|CMND)[^\\n.]*", "Thông tin bảo mật được cung cấp trong tài khoản StorageHub");
+        return displayCodes.noticeText(value).replaceAll("(?iu)(mật khẩu|mã (?:ra vào|truy cập|ổ khóa)|số (?:tài khoản|thẻ)|CCCD|CMND)[^\\n.]*", "Thông tin bảo mật được cung cấp trong tài khoản StorageHub");
     }
 
     private String money(java.math.BigDecimal value) {

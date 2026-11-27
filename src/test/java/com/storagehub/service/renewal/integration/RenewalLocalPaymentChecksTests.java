@@ -29,10 +29,12 @@ class RenewalLocalPaymentChecksTests {
         var beans=new StaticListableBeanFactory();beans.addBean("ledger",ledger);
         return new RenewalLocalPaymentChecks(em,beans.getBeanProvider(LedgerStore.class),beans.getBeanProvider(OverdueSources.TermSource.class));
     }
-    @Test void knownUnpaidPastObligationStillBlocksPayment() {
+    @Test void unpaidObligationsFromOtherDossiersDoNotBlockCurrentRenewal() {
         var c=checks();var due=new LedgerStore.Obligation(UUID.randomUUID(),null,LedgerStore.Kind.RENT,BigDecimal.TEN,now.minusSeconds(1),"old",BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.TEN);
         when(ledger.read(id)).thenReturn(Optional.of(new LedgerStore.Snapshot(id,customer,facility,0,List.of(due),List.of(),List.of())));
-        assertThatThrownBy(()->c.requireKnownFinance(rental,renewal,now)).hasMessageContaining("Recorded due obligations");
+        c.requireKnownFinance(rental,renewal,now);
+        c.requireKnownFinance(rental,null,now);
+        verify(em,times(1)).createQuery(contains("p.payment.renewal.id=:id"),eq(Long.class));
     }
     @Test void currentRenewalObligationIsNotTreatedAsPriorDebt() {
         var c=checks();var due=new LedgerStore.Obligation(UUID.randomUUID(),renewal,LedgerStore.Kind.RENEWAL_REMAINDER,BigDecimal.TEN,now,"current",BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.TEN);
@@ -42,6 +44,11 @@ class RenewalLocalPaymentChecksTests {
     @Test void accountBindingMismatchIsNeverAccepted() {
         var c=checks();when(ledger.read(id)).thenReturn(Optional.of(new LedgerStore.Snapshot(id,UUID.randomUUID(),facility,0,List.of(),List.of(),List.of())));
         assertThatThrownBy(()->c.requireKnownFinance(rental,renewal,now)).hasMessageContaining("binding changed");
+    }
+    @Test void complaintLookupIsScopedToCurrentRenewalPayment() {
+        var c=checks();when(ledger.read(id)).thenReturn(Optional.of(new LedgerStore.Snapshot(id,customer,facility,0,List.of(),List.of(),List.of())));
+        c.requireKnownFinance(rental,renewal,now);
+        verify(em).createQuery(contains("p.payment.renewal.id=:id"),eq(Long.class));
     }
     @Test void absentPriorLedgerIsAllowedByTheExplicitNarrowPolicy() {
         var c=checks();when(ledger.read(id)).thenReturn(Optional.empty());c.requireKnownFinance(rental,renewal,now);

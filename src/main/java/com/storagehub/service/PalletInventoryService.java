@@ -1,5 +1,6 @@
 package com.storagehub.service;
 
+import com.storagehub.api.checkin.CheckInResponse;
 import com.storagehub.api.reservation.GoodsItemRequest;
 import com.storagehub.api.reservation.PalletPlan;
 import com.storagehub.common.api.ApiException;
@@ -39,6 +40,27 @@ public class PalletInventoryService {
 
     record StorageLimits(BigDecimal maxCargoLengthCm, BigDecimal maxCargoWidthCm,
                          BigDecimal maxCargoHeightCm, BigDecimal maxCargoWeightKg) {}
+
+    CheckInResponse.Equipment equipment(StorageUnit unit) {
+        if (unit == null || unit.getUnitType() == null) return null;
+        String json = layoutJson(unit, unit.getUnitType());
+        if (json == null) return null;
+        try {
+            var layout = layouts.layoutForPacking(unit.getUnitType(), json);
+            if (layout == null) return null;
+            int rackCount = layout.rackCount();
+            int frameCount = layout.configuration() != null && layout.configuration().racks() != null
+                ? layout.configuration().racks().stream()
+                    .mapToInt(rack -> rack.uprightFrameCount() == null ? 0 : rack.uprightFrameCount().intValue())
+                    .sum()
+                : rackCount;
+            if (frameCount <= 0) frameCount = rackCount;
+            int pallets = layout.totalPallets() > 0 ? layout.totalPallets() : layout.palletSlotCount();
+            return new CheckInResponse.Equipment(rackCount, frameCount, pallets > 0 ? pallets : null);
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
 
     StorageLimits storageLimits(UnitType type) {
         if (type == null || type.getRackLayoutJson() == null) return null;
@@ -163,6 +185,31 @@ public class PalletInventoryService {
     void requireFit(UnitType type, List<GoodsItemRequest> items) {
         if (type == null) throw ApiExceptions.conflict("Loại gian chưa có cấu hình kệ pallet.");
         requireFit(type, type.getRackLayoutJson(), items);
+    }
+
+    /**
+     * Reuses the same packing calculation used during reservation compatibility
+     * for the actual inventory measurements recorded at handover.
+     */
+    Fit evaluateActualFit(StorageUnit unit, List<GoodsItemRequest> items) {
+        if (unit == null || unit.getUnitType() == null) {
+            return new Fit(null, 0, null, List.of("Gian kho chưa có cấu hình."), true);
+        }
+        String json = layoutJson(unit, unit.getUnitType());
+        if (json == null) {
+            return new Fit(null, 0, null, List.of("Gian kho chưa có cấu hình kệ pallet."), true);
+        }
+        var layout = layouts.layoutForPacking(unit.getUnitType(), json);
+        if (layout == null || !layout.palletRatingConfigured()) {
+            return new Fit(null, 0, null,
+                List.of("Cấu hình kệ chưa đủ điều kiện để tự động đối chiếu sức chứa."),
+                layout == null, null, layout == null ? null : layout.palletSlotCount(), true);
+        }
+        var result = fit(unit.getUnitType(), json, items);
+        return result.plan() == null
+            ? unavailable(result)
+            : new Fit(result.plan(), 1, unit, List.of(), false,
+                result.requiredPallets(), result.availableSlots(), false);
     }
 
     private void requireFit(UnitType type, String json, List<GoodsItemRequest> items) {
