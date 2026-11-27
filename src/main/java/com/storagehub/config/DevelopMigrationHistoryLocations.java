@@ -30,7 +30,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
                     if (result.next() && result.getInt(1) > 0) {
                         boolean clean2402 = false;
                         boolean clean2404 = false;
-                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402','2026112402','2026112403','2026112404','2026112601','2026112602','2026112603')")) {
+                        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT version,script,type,success FROM `" + history + "` WHERE version IN ('2026100909','2026100910','2026101001','2026101202','2026101203','2026101301','2026101302','2026101401','2026101402','2026101403','2026101404','2026101405','2026101406','2026101501','2026101502','2026101900','2026101901','2026101904','2026102002','2026102003','2026102401','2026102402','2026112402','2026112403','2026112404','2026112601','2026112602','2026112603','2026112702','2026112703','2026112704','2026112706','2026112707','2026112708','2026112709','2026112711')")) {
                             while (rows.next()) {
                                 String version = rows.getString("version");
                                 boolean success = rows.getBoolean("success");
@@ -62,6 +62,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         } catch (SQLException error) { throw new IllegalStateException("Cannot inspect actual Flyway history; no migration performed", error); }
         var selected = new ArrayList<>(locations.stream().filter(location -> !location.startsWith("classpath:db/migration-history/")).toList());
         selectCheckinRenumbered(selected, applied, configuration);
+        selectLateNovemberHistory(selected, applied);
         selected.add(select(applied, "2026112403", "V2026112403__ensure_money_receipt_codes.sql", "receipt-checked-2403",
             "V2026112403__register_money_receipt_codes.sql", "receipt-original-2403"));
         selected.add(select(applied, "2026102401", "V2026102401__support_handoff_retention.sql", "develop-support-2401",
@@ -189,6 +190,48 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         }
         return configuration.locations(selected.toArray(String[]::new));
     }
+    private static void selectLateNovemberHistory(ArrayList<String> selected, Map<String, Applied> applied) {
+        Applied at2708 = applied.get("2026112708");
+        String oldFee = "V2026112708__immutable_return_fee_schedule.sql";
+        boolean appliedOldFee = at2708 != null && oldFee.equals(at2708.script());
+        if (appliedOldFee) {
+            require(at2708, oldFee);
+            if (applied.containsKey("2026112711"))
+                throw new IllegalStateException("Mixed return fee schedule migration history; no repair performed");
+            selected.add("classpath:db/migration-history/local-return-fee-2708");
+        } else {
+            if (applied.containsKey("2026112711"))
+                require(applied.get("2026112711"), "V2026112711__immutable_return_fee_schedule.sql");
+            selected.add("classpath:db/migration-history/current-return-fee-2711");
+        }
+        Applied previous = applied.get("2026112702");
+        String legacy = "V2026112702__renewal_customer_cancellation_accounting.sql";
+        if (previous != null && legacy.equals(previous.script())) {
+            require(previous, legacy);
+            Map<String, String> scripts = Map.of(
+                "2026112703", "V2026112703__fully_paid_renewal_cancellation.sql",
+                "2026112704", "V2026112704__unit_type_deadline_policy.sql",
+                "2026112706", "V2026112706__payment_complaint_reminders.sql",
+                "2026112707", "V2026112707__payment_gateway_create_date.sql",
+                "2026112709", "V2026112709__account_lifecycle_and_lease_limits.sql");
+            scripts.forEach((version, script) -> {
+                if (applied.containsKey(version)) require(applied.get(version), script);
+            });
+            selected.add("classpath:db/migration-history/legacy-local-2702");
+            if (!appliedOldFee) {
+                if (at2708 != null) require(at2708, "V2026112708__reservation_customer_snapshot.sql");
+                selected.add("classpath:db/migration-history/legacy-reservation-snapshot-2708");
+            } else {
+                selected.add("classpath:db/migration-history/local-reservation-snapshot-2714");
+            }
+        } else {
+            if (previous != null) require(previous, "V2026112702__account_lifecycle_and_lease_limits.sql");
+            if (applied.containsKey("2026112709"))
+                throw new IllegalStateException("Mixed account lifecycle migration history; no repair performed");
+            selected.add("classpath:db/migration-history/develop-lifecycle-2702");
+        }
+    }
+
     private static void selectCheckinRenumbered(ArrayList<String> selected, Map<String,Applied> applied,
         FluentConfiguration configuration) {
         String legacyViolation = "V2026112601__violation_recovery_workflow.sql";
@@ -199,7 +242,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
         Applied at2602 = applied.get("2026112602");
         Applied at2603 = applied.get("2026112603");
 
-        if (at2601 != null) {
+        if (at2601 != null && !"V2026112601__inspection_clock_starts_on_arrival.sql".equals(at2601.script())) {
             require(at2601, legacyViolation);
             selected.add("classpath:db/migration-history/legacy-2601");
             if (at2602 == null) {
@@ -222,6 +265,7 @@ public class DevelopMigrationHistoryLocations implements FlywayConfigurationCust
             return;
         }
 
+        if (at2601 != null) require(at2601, "V2026112601__inspection_clock_starts_on_arrival.sql");
         if (at2602 != null && legacyReturn.equals(at2602.script()))
             throw new IllegalStateException("2026112602 has legacy history without 2026112601; no repair performed");
         if (at2602 != null) require(at2602, currentViolation);

@@ -26,10 +26,11 @@ public class StaffReservationController {
         @RequestParam(required = false) ReservationStatus status,
         @RequestParam(required = false) String q,
         @RequestParam(defaultValue = "0") int page,
-        @RequestParam(defaultValue = "20") int size
+        @RequestParam(defaultValue = "20") int size,
+        @RequestParam(defaultValue = "priority") String sort
     ) {
         return service.listActive(
-            actorContext.required(), facilityId, status, q, page, size,
+            actorContext.required(), facilityId, status, q, page, size, sort,
             CorrelationIdContext.current()
         );
     }

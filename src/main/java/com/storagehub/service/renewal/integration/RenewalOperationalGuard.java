@@ -32,8 +32,6 @@ public class RenewalOperationalGuard {
         var unit=em.find(StorageUnit.class,rental.getStorageUnit().getId());
         if(unit==null || unit.getFacility()==null || !Objects.equals(unit.getFacility().getId(),rental.getFacility().getId()))
             throw ApiExceptions.conflict("DEFERRED_SOURCE: Rental unit/facility mapping incomplete");
-        if(com.storagehub.service.RentalIntakePolicy.isPending(rental))
-            throw ApiExceptions.conflict(com.storagehub.service.RentalIntakePolicy.INCOMPLETE);
         // Never infer physical availability from a contract end date or modify the shared unit status.
         if(unit.getStatus()!=StorageUnitStatus.occupied)
             throw ApiExceptions.conflict("Rental unit is no longer occupied by the current rental");

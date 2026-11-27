@@ -572,13 +572,16 @@ public class FacilityLifecycleService {
         List<UUID> categoryIds = distinct(request.acceptedGoodsCategoryIds());
         List<UUID> materialIds = distinct(request.acceptedGoodsMaterialIds());
         // Backward-compatible requests created before scoped goods existed mean "all active".
-        if (categoryIds.isEmpty()) categoryIds = goodsTypes.findAllByStatusOrderByCodeAsc(com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
-            .stream().map(com.storagehub.domain.model.GoodsTypeCatalog::getId).sorted().toList();
+        if (request.acceptedGoodsCategoryIds() == null && request.acceptedGoodsMaterialIds() == null) {
+            categoryIds = goodsTypes.findAllByStatusOrderByCodeAsc(com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
+                .stream().map(com.storagehub.domain.model.GoodsTypeCatalog::getId).sorted().toList();
+            List<UUID> selectedCategoryIds = categoryIds;
+            materialIds = goodsMaterials.findAll().stream()
+                .filter(value -> value.getStatus() == com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
+                .filter(value -> selectedCategoryIds.contains(value.getGoodsType().getId()))
+                .map(com.storagehub.domain.model.GoodsMaterialCatalog::getId).sorted().toList();
+        }
         List<UUID> selectedCategoryIds = categoryIds;
-        if (materialIds.isEmpty()) materialIds = goodsMaterials.findAll().stream()
-            .filter(value -> value.getStatus() == com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)
-            .filter(value -> selectedCategoryIds.contains(value.getGoodsType().getId()))
-            .map(com.storagehub.domain.model.GoodsMaterialCatalog::getId).sorted().toList();
         var categories = goodsTypes.findAllById(categoryIds);
         var materials = goodsMaterials.findAllById(materialIds);
         if (categories.size() != categoryIds.size() || categories.stream().anyMatch(v -> v.getStatus() != com.storagehub.domain.model.GoodsCatalogStatus.ACTIVE)) {
@@ -703,50 +706,6 @@ public class FacilityLifecycleService {
             && java.util.Set.of("S", "M", "L", "XL").contains(type.getCode().trim().toUpperCase());
     }
 
-    @Transactional
-    public java.util.Map<UUID, com.storagehub.api.configuration.UnitTypeDeadlinePolicy> updateDeadlinePolicies(
-        ActorPrincipal actor, UUID facilityId, com.storagehub.api.configuration.FacilityDeadlinePoliciesRequest request) {
-        requireBusiness(actor);
-        var types = unitTypes.findByFacility_IdOrderByCodeAsc(facilityId).stream()
-            .filter(type -> type.getStatus() != UnitTypeStatus.archived).toList();
-        var expectedIds = types.stream().map(UnitType::getId).collect(java.util.stream.Collectors.toSet());
-        var policies = request.policies();
-        if (expectedIds.isEmpty() || policies == null || !expectedIds.equals(policies.keySet())) {
-            throw ApiExceptions.validation("Phải thiết lập đầy đủ tất cả loại kho tại cơ sở. Vui lòng tải lại danh sách.", null);
-        }
-        for (var value : policies.values()) {
-            if (value == null || java.util.stream.IntStream.of(value.setupDeadlineDays(), value.setupMaxExtensionDays(),
-                value.mismatchReturnDays(), value.mismatchReturnMaxExtensionDays()).anyMatch(days -> days < 1 || days > 365)) {
-                throw ApiExceptions.validation("Phải nhập đủ các thời hạn bằng số nguyên từ 1 đến 365 ngày.", null);
-            }
-        }
-        // All updates and audit entries commit together or roll back together.
-        for (var id : expectedIds.stream().sorted().toList()) {
-            unitTypes.findByIdForUpdate(id).orElseThrow(() -> ApiExceptions.conflict("Danh sách loại kho đã thay đổi. Vui lòng tải lại."));
-        }
-        for (var type : types) updateDeadlinePolicy(actor, type.getId(), policies.get(type.getId()));
-        return java.util.Map.copyOf(policies);
-    }
-
-    @Transactional(readOnly = true)
-    public com.storagehub.api.configuration.UnitTypeDeadlinePolicy deadlinePolicy(ActorPrincipal actor, UUID id) {
-        requireBusiness(actor);
-        UnitType type = unitTypes.findById(id).orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
-        return new com.storagehub.api.configuration.UnitTypeDeadlinePolicy(type.getSetupDeadlineDays(), type.getSetupMaxExtensionDays(), type.getMismatchReturnDays(), type.getMismatchReturnMaxExtensionDays());
-    }
-    @Transactional
-    public com.storagehub.api.configuration.UnitTypeDeadlinePolicy updateDeadlinePolicy(ActorPrincipal actor, UUID id, com.storagehub.api.configuration.UnitTypeDeadlinePolicy request) {
-        var before = deadlinePolicy(actor, id);
-        UnitType type = unitTypes.findById(id).orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
-        if (type.getStatus() == UnitTypeStatus.archived) throw ApiExceptions.conflict("Loại kho đã được lưu trữ.");
-        type.setSetupDeadlineDays(request.setupDeadlineDays());
-        type.setSetupMaxExtensionDays(request.setupMaxExtensionDays());
-        type.setMismatchReturnDays(request.mismatchReturnDays());
-        type.setMismatchReturnMaxExtensionDays(request.mismatchReturnMaxExtensionDays());
-        unitTypes.save(type);
-        audit.recordMutation("UNIT_TYPE_DEADLINE_POLICY_UPDATED", "UnitType", id, type.getFacility().getId(), before, request);
-        return request;
-    }
     @Transactional
     public UnitTypeResponse priceUnitType(ActorPrincipal actor, UUID unitTypeId, UnitTypePricingRequest request) {
         requireBusiness(actor);

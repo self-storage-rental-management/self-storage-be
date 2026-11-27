@@ -73,6 +73,33 @@ class ReservationConcurrencyIntegrationTests {
 
     @Test
     @org.springframework.transaction.annotation.Transactional
+    void checkInCreationSortOverridesPriorityBeforePagination() {
+        Facility site = facility(); site.setCode("CHECKIN-CREATED"); em.persist(site);
+        UnitType type = unitType(site); type.setCode("CREATED-S"); em.persist(type);
+        var owner = userRepository.save(customer("created-sort@storagehub.test"));
+        var now = Instant.parse("2026-11-22T04:00:00Z");
+        var start = LocalDate.of(2026, 11, 23);
+        var quote = quoteRepository.save(quote(owner, site, type, start, start.plusMonths(3)));
+        var old = queueItem("OLD-SORT", quote, now.plusSeconds(7200), CheckInStatus.scheduled);
+        var recent = queueItem("NEW-SORT", quote, now.plusSeconds(3600), CheckInStatus.scheduled);
+        em.flush();
+        em.createNativeQuery("update reservations set created_at=:at where id=:id")
+            .setParameter("at", now.minusSeconds(86400)).setParameter("id", old.getId()).executeUpdate();
+        em.createNativeQuery("update reservations set created_at=:at where id=:id")
+            .setParameter("at", now).setParameter("id", recent.getId()).executeUpdate();
+        em.clear();
+        for (String order : List.of("createdAt,asc", "createdAt,desc")) {
+            var result = reservationRepository.findCheckInWorkOrdered("ONGOING", now, Instant.EPOCH,
+                Instant.EPOCH, Instant.EPOCH, site.getId(), null, false, false, false, null,
+                null, null, true, List.of(site.getId()), order, null, org.springframework.data.domain.PageRequest.of(0, 1));
+            assertThat(result.getTotalElements()).isEqualTo(2);
+            assertThat(result.getContent()).extracting(row -> row.getReservation().getReservationCode())
+                .containsExactly(order.endsWith("asc") ? "OLD-SORT" : "NEW-SORT");
+        }
+    }
+
+    @Test
+    @org.springframework.transaction.annotation.Transactional
     void checkInGroupsSortBeforePaginationAndRetainReleasedUnits() {
         Facility site = facility();
         site.setCode("CHECKIN-QUEUE");
@@ -97,6 +124,16 @@ class ReservationConcurrencyIntegrationTests {
         queueItem("DONE", quote, now, CheckInStatus.completed);
         em.flush();
         em.clear();
+
+        for (var phase : java.util.Map.of("HANDOVER_WAITING", 5L, "HANDOVER_IN_PROGRESS", 1L, "HANDOVER_STOPPED", 3L).entrySet()) {
+            String group = phase.getKey().equals("HANDOVER_STOPPED") ? "PROCESSED" : "ONGOING";
+            var grouped = reservationRepository.findCheckInWorkOrdered(group, now,
+                ReservationCheckInPolicy.firstValidAppointment(now), Instant.EPOCH, Instant.EPOCH,
+                site.getId(), null, false, false, false, null, null, null, true, List.of(site.getId()),
+                "priority", phase.getKey(), org.springframework.data.domain.PageRequest.of(0, 1));
+            assertThat(grouped.getTotalElements()).isEqualTo(phase.getValue());
+            assertThat(grouped.getContent()).hasSize(1);
+        }
 
         for (int page = 0; page < 3; page++) {
             var result = reservationRepository.findCheckInWork("ONGOING", now, ReservationCheckInPolicy.firstValidAppointment(now),
@@ -593,6 +630,7 @@ class ReservationConcurrencyIntegrationTests {
         );
         var request = new CreateReservationRequest(quote.getId(), "Packed", "Concurrency test", List.of(item), Instant.now().plusSeconds(86400));
         request.setAcceptedSetupEarlyExitPolicyVersion(quote.getSetupEarlyExitPolicyVersion());
+        request.setAcceptedHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
         return request;
     }
 

@@ -28,11 +28,6 @@ public interface PaymentComplaintRepository extends JpaRepository<PaymentComplai
         PaymentComplaintStatus status, Instant now
     );
 
-    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
-    List<PaymentComplaint> findTop100ByStatusAndReviewDueAtAfterOrderByReviewDueAtAsc(
-        PaymentComplaintStatus status, Instant now
-    );
-
     @Query("""
         select complaint from PaymentComplaint complaint
         where complaint.status in :statuses

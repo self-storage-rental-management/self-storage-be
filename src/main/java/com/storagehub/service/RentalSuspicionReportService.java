@@ -67,7 +67,7 @@ public class RentalSuspicionReportService {
 
     public record RentalContext(String displayCode, String reservationCode, String unitCode, String customerName) {}
     public record TransferInput(@NotBlank @Size(max = 2000) String conclusion,
-        @Size(max = 2000) String grounds) {}
+        @NotBlank @Size(max = 2000) String grounds) {}
     public record Transfer(UUID recoveryId, String conclusion, String grounds, String decidedBy, Instant decidedAt) {}
     public record CloseInput(@NotBlank @Size(max = 2000) String reason) {}
     public record Closure(String reason, String decidedBy, Instant decidedAt) {}
@@ -133,7 +133,7 @@ public class RentalSuspicionReportService {
         UUID recoveryId = recoveryWorkflow.openConfirmedProhibitedGoodsRecovery(actor, rental.getId());
         audit.recordMutation(users.getReferenceById(actor.userId()), TRANSFER_ACTION, ENTITY, reportId,
             log.getFacility().getId(), INVESTIGATING,
-            java.util.Map.of("recoveryId", recoveryId, "conclusion", input.conclusion().strip(), "grounds", input.grounds() == null ? "" : input.grounds().strip()));
+            java.util.Map.of("recoveryId", recoveryId, "conclusion", input.conclusion().strip(), "grounds", input.grounds().strip()));
         return managerDetail(log, accepted);
     }
 

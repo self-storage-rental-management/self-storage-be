@@ -43,23 +43,6 @@ public class BusinessFacilityLifecycleController {
         return new ApiResponse<>(lifecycle.archiveFacility(actors.required(), facilityId), CorrelationIdContext.current());
     }
 
-    @PatchMapping("/facilities/{facilityId}/deadline-policies")
-    public ApiResponse<java.util.Map<UUID, com.storagehub.api.configuration.UnitTypeDeadlinePolicy>> updateDeadlinePolicies(
-        @PathVariable UUID facilityId,
-        @Valid @RequestBody com.storagehub.api.configuration.FacilityDeadlinePoliciesRequest request) {
-        return new ApiResponse<>(lifecycle.updateDeadlinePolicies(actors.required(), facilityId, request), CorrelationIdContext.current());
-    }
-
-    @GetMapping("/unit-types/{unitTypeId}/deadline-policy")
-    public ApiResponse<com.storagehub.api.configuration.UnitTypeDeadlinePolicy> deadlinePolicy(@PathVariable UUID unitTypeId) {
-        return new ApiResponse<>(lifecycle.deadlinePolicy(actors.required(), unitTypeId), CorrelationIdContext.current());
-    }
-    @PatchMapping("/unit-types/{unitTypeId}/deadline-policy")
-    public ApiResponse<com.storagehub.api.configuration.UnitTypeDeadlinePolicy> updateDeadlinePolicy(@PathVariable UUID unitTypeId,
-        @Valid @RequestBody com.storagehub.api.configuration.UnitTypeDeadlinePolicy request) {
-        return new ApiResponse<>(lifecycle.updateDeadlinePolicy(actors.required(), unitTypeId, request), CorrelationIdContext.current());
-    }
-
     @PatchMapping("/unit-types/{unitTypeId}/pricing")
     public ApiResponse<UnitTypeResponse> price(
         @PathVariable UUID unitTypeId,

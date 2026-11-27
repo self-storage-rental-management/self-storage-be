@@ -53,9 +53,9 @@ public class IntakeTimelineCalculator {
             && IntakePolicyProperties.POLICY_VERSION.equals(rental.getIntakePolicyVersion())) {
             return;
         }
-        var unitType = rental.getStorageUnit() == null ? null : rental.getStorageUnit().getUnitType();
-        IntakePolicyProperties.SizeRule rule = unitType == null ? null : new IntakePolicyProperties.SizeRule(
-            unitType.getSetupDeadlineDays() * 24, unitType.getSetupMaxExtensionDays() * 24);
+        String code = rental.getStorageUnit() == null || rental.getStorageUnit().getUnitType() == null
+            ? null : rental.getStorageUnit().getUnitType().getCode();
+        IntakePolicyProperties.SizeRule rule = policy.ruleFor(code);
         if (rule == null) {
             throw ApiExceptions.conflict("Cỡ kho chưa được cấu hình thời hạn setup và kiểm kê.");
         }
@@ -250,9 +250,9 @@ public class IntakeTimelineCalculator {
     public int maxExtensionHoursFor(Rental rental) {
         if (rental.getIntakeExtensionMaxHours() != null) return rental.getIntakeExtensionMaxHours();
         if (rental.getSetupExtensionDays() != null) return rental.getSetupExtensionDays() * 24;
-        var unitType = rental.getStorageUnit() == null ? null : rental.getStorageUnit().getUnitType();
-        IntakePolicyProperties.SizeRule rule = unitType == null ? null : new IntakePolicyProperties.SizeRule(
-            unitType.getSetupDeadlineDays() * 24, unitType.getSetupMaxExtensionDays() * 24);
+        String code = rental.getStorageUnit() == null || rental.getStorageUnit().getUnitType() == null
+            ? null : rental.getStorageUnit().getUnitType().getCode();
+        IntakePolicyProperties.SizeRule rule = policy.ruleFor(code);
         return rule == null ? 0 : rule.getMaxExtensionHours();
     }
 

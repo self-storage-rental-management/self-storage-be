@@ -28,8 +28,6 @@ class RenewalDepositForfeituresTests {
         new ResourceDatabasePopulator(new ClassPathResource("rental-ledger-test-schema.sql")).execute(ds);
         var sql=new String(new ClassPathResource("db/migration-history/legacy-deposit-1501/V2026101501__record_renewal_deposit_forfeitures.sql").getInputStream().readAllBytes(),StandardCharsets.UTF_8).replace("ENGINE=InnoDB","");
         for(var statement:sql.split(";"))if(!statement.isBlank())jdbc.execute(statement);
-        var fullSql=new String(new ClassPathResource("db/migration/V2026112703__fully_paid_renewal_cancellation.sql").getInputStream().readAllBytes(),StandardCharsets.UTF_8).replace("ENGINE=InnoDB","");
-        for(var statement:fullSql.split(";"))if(!statement.isBlank())jdbc.execute(statement);
         var beans=new StaticListableBeanFactory();beans.addBean("forfeitures",forfeitures);
         ReflectionTestUtils.setField(ledger,"depositForfeitures",beans.getBeanProvider(RenewalDepositForfeitures.class));
         tx.executeWithoutResult(s->{
@@ -61,33 +59,6 @@ class RenewalDepositForfeituresTests {
         assertThatThrownBy(()->tx.executeWithoutResult(s->forfeitures.record(renewal,payment,wrong,security,account.receipts().getFirst(),"PRODUCTION",now)))
             .hasMessageContaining("original allocated Renewal deposit");
         assertThat(jdbc.queryForObject("select count(*) from renewal_deposit_forfeitures",Long.class)).isZero();
-    }
-    @Test void fullPaymentDispositionRetainsAllReceiptsAndPreventsRefundingEitherPayment() {
-        tx.executeWithoutResult(s->{
-            var obligation=ledger.charge(rental,renewal,LedgerStore.Kind.RENEWAL_REMAINDER,new BigDecimal("26400000"),now,"accepted:REMAINDER",actor,"charge-balance",account.revision());
-            ledger.receive(rental,LedgerStore.Method.CASH,new BigDecimal("26400000"),Map.of(obligation,new BigDecimal("26400000")),"balance-receipt",UUID.randomUUID(),actor,"receive-balance",account.revision()+1,now);
-        });
-        var before=ledger.read(rental).orElseThrow();
-        var paid=before.receipts().stream().map(r->new RenewalDepositForfeitures.PaidReceipt(UUID.randomUUID(),r,"PRODUCTION")).toList();
-        tx.executeWithoutResult(s->forfeitures.recordFullyPaid(renewal,before,paid,now));
-        var after=ledger.read(rental).orElseThrow();
-        assertThat(after.receipts()).isEqualTo(before.receipts());assertThat(after.refunds()).isEmpty();assertThat(after.knownOutstanding()).isZero();
-        tx.executeWithoutResult(s->forfeitures.recordFullyPaid(renewal,after,paid,now));
-        assertThat(ledger.read(rental).orElseThrow().revision()).isEqualTo(after.revision());
-        assertThat(jdbc.queryForObject("select count(*) from renewal_payment_forfeitures",Long.class)).isEqualTo(2);
-        for(var p:paid) {
-            assertThat(forfeitures.containsReceipt(p.receipt().id())).isTrue();
-            var obligation=ledger.renewalAllocations(rental,renewal).stream().filter(a->a.receiptId().equals(p.receipt().id())).findFirst().orElseThrow().obligationId();
-            assertThatThrownBy(()->tx.execute(s->ledger.reserveRefund(rental,p.receipt().id(),obligation,p.receipt().amount(),"refund",actor,"refund-"+p.paymentId(),after.revision())))
-                .hasMessageContaining("not refundable");
-        }
-    }
-    @Test void fullPaymentDispositionRejectsAnAlreadyReservedRefund() {
-        tx.execute(s->ledger.reserveRefund(rental,account.receipts().getFirst().id(),account.obligations().getFirst().id(),new BigDecimal("6600000"),"approved",actor,"refund",account.revision()));
-        account=ledger.read(rental).orElseThrow();
-        assertThatThrownBy(()->tx.executeWithoutResult(s->forfeitures.recordFullyPaid(renewal,account,List.of(new RenewalDepositForfeitures.PaidReceipt(payment,account.receipts().getFirst(),"PRODUCTION")),now)))
-            .hasMessageContaining("reserved or executed refund");
-        assertThat(jdbc.queryForObject("select count(*) from renewal_payment_forfeitures",Long.class)).isZero();
     }
     private void record(LedgerStore.Snapshot s){forfeitures.record(renewal,payment,s,s.obligations().getFirst(),s.receipts().getFirst(),"PRODUCTION",now);}
 }

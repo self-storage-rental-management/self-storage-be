@@ -203,8 +203,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
             staff, reservation.getId(),
             new ReservationReviewRequest(ReservationReviewDecision.APPROVE, null)
         ))
-            .isInstanceOf(ApiException.class)
-            .hasMessage("The actor has no required scope for this facility");
+            .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.getStatus().value()).isEqualTo(403));
     }
 
     @Test
