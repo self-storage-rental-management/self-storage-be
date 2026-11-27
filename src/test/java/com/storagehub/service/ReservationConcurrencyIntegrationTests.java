@@ -630,6 +630,7 @@ class ReservationConcurrencyIntegrationTests {
         );
         var request = new CreateReservationRequest(quote.getId(), "Packed", "Concurrency test", List.of(item), Instant.now().plusSeconds(86400));
         request.setAcceptedSetupEarlyExitPolicyVersion(quote.getSetupEarlyExitPolicyVersion());
+        request.setAcceptedHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
         return request;
     }
 

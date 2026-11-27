@@ -93,8 +93,8 @@ public class StaffReservationQueryService {
         var unit = reservation.getAssignedUnit();
         return new StaffReservationProgressResponse(
             reservation.getId(), reservation.getReservationCode(),
-            reservation.getCustomer().getId(), reservation.getCustomerName(),
-            reservation.getCustomerEmail(), reservation.getFacility().getId(),
+            reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
+            reservation.getCustomer().getEmail(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), reservation.getUnitType().getId(),
             ReservationSnapshotView.unitTypeName(reservation), unit == null ? null : unit.getId(),
             unit == null ? null : unit.getCode(), reservation.getStatus(),

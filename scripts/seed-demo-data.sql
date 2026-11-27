@@ -140,6 +140,7 @@ ON DUPLICATE KEY UPDATE name=VALUES(name);
 INSERT INTO users (id, created_at, updated_at, email, full_name, phone, password_hash, status, must_change_password)
 VALUES
     (UUID_TO_BIN('44444444-4444-4444-0001-000000000001'), NOW(6), NOW(6), 'customer@storagehub.demo', 'Demo Customer', '+84 908 123 456', '$2a$12$XrJdCq71NkpzcsK31qWRpedqnNIe3ZXVGSPyzNWXNe.MkGD8KiCAi', 'ACTIVE', 0),
+    (UUID_TO_BIN('41ca8903-3dbd-4e6f-8682-711a2db24fd4'), NOW(6), NOW(6), 'thongvinh2@gmail.com', 'Anh Liêm', '+84 902 000 002', '$2a$12$XrJdCq71NkpzcsK31qWRpedqnNIe3ZXVGSPyzNWXNe.MkGD8KiCAi', 'ACTIVE', 0),
     (UUID_TO_BIN('44444444-4444-4444-0002-000000000001'), NOW(6), NOW(6), 'staff@storagehub.demo', 'Demo Staff', '+84 905 550 101', '$2a$12$YBjOhbjzqbDmVdxyCeohceTTYFoAyAuvE72vTUHiGHdPmD6RX1zUG', 'ACTIVE', 0),
     (UUID_TO_BIN('44444444-4444-4444-0003-000000000001'), NOW(6), NOW(6), 'manager@storagehub.demo', 'Demo Manager', '+84 903 444 888', '$2a$12$tHvraiCntO.ncogr5WDLZ.MKovT9rXRuQJGUZXsgccdyqhDnMKfi.', 'ACTIVE', 0),
     (UUID_TO_BIN('44444444-4444-4444-0004-000000000001'), NOW(6), NOW(6), 'business@storagehub.demo', 'Demo Operations', '+84 28 3999 1111', '$2a$12$VIzVqC24HiSToqyjtkf09.EOrkrQ3NsCPm0MFO0YRoekI4tatA8Pa', 'ACTIVE', 0)
@@ -147,10 +148,12 @@ ON DUPLICATE KEY UPDATE full_name=VALUES(full_name), phone=VALUES(phone), passwo
 
 DELETE ur FROM user_roles ur
 JOIN users u ON u.id=ur.user_id
-WHERE u.email IN ('customer@storagehub.demo', 'staff@storagehub.demo', 'manager@storagehub.demo', 'business@storagehub.demo');
+WHERE u.email IN ('customer@storagehub.demo', 'thongvinh2@gmail.com', 'staff@storagehub.demo', 'manager@storagehub.demo', 'business@storagehub.demo');
 
 INSERT INTO user_roles (user_id, role_id)
 SELECT u.id, r.id FROM users u CROSS JOIN roles r WHERE u.email='customer@storagehub.demo' AND r.code='CUSTOMER';
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id FROM users u CROSS JOIN roles r WHERE u.email='thongvinh2@gmail.com' AND r.code='CUSTOMER';
 INSERT INTO user_roles (user_id, role_id)
 SELECT u.id, r.id FROM users u CROSS JOIN roles r WHERE u.email='staff@storagehub.demo' AND r.code='STAFF';
 INSERT INTO user_roles (user_id, role_id)
@@ -171,6 +174,11 @@ ON DUPLICATE KEY UPDATE scope_level=VALUES(scope_level);
 INSERT INTO user_facility_scopes (id, created_at, updated_at, user_id, facility_id, scope_level)
 SELECT UUID_TO_BIN('55555555-5555-5555-0002-000000000002'), NOW(6), NOW(6), u.id, f.id, 'OPERATE'
 FROM users u JOIN facilities f ON f.code='FPT-TD-F01' WHERE u.email='staff@storagehub.demo'
+ON DUPLICATE KEY UPDATE scope_level=VALUES(scope_level);
+
+INSERT INTO user_facility_scopes (id, created_at, updated_at, user_id, facility_id, scope_level)
+SELECT UUID_TO_BIN('55555555-5555-5555-0002-000000000003'), NOW(6), NOW(6), u.id, f.id, 'OPERATE'
+FROM users u JOIN facilities f ON f.code='HCM-Q1-F01' WHERE u.email='staff@storagehub.demo'
 ON DUPLICATE KEY UPDATE scope_level=VALUES(scope_level);
 
 INSERT INTO user_facility_scopes (id, created_at, updated_at, user_id, facility_id, scope_level)

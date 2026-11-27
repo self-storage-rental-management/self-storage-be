@@ -10,12 +10,12 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 class InventoryTimelinePolicyTests {
-    @Test void preservesSevenExactDaysAcrossMonthBoundary() {
+    @Test void preservesSevenFullCalendarDaysAcrossMonthBoundary() {
         Instant notice = Instant.parse("2026-12-28T16:45:00Z");
         assertThat(InventoryTimelinePolicy.removalEffectiveAt(notice))
-            .isEqualTo(Instant.parse("2026-12-28T16:45:00Z"));
+            .isEqualTo(Instant.parse("2026-12-28T17:00:00Z"));
         assertThat(InventoryTimelinePolicy.removalDeadline(notice))
-            .isEqualTo(Instant.parse("2027-01-04T16:45:00Z"));
+            .isEqualTo(Instant.parse("2027-01-04T17:00:00Z"));
     }
 
     @Test void remindsAtStartOfFourthDayAndRecoversAtStartOfEighth() {
@@ -32,7 +32,8 @@ class InventoryTimelinePolicyTests {
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("L"))).isEqualTo(7);
         assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XL"))).isEqualTo(10);
 
-        assertThat(InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XXL"))).isEqualTo(3);
+        assertThatThrownBy(() -> InventoryTimelinePolicy.returnWindowDaysForUnitType(unitType("XXL")))
+            .isInstanceOf(RuntimeException.class);
         assertThatThrownBy(() -> InventoryTimelinePolicy.returnWindowDaysForUnitType(null))
             .isInstanceOf(RuntimeException.class);
     }
@@ -63,16 +64,16 @@ class InventoryTimelinePolicyTests {
     }
 
     @Test void handlesYearBoundaryForXlTenDaysAndPreservesSnapshotAfterConfigChange() {
-        // Announced on 29/12/2026 15:00 ICT (08:00 UTC) -> effective 29/12 15:00 ICT,
-        // 10 * 24h window -> recovery boundary = 08/01/2027 15:00 ICT (08/01 08:00 UTC).
+        // Announced on 29/12/2026 15:00 ICT (08:00 UTC) -> effective 30/12 00:00 ICT,
+        // 10 calendar days = 30/12..08/01, recovery boundary = 09/01 00:00 ICT (08/01 17:00 UTC).
         Instant dec29 = Instant.parse("2026-12-29T08:00:00Z");
         Rental xlRental = rentalWithSize("XL");
         InventoryTimelinePolicy.initializeRemovalWindow(xlRental, dec29);
         assertThat(InventoryTimelinePolicy.removalEffectiveAt(dec29))
-            .isEqualTo(Instant.parse("2026-12-29T08:00:00Z"));
+            .isEqualTo(Instant.parse("2026-12-29T17:00:00Z"));
         assertThat(xlRental.getInventoryReturnWindowDays()).isEqualTo(10);
         assertThat(xlRental.getInventoryRemovalDeadlineAt())
-            .isEqualTo(Instant.parse("2027-01-08T08:00:00Z"));
+            .isEqualTo(Instant.parse("2027-01-08T17:00:00Z"));
 
         // Changing the unit type later does not mutate the already-snapshotted rental window.
         Rental smallRental = rentalWithSize("S");
@@ -132,7 +133,7 @@ class InventoryTimelinePolicyTests {
         Instant approved = InventoryTimelinePolicy.removalDeadline(published, 6);
         rental.setInventoryRemovalDeadlineAt(approved);
         assertThat(InventoryTimelinePolicy.extendRemovalWindow(rental, published.plusSeconds(60)))
-            .isEqualTo(approved.plusSeconds(2 * 86400L));
+            .isEqualTo(InventoryTimelinePolicy.dayStart(approved, 2));
         assertThat(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null)).isEqualTo(8);
     }
 
@@ -144,42 +145,9 @@ class InventoryTimelinePolicyTests {
         assertThat(InventoryTimelinePolicy.resolveReturnWindowDays(rental, null)).isNull();
     }
 
-    @Test void sameCodeUsesIndependentPolicyAndSnapshotsExtensionLimit() {
-        Rental first = rentalWithSize("CUSTOM");
-        Rental second = rentalWithSize("CUSTOM");
-        first.getStorageUnit().getUnitType().setMismatchReturnDays(11);
-        first.getStorageUnit().getUnitType().setMismatchReturnMaxExtensionDays(4);
-        second.getStorageUnit().getUnitType().setMismatchReturnDays(6);
-        Instant now = Instant.parse("2026-11-20T08:00:00Z");
-        InventoryTimelinePolicy.initializeRemovalWindow(first, now);
-        InventoryTimelinePolicy.initializeRemovalWindow(second, now);
-        assertThat(first.getInventoryReturnWindowDays()).isEqualTo(11);
-        assertThat(second.getInventoryReturnWindowDays()).isEqualTo(6);
-        first.getStorageUnit().getUnitType().setMismatchReturnMaxExtensionDays(9);
-        InventoryTimelinePolicy.extendRemovalWindow(first, now.plusSeconds(60));
-        assertThat(first.getInventoryReturnWindowDays()).isEqualTo(15);
-        assertThat(first.getInventoryReturnExtensionDays()).isEqualTo(4);
-    }
-
-    @Test void setupUsesCustomTypePolicyAndKeepsExistingSnapshot() {
-        Rental rental = rentalWithSize("CUSTOM");
-        UnitType type = rental.getStorageUnit().getUnitType();
-        type.setSetupDeadlineDays(13);
-        type.setSetupMaxExtensionDays(6);
-        Instant now = Instant.parse("2026-11-20T08:00:00Z");
-        var calculator = new IntakeTimelineCalculator(new IntakePolicyProperties());
-        calculator.initializeOnReceipt(rental, now);
-        assertThat(rental.getOriginalInspectionArrivalDeadlineAt()).isEqualTo(now.plusSeconds(13 * 86400));
-        assertThat(rental.getIntakeExtensionMaxHours()).isEqualTo(144);
-        type.setSetupDeadlineDays(20);
-        calculator.initializeOnReceipt(rental, now);
-        assertThat(rental.getOriginalInspectionArrivalDeadlineAt()).isEqualTo(now.plusSeconds(13 * 86400));
-    }
-
     private static UnitType unitType(String code) {
         UnitType type = new UnitType();
         type.setCode(code);
-        type.setMismatchReturnDays(switch(code) {case "M" -> 5; case "L" -> 7; case "XL" -> 10; default -> 3;});
         return type;
     }
 

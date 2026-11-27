@@ -524,7 +524,7 @@ public class AccessCredentialService {
                 checkIn.getId(), "ISSUE", reservation.getId(), reservation.getReservationCode(), null,
                 reservation.getFacility().getId(), reservation.getFacility().getName(),
                 reservation.getAssignedUnit().getId(), reservation.getAssignedUnit().getCode(),
-                reservation.getCustomer().getId(), reservation.getCustomerName(), null, null,
+                reservation.getCustomer().getId(), reservation.getCustomer().getFullName(), null, null,
                 checkIn.getScheduledAt(), "Hồ sơ đã sẵn sàng nhận kho nhưng chưa cấp mã ổ khóa"
             ));
         }

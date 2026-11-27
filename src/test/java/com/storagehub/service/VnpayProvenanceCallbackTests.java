@@ -45,16 +45,6 @@ class VnpayProvenanceCallbackTests {
         when(payments.findByGatewayIntentIdForUpdate("intent")).thenReturn(Optional.of(p));
         return p;
     }
-    @Test void legacyRefundExecutionsAreRejectedWithoutTouchingPayments() {
-        var message = "Không hỗ trợ hoàn tiền qua VNPay";
-        assertThatThrownBy(() -> service.refund(null, UUID.randomUUID(), null, "127.0.0.1"))
-            .hasMessageContaining(message);
-        assertThatThrownBy(() -> service.approveRefundRequest(null, UUID.randomUUID(), null, "127.0.0.1"))
-            .hasMessageContaining(message);
-        assertThatThrownBy(() -> service.executeApprovedReturnRefund(null, UUID.randomUUID(), BigDecimal.ONE, "test", "127.0.0.1"))
-            .hasMessageContaining(message);
-        verifyNoInteractions(payments, audit, notifications);
-    }
     @ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     void transactionReceiptPreservesReservationAndRenewalPaymentMetadata(boolean renewal) {

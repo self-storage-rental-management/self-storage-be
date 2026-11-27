@@ -123,7 +123,7 @@ public class ViolationRecoveryWorkflow {
     public static final class Details {
         public Instant notifiedAt, responseDueAt, arrivedAt, verifiedAt, acceptedAt, startedAt, pickupOpenedAt, pickupVerifiedAt, pickupAppointmentAt;
         public Reply reply;
-        public boolean disputeOpen, needsWitness, customerReplyPending;
+        public boolean disputeOpen, needsWitness;
         public Attendance attendance;
         public UUID beforeEvidenceId, afterEvidenceId, attendanceEvidenceId, approvedBy, pickupStaffId, pickupAssignedStaffId;
         public Instant approvedAt;
@@ -336,7 +336,6 @@ public class ViolationRecoveryWorkflow {
                         : "Bạn đã báo không thể có mặt. Chỉ có thể chọn lại sau khi chuyển sang sẽ có mặt.");
                 }
                 d.reply = target;
-                d.customerReplyPending = true;
                 d.customerNote = clean(c.note());
                 var uploaded = attachments(v, actor, c.attachmentIds());
                 if (!uploaded.isEmpty()) d.customerAttachmentIds.addAll(uploaded);
@@ -344,7 +343,6 @@ public class ViolationRecoveryWorkflow {
             case DISPUTE -> {
                 d.customerNote = required(c.note(), "nội dung phản đối");
                 d.reply = Reply.DISPUTED;
-                d.customerReplyPending = true;
                 var uploaded = attachments(v, actor, c.attachmentIds());
                 if (!uploaded.isEmpty()) d.customerAttachmentIds.addAll(uploaded);
                 if (terminal(v)) {
@@ -650,7 +648,6 @@ public class ViolationRecoveryWorkflow {
         d.reasonNote = required(c.note(), "kết luận xử lý ngoại lệ");
         d.managerResponseNote = d.reasonNote;
         d.managerRespondedAt = now;
-        d.customerReplyPending = false;
         var uploaded = attachments(v, actor, c.attachmentIds());
         if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         if (v.getTask() != null && v.getTask().getAssignedTo() != null) {
@@ -688,7 +685,6 @@ public class ViolationRecoveryWorkflow {
         d.reasonNote = required(c.note(), "căn cứ hủy thu hồi");
         d.managerResponseNote = d.reasonNote;
         d.managerRespondedAt = now;
-        d.customerReplyPending = false;
         var uploaded = attachments(v, actor, c.attachmentIds());
         if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         if (v.getRequiredAt() != null) {
@@ -714,7 +710,6 @@ public class ViolationRecoveryWorkflow {
         d.reasonNote = required(c.note(), "kết luận khắc phục, tình trạng gian và tài sản");
         d.managerResponseNote = d.reasonNote;
         d.managerRespondedAt = now;
-        d.customerReplyPending = false;
         var uploaded = attachments(v, actor, c.attachmentIds());
         if (!uploaded.isEmpty()) d.managerAttachmentIds.addAll(uploaded);
         var rental = v.getRental();
@@ -884,7 +879,7 @@ public class ViolationRecoveryWorkflow {
         List<Action> actions = new ArrayList<>();
         if (actor.hasRole(RoleCode.CUSTOMER)) {
             if (v.getRequiredAt() == null) return actions;
-            if (!terminal(v) && !d.customerReplyPending && !d.disputeOpen && d.responseDueAt != null && now.isBefore(d.responseDueAt)) {
+            if (!terminal(v) && d.responseDueAt != null && now.isBefore(d.responseDueAt)) {
                 if (!d.disputeOpen) {
                     if (d.reply != Reply.WILL_ATTEND) actions.add(Action.WILL_ATTEND);
                     if (d.reply != Reply.CANNOT_ATTEND) actions.add(Action.CANNOT_ATTEND);
@@ -911,7 +906,7 @@ public class ViolationRecoveryWorkflow {
             boolean withinCancelWindow = d.startedAt == null
                 && (v.getRequiredAt() == null || !now.isAfter(v.getRequiredAt().plus(Duration.ofHours(12))));
             if (withinCancelWindow) actions.add(Action.CANCEL);
-            if (v.getStage() == Stage.BLOCKED || d.customerReplyPending) actions.add(Action.RESUME);
+            if (v.getStage() == Stage.BLOCKED) actions.add(Action.RESUME);
             if (v.getRequiredAt() != null) {
                 if (v.getStage() != Stage.IN_PROGRESS) actions.add(Action.ASSIGN);
             }

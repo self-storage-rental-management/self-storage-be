@@ -232,41 +232,8 @@ public record ReturnCaseResponse(
             customerDecisionNote, reviewedById, reviewedByName, reviewedAt, managerResolutionNote,
             settlementPaymentId, settlementPaidAt, completedAt, sourceType, recoveryTaskId, recoveryTaskStatus,
             recoveryCompletedAt, false, null, settlementReceipt, overdueSettlement, settlementBlocker,
-            null, // earlyTerminationPolicy
-            null, // activeReturnPolicy
-            false, // legacyPricingReviewRequired
-            false, // legacyPricingSnapshotAvailable
-            null, // legacyPricingEvidenceFileId
-            false, // setupExitRequested
-            false, // setupEarlyExit
-            null, // setupReturnedAt
-            null, // setupEarlyExitPolicyVersion
-            null, // rentalRefundCredit
-            null, // earlyTerminationFee
-            null, // noShowAt
-            null, // recoveryEligibleAt
-            null, // recoveryTaskCreatedAt
-            null, // recoveryWitnessStaffId
-            null, // recoveryWitnessStaffName
-            null, // recoveryTaskDeadlineAt
-            null, // inventoryRemovalDeadlineAt
-            null, // lockInspectionResult
-            null, // returnWindowDays
-            null, // returnPolicyVersion
-            null, // equipment
-            null, // customerClearedAt
-            null, // warehouseEmptyVerified
-            null, // warehouseEmptyVerifiedAt
-            null, // warehouseEmptyVerifiedBy
-            0L, // clearanceRevision
-            null, // displayCode
-            null, // rentalDisplayCode
-            null, // attendance
-            0L, // settlementVersion
-            null, // settlementPublishedAt
-            null, // settlementPaymentDueAt
-            List.of(), // settlementReceipts
-            null, null, null, null, null, 0, 0, false, 0L
+            null, null, false, false, null, false, false, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, 0, null, null, List.of(), null, null,
+            null, null, null, 0, 0, false, 0L
         );
     }
 

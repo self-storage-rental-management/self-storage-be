@@ -24,11 +24,6 @@ public class CustomerReturnController {
     private final ActorContext actorContext;
     private final ReturnSettlementService returnSettlementService;
 
-    @GetMapping("/rentals/{rentalId}/return-eligibility")
-    public ApiResponse<com.storagehub.service.renewal.RenewalReturnPolicy.View> returnEligibility(@PathVariable UUID rentalId) {
-        return new ApiResponse<>(returnSettlementService.customerReturnEligibility(actorContext.required(),rentalId),CorrelationIdContext.current());
-    }
-
     @PostMapping("/rentals/{rentalId}/return-request")
     public ApiResponse<ReturnCaseResponse> createReturnRequest(
         @PathVariable UUID rentalId,

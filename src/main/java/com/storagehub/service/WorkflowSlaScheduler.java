@@ -126,9 +126,9 @@ public class WorkflowSlaScheduler {
         process(mismatchFinancialIds(), ReturnCase.class, this::mismatchFinancialDeadline, true, deadline -> {
             if (deadline.owner() != RoleCode.CUSTOMER || !now.isBefore(deadline.dueAt())) return;
             boolean payment = deadline.workflow().equals("MISMATCH_RETURN_PAYMENT");
-            Instant first = payment ? deadline.startedAt().plus(Duration.ofHours(3 * 24L))
+            Instant first = payment ? InventoryTimelinePolicy.dayStart(deadline.startedAt(), 3)
                 : deadline.startedAt().plus(Duration.ofHours(24));
-            Instant second = payment ? deadline.startedAt().plus(Duration.ofHours(6 * 24L))
+            Instant second = payment ? InventoryTimelinePolicy.dayStart(deadline.startedAt(), 6)
                 : deadline.startedAt().plus(Duration.ofHours(48));
             if (now.isBefore(first)) return;
             deliverCustomerReminder(deadline, now.isBefore(second) ? "REMINDER_1" : "REMINDER_2", now,
@@ -177,7 +177,7 @@ public class WorkflowSlaScheduler {
                 start = rc.getCustomerConfirmedAt() == null || reviewed != null && reviewed.isAfter(rc.getCustomerConfirmedAt())
                     ? reviewed : rc.getCustomerConfirmedAt();
                 if (start == null) return null;
-                due = rc.getSettlementPaymentDueAt() == null ? start.plus(Duration.ofHours(7 * 24L)) : rc.getSettlementPaymentDueAt();
+                due = rc.getSettlementPaymentDueAt() == null ? InventoryTimelinePolicy.dayStart(start, 8) : rc.getSettlementPaymentDueAt();
                 workflow = "MISMATCH_RETURN_PAYMENT";
                 description = "thanh toán công nợ trả kho";
                 owner = RoleCode.CUSTOMER;

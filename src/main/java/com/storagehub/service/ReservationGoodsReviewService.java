@@ -233,7 +233,7 @@ public class ReservationGoodsReviewService {
         response.setFacilityId(reservation.getFacility().getId());
         response.setUnitTypeId(reservation.getUnitType().getId());
         response.setCustomerId(reservation.getCustomer().getId());
-        response.setCustomerEmail(reservation.getCustomerEmail());
+        response.setCustomerEmail(reservation.getCustomer().getEmail());
         response.setReservationStatus(reservation.getStatus());
         response.setGoodsReviewStatus(reservation.getGoodsReviewStatus());
         response.setStartDate(reservation.getStartDate());

@@ -18,9 +18,5 @@ public record PaymentComplaintResponse(
     PaymentStatus paymentStatus, ReservationStatus reservationStatus,
     String reason, List<UUID> imageIds, List<PaymentComplaintImageResponse> images,
     Instant submittedAt, Instant reviewDueAt,
-    Instant reviewedAt, Instant withdrawnAt, String decisionReason,
-    UUID paymentId, String gatewayIntentId, Instant paymentInitiatedAt,
-    Instant gatewayQueryCheckedAt, String gatewayQueryResponseCode,
-    String gatewayQueryTransactionStatus, String gatewayQueryTransactionNo,
-    String gatewayQueryPayDate, String gatewayQueryConclusion, String gatewayQueryMessage
+    Instant reviewedAt, Instant withdrawnAt, String decisionReason
 ) {}

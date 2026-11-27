@@ -716,7 +716,7 @@ public class CheckInHandoverService {
         checkIn.setPerformedBy(operator);
         CustomerProfilePolicy.validate(reservation.getCustomer(), true);
         if (!java.util.Objects.equals(checkIn.getVerifiedIdentityDocument(), reservation.getIdentityDocumentNumber()))
-            throw ApiExceptions.conflict("CCCD trên hồ sơ nhận kho và hợp đồng phải khớp giấy tờ đã được nhân viên đối chiếu.");
+            throw ApiExceptions.conflict("CCCD trong hồ sơ phải khớp giấy tờ đã được nhân viên đối chiếu trước khi ký hợp đồng.");
         checkIn.setEmergencyContactsSnapshot(CustomerProfilePolicy.snapshot(reservation.getCustomer()));
         checkIn.setStatus(CheckInStatus.contract_signed);
         checkIn.setContractSignedAt(Instant.now());
@@ -1744,7 +1744,7 @@ public class CheckInHandoverService {
         if (now.isBefore(deadline)) {
             int previousReminder = reservation.getAttendanceReminderHours();
             if (!now.isBefore(deadline.minus(Duration.ofHours(ReservationCheckInPolicy.FINAL_REMINDER_WINDOW_HOURS)))) {
-                int hours = ReservationCheckInPolicy.finalReminderHours(now, deadline);
+                int hours = ReservationCheckInPolicy.finalReminderHours(now);
                 if (previousReminder != 0 && previousReminder != ReservationCheckInPolicy.ATTENDANCE_FIRST_REMINDER_HOURS
                     && Math.abs(previousReminder) <= hours) return;
                 reminder = ReservationCheckInPolicy.finalReminderMarker(hours);
@@ -1811,7 +1811,7 @@ public class CheckInHandoverService {
         UnitAssignment assignment = activeAssignment(reservation.getId());
         StorageUnit unit = lockAssignedUnit(assignment);
         assertReservationUnitMatch(reservation, assignment, unit);
-        String reason = "Quá 72 giờ kể từ khi xác nhận khách đến nhận kho, bàn giao chưa hoàn tất.";
+        String reason = "Quá 72 giờ từ lần đối chiếu CCCD đầu tiên, bàn giao chưa hoàn tất.";
         Instant now = Instant.now();
         var previous = checkIn.getStatus();
         boolean reviewUnit = previous == CheckInStatus.payment_collected || checkIn.getLockReference() != null
@@ -2314,9 +2314,9 @@ public class CheckInHandoverService {
             checkIn == null || checkIn.getAssignedStaff() == null ? null : checkIn.getAssignedStaff().getId(),
             checkIn == null || checkIn.getAssignedStaff() == null ? null : checkIn.getAssignedStaff().getFullName(),
             reservation.getId(), reservation.getReservationCode(), reservation.getStatus(),
-            reservation.getCustomer().getId(), reservation.getCustomerName(),
-            reservation.getCustomerEmail(), reservation.getIdentityDocumentNumber(),
-            reservation.getCustomerPhone(), reservation.getFacility().getId(),
+            reservation.getCustomer().getId(), reservation.getCustomer().getFullName(),
+            reservation.getCustomer().getEmail(), reservation.getIdentityDocumentNumber(),
+            reservation.getCustomer().getPhone(), reservation.getFacility().getId(),
             reservation.getFacility().getName(), unit.getId(), unit.getCode(), unit.getStatus(),
             assignment.getId(), assignment.getStatus(), reservation.getStartDate(),
             reservation.getEndDate(), declaredPackageCount(goodsItems),
