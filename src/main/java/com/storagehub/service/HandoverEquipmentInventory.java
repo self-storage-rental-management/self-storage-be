@@ -9,7 +9,7 @@ import java.math.BigDecimal;
 final class HandoverEquipmentInventory {
     private HandoverEquipmentInventory() {}
 
-    static ReturnCaseResponse.Equipment read(ObjectMapper objectMapper, ReservationPricingSnapshot snapshot, BigDecimal price) {
+    static ReturnCaseResponse.Equipment read(ObjectMapper objectMapper, ReservationPricingSnapshot snapshot, BigDecimal price, String... fallbackLayouts) {
         try {
             String layoutJson = null;
             if (snapshot != null) {
@@ -18,6 +18,14 @@ final class HandoverEquipmentInventory {
                     var node = objectMapper.readTree(json).get("rackLayoutJson");
                     if (node != null && !node.isNull() && !node.asText().isBlank()) {
                         layoutJson = node.isTextual() ? node.asText() : node.toString();
+                        break;
+                    }
+                }
+            }
+            if (layoutJson == null && fallbackLayouts != null) {
+                for (String fallback : fallbackLayouts) {
+                    if (fallback != null && !fallback.isBlank()) {
+                        layoutJson = fallback;
                         break;
                     }
                 }
