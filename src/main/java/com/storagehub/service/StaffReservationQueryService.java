@@ -48,6 +48,22 @@ public class StaffReservationQueryService {
         int size,
         String correlationId
     ) {
+        return listActive(actor, facilityId, status, query, page, size, "priority", correlationId);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<StaffReservationProgressResponse> listActive(
+        ActorPrincipal actor,
+        UUID facilityId,
+        ReservationStatus status,
+        String query,
+        int page,
+        int size,
+        String sort,
+        String correlationId
+    ) {
+        if (!java.util.Set.of("priority", "createdAt,asc", "createdAt,desc", "appointmentAt,asc").contains(sort))
+            throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.", null);
         if (!actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER, RoleCode.BUSINESS, RoleCode.ADMIN)) {
             throw ApiExceptions.forbidden("Only operations staff can view active reservations");
         }
@@ -66,10 +82,10 @@ public class StaffReservationQueryService {
         List<UUID> facilityIds = actor.facilityScopes().isEmpty()
             ? List.of(new UUID(0, 0))
             : actor.facilityScopes().keySet().stream().toList();
-        var result = reservationRepository.findStaffActiveReservations(
-            ACTIVE_STATUSES, facilityId, status, clean(query), scoped, facilityIds,
-            PageRequest.of(page, size)
-        ).map(this::toResponse);
+        var records = sort.equals("priority")
+            ? reservationRepository.findStaffActiveReservations(ACTIVE_STATUSES, facilityId, status, clean(query), scoped, facilityIds, PageRequest.of(page, size))
+            : reservationRepository.findStaffActiveReservationsOrdered(ACTIVE_STATUSES, facilityId, status, clean(query), scoped, facilityIds, sort, PageRequest.of(page, size));
+        var result = records.map(this::toResponse);
         return PageResponse.from(result, correlationId);
     }
 

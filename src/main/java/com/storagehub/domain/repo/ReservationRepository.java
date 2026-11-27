@@ -44,7 +44,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 
     @Query("""
         select r.id from Reservation r join CheckIn c on c.reservation = r
-        where r.status in (UNIT_RESERVED, READY_FOR_CHECKIN) and r.firstHandoverComparisonAt < :startedBefore
+        where r.status in (UNIT_RESERVED, READY_FOR_CHECKIN) and coalesce(r.handoverArrivedAt, r.firstHandoverComparisonAt) < :startedBefore
           and c.status in (scheduled, identity_verified, contract_signed, payment_collected)
         """)
     List<UUID> findUnfinishedHandovers(@Param("startedBefore") Instant startedBefore);
@@ -192,15 +192,27 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and reservation.goodsReviewStatus = com.storagehub.domain.model.GoodsReviewStatus.PENDING
           and (:facilityId is null or reservation.facility.id = :facilityId)
           and (:scoped = false or reservation.facility.id in :facilityIds)
-        order by reservation.goodsReviewDueAt asc nulls last,
+        order by case when :order = 'createdAt,desc' then reservation.createdAt end desc,
+                 case when :order = 'createdAt,asc' then reservation.createdAt end asc,
+                 case when :order = 'appointmentAt,asc' then reservation.appointmentAt end asc nulls last,
+                 case when :order <> 'priority' then reservation.id end asc,
+                 reservation.goodsReviewDueAt asc nulls last,
                  reservation.createdAt asc, reservation.id asc
         """)
-    Page<Reservation> findPendingGoodsReviews(
+    Page<Reservation> findPendingGoodsReviewsOrdered(
         @Param("facilityId") UUID facilityId,
         @Param("scoped") boolean scoped,
         @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        @Param("order") String order,
         Pageable pageable
     );
+    default Page<Reservation> findPendingGoodsReviews(
+        UUID facilityId,
+        boolean scoped,
+        java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    ) { return findPendingGoodsReviewsOrdered(facilityId, scoped, facilityIds, "priority", pageable); }
+
 
     @Query("""
         select r from Reservation r
@@ -209,14 +221,26 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             or r.status <> com.storagehub.domain.model.ReservationStatus.AWAITING_REVIEW)
           and (:facilityId is null or r.facility.id = :facilityId)
           and (:scoped = false or r.facility.id in :facilityIds)
-        order by coalesce(r.goodsReviewedAt, r.cancelledAt, r.expiredAt, r.createdAt) desc, r.id asc
+        order by case when :order = 'createdAt,desc' then r.createdAt end desc,
+                 case when :order = 'createdAt,asc' then r.createdAt end asc,
+                 case when :order = 'appointmentAt,asc' then r.appointmentAt end asc nulls last,
+                 case when :order <> 'priority' then r.id end asc,
+                 coalesce(r.goodsReviewedAt, r.cancelledAt, r.expiredAt, r.createdAt) desc, r.id asc
         """)
-    Page<Reservation> findCompletedGoodsReviews(
+    Page<Reservation> findCompletedGoodsReviewsOrdered(
         @Param("facilityId") UUID facilityId,
         @Param("scoped") boolean scoped,
         @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        @Param("order") String order,
         Pageable pageable
     );
+    default Page<Reservation> findCompletedGoodsReviews(
+        UUID facilityId,
+        boolean scoped,
+        java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    ) { return findCompletedGoodsReviewsOrdered(facilityId, scoped, facilityIds, "priority", pageable); }
+
 
     @Query("""
         select reservation from Reservation reservation
@@ -231,7 +255,11 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
                or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
                or lower(coalesce(assignedUnit.code, '')) like lower(concat('%', :q, '%')))
-        order by case
+        order by case when :order = 'createdAt,desc' then reservation.createdAt end desc,
+                 case when :order = 'createdAt,asc' then reservation.createdAt end asc,
+                 case when :order = 'appointmentAt,asc' then reservation.appointmentAt end asc nulls last,
+                 case when :order <> 'priority' then reservation.id end asc,
+                 case
                    when reservation.status in (AWAITING_REVIEW, PAYMENT_REVIEW) then 0
                    when reservation.status = COMPLETED then 2
                    else 1 end,
@@ -240,15 +268,26 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                       else reservation.appointmentAt end asc nulls last,
                  reservation.createdAt asc, reservation.id asc
         """)
-    Page<Reservation> findStaffActiveReservations(
+    Page<Reservation> findStaffActiveReservationsOrdered(
         @Param("activeStatuses") java.util.Collection<ReservationStatus> activeStatuses,
         @Param("facilityId") UUID facilityId,
         @Param("status") ReservationStatus status,
         @Param("q") String q,
         @Param("scoped") boolean scoped,
         @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        @Param("order") String order,
         Pageable pageable
     );
+    default Page<Reservation> findStaffActiveReservations(
+        java.util.Collection<ReservationStatus> activeStatuses,
+        UUID facilityId,
+        ReservationStatus status,
+        String q,
+        boolean scoped,
+        java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    ) { return findStaffActiveReservationsOrdered(activeStatuses, facilityId, status, q, scoped, facilityIds, "priority", pageable); }
+
 
     @Query("""
         select reservation from Reservation reservation
@@ -317,12 +356,21 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             or (:recoveryTransferred = false and not exists (select 1 from Rental recoveryRental
                 where recoveryRental.reservation = r and recoveryRental.inventoryEscalatedAt is not null)
               and ((:unscheduled = true and c.id is null) or c.status = :checkInStatus)))
+          and (:phase is null or (
+            not exists (select 1 from Rental phaseRental where phaseRental.reservation = r and phaseRental.inventoryEscalatedAt is not null)
+            and ((:phase = 'HANDOVER_WAITING' and (c.id is null or c.status = scheduled))
+              or (:phase = 'HANDOVER_IN_PROGRESS' and c.status in (identity_verified, contract_signed, payment_collected, handover_pending_receipt))
+              or (:phase = 'HANDOVER_STOPPED' and c.status in (rejected, no_show, cancelled)))))
           and (:scheduledFrom is null or coalesce(r.appointmentAt, c.scheduledAt) >= :scheduledFrom)
           and (:scheduledTo is null or coalesce(r.appointmentAt, c.scheduledAt) < :scheduledTo)
         """;
 
     @Query(value = "select r as reservation, c as checkIn, a as assignment " + CHECK_IN_WORK_FROM + """
-        order by case
+        order by
+          case when :order = 'createdAt,desc' then r.createdAt end desc,
+          case when :order = 'createdAt,asc' then r.createdAt end asc,
+          case when :order <> 'priority' then r.id end asc,
+          case
           when :workGroup = 'PROCESSED' then 0
             when r.handoverArrivedAt is not null and c.status in (scheduled, identity_verified, contract_signed, payment_collected) then -1
           when c.status = handover_pending_receipt
@@ -342,7 +390,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           case when :workGroup <> 'PROCESSED' then coalesce(r.appointmentAt, c.scheduledAt) end asc nulls last,
           r.createdAt desc, r.id asc
         """, countQuery = "select count(r.id) " + CHECK_IN_WORK_FROM)
-    Page<CheckInWorkRow> findCheckInWork(
+    Page<CheckInWorkRow> findCheckInWorkOrdered(
         @Param("workGroup") String workGroup,
         @Param("now") Instant now,
         @Param("firstValidAppointment") Instant firstValidAppointment,
@@ -358,8 +406,33 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         @Param("scheduledTo") Instant scheduledTo,
         @Param("scoped") boolean scoped,
         @Param("facilityIds") java.util.Collection<UUID> facilityIds,
+        @Param("order") String order,
+        @Param("phase") String phase,
         Pageable pageable
     );
+
+    default Page<CheckInWorkRow> findCheckInWork(
+        String workGroup,
+        Instant now,
+        Instant firstValidAppointment,
+        Instant receiptConfirmationDueCutoff,
+        Instant receiptConfirmationReminderCutoff,
+        UUID facilityId,
+        String q,
+        boolean statusFilter,
+        boolean unscheduled,
+        boolean recoveryTransferred,
+        com.storagehub.domain.model.CheckInStatus checkInStatus,
+        Instant scheduledFrom,
+        Instant scheduledTo,
+        boolean scoped,
+        java.util.Collection<UUID> facilityIds,
+        Pageable pageable
+    ) {
+        return findCheckInWorkOrdered(workGroup, now, firstValidAppointment, receiptConfirmationDueCutoff, receiptConfirmationReminderCutoff, facilityId, q, statusFilter, unscheduled, recoveryTransferred, checkInStatus, scheduledFrom, scheduledTo, scoped, facilityIds, "priority", null, pageable);
+    }
+
+
 
     List<Reservation> findByFacility_IdInAndStatusInAndAssignedUnitIsNotNull(
         java.util.Collection<UUID> facilityIds,
