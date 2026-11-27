@@ -57,11 +57,8 @@ public class IntakePolicyProperties {
         if (unitTypeCode == null || unitTypeCode.isBlank()) return null;
         String key = unitTypeCode.trim().toUpperCase(Locale.ROOT);
         SizeRule rule = sizeRules.get(key);
-        if (rule == null) {
-            rule = defaultSizeRules().get(key);
-        }
-        if (rule == null) {
-            rule = defaultSizeRules().get("M");
+        if (rule == null && !sizeRules.containsKey(key)) {
+            return defaultSizeRules().get(key);
         }
         return rule;
     }

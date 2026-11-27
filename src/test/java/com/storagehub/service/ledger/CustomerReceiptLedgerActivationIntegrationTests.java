@@ -337,7 +337,7 @@ class CustomerReceiptLedgerActivationIntegrationTests {
         User staff = user("staff");
         UnitType type = new UnitType();
         type.setFacility(facility);
-        type.setCode("TYPE-" + UUID.randomUUID().toString().substring(0, 8));
+        type.setCode("M");
         type.setName("Test unit");
         type.setLengthM(BigDecimal.ONE);
         type.setWidthM(BigDecimal.ONE);
