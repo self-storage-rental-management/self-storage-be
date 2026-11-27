@@ -28,6 +28,40 @@ import org.springframework.web.bind.annotation.*;
 public class ManagerRentalController {
     private final ActorContext actors;
     private final RentalQueryService rentals;
+    private final com.storagehub.service.RentalSuspicionReportService suspicionReports;
+
+    @GetMapping("/{id}/suspicion-reports")
+    public ApiResponse<java.util.List<com.storagehub.service.RentalSuspicionReportService.Detail>> rentalSuspicionReports(@PathVariable UUID id) {
+        return new ApiResponse<>(suspicionReports.managerRentalReports(actors.required(), id), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/{id}/suspicion-reports")
+    public ApiResponse<com.storagehub.service.RentalSuspicionReportService.Receipt> submitSuspicionReport(
+        @PathVariable UUID id, @jakarta.validation.Valid @RequestBody com.storagehub.service.RentalSuspicionReportService.Input input) {
+        return new ApiResponse<>(suspicionReports.submitAsManager(actors.required(), id, input), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/suspicion-reports")
+    public PageResponse<com.storagehub.service.RentalSuspicionReportService.Detail> suspicionReports(
+        @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "15") int size) {
+        return suspicionReports.managerList(actors.required(), page, size, CorrelationIdContext.current());
+    }
+
+    @PostMapping("/suspicion-reports/{reportId}/transfer")
+    public ApiResponse<com.storagehub.service.RentalSuspicionReportService.ManagerDetail> transferSuspicionReport(
+        @PathVariable UUID reportId, @jakarta.validation.Valid @RequestBody com.storagehub.service.RentalSuspicionReportService.TransferInput input) {
+        return new ApiResponse<>(suspicionReports.transferToRecovery(actors.required(), reportId, input), CorrelationIdContext.current());
+    }
+
+    @PostMapping("/suspicion-reports/{reportId}/accept")
+    public ApiResponse<com.storagehub.service.RentalSuspicionReportService.ManagerDetail> acceptSuspicionReport(@PathVariable UUID reportId) {
+        return new ApiResponse<>(suspicionReports.accept(actors.required(), reportId), CorrelationIdContext.current());
+    }
+
+    @GetMapping("/suspicion-reports/{reportId}")
+    public ApiResponse<com.storagehub.service.RentalSuspicionReportService.ManagerDetail> suspicionReport(@PathVariable UUID reportId) {
+        return new ApiResponse<>(suspicionReports.managerDetail(actors.required(), reportId), CorrelationIdContext.current());
+    }
 
     @GetMapping
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="Paginated facility-scoped RentalSummary records")

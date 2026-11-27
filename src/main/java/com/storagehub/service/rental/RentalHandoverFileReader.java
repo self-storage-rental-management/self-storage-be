@@ -20,15 +20,23 @@ public class RentalHandoverFileReader {
     private final EntityManager em;
     private final ObjectMapper mapper;
     public record Document(UUID id,String name,String contentType,long sizeBytes,Instant uploadedAt,String kind) {}
-    public List<Document> read(ActorPrincipal actor,UUID rentalId,boolean manager) {
-        var rental=rentals.detail(actor,rentalId,manager); // Reuse ownership and facility scope checks.
+    public List<Document> read(ActorPrincipal actor, UUID rentalId, boolean manager) {
+        return read(actor, rentalId, manager ? "manager" : "customer");
+    }
+
+    public List<Document> read(ActorPrincipal actor,UUID rentalId, String role) {
+        boolean staff = "staff".equals(role);
+        UUID reservationId = staff ? rentals.staffDetail(actor, rentalId).reservationId()
+            : rentals.detail(actor, rentalId, "manager".equals(role)).reservationId();
+        if (staff && !actor.hasPermission(SystemPermission.VIEW_CHECKINS))
+            throw ApiExceptions.forbidden("VIEW_CHECKINS permission is required");
         var checkIns=em.createQuery("select c from CheckIn c where (c.rental.id=:rental or (c.rental is null and c.reservation.id=:reservation)) and (c.status=:status or (c.contractSignedAt is not null and c.contractEvidenceReference is not null)) order by c.checkedInAt desc,c.id desc",CheckIn.class)
-            .setParameter("rental",rentalId).setParameter("reservation",rental.reservationId()).setParameter("status",CheckInStatus.completed).getResultList();
+            .setParameter("rental",rentalId).setParameter("reservation",reservationId).setParameter("status",CheckInStatus.completed).getResultList();
         var result=new LinkedHashMap<UUID,Document>();
         for(var checkIn:checkIns) {
             boolean completed = checkIn.getStatus() == CheckInStatus.completed;
             var referencedFiles = new HashSet<UUID>();
-            if (completed) {
+            if (completed && (!staff || checkIn.getChecklistJson() != null)) {
                 final CompleteCheckInRequest handover;
                 try { handover=mapper.readValue(checkIn.getChecklistJson(),CompleteCheckInRequest.class); }
                 catch(Exception invalid){throw ApiExceptions.conflict("Completed handover document references require reconciliation");}
@@ -50,6 +58,7 @@ public class RentalHandoverFileReader {
                 result.putIfAbsent(file.getId(),new Document(file.getId(),file.getOriginalName(),file.getContentType(),file.getSizeBytes(),file.getCreatedAt(),kind));
             }
         }
+        if (staff) return List.copyOf(result.values());
         var completions=em.createQuery("select e from RenewalOperationEvent e where e.renewal.rental.id=:rental and e.renewal.status=:status and e.kind='COMPLETION' order by e.occurredAt desc,e.id desc",RenewalOperationEvent.class)
             .setParameter("rental",rentalId).setParameter("status",RenewalStatus.completed).getResultList();
         for(var completion:completions) {
