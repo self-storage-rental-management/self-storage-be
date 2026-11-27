@@ -46,6 +46,31 @@ public class PaymentComplaint extends BaseEntity {
     @Column(length = 2000)
     private String decisionReason;
 
+    private Instant gatewayQueryCheckedAt;
+
+    @Column(length = 16)
+    private String gatewayQueryResponseCode;
+
+    @Column(length = 16)
+    private String gatewayQueryTransactionStatus;
+
+    @Column(length = 64)
+    private String gatewayQueryTransactionNo;
+
+    @Column(length = 32)
+    private String gatewayQueryPayDate;
+
+    @Column(length = 40)
+    private String gatewayQueryConclusion;
+
+    @Column(length = 500)
+    private String gatewayQueryMessage;
+
+    private Instant lastReminderAt;
+
+    @Column(length = 32)
+    private String lastReminderStage;
+
     @Version
     private long version;
 }

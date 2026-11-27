@@ -17,7 +17,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
     String CUSTOMER_QUEUE_ORDER = " order by case "
-        + "when reservation.status in (AWAITING_EMAIL, AWAITING_PAYMENT, PAYMENT_GRACE, AWAITING_CUSTOMER_RECEIPT, UNIT_RESERVED, READY_FOR_CHECKIN) then 0 "
+        + "when reservation.status in (AWAITING_EMAIL, AWAITING_PAYMENT, PAYMENT_GRACE, PAYMENT_REVIEW, AWAITING_CUSTOMER_RECEIPT, UNIT_RESERVED, READY_FOR_CHECKIN) then 0 "
         + "when reservation.status in (COMPLETED, EXPIRED, CANCELLED, REJECTED) then 2 else 1 end, "
         + "case when reservation.status in (AWAITING_PAYMENT, PAYMENT_GRACE) then coalesce(reservation.paymentExpiresAt, reservation.holdExpiresAt) "
         + "when reservation.status = AWAITING_EMAIL then reservation.holdExpiresAt "
@@ -81,10 +81,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         select reservation from Reservation reservation
         where reservation.customer.id = :customerId
           and reservation.customerArchivedAt is null
-          and reservation.status <> com.storagehub.domain.model.ReservationStatus.REJECTED
           and (
             reservation.archivedAt is null
             or reservation.status = com.storagehub.domain.model.ReservationStatus.EXPIRED
+            or reservation.status = com.storagehub.domain.model.ReservationStatus.REJECTED
           )
         """ + CUSTOMER_QUEUE_ORDER)
     Page<Reservation> findCustomerVisibleReservations(

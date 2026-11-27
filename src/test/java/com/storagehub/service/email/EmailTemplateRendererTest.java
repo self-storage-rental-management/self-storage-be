@@ -53,6 +53,35 @@ class EmailTemplateRendererTest {
     }
 
     @Test
+    void repairsDoubleEncodedUtf8MojibakeInLifecycleEmailVariables() {
+        var win1252 = java.nio.charset.Charset.forName("windows-1252");
+        var utf8 = java.nio.charset.StandardCharsets.UTF_8;
+        java.util.function.Function<String, String> singleMojibake = s -> new String(s.getBytes(utf8), win1252);
+        java.util.function.Function<String, String> doubleMojibake = s -> singleMojibake.apply(singleMojibake.apply(s));
+
+        var details = new java.util.LinkedHashMap<String, String>();
+        details.put("Mã đơn giữ kho", "RSV-OVERDUE-DEP-01");
+        details.put("Cơ sở", doubleMojibake.apply("Kho Việt - Cơ sở Quận 1"));
+        details.put("Loại kho", singleMojibake.apply("Kho Lớn (L)"));
+        details.put("Kích thước kho (D × R × C)", "2.4 × 1.8 × 2.5 m");
+
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("fullName", "Thanh Thao");
+        vars.put("title", "Khiếu nại bị từ chối");
+        vars.put("summary", "yiutiuiu");
+        vars.put("details", details);
+        vars.put("detailsUrl", "http://localhost:8443/login");
+
+        String html = renderer.render("customer-lifecycle", vars);
+
+        assertTrue(html.contains("Kho Việt - Cơ sở Quận 1"));
+        assertTrue(html.contains("Kho Lớn (L)"));
+        assertTrue(html.contains("2.4 × 1.8 × 2.5 m"));
+        assertTrue(html.contains("Khiếu nại bị từ chối"));
+        assertFalse(html.contains("Ã¡Â»"));
+    }
+
+    @Test
     @DisplayName("1. verify-email template renders correctly with UTF-8 Vietnamese and escaped inputs")
     void testVerifyEmailTemplate() {
         Map<String, Object> vars = new HashMap<>();

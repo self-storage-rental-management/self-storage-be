@@ -1148,7 +1148,10 @@ public class ReturnSettlementService {
     private void validateRemovalDate(Rental rental, LocalDate date) {
         LocalDate first = InventoryTimelinePolicy.removalEffectiveAt(rental.getInventoryRemovalPublishedAt())
             .atZone(BusinessTime.ZONE).toLocalDate();
-        LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
+        var deadlineZoned = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE);
+        LocalDate last = deadlineZoned.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
+            ? deadlineZoned.toLocalDate().minusDays(1)
+            : deadlineZoned.toLocalDate();
         if (date == null || date.isBefore(first) || date.isAfter(last))
             throw ApiExceptions.validation("Ngày hẹn trả kho phải từ " + first + " đến hết " + last + ".", null);
     }
@@ -2630,7 +2633,7 @@ public class ReturnSettlementService {
 
     private static void startMismatchPaymentDeadline(ReturnCase rc, Instant now) {
         if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH && rc.getSettlementPaymentDueAt() == null)
-            rc.setSettlementPaymentDueAt(InventoryTimelinePolicy.dayStart(now, 8));
+            rc.setSettlementPaymentDueAt(now.plus(java.time.Duration.ofHours(7 * 24L)));
     }
 
     private Map<String, BigDecimal> mismatchStatementAmounts(ReturnCase rc) {
@@ -3011,7 +3014,10 @@ public class ReturnSettlementService {
             if (actual == null || snapshot.getMonthlyPrice() == null || snapshot.getNetRentalAmount() == null) return null;
             LocalDate endDate = actual.atZone(BusinessTime.ZONE).toLocalDate();
             if (rental.getInventoryRemovalDeadlineAt() != null && endDate != null) {
-                LocalDate last = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE).toLocalDate().minusDays(1);
+                var deadlineZoned = rental.getInventoryRemovalDeadlineAt().atZone(BusinessTime.ZONE);
+        LocalDate last = deadlineZoned.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
+            ? deadlineZoned.toLocalDate().minusDays(1)
+            : deadlineZoned.toLocalDate();
                 if (endDate.isAfter(last)) endDate = last;
             }
             int usedDays = EarlyTerminationPolicy.calendarUsageDays(usageStart, endDate);
