@@ -531,20 +531,15 @@ public class ViolationRecoveryWorkflow {
 
     private void attendance(ActorPrincipal actor, ViolationRecovery v, Details d, Command c, Instant now) {
         boolean present = c.action() == Action.RECORD_PRESENT;
-        if (present) {
-            if (v.getScheduledAt() != null && now.isBefore(v.getScheduledAt())) {
-                throw ApiExceptions.conflict("Chưa đến ngày giờ lịch thu hồi, chưa thể ghi nhận khách có mặt.");
-            }
-            if (d.reply == Reply.CANNOT_ATTEND) {
-                throw ApiExceptions.conflict("Khách hàng đã báo không thể có mặt, không thể ghi nhận có mặt.");
-            }
+        if (present && d.reply == Reply.CANNOT_ATTEND) {
+            throw ApiExceptions.conflict("Khách hàng đã báo không thể có mặt, không thể ghi nhận có mặt.");
         }
-        Instant actual = c.appointmentAt() == null ? now : c.appointmentAt();
-        if (actual.isAfter(now) || actual.isBefore(v.getRequiredAt()))
+        if (!present && c.appointmentAt() != null
+            && (c.appointmentAt().isAfter(now) || c.appointmentAt().isBefore(v.getRequiredAt())))
             throw ApiExceptions.validation("Giờ ghi nhận khách không hợp lệ.", null);
         d.attendanceEvidenceId = evidence(v, actor, c.evidenceId());
         d.attendance = present ? Attendance.PRESENT : Attendance.ABSENT;
-        d.arrivedAt = present ? actual : null;
+        d.arrivedAt = present ? now : null;
         d.verifiedAt = null;
         d.reasonNote = clean(c.note());
         if (d.startedAt != null || d.disputeOpen) {
@@ -552,6 +547,9 @@ public class ViolationRecoveryWorkflow {
         } else {
             d.needsWitness |= !present;
             advance(v, Stage.AWAITING_ATTENDANCE, v.getDeadlineAt());
+            if (present && c.document() != null && !normalize(v.getRental().getReservation().getIdentityDocumentNumber()).isEmpty()) {
+                verify(v, d, c, now);
+            }
         }
     }
 
@@ -919,7 +917,7 @@ public class ViolationRecoveryWorkflow {
         }
         if (terminal(v)) return actions;
         if (v.getStage() == Stage.BLOCKED || d.disputeOpen || v.getRequiredAt() == null) return actions;
-        if (v.getScheduledAt() != null && !now.isBefore(v.getScheduledAt())
+        if (v.getScheduledAt() != null
             && d.reply != Reply.CANNOT_ATTEND
             && d.attempts.size() < VERIFICATION_LIMIT
             && (d.attendance != Attendance.PRESENT || !session(d.arrivedAt, now))) {
@@ -931,9 +929,12 @@ public class ViolationRecoveryWorkflow {
         if (d.startedAt == null && d.attendance == Attendance.PRESENT && d.verifiedAt == null && session(d.arrivedAt, now)
             && d.attempts.size() < VERIFICATION_LIMIT
             && !normalize(v.getRental().getReservation().getIdentityDocumentNumber()).isEmpty()) actions.add(Action.VERIFY);
-        if (v.getStage() == Stage.AWAITING_ATTENDANCE && !now.isBefore(v.getScheduledAt())
-            && d.notifiedAt != null && d.responseDueAt != null && !now.isBefore(d.responseDueAt)
-            && (d.attendance == Attendance.ABSENT || d.attendance == Attendance.PRESENT)) actions.add(Action.START);
+        if (v.getStage() == Stage.AWAITING_ATTENDANCE && d.notifiedAt != null && d.responseDueAt != null
+            && (d.attendance == Attendance.ABSENT || d.attendance == Attendance.PRESENT)) {
+            boolean verifiedInPerson = d.attendance == Attendance.PRESENT && within(d.arrivedAt, now, d.verifiedAt);
+            boolean scheduledWindowOpen = !now.isBefore(v.getScheduledAt()) && !now.isBefore(d.responseDueAt);
+            if (verifiedInPerson || scheduledWindowOpen) actions.add(Action.START);
+        }
         if (v.getStage() == Stage.IN_PROGRESS && !d.disputeOpen) actions.addAll(List.of(Action.SAVE_ITEM, Action.COMPLETE));
         return actions;
     }

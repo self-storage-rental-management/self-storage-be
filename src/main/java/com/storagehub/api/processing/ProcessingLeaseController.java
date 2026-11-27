@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/processing-locks/{type}/{id}")
 @RequiredArgsConstructor
 public class ProcessingLeaseController {
-    public record TokenRequest(@NotNull UUID token, boolean reclaimSameOwner) {
+    public record TokenRequest(@NotNull UUID token, Boolean reclaimSameOwner) {
         public TokenRequest(UUID token) { this(token, false); }
     }
     private final ActorContext actors;
@@ -27,7 +27,7 @@ public class ProcessingLeaseController {
     }
     @PostMapping("/acquire") public ApiResponse<View> acquire(@PathVariable Target type, @PathVariable UUID id,
         @Valid @RequestBody TokenRequest request) {
-        return envelope(leases.acquire(actors.required(), type, id, request.token(), request.reclaimSameOwner()));
+        return envelope(leases.acquire(actors.required(), type, id, request.token(), Boolean.TRUE.equals(request.reclaimSameOwner())));
     }
     @PostMapping("/heartbeat") public ApiResponse<View> heartbeat(@PathVariable Target type, @PathVariable UUID id,
         @Valid @RequestBody TokenRequest request) {

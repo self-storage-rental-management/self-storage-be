@@ -11,8 +11,14 @@ import java.util.*;
 public final class CustomerIdentityPolicy {
     private CustomerIdentityPolicy() {}
     static void requireMinorCorrection(String saved, String actual) {
-        if (correctionDistance(saved, actual) <= 1) return;
-        throw ApiExceptions.validation("Chỉ được sửa tối đa một chữ số CCCD sau khi đã xác minh.", null);
+        String previous = CccdPolicy.normalize(saved);
+        String corrected = CccdPolicy.normalize(actual);
+        if (previous != null && previous.matches("[0-9]{12}") && corrected != null
+            && corrected.matches("[0-9]{12}") && !previous.substring(0, 6).equals(corrected.substring(0, 6))) {
+            throw ApiExceptions.validation("Không được sửa 6 số đầu CCCD gồm mã tỉnh, giới tính/thế kỷ và năm sinh.", null);
+        }
+        if (correctionDistance(saved, corrected) <= HANDOVER_CORRECTION_LIMIT) return;
+        throw ApiExceptions.validation("Chỉ được sửa tối đa 3 chữ số trong 6 số cuối CCCD.", null);
     }
 
     static final int HANDOVER_CORRECTION_LIMIT = 3;
@@ -21,6 +27,7 @@ public final class CustomerIdentityPolicy {
         String previous = CccdPolicy.normalize(saved);
         if (previous == null || previous.isBlank() || previous.equals(actual)) return 0;
         if (previous.matches("[0-9]{12}") && actual != null && actual.matches("[0-9]{12}")) {
+            if (!previous.substring(0, 6).equals(actual.substring(0, 6))) return Integer.MAX_VALUE;
             int differences = 0;
             for (int i = 0; i < 12; i++) {
                 if (previous.charAt(i) != actual.charAt(i)) differences++;

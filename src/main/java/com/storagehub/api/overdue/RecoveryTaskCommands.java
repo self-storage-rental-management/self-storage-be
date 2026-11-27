@@ -22,7 +22,8 @@ public final class RecoveryTaskCommands {
     }
     public record Settlement(@NotNull @PositiveOrZero Long expectedVersion,@NotNull PaymentMethod paymentMethod,
         @Pattern(regexp="(?:[A-Za-z0-9][A-Za-z0-9._:/-]{0,63})?") String transactionReference,
-        @NotNull UUID receiptFileId,@NotNull @AssertTrue Boolean confirmed) {
+        @NotNull UUID receiptFileId,@NotNull @AssertTrue Boolean confirmed,
+        @NotBlank @Size(max=32) String documentNumber) {
         @JsonAnySetter public void unknown(String key,Object value){throw new IllegalArgumentException("Unsupported Recovery field: "+key);}
     }
     public record Completion(@NotNull @PositiveOrZero Long expectedVersion,@NotNull @AssertTrue Boolean assetsCleared,

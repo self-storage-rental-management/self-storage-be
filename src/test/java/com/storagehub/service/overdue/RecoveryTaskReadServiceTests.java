@@ -31,6 +31,7 @@ class RecoveryTaskReadServiceTests {
         jdbc.execute("create table storage_units(id binary(16) primary key,code varchar(100))");
         jdbc.execute("create table rentals(id binary(16) primary key,customer_id binary(16),storage_unit_id binary(16))");
         jdbc.execute("create table recovery_tasks(id binary(16) primary key,case_ref varchar(120),rental_id binary(16),facility_id binary(16),status varchar(24),reason varchar(2000),received_at timestamp)");
+        jdbc.execute("alter table recovery_tasks add column assigned_staff_id binary(16)");
     }
     @AfterEach void close() {
         // SHUTDOWN closes H2 before JdbcTemplate can inspect statement warnings.
@@ -41,17 +42,18 @@ class RecoveryTaskReadServiceTests {
     }
 
     @Test void queueUsesPersistedTasksAndKeepsFacilityScopeBeforePagination() {
-        task(facility,now.minusSeconds(1),"Older");
+        var older=task(facility,now.minusSeconds(1),"Older");
         var newer=task(facility,now,"Newer");
         task(otherFacility,now.plusSeconds(1),"Other facility");
         var page=service.list(actor,RoleCode.MANAGER,facility,0,1,"test");
         assertThat(page.data()).hasSize(1);
-        assertThat(page.data().getFirst().id()).isEqualTo(newer.id());
-        assertThat(page.data().getFirst().customerName()).isEqualTo("Newer");
+        assertThat(page.data().getFirst().id()).isEqualTo(older.id());
+        assertThat(page.data().getFirst().customerName()).isEqualTo("Older");
         assertThat(page.data().getFirst().storageUnitCode()).isEqualTo("UNIT-01");
         assertThat(page.pagination().totalItems()).isEqualTo(2);
         verify(access).require(actor,RoleCode.MANAGER,facility,FacilityScopeLevel.READ,SystemPermission.VIEW_RENTALS);
-        assertThat(service.list(actor,RoleCode.MANAGER,facility,1,1,"test").data()).hasSize(1);
+        assertThat(service.list(actor,RoleCode.MANAGER,facility,1,1,"test").data())
+            .extracting(RecoveryTaskReadService.View::id).containsExactly(newer.id());
     }
     @Test void taskDetailsAndRiskProjectionReferToTheSameReceipt() {
         var expected=task(facility,now,"Customer");
@@ -60,6 +62,17 @@ class RecoveryTaskReadServiceTests {
         assertThat(detail.receivedAt()).isEqualTo(now);
         verify(access).require(actor,RoleCode.MANAGER,facility,FacilityScopeLevel.READ,SystemPermission.VIEW_RENTALS);
         assertThat(service.forRental(UUID.randomUUID())).isEmpty();
+    }
+    @Test void staffQueueIncludesOwnAssignmentsAndUnassignedTasks() {
+        var staff=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.STAFF),Set.of(),Map.of());
+        var open=task(facility,now,"Unassigned");
+        var own=task(facility,now,"Assigned to me");
+        var other=task(facility,now,"Assigned elsewhere");
+        jdbc.update("update recovery_tasks set assigned_staff_id=? where id=?",bytes(staff.userId()),bytes(own.id()));
+        jdbc.update("update recovery_tasks set assigned_staff_id=? where id=?",bytes(UUID.randomUUID()),bytes(other.id()));
+        var page=service.list(staff,RoleCode.STAFF,facility,0,20,"test");
+        assertThat(page.data()).extracting(RecoveryTaskReadService.View::id).containsExactlyInAnyOrder(open.id(),own.id());
+        assertThat(page.pagination().totalItems()).isEqualTo(2);
     }
     @Test void deniedFacilityAndInvalidPaginationCannotReturnRows() {
         doThrow(ApiExceptions.notFound("Resource not found")).when(access)
@@ -84,8 +97,8 @@ class RecoveryTaskReadServiceTests {
         jdbc.update("insert into users values(?,?)",bytes(customer),name);
         jdbc.update("insert into storage_units values(?,?)",bytes(unit),"UNIT-01");
         jdbc.update("insert into rentals values(?,?,?)",bytes(rental),bytes(customer),bytes(unit));
-        jdbc.update("insert into recovery_tasks values(?,?,?,?,?,?,?)",bytes(id),"RENTAL_TERM:"+rental,bytes(rental),bytes(facilityId),"OPEN","AUTO_OVERDUE_DAY_8",Timestamp.from(at));
-        return new RecoveryTaskReadService.View(id,"RENTAL_TERM:"+rental,rental,facilityId,"OPEN","AUTO_OVERDUE_DAY_8",at,name,"UNIT-01");
+        jdbc.update("insert into recovery_tasks(id,case_ref,rental_id,facility_id,status,reason,received_at) values(?,?,?,?,?,?,?)",bytes(id),"RENTAL_TERM:"+rental,bytes(rental),bytes(facilityId),"OPEN","AUTO_OVERDUE_DAY_8",Timestamp.from(at));
+        return new RecoveryTaskReadService.View(id,"RENTAL_TERM:"+rental,rental,facilityId,"OPEN","AUTO_OVERDUE_DAY_8",at,name,"UNIT-01",null,null);
     }
     private static byte[] bytes(UUID id) {return ByteBuffer.allocate(16).putLong(id.getMostSignificantBits()).putLong(id.getLeastSignificantBits()).array();}
 }

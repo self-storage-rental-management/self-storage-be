@@ -3,13 +3,17 @@ package com.storagehub.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.storagehub.api.rental.ManagerRentalController;
 import com.storagehub.api.rental.RentalSummaryResponse;
 import com.storagehub.api.rental.StaffRentalDetailResponse;
 import com.storagehub.domain.model.*;
 import com.storagehub.domain.repo.ActivityLogRepository;
 import com.storagehub.domain.repo.RentalRepository;
 import com.storagehub.domain.repo.UserRepository;
+import com.storagehub.security.ActorContext;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
 import java.util.List;
@@ -18,8 +22,27 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class RentalSuspicionReportServiceTest {
+    @Test
+    void transferAcceptsOneCombinedConclusion() throws Exception {
+        var actor = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.MANAGER), Set.of(), Map.of());
+        var actors = mock(ActorContext.class);
+        when(actors.required()).thenReturn(actor);
+        var reports = mock(RentalSuspicionReportService.class);
+        var mvc = MockMvcBuilders.standaloneSetup(
+            new ManagerRentalController(actors, mock(RentalQueryService.class), reports)).build();
+        var reportId = UUID.randomUUID();
+        var conclusion = "Đã xác minh vi phạm theo biên bản đối chiếu.";
+        mvc.perform(post("/api/manager/rentals/suspicion-reports/{reportId}/transfer", reportId)
+                .contentType("application/json").content("""
+                    {"conclusion":"%s"}
+                    """.formatted(conclusion)))
+            .andExpect(status().isOk());
+        verify(reports).transferToRecovery(actor, reportId, new RentalSuspicionReportService.TransferInput(conclusion, null));
+    }
+
     @Test
     void sendsOnlyToFacilityManagersAndTreatsAnIdenticalRequestAsAlreadySubmitted() {
         var queries = mock(RentalQueryService.class);

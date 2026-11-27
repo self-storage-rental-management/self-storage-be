@@ -49,7 +49,7 @@ class RenewalRiskReadServiceTests {
     }
     @Test void receiptProvesRecoveryEvenIfCurrentTermSourceIsUnavailable() {
         var service=service();var taskId=UUID.randomUUID();
-        when(tasks.forRental(id)).thenReturn(Optional.of(new RecoveryTaskReadService.View(taskId,"RENTAL_TERM:"+id,id,facility,"OPEN","AUTO_OVERDUE_DAY_8",now.minusSeconds(60),"Customer","UNIT")));
+        when(tasks.forRental(id)).thenReturn(Optional.of(new RecoveryTaskReadService.View(taskId,"RENTAL_TERM:"+id,id,facility,"OPEN","AUTO_OVERDUE_DAY_8",now.minusSeconds(60),"Customer","UNIT",null,null)));
         var view=service.rental(actor,id,false);
         assertThat(view.completeness()).isEqualTo("UNKNOWN");
         assertThat(view.repossessionStatus()).isEqualTo("REPOSSESSION_STARTED");
@@ -59,7 +59,7 @@ class RenewalRiskReadServiceTests {
     }
     @Test void mismatchedFacilityReceiptCannotBecomeCustomerEvidence() {
         var service=service();
-        when(tasks.forRental(id)).thenReturn(Optional.of(new RecoveryTaskReadService.View(UUID.randomUUID(),"RENTAL_TERM:"+id,id,UUID.randomUUID(),"OPEN","reason",now,"Customer","UNIT")));
+        when(tasks.forRental(id)).thenReturn(Optional.of(new RecoveryTaskReadService.View(UUID.randomUUID(),"RENTAL_TERM:"+id,id,UUID.randomUUID(),"OPEN","reason",now,"Customer","UNIT",null,null)));
         assertThatThrownBy(()->service.rental(actor,id,false)).hasMessageContaining("facility mismatch");
     }
 }

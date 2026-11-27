@@ -1498,28 +1498,26 @@ class ReturnSettlementServiceTests {
     }
 
     @Test
-    void draftPreservesDeadlineAndRevocationInvalidatesPendingInspection() {
+    void revocationClearsLegacyPropertyCheckAndInvalidatesPendingInspection() {
         var rc = setupReturn(ReturnCaseStatus.requested);
         rc.setRecoveryEligibleAt(Instant.now().plusSeconds(86400));
         var deadline = rc.getRecoveryEligibleAt();
         when(returnCaseRepository.findById(rc.getId())).thenReturn(Optional.of(rc));
         when(returnCaseRepository.findByIdAndCustomer_Id(rc.getId(), customer.getId())).thenReturn(Optional.of(rc));
-        var photos = inspectionPhoto(rc);
-        var draft = service.savePropertyCheck(staffActor, rc.getId(),
-            new com.storagehub.api.returns.ReturnPropertyCheckRequest(false, 0, "Còn hai thùng", photos));
-        assertThat(draft.evidencePhotos()).isEqualTo(photos);
-        assertThat(draft.inspectionNotes()).isEqualTo("Còn hai thùng");
-        assertThat(draft.recoveryEligibleAt()).isEqualTo(deadline);
-        assertThat(draft.status()).isEqualTo(ReturnCaseStatus.requested);
-        assertThat(draft.inspectedAt()).isNull();
-        verify(notificationService).createNotification(eq(customer.getId()), any(), any(), any(), eq(rc.getId()));
-        service.setCustomerClearance(customerActor, rc.getId(), true, draft.clearanceRevision());
-        var verified = service.savePropertyCheck(staffActor, rc.getId(),
-            new com.storagehub.api.returns.ReturnPropertyCheckRequest(true, draft.clearanceRevision(), "Đã kiểm tra", photos));
-        var revoked = service.setCustomerClearance(customerActor, rc.getId(), false, verified.clearanceRevision());
+        var cleared = service.setCustomerClearance(customerActor, rc.getId(), true, 0);
+        rc.setWarehouseEmptyVerified(true);
+        rc.setWarehouseEmptyVerifiedAt(Instant.now());
+        rc.setWarehouseEmptyVerifiedBy(staff.getId());
+
+        var revoked = service.setCustomerClearance(customerActor, rc.getId(), false, cleared.clearanceRevision());
+
         assertThat(revoked.warehouseEmptyVerified()).isNull();
+        assertThat(revoked.warehouseEmptyVerifiedAt()).isNull();
         assertThat(revoked.warehouseEmptyVerifiedBy()).isNull();
-        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), propertyInspection(true, photos), verified.clearanceRevision()))
+        assertThat(revoked.recoveryEligibleAt()).isEqualTo(deadline);
+        assertThat(revoked.status()).isEqualTo(ReturnCaseStatus.requested);
+        assertThat(revoked.inspectedAt()).isNull();
+        assertThatThrownBy(() -> service.performInspection(staffActor, rc.getId(), setupInspection(true), cleared.clearanceRevision()))
             .hasMessageContaining("kiểm tra thực tế");
         verify(returnFinance, org.mockito.Mockito.never()).capture(any());
     }
