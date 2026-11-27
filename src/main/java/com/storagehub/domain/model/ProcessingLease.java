@@ -20,6 +20,8 @@ public class ProcessingLease {
     private UUID sessionId;
     private UUID token;
     private Instant expiresAt;
+    private Instant acquiredAt;
+    private Instant maxExpiresAt;
     @Column(nullable = false)
     private long revision;
 }
