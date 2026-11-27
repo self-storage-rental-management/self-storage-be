@@ -154,7 +154,7 @@ class ViolationRecoveryWorkflowTests {
         assertThatThrownBy(() -> execute(staff(), ViolationRecoveryWorkflow.Action.START, null, null))
             .isInstanceOf(ApiException.class).hasMessageContaining("chưa đủ điều kiện");
         var actionDue = recovery.getActionDueAt();
-        execute(customerActor, ViolationRecoveryWorkflow.Action.DISPUTE, "Bổ sung thông tin", null);
+        assertThatThrownBy(() -> execute(customerActor, ViolationRecoveryWorkflow.Action.DISPUTE, "Bổ sung thông tin", null)).isInstanceOf(ApiException.class);
         assertThat(recovery.getActionDueAt()).isEqualTo(actionDue);
         assertThat(recovery.getDeadlineAt()).isEqualTo(before);
         verifyNoInteractions(access);
@@ -734,30 +734,32 @@ class ViolationRecoveryWorkflowTests {
     }
 
     @Test
-    void customerCannotRepeatSameAttendanceReplyUnlessToggledBetweenAttendAndCannotAttend() throws Exception {
+    void customerMustWaitForManagerApprovalBeforeChangingAttendanceReply() throws Exception {
         activateRecovery();
         var customerActor = actor(customer, RoleCode.CUSTOMER, null, null);
 
         var afterAttend = execute(customerActor, ViolationRecoveryWorkflow.Action.WILL_ATTEND, "Tôi sẽ đến đúng giờ", null);
         assertThat(afterAttend.reply()).isEqualTo(Reply.WILL_ATTEND);
         assertThat(afterAttend.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.WILL_ATTEND)
-            .contains(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND);
+            .doesNotContain(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND, ViolationRecoveryWorkflow.Action.DISPUTE);
         assertThatThrownBy(() -> execute(customerActor, ViolationRecoveryWorkflow.Action.WILL_ATTEND, null, null))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("Thao tác chưa đủ điều kiện");
 
+        execute(manager(), ViolationRecoveryWorkflow.Action.RESUME, "Đã duyệt phản hồi", null);
         var afterCannotAttend = execute(customerActor, ViolationRecoveryWorkflow.Action.CANNOT_ATTEND, "Có việc đột xuất", null);
         assertThat(afterCannotAttend.reply()).isEqualTo(Reply.CANNOT_ATTEND);
         assertThat(afterCannotAttend.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND)
-            .contains(ViolationRecoveryWorkflow.Action.WILL_ATTEND);
+            .doesNotContain(ViolationRecoveryWorkflow.Action.WILL_ATTEND, ViolationRecoveryWorkflow.Action.DISPUTE);
         assertThatThrownBy(() -> execute(customerActor, ViolationRecoveryWorkflow.Action.CANNOT_ATTEND, null, null))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("Thao tác chưa đủ điều kiện");
 
+        execute(manager(), ViolationRecoveryWorkflow.Action.RESUME, "Đã duyệt phản hồi", null);
         var toggledBack = execute(customerActor, ViolationRecoveryWorkflow.Action.WILL_ATTEND, "Đã sắp xếp lại được", null);
         assertThat(toggledBack.reply()).isEqualTo(Reply.WILL_ATTEND);
         assertThat(toggledBack.actions()).doesNotContain(ViolationRecoveryWorkflow.Action.WILL_ATTEND)
-            .contains(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND);
+            .doesNotContain(ViolationRecoveryWorkflow.Action.CANNOT_ATTEND, ViolationRecoveryWorkflow.Action.DISPUTE);
     }
 
     @Test
