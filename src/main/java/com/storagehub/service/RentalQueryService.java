@@ -41,9 +41,14 @@ public class RentalQueryService {
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.rental.RentalBookingEvidenceReader> bookingEvidenceReaders;
 
     public PageResponse<RentalSummaryResponse> list(ActorPrincipal actor, RentalQuery query, boolean manager, String correlationId) {
-        Set<UUID> facilities = authorize(actor, manager, query.facilityId());
-        var spec = scoped(actor, manager, facilities).and(filters(query, manager));
-        if (query.priorityOrder()) spec = spec.and(BusinessQueueOrder.rentals(manager));
+        return list(actor, query, manager ? RoleCode.MANAGER : RoleCode.CUSTOMER, correlationId);
+    }
+
+    public PageResponse<RentalSummaryResponse> list(ActorPrincipal actor, RentalQuery query, RoleCode role, String correlationId) {
+        Set<UUID> facilities = authorize(actor, role, query.facilityId());
+        boolean facilityView = role != RoleCode.CUSTOMER;
+        var spec = scoped(actor, facilityView, facilities).and(filters(query, facilityView));
+        if (query.priorityOrder()) spec = spec.and(BusinessQueueOrder.rentals(facilityView));
         var page = repository.findAll(spec, query.pageable());
         var displayCodes = codes.findAll(page.getContent().stream().map(r -> "TH:" + r.getId()).toList());
         Set<UUID> mismatchReturns = page.isEmpty() ? Set.of()
@@ -53,7 +58,7 @@ public class RentalQueryService {
     }
 
     public RentalDetailResponse detail(ActorPrincipal actor, UUID id, boolean manager) {
-        Set<UUID> facilities = authorize(actor, manager, null);
+        Set<UUID> facilities = authorize(actor, manager ? RoleCode.MANAGER : RoleCode.CUSTOMER, null);
         Rental r = repository.findOne(scoped(actor, manager, facilities).and((root, q, cb) -> cb.equal(root.get("id"), id)))
             .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
         var s = summary(r, codes.find("TH:" + r.getId()), repository.findInventoryMismatchReturnIds(Set.of(id)).contains(id));
@@ -66,6 +71,18 @@ public class RentalQueryService {
             contracts == null ? null : contracts.findAllByRentalIdOrderByCreatedAtDesc(id).stream()
                 .filter(contract -> contract.getStatus() == ContractStatus.SIGNED).map(Contract::getContractNumber)
                 .findFirst().orElse(null), ReturnSettlementService.inSetupReturnWindow(r), s.inventoryMismatchReturn(), s.intakeCompleted());
+    }
+
+    public StaffRentalDetailResponse staffDetail(ActorPrincipal actor, UUID id) {
+        var facilities = authorize(actor, RoleCode.STAFF, null);
+        var rental = repository.findOne(scoped(actor, true, facilities).and((root, q, cb) -> cb.equal(root.get("id"), id)))
+            .orElseThrow(() -> ApiExceptions.notFound("Rental was not found"));
+        var record = summary(rental, codes.find("TH:" + id), repository.findInventoryMismatchReturnIds(Set.of(id)).contains(id));
+        var contractNumber = contracts == null ? null : contracts.findAllByRentalIdOrderByCreatedAtDesc(id).stream()
+            .filter(contract -> contract.getStatus() == ContractStatus.SIGNED).map(Contract::getContractNumber)
+            .findFirst().orElse(null);
+        return new StaffRentalDetailResponse(record, rental.getReservation().getId(),
+            rental.getReservation().getReservationCode(), contractNumber);
     }
 
     private RentalDetailResponse.Inventory inventory(Rental rental) {
@@ -138,15 +155,28 @@ public class RentalQueryService {
         return value.flatMap(d -> com.storagehub.service.rental.period.RentalPeriodResolver.normalize(r,d));
     }
 
-    private Set<UUID> authorize(ActorPrincipal actor, boolean manager, UUID requested) {
+    private Set<UUID> authorize(ActorPrincipal actor, RoleCode role, UUID requested) {
         if (actor == null) throw ApiExceptions.unauthorized("Authentication is required");
-        if (!manager) {
+        if (role == RoleCode.CUSTOMER) {
             // Existing customer reservation endpoints use authenticated ownership, not a seeded permission grant.
             if (!actor.hasRole(RoleCode.CUSTOMER)) throw ApiExceptions.forbidden("Customer role is required");
             return Set.of();
         }
-        if (!actor.hasRole(RoleCode.MANAGER) || !actor.hasPermission(SystemPermission.VIEW_RENTALS))
-            throw ApiExceptions.forbidden("Manager VIEW_RENTALS permission is required");
+        if (!actor.hasRole(role) || !actor.hasPermission(SystemPermission.VIEW_RENTALS))
+            throw ApiExceptions.forbidden(role + " VIEW_RENTALS permission is required");
+        if (role == RoleCode.STAFF) {
+            // Match the working facility shown in the staff portal. Scope claim order is unspecified.
+            UUID workingFacility = actor.facilityScopes().entrySet().stream()
+                .filter(scope -> scope.getValue() != null)
+                .sorted(Comparator.<Map.Entry<UUID, FacilityScopeLevel>, FacilityScopeLevel>comparing(Map.Entry::getValue)
+                    .reversed().thenComparing(scope -> scope.getKey().toString()))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElseThrow(() -> ApiExceptions.forbidden("Nhân viên chưa được phân cơ sở."));
+            if (requested != null && !workingFacility.equals(requested))
+                throw ApiExceptions.forbidden("Chỉ được xem hồ sơ thuê của cơ sở đang làm việc.");
+            return Set.of(workingFacility);
+        }
         Set<UUID> readable = new HashSet<>();
         actor.facilityScopes().forEach((id, level) -> { if (level != null && level.includes(FacilityScopeLevel.READ)) readable.add(id); });
         if (readable.isEmpty() || requested != null && !readable.contains(requested))
@@ -186,6 +216,7 @@ public class RentalQueryService {
                 List<Predicate> matches = new ArrayList<>();
                 if (displayCodeId != null) matches.add(cb.equal(root.get("id"), displayCodeId));
                 matches.add(cb.like(cb.lower(root.join("storageUnit", JoinType.LEFT).get("code")), pattern, '\\'));
+                matches.add(cb.like(cb.lower(root.join("reservation", JoinType.LEFT).get("reservationCode")), pattern, '\\'));
                 if (manager) matches.add(cb.like(cb.lower(root.join("customer", JoinType.LEFT).get("fullName")), pattern, '\\'));
                 try { matches.add(cb.equal(root.get("id"), UUID.fromString(filter.search()))); }
                 catch (IllegalArgumentException ignored) { /* A non-UUID still searches visible text fields. */ }
