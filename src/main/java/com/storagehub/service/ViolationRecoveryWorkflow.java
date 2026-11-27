@@ -142,19 +142,39 @@ public class ViolationRecoveryWorkflow {
 
     /** Called with the rental locked by the originating scheduler. */
     public boolean detect(Rental rental, ReturnCase source, Reason reason, Instant deadline, Instant now, boolean ignoredReview) {
+        return openRecovery(rental, source, reason, deadline, now) != null;
+    }
+
+    @Transactional
+    public UUID openConfirmedProhibitedGoodsRecovery(ActorPrincipal actor, UUID rentalId) {
+        if (!actor.hasRole(RoleCode.MANAGER) || !actor.hasPermission(SystemPermission.MANAGE_STAFF_TASKS))
+            throw ApiExceptions.forbidden("Cần quyền phân công thu hồi tại cơ sở.");
+        var rental = rentals.findByIdForUpdate(rentalId)
+            .filter(record -> scopes.canAccessFacility(actor, record.getFacility().getId(), FacilityScopeLevel.MANAGE))
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thuê."));
+        if (rental.getStatus() != RentalStatus.active)
+            throw ApiExceptions.conflict("Chỉ chuyển thu hồi khi hồ sơ đang thuê.");
+        var now = Instant.now();
+        var recovery = openRecovery(rental, null, Reason.CONFIRMED_PROHIBITED_GOODS, now, now);
+        if (recovery == null)
+            throw ApiExceptions.conflict("Hồ sơ đang có luồng thu hồi hoặc chưa đủ điều kiện mở thu hồi.");
+        return recovery.getId();
+    }
+
+    private ViolationRecovery openRecovery(Rental rental, ReturnCase source, Reason reason, Instant deadline, Instant now) {
         if (deadline == null || now.isBefore(deadline) || rental.getActualReturnedAt() != null
-            || rental.getCompletedAt() != null || rental.getInventoryEscalatedAt() != null) return false;
+            || rental.getCompletedAt() != null || rental.getInventoryEscalatedAt() != null) return null;
         if (recoveries.findByRental_IdOrderByCreatedAtDesc(rental.getId()).stream().anyMatch(v ->
-            !terminal(v) || v.getReason() == reason && v.getSourceDeadlineAt().equals(deadline))) return false;
+            !terminal(v) || v.getReason() == reason && v.getSourceDeadlineAt().equals(deadline))) return null;
         if (tasks.findByRental_IdAndTaskTypeAndStatusIn(rental.getId(), MaintenanceTaskType.maintenance,
             List.of(MaintenanceTaskStatus.open, MaintenanceTaskStatus.in_progress)).stream()
-            .anyMatch(task -> task.getRecoveryType() != MaintenanceRecoveryType.NONE)) return false;
+            .anyMatch(task -> task.getRecoveryType() != MaintenanceRecoveryType.NONE)) return null;
         var v = new ViolationRecovery();
         v.setRental(rental);
         v.setSourceReturnId(source == null ? null : source.getId());
         v.setReason(reason);
         v.setSourceDeadlineAt(deadline);
-        if (!reviewEvidence.read(v, now).openingAllowed()) return false;
+        if (!reviewEvidence.read(v, now).openingAllowed()) return null;
         activate(v, now);
         var d = new Details();
         d.history.add(new HistoryEvent("DETECT", "Hệ thống", now, v.getStage(), reason.name()));
@@ -163,12 +183,25 @@ public class ViolationRecoveryWorkflow {
         notifyCustomerSchedule(v, d, now, "Thông báo thu hồi kho");
         save(v, d);
         notifyCoordinationRequired(v);
-        return true;
+        return v;
     }
 
     public boolean blocksLegacyReturn(UUID rentalId) {
         return recoveries.findByRental_IdOrderByCreatedAtDesc(rentalId).stream()
             .anyMatch(v -> v.getRequiredAt() != null && v.getStage() != Stage.CANCELLED);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Entry> list(ActorPrincipal actor, int page, String sort) {
+        if (sort.equals("priority")) return list(actor, page);
+        if (!java.util.Set.of("createdAt,desc", "createdAt,asc").contains(sort))
+            throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.", null);
+        if (!actor.hasRole(RoleCode.STAFF)) throw ApiExceptions.forbidden("Chỉ nhân viên được xem danh sách công việc được phân công.");
+        var paging = PageRequest.of(Math.max(0, page), 30,
+            org.springframework.data.domain.Sort.by(sort.endsWith("asc") ? org.springframework.data.domain.Sort.Direction.ASC
+                : org.springframework.data.domain.Sort.Direction.DESC, "createdAt").and(org.springframework.data.domain.Sort.by("id")));
+        return recoveries.findByTask_AssignedTo_Id(actor.userId(), paging).stream()
+            .filter(v -> canRead(actor, v)).map(v -> view(actor, v, details(v), Instant.now())).toList();
     }
 
     @Transactional(readOnly = true)
@@ -429,6 +462,7 @@ public class ViolationRecoveryWorkflow {
                     && r.getInventoryResultPublishedAt() != null ? r.getInventoryResultPublishedAt().plus(Duration.ofHours(48)) : null;
             }
             case REMOVAL_OVERDUE, HANDOVER_FOLLOW_UP -> r.getInventoryRemovalDeadlineAt();
+            case CONFIRMED_PROHIBITED_GOODS -> v.getSourceDeadlineAt();
         };
         if (current == null || now.isBefore(current))
             throw ApiExceptions.conflict("Mốc nguồn đã thay đổi hoặc chưa đến hạn.");
@@ -1161,6 +1195,7 @@ public class ViolationRecoveryWorkflow {
             case INVENTORY_CONFIRMATION_OVERDUE -> "Quá hạn 48 giờ phản hồi kết quả kiểm kê";
             case REMOVAL_OVERDUE -> "Quá hạn dọn hàng sau kiểm kê sai lệch";
             case HANDOVER_FOLLOW_UP -> "Bàn giao sau đối soát cần xử lý";
+            case CONFIRMED_PROHIBITED_GOODS -> "Vi phạm hàng cấm đã xác minh";
         };
         return recoveryIdentity(v) + " Lý do: " + reason + ". Lịch thu hồi: " + customerTime(v.getScheduledAt())
             + ". Hạn hoàn tất: " + customerTime(v.getDeadlineAt()) + ".";

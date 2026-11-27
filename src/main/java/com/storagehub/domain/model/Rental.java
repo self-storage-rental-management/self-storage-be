@@ -61,6 +61,9 @@ public class Rental extends BaseEntity {
     @Column
     private Instant setupStartedAt;
 
+    @Column(nullable = false)
+    private boolean staffHandoverPreparation;
+
     /** Exclusive free-setup boundary calculated from the selected appointment. */
     @Column
     private Instant setupEndsAt;

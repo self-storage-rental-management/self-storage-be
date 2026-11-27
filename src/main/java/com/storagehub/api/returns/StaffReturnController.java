@@ -31,10 +31,11 @@ public class StaffReturnController {
         @RequestParam(required = false) ReturnCaseStatus status,
         @RequestParam(required = false) String q,
         @RequestParam(defaultValue = "0") int page,
-        @RequestParam(defaultValue = "20") int pageSize
+        @RequestParam(defaultValue = "20") int pageSize,
+        @RequestParam(defaultValue = "priority") String sort
     ) {
         return returnSettlementService.listReturns(
-            actorContext.required(), facilityId, status, q, page, pageSize, CorrelationIdContext.current()
+            actorContext.required(), facilityId, status, q, page, pageSize, sort, CorrelationIdContext.current()
         );
     }
 
