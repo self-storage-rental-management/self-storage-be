@@ -81,6 +81,32 @@ class RentalReadIntegrationTests {
         assertThat(repo.existsActiveRental(own.getReservation().getId(),own.getStorageUnit().getId(),RentalStatus.active)).isTrue();
     }
 
+    @Test void staffRentalReadsAreLimitedToAssignedFacilities() {
+        var own = fixture("A", "Unit-A", "Customer A", LocalDate.of(2026, 11, 30));
+        var other = fixture("B", "Unit-B", "Customer B", LocalDate.of(2026, 11, 30));
+        em.flush();
+        em.clear();
+        var staff = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.STAFF),
+            Set.of(SystemPermission.VIEW_RENTALS.code()),
+            Map.of(own.getFacility().getId(), FacilityScopeLevel.OPERATE,
+                other.getFacility().getId(), FacilityScopeLevel.READ));
+        var params = new LinkedMultiValueMap<String, String>();
+        assertThat(service.list(staff, RentalQuery.parse(params, true), RoleCode.STAFF, "test").data())
+            .extracting(RentalSummaryResponse::id).containsExactly(own.getId());
+        params.add("search", own.getReservation().getReservationCode());
+        assertThat(service.list(staff, RentalQuery.parse(params, true), RoleCode.STAFF, "test").data())
+            .extracting(RentalSummaryResponse::id).containsExactly(own.getId());
+        assertThat(service.staffDetail(staff, own.getId()).reservationCode())
+            .isEqualTo(own.getReservation().getReservationCode());
+        assertThatThrownBy(() -> service.staffDetail(staff, other.getId()))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
+        params.add("facilityId", other.getFacility().getId().toString());
+        assertThatThrownBy(() -> service.list(staff, RentalQuery.parse(params, true), RoleCode.STAFF, "test"))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+        assertThatThrownBy(() -> service.detail(staff, own.getId(), true))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+    }
+
     @Test void listAndDetailSharePhysicalIntakeProgressWithoutChangingPaidDates() {
         Rental r=fixture("INTAKE","INTAKE-1","Customer",LocalDate.of(2026,10,31));
         r.setSetupStartedAt(Instant.parse("2026-10-01T00:00:00Z"));
@@ -101,7 +127,7 @@ class RentalReadIntegrationTests {
     @Test void httpEnvelopeValidationUnknownAndReadOnly() throws Exception {
         Rental r=fixture("HTTP","S-1","Customer",LocalDate.of(2026,10,31)); em.flush(); em.clear();
         ActorContext context=mock(ActorContext.class); when(context.required()).thenReturn(actor(r,false,Map.of()));
-        var mvc=MockMvcBuilders.standaloneSetup(new CustomerRentalReadController(context,service),new ManagerRentalController(context,service))
+        var mvc=MockMvcBuilders.standaloneSetup(new CustomerRentalReadController(context,service),new ManagerRentalController(context,service, null))
             .setControllerAdvice(new GlobalExceptionHandler()).build();
         mvc.perform(get("/api/customer/rental-records")).andExpect(status().isOk()).andExpect(jsonPath("pagination.totalItems").value(1));
         mvc.perform(get("/api/customer/rental-records/"+r.getId())).andExpect(status().isOk())
