@@ -25,7 +25,7 @@ import org.springframework.context.annotation.*;
 import org.springframework.test.context.ActiveProfiles;
 
 @DataJpaTest @ActiveProfiles("test")
-@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RenewalWorkflowService.class,RenewalPersistence.class,RenewalReadService.class,AuditLogService.class,RenewalWorkflowIntegrationTests.Sources.class})
+@Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,RenewalWorkflowService.class,RenewalPersistence.class,RenewalReadService.class,RenewalReturnPolicy.class,AuditLogService.class,RenewalWorkflowIntegrationTests.Sources.class})
 class RenewalWorkflowIntegrationTests {
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.storagehub.service.NotificationService workflowNotifications;
@@ -89,6 +89,7 @@ class RenewalWorkflowIntegrationTests {
     @Autowired com.storagehub.domain.repo.PaymentRepository paymentHistory;
     @Autowired com.storagehub.domain.repo.ActivityLogRepository activityLogs;
     @Autowired RenewalPersistence persistence;
+    @Autowired RenewalReturnPolicy returnPolicy;
     @org.springframework.test.context.bean.override.mockito.MockitoBean com.storagehub.service.ledger.LedgerStore ledgerWrites;
     @BeforeEach void resetMutableTerms(){pricing.rate=new BigDecimal("100");pricing.discountRate=BigDecimal.ZERO;policy.version="v1";eligibility.unknown=false;}
     @Test void completedVerificationUsesHistoricalEvidenceAfterRentalAndPolicyChange() throws Exception {
@@ -197,7 +198,13 @@ class RenewalWorkflowIntegrationTests {
         mvc.perform(post(path+"/renewal-requests").header("Idempotency-Key","http").contentType("application/json").content(body)).andExpect(status().isCreated());
         assertThat(em.createQuery("select count(x) from Renewal x",Long.class).getSingleResult()).isEqualTo(1);
     }
-    @BeforeEach void resetSources(){pricing.rate=new BigDecimal("100");eligibility.unknown=false;finance.unknown=false;finance.debt=false;finance.consistent=true;lifecycle.available=true;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;}
+    @BeforeEach void resetSources(){
+        var jdbc=new org.springframework.jdbc.core.JdbcTemplate(datasource);
+        jdbc.execute("create table if not exists business_record_codes (resource_key varchar(120) primary key, display_code varchar(16))");
+        jdbc.execute("create table if not exists money_receipt_codes (source_type varchar(24), source_id binary(16), receipt_code varchar(20))");
+        jdbc.execute("create alias if not exists bin_to_uuid for 'com.storagehub.service.ReturnClearanceConcurrencyTests.binaryUuid'");
+        pricing.rate=new BigDecimal("100");eligibility.unknown=false;finance.unknown=false;finance.debt=false;finance.consistent=true;lifecycle.available=true;hold.calls=0;hold.atomic=true;hold.fail=false;clock.time=NOW;
+    }
     @Test void optionsRemainReadableWhenEligibilityIsUnknownButQuoteStaysBlocked(){
         var r=fixture();var actor=customer(r);eligibility.unknown=true;
         assertThat(commands.options(actor,r.getId())).containsExactly(new RenewalCommands.Option("TEST",1,null,BigDecimal.ZERO));
@@ -317,11 +324,77 @@ class RenewalWorkflowIntegrationTests {
     @Test void acceptedCancellationReleasesSlotKeepsHistoryAndReplays(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
         var n=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"submit");
+        assertThat(returnPolicy.customer(a,r.getId()).state()).isEqualTo("UNPAID");
         var body=new RenewalCommands.Cancel("test cancel",n.version());var cancelled=commands.cancel(a,n.id(),body,"cancel");
         assertThat(cancelled.status()).isEqualTo(RenewalStatus.cancelled);assertThat(commands.cancel(a,n.id(),body,"cancel")).isEqualTo(cancelled);
         assertThat(cancelled.reviewerId()).isNull();assertThat(cancelled.reviewedAt()).isNull();assertThat(em.find(RenewalWorkflow.class,n.id()).getCancellationReason()).isEqualTo("test cancel");
         em.flush();em.clear();assertThat(reads.detail(a,n.id(),false).cancellationReason()).isEqualTo("test cancel");
         assertThat(em.find(RenewalOpenSlot.class,r.getId())).isNull();assertThat(em.find(Renewal.class,n.id())).isNotNull();assertThat(hold.calls).isZero();
+        assertThat(returnPolicy.customer(a,r.getId()).allowed()).isTrue();
+    }
+    @Test void returnEligibilityDoesNotExposeAnotherCustomersRenewal() {
+        var own=fixture();var other=fixture();var actor=customer(own);
+        assertThatThrownBy(()->returnPolicy.customer(actor,other.getId())).hasMessageContaining("Không tìm thấy hồ sơ thuê");
+        assertThatThrownBy(()->returnPolicy.customer(manager(own),own.getId())).hasMessageContaining("Chỉ khách hàng");
+    }
+    @Test void customerDepositCancellationRequiresAcknowledgementAndReplaysWithoutASecondForfeiture() {
+        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var response=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"paid-cancel-submit");
+        var n=em.find(Renewal.class,response.id());n.setStatus(RenewalStatus.deposit_paid);em.flush();
+        var policy=mock(RenewalReturnPolicy.class);
+        when(policy.assess(n)).thenReturn(new RenewalReturnPolicy.View(r.getId(),false,n.getId(),"DEPOSIT_PAID","TEST",new BigDecimal("20"),new BigDecimal("20")));
+        when(policy.canCancel(n)).thenAnswer(invocation->n.getStatus()!=RenewalStatus.cancelled);
+        var settlement=mock(com.storagehub.service.ledger.RenewalDepositSettlementService.class);
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("deposits",settlement);
+        Object oldPolicy=org.springframework.test.util.ReflectionTestUtils.getField(commands,"returnPolicy");
+        Object oldDeposits=org.springframework.test.util.ReflectionTestUtils.getField(commands,"depositSettlements");
+        try {
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"returnPolicy",policy);
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositSettlements",beans.getBeanProvider(com.storagehub.service.ledger.RenewalDepositSettlementService.class));
+            assertThatThrownBy(()->commands.cancel(a,n.getId(),new RenewalCommands.Cancel("Trả kho",response.version()),"no-ack"))
+                .hasMessageContaining("xác nhận tiền cọc");
+            verifyNoInteractions(settlement);
+            var body=new RenewalCommands.Cancel("Trả kho",response.version(),true);
+            var cancelled=commands.cancel(a,n.getId(),body,"deposit-cancel");
+            assertThat(cancelled.status()).isEqualTo(RenewalStatus.cancelled);
+            assertThat(commands.cancel(a,n.getId(),body,"deposit-cancel")).isEqualTo(cancelled);
+            verify(settlement,times(1)).forfeitCustomerCancellation(eq(n),any());
+            assertThat(em.find(RenewalOpenSlot.class,r.getId())).isNull();
+            assertThat(r.getContractEndDate()).isEqualTo(q.terms().oldEndDate());
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"returnPolicy",oldPolicy);
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositSettlements",oldDeposits);
+        }
+    }
+    @Test void fullyPaidCancellationRequiresItsOwnAcknowledgementAndReplaysOnlyOnce() {
+        var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));
+        var response=commands.submit(a,r.getId(),new RenewalCommands.Submit(q.id(),null),"full-cancel-submit");
+        var n=em.find(Renewal.class,response.id());n.setStatus(RenewalStatus.full_rent_paid);em.flush();
+        var policy=mock(RenewalReturnPolicy.class);
+        when(policy.assess(n)).thenReturn(new RenewalReturnPolicy.View(r.getId(),false,n.getId(),"FULLY_PAID","TEST",new BigDecimal("100"),new BigDecimal("20")));
+        when(policy.canCancel(n)).thenAnswer(invocation->n.getStatus()!=RenewalStatus.cancelled);
+        var settlement=mock(com.storagehub.service.ledger.RenewalDepositSettlementService.class);
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();beans.addBean("deposits",settlement);
+        Object oldPolicy=org.springframework.test.util.ReflectionTestUtils.getField(commands,"returnPolicy");
+        Object oldDeposits=org.springframework.test.util.ReflectionTestUtils.getField(commands,"depositSettlements");
+        try {
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"returnPolicy",policy);
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositSettlements",beans.getBeanProvider(com.storagehub.service.ledger.RenewalDepositSettlementService.class));
+            assertThatThrownBy(()->commands.cancel(a,n.getId(),new RenewalCommands.Cancel("Trả kho",response.version(),true),"deposit-ack-only"))
+                .hasMessageContaining("xác nhận toàn bộ tiền gia hạn");
+            verifyNoInteractions(settlement);
+            var body=new RenewalCommands.Cancel("Trả kho",response.version(),false,true);
+            var cancelled=commands.cancel(a,n.getId(),body,"full-cancel");
+            assertThat(cancelled.status()).isEqualTo(RenewalStatus.cancelled);
+            assertThat(commands.cancel(a,n.getId(),body,"full-cancel")).isEqualTo(cancelled);
+            verify(settlement,times(1)).forfeitFullyPaidCustomerCancellation(eq(n),any());
+            verify(settlement,never()).forfeitCustomerCancellation(any(),any());
+            assertThat(em.find(RenewalOpenSlot.class,r.getId())).isNull();
+            assertThat(r.getContractEndDate()).isEqualTo(q.terms().oldEndDate());
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"returnPolicy",oldPolicy);
+            org.springframework.test.util.ReflectionTestUtils.setField(commands,"depositSettlements",oldDeposits);
+        }
     }
     @Test void financialReadbackIsPartialWhenConsistencyIsUnavailable(){
         var r=fixture();var a=customer(r);var q=commands.quote(a,r.getId(),new RenewalCommands.Quote("TEST"));

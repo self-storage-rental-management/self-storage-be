@@ -19,6 +19,10 @@ import org.springframework.web.bind.annotation.*;
 @SecurityRequirement(name="bearerAuth")
 public class CustomerRenewalController {
     private final ActorContext actors; private final RenewalReadService reads; private final RenewalWorkflowService commands;
+    @GetMapping("/renewals/{id}/cancellation-policy")
+    public ApiResponse<RenewalReturnPolicy.View> cancellationPolicy(@PathVariable UUID id) {
+        return new ApiResponse<>(commands.cancellationPolicy(actors.required(),id),CorrelationIdContext.current());
+    }
     @GetMapping("/renewals") @Operation(summary="Read my renewal requests")
     @Parameters({@Parameter(name="page",in=ParameterIn.QUERY,example="0"),@Parameter(name="size",in=ParameterIn.QUERY,example="20"),@Parameter(name="status",in=ParameterIn.QUERY),@Parameter(name="rentalId",in=ParameterIn.QUERY),@Parameter(name="sort",in=ParameterIn.QUERY,example="createdAt,desc")})
     public PageResponse<RenewalResponse> list(@Parameter(hidden=true) @RequestParam MultiValueMap<String,String> query){

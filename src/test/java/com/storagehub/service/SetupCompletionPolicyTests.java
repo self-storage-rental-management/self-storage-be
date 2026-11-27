@@ -14,7 +14,7 @@ class SetupCompletionPolicyTests {
     }
     @Test void unifiedArrivalDeadlineStartsFromReceivedAtAndKeepsFreeBoundaryStable() {
         var r = new Rental(); var u = new StorageUnit(); var t = new UnitType();
-        t.setCode("M"); u.setUnitType(t); r.setStorageUnit(u);
+        t.setCode("M"); t.setSetupDeadlineDays(7); t.setSetupMaxExtensionDays(3); u.setUnitType(t); r.setStorageUnit(u);
         Instant receivedAt = Instant.parse("2026-11-25T10:30:00Z");
         Instant freeEnd = Instant.parse("2026-11-27T08:45:00Z");
         r.setSetupStartedAt(receivedAt);

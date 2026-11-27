@@ -33,18 +33,18 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and r.handoverArrivedAt is null and r.arrivalReviewOpenedAt is null
           and (c.id is null or c.status = scheduled)
           and (r.appointmentAt < :expired or (r.appointmentAt >= :currentWindow and r.appointmentAt < :oneDay
-                   and r.attendanceReminderHours <> :currentMarker and r.attendanceReminderHours <> 2)
+                   and r.attendanceReminderHours <> 2)
                or (r.handoverTermsVersion = :currentVersion and r.appointmentAt <= :firstReminder and r.attendanceReminderHours = 0))
         order by r.appointmentAt, r.id
         """)
     List<UUID> findAttendanceDue(@Param("versions") List<String> versions,
         @Param("currentVersion") String currentVersion, @Param("expired") Instant expired,
-        @Param("currentWindow") Instant currentWindow, @Param("currentMarker") int currentMarker, @Param("oneDay") Instant oneDay,
+        @Param("currentWindow") Instant currentWindow, @Param("oneDay") Instant oneDay,
         @Param("firstReminder") Instant firstReminder);
 
     @Query("""
         select r.id from Reservation r join CheckIn c on c.reservation = r
-        where r.status in (UNIT_RESERVED, READY_FOR_CHECKIN) and r.firstHandoverComparisonAt < :startedBefore
+        where r.status in (UNIT_RESERVED, READY_FOR_CHECKIN) and coalesce(r.handoverArrivedAt, r.firstHandoverComparisonAt) < :startedBefore
           and c.status in (scheduled, identity_verified, contract_signed, payment_collected)
         """)
     List<UUID> findUnfinishedHandovers(@Param("startedBefore") Instant startedBefore);
