@@ -25,10 +25,25 @@ import org.springframework.util.LinkedMultiValueMap;
 @Import({RentalQueryService.class, com.storagehub.testsupport.DisplayCodeTestConfiguration.class})
 @ActiveProfiles("test")
 class RentalReadIntegrationTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.storagehub.service.InventoryDecisionService inventoryDecisions;
     @Autowired EntityManager em;
     @Autowired RentalQueryService service;
     @Autowired RentalRepository repo;
+    @Autowired com.storagehub.domain.repo.ViolationRecoveryRepository recoveryRepository;
+    @Autowired com.storagehub.domain.repo.ReturnCaseRepository returnRepository;
     @Autowired com.storagehub.service.BusinessRecordCodes codes;
+    @Autowired javax.sql.DataSource dataSource;
+
+    @org.junit.jupiter.api.BeforeEach
+    void provisionDisplayCodeFormulaFixtures() {
+        var jdbc=new org.springframework.jdbc.core.JdbcTemplate(dataSource);
+        jdbc.execute("create table if not exists business_record_codes (resource_key varchar(120) primary key, display_code varchar(16))");
+        jdbc.execute("create table if not exists money_receipt_codes (source_type varchar(24), source_id binary(16), receipt_code varchar(20))");
+        jdbc.execute("create alias if not exists bin_to_uuid for 'com.storagehub.service.ReturnClearanceConcurrencyTests.binaryUuid'");
+    }
 
     @Test void realQueriesScopeFilterPaginateAndHideOtherOwners() {
         Rental own = fixture("A", "Unit_%", "Dương", LocalDate.of(2026,10,31));
@@ -103,6 +118,85 @@ class RentalReadIntegrationTests {
         assertThatThrownBy(() -> service.detail(actor(r,false,Map.of()),r.getId(),false))
             .isInstanceOfSatisfying(ApiException.class,e -> assertThat(e.getStatus().value()).isEqualTo(409));
         assertThat(repo.findById(r.getId()).orElseThrow().getMonthlyPrice()).isEqualByComparingTo("-1");
+    }
+
+    @Test void managerWorkQueueOrdersAcrossPagesBeforeLimitingAndKeepsHistoryLast() {
+        Rental active=fixture("Q-A","Q-A","Active",LocalDate.of(2026,11,27));
+        Rental disputed=fixture("Q-B","Q-B","Disputed",LocalDate.of(2027,11,27));
+        Rental history=fixture("Q-C","Q-C","History",LocalDate.of(2026,10,15));
+        history.setStatus(RentalStatus.completed); history.setCompletedAt(Instant.now());
+        var rc=new ReturnCase(); rc.setRental(disputed); rc.setFacility(disputed.getFacility());
+        rc.setStorageUnit(disputed.getStorageUnit()); rc.setCustomer(disputed.getCustomer());
+        rc.setScheduledDate(LocalDate.of(2026,11,27)); rc.setStatus(ReturnCaseStatus.disputed);
+        rc.setDepositAmount(BigDecimal.ZERO); rc.setRequestedAt(Instant.now()); rc.setRequestedBy(disputed.getCustomer()); em.persist(rc);
+        em.flush(); em.clear();
+        var scopes=Map.of(active.getFacility().getId(),FacilityScopeLevel.READ,
+            disputed.getFacility().getId(),FacilityScopeLevel.READ,history.getFacility().getId(),FacilityScopeLevel.READ);
+        var manager=actor(active,true,scopes);
+        var p=new LinkedMultiValueMap<String,String>(); p.set("size","1");
+        assertThat(service.list(manager,RentalQuery.parse(p,true),true,"queue").data()).extracting(RentalSummaryResponse::id).containsExactly(disputed.getId());
+        p.set("page","1");
+        assertThat(service.list(manager,RentalQuery.parse(p,true),true,"queue").data()).extracting(RentalSummaryResponse::id).containsExactly(active.getId());
+        p.set("page","2");
+        assertThat(service.list(manager,RentalQuery.parse(p,true),true,"queue").data()).extracting(RentalSummaryResponse::id).containsExactly(history.getId());
+    }
+
+    @Test void customerReservationQueueUsesNextActionBeforePageLimit() {
+        var waiting=fixture("CUST-Q1","CUST-Q1","Queue",LocalDate.of(2026,11,27));
+        var payment=fixture("CUST-Q2","CUST-Q2","Queue",LocalDate.of(2026,11,27));
+        payment.setCustomer(waiting.getCustomer()); payment.getReservation().setCustomer(waiting.getCustomer());
+        payment.getReservation().getSourceQuote().setCustomer(waiting.getCustomer());
+        waiting.getReservation().setStatus(ReservationStatus.AWAITING_REVIEW);
+        payment.getReservation().setStatus(ReservationStatus.AWAITING_PAYMENT);
+        payment.getReservation().setPaymentExpiresAt(Instant.now().plusSeconds(3600));
+        em.flush(); em.clear();
+        var rows=em.createQuery("select reservation from Reservation reservation where reservation.customer.id=:customer"+
+            com.storagehub.domain.repo.ReservationRepository.CUSTOMER_QUEUE_ORDER,Reservation.class)
+            .setParameter("customer",waiting.getCustomer().getId()).setMaxResults(1).getResultList();
+        assertThat(rows).extracting(Reservation::getId).containsExactly(payment.getReservation().getId());
+    }
+
+    @Test void staffReturnQueuePutsPresentCustomerAheadAndLeavesExpiredIdentityReviewToManager() {
+        var rental=fixture("RETURN-Q","RETURN-Q","Queue",LocalDate.now().plusDays(10));
+        var rows=new ArrayList<ReturnCase>(); var now=Instant.now(); var today=LocalDate.now(com.storagehub.time.BusinessTime.ZONE);
+        for(int i=0;i<3;i++) {
+            var rc=new ReturnCase(); rc.setRental(rental); rc.setCustomer(rental.getCustomer());
+            rc.setFacility(rental.getFacility()); rc.setStorageUnit(rental.getStorageUnit()); rc.setRequestedBy(rental.getCustomer());
+            rc.setRequestedAt(now.minusSeconds(86400)); rc.setScheduledDate(i==0?today.minusDays(2):today.plusDays(1));
+            rc.setStatus(ReturnCaseStatus.scheduled);
+            if(i>0)rc.setReturnArrivedAt(now.minusSeconds(i==1?60:3600));
+            em.persist(rc); rows.add(rc);
+        }
+        em.flush(); em.clear();
+        var first=returnRepository.searchReturnCases(rental.getFacility().getId(),null,Set.of(rental.getFacility().getId()),null,
+            org.springframework.data.domain.PageRequest.of(0,1),today);
+        var second=returnRepository.searchReturnCases(rental.getFacility().getId(),null,Set.of(rental.getFacility().getId()),null,
+            org.springframework.data.domain.PageRequest.of(1,1),today);
+        assertThat(first).extracting(ReturnCase::getId).containsExactly(rows.get(1).getId());
+        assertThat(second).extracting(ReturnCase::getId).containsExactly(rows.get(0).getId());
+        assertThat(first.getTotalElements()).isEqualTo(3);
+    }
+
+    @Test void recoveryQueuePrioritizesBlockedAndOverdueWorkBeforePagination() {
+        var rental=fixture("REC-Q","REC-Q","Queue",LocalDate.of(2026,11,27));
+        var cases=new ArrayList<ViolationRecovery>();
+        var at=Instant.now();
+        for(int i=0;i<3;i++) {
+            var v=new ViolationRecovery(); v.setRental(rental); v.setReason(ViolationRecovery.Reason.REMOVAL_OVERDUE);
+            v.setSourceDeadlineAt(at.minusSeconds(86400)); v.setRequiredAt(at.minusSeconds(3600));
+            v.setStage(i==2?ViolationRecovery.Stage.BLOCKED:ViolationRecovery.Stage.AWAITING_APPROVAL);
+            v.setActionDueAt(i==0?at.plusSeconds(3600):i==1?at.minusSeconds(60):at.plusSeconds(7200));
+            em.persist(v); cases.add(v);
+        }
+        cases.getFirst().setEscalated(true);
+        em.flush(); em.clear();
+        var facilities=Set.of(rental.getFacility().getId());
+        var first=recoveryRepository.operationsQueue(false,facilities,true,false,org.springframework.data.domain.PageRequest.of(0,1));
+        var second=recoveryRepository.operationsQueue(false,facilities,true,false,org.springframework.data.domain.PageRequest.of(1,1));
+        assertThat(first).extracting(ViolationRecovery::getId).containsExactly(cases.get(2).getId());
+        assertThat(second).extracting(ViolationRecovery::getId).containsExactly(cases.get(1).getId());
+        assertThat(recoveryRepository.operationsQueue(false,facilities,true,true,org.springframework.data.domain.PageRequest.of(0,1)))
+            .extracting(ViolationRecovery::getId).containsExactly(cases.getFirst().getId());
     }
 
     private ActorPrincipal actor(Rental r,boolean manager,Map<UUID,FacilityScopeLevel> scopes) {

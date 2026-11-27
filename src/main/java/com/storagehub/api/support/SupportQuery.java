@@ -23,8 +23,9 @@ public record SupportQuery(int page,int size,SupportTicketStatus status,UUID fac
             int page=Integer.parseInt(value(values,"page","0")),size=Integer.parseInt(value(values,"size","20"));
             if(page<0||size<1||size>100||(long)page*size>Integer.MAX_VALUE)throw invalid();
             String search=value(values,"search","").trim();if(search.length()>200)throw invalid();
-            String[] order=value(values,"sort","createdAt,desc").split(",",-1);
-            if(order.length!=2||!Set.of("createdAt","updatedAt","id","subject").contains(order[0])||!Set.of("asc","desc").contains(order[1]))throw invalid();
+            String[] order=value(values,"sort",timeline?"createdAt,desc":"priority,asc").split(",",-1);
+            if(order.length!=2||!Set.of("priority","createdAt","updatedAt","id","subject").contains(order[0])||!Set.of("asc","desc").contains(order[1]))throw invalid();
+            if(order[0].equals("priority")&&!order[1].equals("asc"))throw invalid();
             return new SupportQuery(page,size,values.containsKey("status")?SupportTicketStatus.valueOf(values.getFirst("status")):null,
                 uuid(values,"facilityId"),uuid(values,"staffId"),search,order[0],order[1].equals("desc"));
         } catch(IllegalArgumentException e) {throw invalid();}

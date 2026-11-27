@@ -42,11 +42,14 @@ public class RentalQueryService {
 
     public PageResponse<RentalSummaryResponse> list(ActorPrincipal actor, RentalQuery query, boolean manager, String correlationId) {
         Set<UUID> facilities = authorize(actor, manager, query.facilityId());
-        var page = repository.findAll(scoped(actor, manager, facilities).and(filters(query, manager)), query.pageable());
+        var spec = scoped(actor, manager, facilities).and(filters(query, manager));
+        if (query.priorityOrder()) spec = spec.and(BusinessQueueOrder.rentals(manager));
+        var page = repository.findAll(spec, query.pageable());
         var displayCodes = codes.findAll(page.getContent().stream().map(r -> "TH:" + r.getId()).toList());
         Set<UUID> mismatchReturns = page.isEmpty() ? Set.of()
             : repository.findInventoryMismatchReturnIds(page.getContent().stream().map(Rental::getId).toList());
-        return PageResponse.from(page.map(r -> summary(r, displayCodes.get("TH:" + r.getId()), mismatchReturns.contains(r.getId()))), correlationId);
+        var result = PageResponse.from(page.map(r -> summary(r, displayCodes.get("TH:" + r.getId()), mismatchReturns.contains(r.getId()))), correlationId);
+        return query.priorityOrder() ? result.withSort("priority,asc") : result;
     }
 
     public RentalDetailResponse detail(ActorPrincipal actor, UUID id, boolean manager) {

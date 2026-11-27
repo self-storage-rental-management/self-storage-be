@@ -2,6 +2,8 @@
 
 ## Luồng gia hạn hiện hành
 
+Danh sách Customer/Manager mặc định `sort=priority,asc`: yêu cầu đang chờ đúng vai trò xử lý trước, tiếp theo hạn thanh toán đã lưu (thiếu hạn xếp sau), ngày kết thúc hợp đồng gốc, thời điểm tạo và ID. Hồ sơ đã kết thúc nằm sau hàng đang xử lý. Các lựa chọn `createdAt`, `newEndDate`, `amount`, `id` asc/desc tiếp tục được hỗ trợ; không nhận `priority,desc`. Thứ tự được áp dụng trong truy vấn trước khi phân trang. Danh sách ký của Staff ưu tiên khách đã được ghi nhận có mặt, lịch còn hiệu lực gần nhất, lịch lỡ hẹn và hồ sơ hoàn tất; sort không thay thế điều kiện được phép thực hiện thao tác.
+
 - Khách gửi yêu cầu cho hồ sơ thuê đang hoạt động, trong cửa sổ chính sách. Backend kiểm tra công nợ đến hạn, tranh chấp và xung đột với kỳ gia hạn theo các nguồn vận hành được cấu hình.
 - Báo giá mới có `expiresAt: null`. Backend kiểm tra lại điều khoản khi khách chấp nhận và mở thanh toán. Nếu điều khoản thay đổi, khách lấy báo giá mới và xác nhận lại.
 - Khách lưu lịch ký còn hiệu lực trước khi mở VNPay. Backend giữ lượt 30 phút khi tạo giao dịch. Hạn thanh toán tối đa 15 phút, kết thúc trước giờ hẹn và mốc xử lý thu hồi nếu các mốc đó đến sớm hơn.

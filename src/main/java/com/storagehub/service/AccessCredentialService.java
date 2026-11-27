@@ -550,7 +550,8 @@ public class AccessCredentialService {
                     rental.getId(), returnCase.getFacility().getId(), returnCase.getFacility().getName(),
                     rental.getStorageUnit().getId(), rental.getStorageUnit().getCode(),
                     rental.getCustomer().getId(), rental.getCustomer().getFullName(), credential.getType(),
-                    credential.getReference(), returnCase.getScheduledDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC),
+                    credential.getReference(), returnCase.getScheduledDate() == null ? returnCase.getRecoveryEligibleAt()
+                        : returnCase.getScheduledDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC),
                     "Có credential đang hoạt động cần thu hồi khi nghiệm thu trả kho"
                 ));
             }

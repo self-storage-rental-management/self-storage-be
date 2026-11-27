@@ -16,6 +16,14 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
+    String CUSTOMER_QUEUE_ORDER = " order by case "
+        + "when reservation.status in (AWAITING_EMAIL, AWAITING_PAYMENT, PAYMENT_GRACE, AWAITING_CUSTOMER_RECEIPT, UNIT_RESERVED, READY_FOR_CHECKIN) then 0 "
+        + "when reservation.status in (COMPLETED, EXPIRED, CANCELLED, REJECTED) then 2 else 1 end, "
+        + "case when reservation.status in (AWAITING_PAYMENT, PAYMENT_GRACE) then coalesce(reservation.paymentExpiresAt, reservation.holdExpiresAt) "
+        + "when reservation.status = AWAITING_EMAIL then reservation.holdExpiresAt "
+        + "when reservation.status in (UNIT_RESERVED, READY_FOR_CHECKIN) then reservation.appointmentAt end asc nulls last, "
+        + "case when reservation.status in (COMPLETED, EXPIRED, CANCELLED, REJECTED) then coalesce(reservation.cancelledAt, reservation.expiredAt, reservation.createdAt) end desc, "
+        + "reservation.createdAt asc, reservation.id asc";
     long countByCustomer_IdAndStatusIn(UUID customerId, java.util.Collection<ReservationStatus> statuses);
     long countByFacility_IdAndStatusIn(UUID facilityId, java.util.Collection<ReservationStatus> statuses);
     @Query("""
@@ -78,7 +86,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             reservation.archivedAt is null
             or reservation.status = com.storagehub.domain.model.ReservationStatus.EXPIRED
           )
-        """)
+        """ + CUSTOMER_QUEUE_ORDER)
     Page<Reservation> findCustomerVisibleReservations(
         @Param("customerId") UUID customerId,
         Pageable pageable
@@ -88,9 +96,11 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
         ReservationStatus status,
         Pageable pageable
     );
+    @Query("select reservation from Reservation reservation where reservation.customer.id = :customerId and reservation.status = :status and reservation.customerArchivedAt is null" + CUSTOMER_QUEUE_ORDER)
     Page<Reservation> findAllByCustomer_IdAndStatusAndCustomerArchivedAtIsNull(
         UUID customerId, ReservationStatus status, Pageable pageable
     );
+    @Query("select reservation from Reservation reservation where reservation.customer.id = :customerId and reservation.status = :status and reservation.archivedAt is null" + CUSTOMER_QUEUE_ORDER)
     Page<Reservation> findAllByCustomer_IdAndStatusAndArchivedAtIsNull(
         UUID customerId, ReservationStatus status, Pageable pageable
     );
@@ -182,9 +192,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
           and reservation.goodsReviewStatus = com.storagehub.domain.model.GoodsReviewStatus.PENDING
           and (:facilityId is null or reservation.facility.id = :facilityId)
           and (:scoped = false or reservation.facility.id in :facilityIds)
-        order by case when reservation.goodsReviewDueAt <= instant then 0
-                      when reservation.goodsReviewDueAt <= instant + 2 hour then 1 else 2 end,
-                 reservation.createdAt desc, reservation.id asc
+        order by reservation.goodsReviewDueAt asc nulls last,
+                 reservation.createdAt asc, reservation.id asc
         """)
     Page<Reservation> findPendingGoodsReviews(
         @Param("facilityId") UUID facilityId,
@@ -223,11 +232,13 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                or lower(reservation.customer.fullName) like lower(concat('%', :q, '%'))
                or lower(coalesce(assignedUnit.code, '')) like lower(concat('%', :q, '%')))
         order by case
-                   when reservation.status in (AWAITING_REVIEW, PAYMENT_REVIEW, PAYMENT_GRACE) then 0
-                   when reservation.status = AWAITING_PAYMENT and reservation.paymentExpiresAt <= instant + 2 hour then 0
+                   when reservation.status in (AWAITING_REVIEW, PAYMENT_REVIEW) then 0
                    when reservation.status = COMPLETED then 2
                    else 1 end,
-                 reservation.createdAt desc, reservation.id asc
+                 case when reservation.status = AWAITING_REVIEW then reservation.goodsReviewDueAt
+                      when reservation.status = PAYMENT_REVIEW then reservation.paymentExpiresAt
+                      else reservation.appointmentAt end asc nulls last,
+                 reservation.createdAt asc, reservation.id asc
         """)
     Page<Reservation> findStaffActiveReservations(
         @Param("activeStatuses") java.util.Collection<ReservationStatus> activeStatuses,
@@ -253,6 +264,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
                or lower(reservation.reservationCode) like lower(concat('%', :q, '%'))
                or lower(reservation.customer.email) like lower(concat('%', :q, '%'))
                or lower(reservation.customer.fullName) like lower(concat('%', :q, '%')))
+        order by reservation.appointmentAt asc nulls last, reservation.confirmedAt asc nulls last,
+          reservation.createdAt asc, reservation.id asc
         """)
     Page<Reservation> findUnitAssignmentCandidates(
         @Param("facilityId") UUID facilityId,
@@ -302,6 +315,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     @Query(value = "select r as reservation, c as checkIn, a as assignment " + CHECK_IN_WORK_FROM + """
         order by case
           when :workGroup = 'PROCESSED' then 0
+            when r.handoverArrivedAt is not null and c.status in (scheduled, identity_verified, contract_signed, payment_collected) then -1
           when c.status = handover_pending_receipt
             and c.checkedInAt <= :receiptConfirmationDueCutoff then 0
           when c.status = handover_pending_receipt

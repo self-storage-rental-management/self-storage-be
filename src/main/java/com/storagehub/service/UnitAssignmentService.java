@@ -75,7 +75,7 @@ public class UnitAssignmentService {
         Page<UnitAssignmentCandidateResponse> result = reservationRepository
             .findUnitAssignmentCandidates(
                 facilityId, unitTypeId, clean(q), scoped, facilityIds,
-                pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "confirmedAt"))
+                pageRequest(page, pageSize, Sort.unsorted())
             )
             .map(this::toCandidateResponse);
         return PageResponse.from(result, correlationId);
@@ -97,7 +97,7 @@ public class UnitAssignmentService {
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanRead(actor, reservation.getFacility().getId());
         assertAssignmentCanShowUnits(reservation);
-        var paging = pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "code"));
+        var paging = pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "code", "id"));
         Page<StorageUnit> units;
         if (reservation.getPalletHeldUnit() == null) {
             units = storageUnitRepository.findAssignableUnits(reservation.getFacility().getId(),

@@ -34,9 +34,9 @@ public final class InventoryTimelinePolicy {
         }
         return switch (code.trim().toUpperCase(java.util.Locale.ROOT)) {
             case "S" -> new int[]{3, 2};
-            case "M" -> new int[]{5, 3};
-            case "L" -> new int[]{7, 4};
-            case "XL" -> new int[]{10, 5};
+            case "M" -> new int[]{5, 2};
+            case "L" -> new int[]{7, 2};
+            case "XL" -> new int[]{10, 2};
             default -> throw ApiExceptions.conflict(
                 "Cỡ kho \"" + code.trim() + "\" chưa được cấu hình hạn trả kho do kiểm kê sai lệch. Vui lòng cấu hình trước khi áp dụng.");
         };
@@ -93,10 +93,11 @@ public final class InventoryTimelinePolicy {
         }
         int nextCount = rental.getInventoryReturnExtensionCount() + 1;
         Instant nextDeadline = rental.getInventoryRemovalDeadlineAt().atZone(ZONE)
-            .plusDays(rental.getInventoryReturnExtensionDays()).toInstant();
+            .plusDays(2).toInstant();
         int nextWindowDays = Math.toIntExact(ChronoUnit.DAYS.between(
             removalEffectiveAt(rental.getInventoryRemovalPublishedAt()).atZone(ZONE).toLocalDate(),
             nextDeadline.atZone(ZONE).toLocalDate()));
+        rental.setInventoryReturnExtensionDays(2);
         rental.setInventoryReturnExtensionCount(nextCount);
         rental.setInventoryReturnWindowDays(nextWindowDays);
         rental.setInventoryRemovalDeadlineAt(nextDeadline);

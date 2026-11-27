@@ -31,7 +31,7 @@ public class UnitTypeController {
         @RequestParam(required = false) UnitTypeStatus status,
         @RequestParam(required = false) LocalDate startDate,
         @RequestParam(required = false) LocalDate endDate,
-        @PageableDefault(size = 20, sort = "monthlyPrice", direction = Sort.Direction.ASC) Pageable pageable
+        @PageableDefault(size = 20, sort = {"areaM2", "code", "id"}, direction = Sort.Direction.ASC) Pageable pageable
     ) {
         return unitTypeQueryService.list(
             actorContext.required(), facilityId, status, startDate, endDate, pageable, CorrelationIdContext.current()
