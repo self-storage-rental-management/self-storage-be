@@ -2,6 +2,7 @@ package com.storagehub.api.reservation;
 
 import com.storagehub.validation.PhoneNumberPolicy;
 import com.storagehub.validation.IdentityDocumentPolicy;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
@@ -42,10 +43,15 @@ public class CreateReservationRequest {
     @Valid
     private List<@NotNull @Valid GoodsItemRequest> goodsItems;
 
+    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "Ngày giờ nhận kho do khách chọn khi tạo đơn.")
     private Instant appointmentAt;
 
     /** Must be explicitly true on the public create endpoint before payment is possible. */
     private Boolean acceptedTerms;
+    @Size(max = 40)
+    private String acceptedHandoverTermsVersion;
+    public String getAcceptedHandoverTermsVersion() { return acceptedHandoverTermsVersion; }
+    public void setAcceptedHandoverTermsVersion(String value) { acceptedHandoverTermsVersion = value; }
 
     public CreateReservationRequest() {
     }

@@ -32,7 +32,7 @@ public class Contract extends BaseEntity {
     @Column(nullable = false, length = 24)
     private ContractStatus status = ContractStatus.DRAFT;
 
-    @Column(nullable = false, unique = true, length = 64)
+    @Column(nullable = false, unique = true, length = 76)
     private String contractNumber;
 
     @Column

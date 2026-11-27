@@ -29,7 +29,7 @@ public class RenewalSigningSlotsReadService {
 
     public View read(ActorPrincipal actor,UUID id,LocalDate date,RenewalOperationService.Audience audience) {
         var detail=operations.detail(actor,id,audience); // Existing ownership/current Staff assignment authorization.
-        if(!Set.of("SIGNING","AWAITING_PAYMENT_INTENT").contains(detail.phase())||detail.arrivalRef()!=null)
+        if(!Set.of("SIGNING","NO_SHOW","AWAITING_PAYMENT_INTENT").contains(detail.phase())||detail.arrivalRef()!=null)
             throw ApiExceptions.conflict("Renewal is not available for signing appointment selection");
         var clock=clocks.getIfAvailable();Instant now=(clock==null?Clock.systemUTC():clock).instant();
         if(date==null||date.isBefore(now.atZone(ServiceCalendarPolicy.ZONE).toLocalDate()))

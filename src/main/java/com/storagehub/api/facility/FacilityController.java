@@ -31,7 +31,7 @@ public class FacilityController {
         @RequestParam(required = false) FacilityStatus status,
         @RequestParam(required = false) String city,
         @RequestParam(name = "q", required = false) String query,
-        @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+        @PageableDefault(size = 20, sort = {"name", "code", "id"}, direction = Sort.Direction.ASC) Pageable pageable
     ) {
         return facilityQueryService.searchFacilities(
             actorContext.required(), status, city, query, pageable, CorrelationIdContext.current()

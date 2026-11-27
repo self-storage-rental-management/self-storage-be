@@ -105,6 +105,9 @@ public class Payment extends BaseEntity {
     @Column(name = "invoice_number", unique = true, length = 64)
     private String invoiceNumber;
 
+    @Column(name = "receipt_code", length = 17)
+    private String receiptCode;
+
     @Column(name = "invoice_issued_at")
     private Instant invoiceIssuedAt;
 

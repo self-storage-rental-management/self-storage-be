@@ -38,9 +38,13 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 @RequiredArgsConstructor
 public class FileStorageService {
+    static final String INVENTORY_IDENTITY_ENTITY = "CHECK_IN_IDENTITY";
 
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.domain.repo.ReturnCaseRepository returnCaseRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.storagehub.domain.repo.ViolationRecoveryRepository violationRecoveryRepository;
 
     private static final Set<String> ALLOWED_TYPES = Set.of("image/jpeg", "image/png", "image/webp", "application/pdf");
     private static final Set<CheckInStatus> ACTIVE_CHECK_IN_EVIDENCE_STATUSES = Set.of(
@@ -160,6 +164,16 @@ public class FileStorageService {
             duongEvidence().requireDownload(actor,asset);
             return; // Deliberately before uploader shortcut, so INTERNAL never leaks to Customer.
         }
+        if (INVENTORY_IDENTITY_ENTITY.equals(asset.getEntityType())) {
+            if (!actor.hasAnyRole(RoleCode.STAFF, RoleCode.MANAGER) || asset.getEntityId() == null) {
+                throw ApiExceptions.notFound("File was not found");
+            }
+            var checkIn = checkInRepository.findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            authorizationService.require(actor, SystemPermission.VIEW_CHECKINS);
+            facilityScopeService.assertCanOperate(actor, checkIn.getReservation().getFacility().getId());
+            return;
+        }
         if (asset.getUploadedBy().getId().equals(actor.userId())) {
             return;
         }
@@ -224,6 +238,22 @@ public class FileStorageService {
             );
             return;
         }
+
+        if ("VIOLATION_RECOVERY".equals(asset.getEntityType())
+            && asset.getEntityId() != null
+            && violationRecoveryRepository != null) {
+            var recovery = violationRecoveryRepository.findById(asset.getEntityId())
+                .orElseThrow(() -> ApiExceptions.notFound("File was not found"));
+            if (actor.hasRole(RoleCode.CUSTOMER)) {
+                if (recovery.getRequiredAt() == null
+                    || !recovery.getRental().getCustomer().getId().equals(actor.userId())) {
+                    throw ApiExceptions.forbidden("Bạn không có quyền truy cập tệp đính kèm này.");
+                }
+                return;
+            }
+            facilityScopeService.assertCanRead(actor, recovery.getRental().getFacility().getId());
+            return;
+        }
         throw ApiExceptions.notFound("File was not found");
     }
 
@@ -253,7 +283,7 @@ public class FileStorageService {
         }
         String normalized = entityType.trim().toUpperCase(java.util.Locale.ROOT);
         if(com.storagehub.service.integration.DuongFileEvidence.handles(normalized))return normalized;
-        if (!Set.of("CHECK_IN", "RETURN_CASE", "RESERVATION_GOODS_ITEM", "MAINTENANCE_TASK").contains(normalized)) {
+        if (!Set.of("CHECK_IN", INVENTORY_IDENTITY_ENTITY, "RETURN_CASE", "RESERVATION_GOODS_ITEM", "MAINTENANCE_TASK", "VIOLATION_RECOVERY").contains(normalized)) {
             throw ApiExceptions.validation("entityType is not supported", null);
         }
         return normalized;
@@ -267,6 +297,25 @@ public class FileStorageService {
     ) {
         if(com.storagehub.service.integration.DuongFileEvidence.handles(entityType)) {
             duongEvidence().requireUpload(actor,entityType,entityId);
+            return;
+        }
+        if (INVENTORY_IDENTITY_ENTITY.equals(entityType)) {
+            if (!actor.hasRole(RoleCode.STAFF)) {
+                throw ApiExceptions.forbidden("Chỉ Staff được tải ảnh xác minh kiểm kê.");
+            }
+            authorizationService.require(actor, SystemPermission.PERFORM_CHECKIN);
+            if (entityId == null || contentType == null || !contentType.toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+                throw ApiExceptions.validation("Cần tệp ảnh và mã hồ sơ kiểm kê hợp lệ.", null);
+            }
+            var checkIn = checkInRepository.findById(entityId)
+                .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ kiểm kê."));
+            facilityScopeService.assertCanOperate(actor, checkIn.getReservation().getFacility().getId());
+            if (checkIn.getStatus() != CheckInStatus.setup_completed || checkIn.getInventoryArrivedAt() == null
+                || checkIn.getInventoryResolutionStatus() != com.storagehub.domain.model.InventoryResolutionStatus.NOT_STARTED
+                || checkIn.getRental() == null) {
+                throw ApiExceptions.conflict("Chỉ tải ảnh sau khi ghi nhận khách đến và trước khi công bố kết quả.");
+            }
+            InventoryDeadlinePolicy.requireInventoryOpen(checkIn.getRental(), java.time.Instant.now());
             return;
         }
         if ("CHECK_IN".equals(entityType)) {
@@ -307,9 +356,36 @@ public class FileStorageService {
             var task = maintenanceTaskRepository.findById(entityId)
                 .orElseThrow(() -> ApiExceptions.notFound("Maintenance task was not found"));
             facilityScopeService.assertCanOperate(actor, task.getFacility().getId());
+            if (task.getRecoveryType() == com.storagehub.domain.model.MaintenanceRecoveryType.VIOLATION) {
+                if (actor.hasAnyRole(RoleCode.BUSINESS, RoleCode.ADMIN)
+                    && (task.getStatus() == MaintenanceTaskStatus.completed || task.getStatus() == MaintenanceTaskStatus.cancelled)) {
+                    facilityScopeService.assertCanManage(actor, task.getFacility().getId());
+                    return;
+                }
+                if (!actor.hasRole(RoleCode.STAFF) || !actor.hasPermission(com.storagehub.domain.model.SystemPermission.PROCESS_RETURNS)
+                    || task.getAssignedTo() == null || !actor.userId().equals(task.getAssignedTo().getId()))
+                    throw ApiExceptions.forbidden("Chỉ nhân viên phụ trách được tải chứng cứ thu hồi.");
+                return;
+            }
             if (task.getStatus() == MaintenanceTaskStatus.completed || task.getStatus() == MaintenanceTaskStatus.cancelled) {
                 throw ApiExceptions.conflict("Evidence can only be uploaded while the maintenance task is active");
             }
+            return;
+        }
+        if ("VIOLATION_RECOVERY".equals(entityType)) {
+            if (entityId == null || violationRecoveryRepository == null) {
+                throw ApiExceptions.validation("entityId is required for recovery attachment", null);
+            }
+            var recovery = violationRecoveryRepository.findById(entityId)
+                .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thu hồi."));
+            if (actor.hasRole(RoleCode.CUSTOMER)) {
+                if (recovery.getRequiredAt() == null
+                    || !recovery.getRental().getCustomer().getId().equals(actor.userId())) {
+                    throw ApiExceptions.forbidden("Bạn không có quyền tải tệp lên hồ sơ thu hồi này.");
+                }
+                return;
+            }
+            facilityScopeService.assertCanOperate(actor, recovery.getRental().getFacility().getId());
             return;
         }
         if (entityType == null) {

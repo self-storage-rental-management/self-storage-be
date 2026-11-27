@@ -28,6 +28,8 @@ public class ReturnFinancialReconciliation {
     private final JdbcTemplate jdbc;
     private final LedgerStore ledger;
     private final PaymentProvenance provenance;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.MoneyReceiptCodes receiptCodes;
     private final ObjectMapper mapper;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RenewalOverdueFeeService> overdueFees;
@@ -54,8 +56,10 @@ public class ReturnFinancialReconciliation {
         Payment checkIn=null;BigDecimal paid=BigDecimal.ZERO;
         for(var p:payments) {
             if(!Set.of(PaymentType.RESERVATION_DEPOSIT,PaymentType.RENTAL_BALANCE).contains(p.getPurpose()))throw unknownDeposit();
-            if(!Set.of(PaymentProvenance.Classification.VERIFIED,PaymentProvenance.Classification.SANDBOX).contains(provenance.classify(p))
-                ||p.getAmount()==null||p.getPaidAt()==null||p.getPaidAt().isAfter(Instant.now())||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0)throw unknownDeposit();
+            if(p.getPurpose()==PaymentType.RENTAL_BALANCE
+                && (!Set.of(PaymentProvenance.Classification.VERIFIED,PaymentProvenance.Classification.SANDBOX).contains(provenance.classify(p))
+                    ||p.getPaidAt()==null||p.getPaidAt().isAfter(Instant.now())))throw unknownDeposit();
+            if(p.getAmount()==null||p.getRefundedAmount()==null||p.getRefundedAmount().signum()!=0)throw unknownDeposit();
             paid=paid.add(p.getAmount());
             if(p.getPurpose()==PaymentType.RENTAL_BALANCE) {
                 if(checkIn!=null||p.getAmount().compareTo(pricing.getDueAtCheckIn())!=0)throw unknownDeposit();
@@ -90,7 +94,7 @@ public class ReturnFinancialReconciliation {
         if(!account.customerId().equals(rental.getCustomer().getId())||!account.facilityId().equals(rental.getFacility().getId()))throw ApiExceptions.conflict("Sổ công nợ không khớp hồ sơ thuê.");
         Instant calculatedAt=rc.getInspectedAt()==null?Instant.now():rc.getInspectedAt();
         RenewalOverdueFeeService.Quote feeQuote=null;
-        if(recovery) {
+        if(!rc.isSetupExitRequested()) {
             var source=overdueFees==null?null:overdueFees.getIfAvailable();
             if(source==null)throw ApiExceptions.conflict("Chưa có nguồn tính phí quá hạn, không thể quyết toán thu hồi.");
             feeQuote=source.quote(rental,account,calculatedAt);
@@ -100,7 +104,7 @@ public class ReturnFinancialReconciliation {
             if(o.outstanding().signum()==0)continue;
             if(o.refunded().signum()>0)throw ApiExceptions.conflict("Khoản công nợ có hoàn tiền cần được đối soát trước khi đưa vào quyết toán.");
             boolean fee=o.sourceRef().startsWith("rental-overdue:"+rental.getId()+":");
-            if(recovery&&fee) {
+            if(feeQuote!=null&&fee) {
                 if(feeQuote.posted().stream().noneMatch(posted->posted.id().equals(o.id())))
                     throw ApiExceptions.conflict("Phí quá hạn đã ghi sổ không khớp kỳ thuê hiện tại, cần đối soát.");
                 allocations.put(o.id(),o.outstanding());debt=debt.add(o.outstanding());postedFee=postedFee.add(o.outstanding());
@@ -168,12 +172,19 @@ public class ReturnFinancialReconciliation {
         ledger.lockForSettlement(account.rentalId(),((Number)row.get("ledger_revision")).longValue());
         var proof=security(rc.getRental());
         if (rc.isSetupExitRequested()) {
+            if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+                && (rc.isSetupEarlyExit()
+                    || !"INVENTORY_MISMATCH_USAGE_V1".equals(rc.getSetupEarlyExitPolicyVersion())
+                    || rc.getEarlyTerminationFee() == null || rc.getEarlyTerminationFee().signum() != 0
+                    || rc.getRentalRefundCredit() == null
+                    || proof.pricing().getNetRentalAmount().compareTo(rc.getRentalRefundCredit()) != 0))
+                throw ApiExceptions.conflict("Bảng kê kiểm kê sai lệch chưa khớp tiền thuê đã đối soát.");
             if (!Objects.equals(row.get("setup_statement_json"), setupStatement(rc)))
                 throw ApiExceptions.conflict("Bảng kê trả kho trong thời gian chuẩn bị đã thay đổi; cần đối soát lại.");
             if (rc.isSetupEarlyExit() && (!SetupEarlyExitPolicy.applies(rc)
                 || !Objects.equals(proof.pricing().getSetupEarlyExitPolicyVersion(), rc.getSetupEarlyExitPolicyVersion())
-                || SetupEarlyExitPolicy.retainedRental(proof.pricing().getNetRentalAmount()).compareTo(rc.getEarlyTerminationFee()) != 0
-                || SetupEarlyExitPolicy.refundableRental(proof.pricing().getNetRentalAmount()).compareTo(rc.getRentalRefundCredit()) != 0))
+                || proof.pricing().getSetupEarlyExitFee().compareTo(rc.getEarlyTerminationFee()) != 0
+                || proof.pricing().getNetRentalAmount().compareTo(rc.getRentalRefundCredit()) != 0))
                 throw ApiExceptions.conflict("Điều khoản hoặc tiền thuê thực thu không khớp bảng kê thời gian chuẩn bị.");
         }
         if(!proof.payment().getId().toString().equals(row.get("security_payment_id"))
@@ -184,6 +195,28 @@ public class ReturnFinancialReconciliation {
         return rc.getStatus()==ReturnCaseStatus.completed&&method!=null&&reference!=null&&file!=null
             &&jdbc.queryForObject("select count(*) from return_settlement_receipts r join return_financial_snapshots f on f.return_id=r.return_id where r.return_id=? and r.payment_method=? and r.transaction_reference=? and r.receipt_file_id=? and f.settled_at_ms is not null",Long.class,
                 rc.getId().toString(),method,reference,file.toString())==1;
+    }
+
+    public boolean hasCollectionReceipt(ReturnCase rc) {
+        return jdbc.queryForObject("select count(*) from return_settlement_receipts where return_id=? and direction='COLLECTION' and amount=?",
+            Long.class, rc.getId().toString(), rc.getAmountDueFromCustomer()) == 1;
+    }
+
+    public boolean matchesMismatchReceipt(ReturnCase rc, String method, String reference, UUID file, BigDecimal amount) {
+        return file != null && amount != null && reference != null && jdbc.queryForObject("""
+            select count(*) from return_settlement_receipts
+            where return_id=? and payment_method=? and transaction_reference=? and receipt_file_id=? and amount=?
+            """, Long.class, rc.getId().toString(), method, reference, file.toString(), amount) == 1;
+    }
+
+    public List<com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt> mismatchReceipts(ReturnCase rc) {
+        return jdbc.query("""
+            select direction,amount,payment_method,transaction_reference,receipt_file_id,recorded_at_ms
+            from return_settlement_receipts where return_id=? order by recorded_at_ms, direction
+            """, (row, index) -> new com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt(
+                row.getString("direction"), row.getBigDecimal("amount"), row.getString("payment_method"),
+                row.getString("transaction_reference"), UUID.fromString(row.getString("receipt_file_id")),
+                Instant.ofEpochMilli(row.getLong("recorded_at_ms"))), rc.getId().toString());
     }
 
     public com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt settledReceipt(ReturnCase rc, boolean recovery) {
@@ -206,7 +239,7 @@ public class ReturnFinancialReconciliation {
             UUID fileId=recovery?new UUID(fileBytes.getLong(),fileBytes.getLong()):UUID.fromString(row.getString("receipt_file_id"));
             return new com.storagehub.api.returns.ReturnCaseResponse.SettlementReceipt(
                 row.getString("direction"),row.getBigDecimal("amount"),row.getString("payment_method"),row.getString("transaction_reference"),fileId,
-                recovery?row.getTimestamp("recorded_at").toInstant():Instant.ofEpochMilli(row.getLong("recorded_at_ms")));
+                recovery?row.getTimestamp("recorded_at").toInstant():Instant.ofEpochMilli(row.getLong("recorded_at_ms")), receiptCodes.find("RETURN", rc.getId()));
         }, returnId, rc.getSettlementPaymentId());
         return receipts.size() == 1 ? receipts.getFirst() : null;
     }
@@ -220,8 +253,11 @@ public class ReturnFinancialReconciliation {
 
     public void receipt(ActorPrincipal actor,ReturnCase rc,String method,String reference,UUID file) {
         requireCurrent(rc);
-        if(!Set.of("CASH","BANK_TRANSFER").contains(method==null?"":method)||reference==null||reference.isBlank()||reference.length()>120||file==null)
-            throw ApiExceptions.validation("Cần phương thức thu/hoàn, mã giao dịch và biên lai đã lưu.",null);
+        if(!Set.of("CASH","BANK_TRANSFER").contains(method==null?"":method)||file==null)
+            throw ApiExceptions.validation("Cần phương thức thu hoặc hoàn tiền và biên lai đã lưu.",null);
+        if(reference==null||reference.isBlank()||reference.length()>120)
+            throw ApiExceptions.validation("CASH".equals(method) ? "Không tạo được mã biên nhận tiền mặt."
+                : "Vui lòng nhập mã giao dịch chuyển khoản hợp lệ.",null);
         var asset=em.find(FileAsset.class,file,LockModeType.PESSIMISTIC_READ);
         if(asset==null||asset.getStatus()!=FileAssetStatus.ACTIVE||!"RETURN_CASE".equals(asset.getEntityType())
             ||!rc.getId().equals(asset.getEntityId())||asset.getUploadedBy()==null||!actor.userId().equals(asset.getUploadedBy().getId()))
@@ -237,7 +273,8 @@ public class ReturnFinancialReconciliation {
         catch(org.springframework.dao.DuplicateKeyException duplicate){
             String msg = duplicate.getMessage();
             if (msg != null && msg.contains("transaction_reference")) {
-                throw ApiExceptions.conflict("Mã giao dịch hoặc số biên nhận này đã được sử dụng trên hệ thống. Vui lòng nhập mã giao dịch khác.");
+                throw ApiExceptions.conflict("CASH".equals(method) ? "Biên nhận tiền mặt đã được lưu. Vui lòng tải lại hồ sơ."
+                    : "Mã giao dịch chuyển khoản đã được sử dụng. Vui lòng đối chiếu biên lai và kiểm tra lại mã.");
             } else if (msg != null && msg.contains("receipt_file_id")) {
                 throw ApiExceptions.conflict("Tệp biên lai này đã được sử dụng cho một quyết toán khác. Vui lòng chọn tệp biên lai hợp lệ.");
             } else if (msg != null && msg.contains("PRIMARY")) {
@@ -252,6 +289,13 @@ public class ReturnFinancialReconciliation {
         requireCurrent(rc);
         if((rc.getAmountDueFromCustomer().signum()>0||rc.getNetRefundAmount().signum()>0)&&!transferVerified)
             throw ApiExceptions.conflict("Cần xác nhận thu hoặc hoàn tiền bằng chứng từ trước khi hoàn tất.");
+        if (rc.getReturnType() == ReturnType.INVENTORY_MISMATCH
+            && rc.getAmountDueFromCustomer().signum() > 0 && rc.getNetRefundAmount().signum() > 0
+            && jdbc.queryForObject("""
+                select count(*) from return_settlement_receipts where return_id=?
+                  and ((direction='COLLECTION' and amount=?) or (direction='REFUND' and amount=?))
+                """, Long.class, rc.getId().toString(), rc.getAmountDueFromCustomer(), rc.getNetRefundAmount()) != 2)
+            throw ApiExceptions.conflict("Cần đủ biên lai thực thu và thực hoàn trước khi đóng quyết toán.");
         var row=jdbc.queryForList("select * from return_financial_snapshots where return_id=?",rc.getId().toString()).getFirst();
         final Map<UUID,BigDecimal> allocations;
         try{allocations=mapper.readValue(row.get("allocations_json").toString(),new TypeReference<LinkedHashMap<UUID,BigDecimal>>(){});}
@@ -264,6 +308,9 @@ public class ReturnFinancialReconciliation {
         }
         jdbc.update("update return_financial_snapshots set settled_at_ms=?,settlement_reference=?,recorded_by=? where return_id=? and settled_at_ms is null",
             Instant.now().toEpochMilli(),reference,actor==null?null:actor.toString(),rc.getId().toString());
+        if (rc.getAmountDueFromCustomer().signum() > 0 || rc.getNetRefundAmount().signum() > 0) {
+            receiptCodes.issue("RETURN", rc.getId(), rc.getNetRefundAmount().signum() > 0);
+        }
         ledger.returnSettled(rc.getRental().getId());
     }
     private String json(Object value){try{return mapper.writeValueAsString(value);}catch(Exception e){throw new IllegalStateException(e);}}

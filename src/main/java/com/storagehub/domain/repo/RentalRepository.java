@@ -12,6 +12,24 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecificationExecutor<Rental> {
+    @Query("""
+        select (count(r) > 0) from Rental r where r.storageUnit.id = :unitId and r.id <> :rentalId
+          and r.actualReturnedAt is null and r.status <> com.storagehub.domain.model.RentalStatus.completed
+        """)
+    boolean existsOtherUnreturnedRental(@Param("unitId") UUID unitId, @Param("rentalId") UUID rentalId);
+
+    @Query("""
+        select r.id from Rental r where r.id in :ids and (
+          exists (select rc.id from ReturnCase rc where rc.rental = r
+            and rc.returnType = com.storagehub.domain.model.ReturnType.INVENTORY_MISMATCH)
+          or exists (select c.id from CheckIn c where c.reservation = r.reservation and (
+            c.inventoryResolutionStatus = com.storagehub.domain.model.InventoryResolutionStatus.RETURN_REQUESTED
+            or (c.inventoryResolutionStatus in (com.storagehub.domain.model.InventoryResolutionStatus.PENDING_CUSTOMER,
+                                               com.storagehub.domain.model.InventoryResolutionStatus.PENDING_STAFF_RESOLUTION)
+              and r.inventoryRemovalDeadlineAt is not null and c.inventoryFullFit = false
+              and c.inventoryPartialFitAvailable = false))))
+        """)
+    java.util.Set<UUID> findInventoryMismatchReturnIds(@Param("ids") java.util.Collection<UUID> ids);
 
     @Query("""
         select (count(r) > 0) from Rental r
@@ -26,7 +44,10 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     java.util.Optional<Rental> findByIdAndCustomer_Id(UUID id, UUID customerId);
 
-    Optional<Rental> findByReservation_Id(UUID reservationId);
+    Optional<Rental> findFirstByReservation_IdOrderByCreatedAtDesc(UUID reservationId);
+    default Optional<Rental> findByReservation_Id(UUID reservationId) {
+        return findFirstByReservation_IdOrderByCreatedAtDesc(reservationId);
+    }
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from Rental r where r.reservation.id = :reservationId")
     Optional<Rental> findByReservationIdForUpdate(@Param("reservationId") UUID reservationId);
@@ -59,5 +80,28 @@ public interface RentalRepository extends JpaRepository<Rental, UUID>, JpaSpecif
 
     java.util.List<Rental> findByStatusAndInventoryPendingTrue(RentalStatus status);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    java.util.List<Rental> findByInventoryPendingTrueAndStatusIn(
+        java.util.Collection<RentalStatus> statuses
+    );
+
     long countByStatus(RentalStatus status);
+
+    @Query("""
+        select count(r) from Rental r
+        where r.facility.id = :facilityId
+          and (:excludeRentalId is null or r.id <> :excludeRentalId)
+          and r.inventoryAppointmentAt >= :slotStart
+          and r.inventoryAppointmentAt < :slotEnd
+          and (r.appointmentStatus is null or r.appointmentStatus = 'ACTIVE')
+          and r.completedAt is null
+          and r.actualReturnedAt is null
+          and r.inventoryEscalatedAt is null
+        """)
+    long countActiveAppointmentsInSlot(
+        @Param("facilityId") UUID facilityId,
+        @Param("excludeRentalId") UUID excludeRentalId,
+        @Param("slotStart") java.time.Instant slotStart,
+        @Param("slotEnd") java.time.Instant slotEnd
+    );
 }

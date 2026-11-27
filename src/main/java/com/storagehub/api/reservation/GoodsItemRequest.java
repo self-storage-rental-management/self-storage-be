@@ -11,7 +11,9 @@ import java.math.BigDecimal;
 
 public class GoodsItemRequest {
 
-    @NotNull private GoodsCategory category;
+    public interface InventoryChecks {}
+
+    @NotNull(groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private GoodsCategory category;
     private java.util.UUID catalogCategoryId;
     public java.util.UUID getCatalogCategoryId() { return catalogCategoryId; }
     public void setCatalogCategoryId(java.util.UUID value) { this.catalogCategoryId = value; }
@@ -27,23 +29,23 @@ public class GoodsItemRequest {
     private String materialCode;
     public String getMaterialCode() { return materialCode; }
     public void setMaterialCode(String value) { this.materialCode = value; }
-    @Size(max = 160) private String customGoodsName;
-    @Size(max = 160) private String materialName;
-    @Size(max = 120) private String customMaterial;
-    @NotBlank @Size(min = 10, max = 1000) private String description;
-    @Size(max = 1000) private String customerNote;
-    @Min(1) private int quantity;
-    @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal lengthCm;
-    @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal widthCm;
-    @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal heightCm;
-    @NotNull @DecimalMin(value = "0", inclusive = false) private BigDecimal weightPerItemKg;
+    @Size(max = 160, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private String customGoodsName;
+    @Size(max = 160, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private String materialName;
+    @Size(max = 120, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private String customMaterial;
+    @NotBlank(groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) @Size(max = 1000, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) @Size(min = 10) private String description;
+    @Size(max = 1000, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private String customerNote;
+    @Min(value = 1, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private int quantity;
+    @NotNull(groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) @DecimalMin(value = "0", inclusive = false, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private BigDecimal lengthCm;
+    @NotNull(groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) @DecimalMin(value = "0", inclusive = false, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private BigDecimal widthCm;
+    @NotNull(groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) @DecimalMin(value = "0", inclusive = false, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private BigDecimal heightCm;
+    @NotNull(groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) @DecimalMin(value = "0", inclusive = false, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private BigDecimal weightPerItemKg;
     private boolean fragile;
     /**
      * New declarations use this flag instead of entering a layer count.
      * Null is retained for old clients and old quote snapshots.
      */
     private Boolean stackable;
-    @Min(1) @Max(100) private int maxStackLayers = 1;
+    @Min(value = 1, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) @Max(value = 100, groups = {jakarta.validation.groups.Default.class, InventoryChecks.class}) private int maxStackLayers = 1;
     /**
      * Null keeps old quote snapshots and old clients compatible. A missing
      * value has the same meaning as false: keep the original upright

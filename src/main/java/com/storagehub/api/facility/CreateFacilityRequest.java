@@ -30,8 +30,16 @@ public record CreateFacilityRequest(
 
     FacilityStatus status,
 
-    List<UnitSpecRequest> unitSpecs
+    List<UnitSpecRequest> unitSpecs,
+    Boolean autoCode
 ) {
+    public CreateFacilityRequest(String code, String name, String address, String city, String phone,
+            String accessHours, String imageUrl, Boolean climateControlled, String securityDescription,
+            FacilityStatus status, List<UnitSpecRequest> unitSpecs) {
+        this(code, name, address, city, phone, accessHours, imageUrl, climateControlled, securityDescription,
+            status, unitSpecs, false);
+    }
+
     public record UnitSpecRequest(
         String sizeCode,
         String name,

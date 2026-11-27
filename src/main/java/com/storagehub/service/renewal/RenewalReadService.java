@@ -16,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class RenewalReadService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.BusinessRecordCodes displayCodes;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private RenewalDisplayIdentity displayIdentity;
     private final RenewalRepository repository;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<RenewalWorkflowService> workflows;
@@ -27,9 +29,13 @@ public class RenewalReadService {
     public PageResponse<RenewalResponse> list(ActorPrincipal actor,RenewalListQuery filter,boolean manager,String correlation) {
         authorize(actor,manager,false);
         if(manager && filter.facilityId()!=null) requireScope(actor,filter.facilityId(),FacilityScopeLevel.READ);
-        var page=readCore(()->PageResponse.from(repository.findAll(scope(actor,manager).and(filters(filter,manager)),filter.pageable())
+        var spec=scope(actor,manager).and(filters(filter,manager));
+        if(filter.priorityOrder())spec=spec.and(com.storagehub.service.BusinessQueueOrder.renewals(manager));
+        var orderedSpec=spec;
+        var page=readCore(()->PageResponse.from(repository.findAll(orderedSpec,filter.pageable())
             .map(n->project(n,actor,manager)),correlation));
-        return new PageResponse<>(page.data().stream().map(this::withStatuses).toList(),page.pagination(),page.correlationId());
+        var result=new PageResponse<>(page.data().stream().map(this::withStatuses).toList(),page.pagination(),page.correlationId());
+        return filter.priorityOrder()?result.withSort("priority,asc"):result;
     }
     @Transactional(readOnly=true,propagation=org.springframework.transaction.annotation.Propagation.SUPPORTS)
     public RenewalResponse detail(ActorPrincipal actor,UUID id,boolean manager) {
@@ -77,6 +83,8 @@ public class RenewalReadService {
             List<Predicate> matches=new ArrayList<>();
             String codeKey=displayCodes==null?null:displayCodes.resource("GH",f.search());
             if(codeKey!=null)matches.add(c.equal(r.get("id"),UUID.fromString(codeKey.substring(3))));
+            String rentalCodeKey=displayCodes==null?null:displayCodes.resource("TH",f.search());
+            if(rentalCodeKey!=null)matches.add(c.equal(rental.get("id"),UUID.fromString(rentalCodeKey.substring(3))));
             matches.add(c.like(c.lower(rental.join("storageUnit",JoinType.LEFT).get("code")),pattern,'\\'));
             matches.add(c.like(c.lower(rental.join("customer",JoinType.LEFT).get("fullName")),pattern,'\\'));
             try{UUID id=UUID.fromString(f.search());matches.add(c.equal(r.get("id"),id));matches.add(c.equal(rental.get("id"),id));}catch(IllegalArgumentException ignored){}
@@ -103,7 +111,7 @@ public class RenewalReadService {
             ||r.getStorageUnit().getFacility()==null||!Objects.equals(r.getFacility().getId(),r.getStorageUnit().getFacility().getId())
             ||n.getStatus()==null||n.getNewEndDate()==null||n.getAmount()==null||n.getAmount().signum()<0)
             throw ApiExceptions.conflict("Renewal core relationships are inconsistent");
-        return new RenewalResponse(n.getId(),r.getId(),new RenewalResponse.Customer(r.getCustomer().getId(),r.getCustomer().getFullName()),
+        var response = new RenewalResponse(n.getId(),r.getId(),new RenewalResponse.Customer(r.getCustomer().getId(),r.getCustomer().getFullName()),
             new RenewalResponse.Facility(r.getFacility().getId(),r.getFacility().getCode(),r.getFacility().getName()),
             new RenewalResponse.Unit(r.getStorageUnit().getId(),r.getStorageUnit().getCode()),n.getStatus(),"UNKNOWN",
             null,n.getNewEndDate(),n.getAmount(),"VND",n.getCreatedAt(),null,n.getRequestedBy().getId(),
@@ -111,5 +119,8 @@ public class RenewalReadService {
             new RenewalResponse.SystemVerification("UNKNOWN",null,List.of(),List.of()),
             List.of(),List.of("Accepted snapshot, version and shared renewal integrations are not connected"),null,null,
             displayCodes==null?null:displayCodes.find("GH:"+n.getId()));
+        if(displayIdentity==null)return response;
+        var identity=displayIdentity.resolve(n);
+        return response.withBusinessIdentity(identity.rentalDisplayCode(),identity.renewalSequence());
     }
 }

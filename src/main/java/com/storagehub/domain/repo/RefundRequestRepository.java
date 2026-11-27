@@ -11,7 +11,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RefundRequestRepository extends JpaRepository<RefundRequest, UUID> {
-    List<RefundRequest> findByStatusOrderByCreatedAtAsc(RefundRequestStatus status);
+    @Query("select r from RefundRequest r where r.status = :status order by r.createdAt asc, r.id asc")
+    List<RefundRequest> findByStatusOrderByCreatedAtAsc(@Param("status") RefundRequestStatus status);
 
     List<RefundRequest> findByPayment_IdAndStatusIn(UUID paymentId, Collection<RefundRequestStatus> statuses);
 

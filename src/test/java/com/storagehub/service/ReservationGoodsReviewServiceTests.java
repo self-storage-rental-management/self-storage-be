@@ -123,7 +123,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
             reservation.getCustomer().getId(),
             com.storagehub.domain.model.NotificationType.RESERVATION,
             "Hàng hóa đã được chấp thuận",
-            "Hàng hóa trong đơn RSV-REVIEW001 đã được chấp thuận. Vui lòng thanh toán cọc trước thời hạn hiển thị trên đơn.",
+            "Hàng hóa trong đơn RSV-REVIEW001 đã được chấp thuận. Bạn có 15 phút kể từ lúc duyệt để thanh toán khoản trả trước giữ chỗ. Xem giờ bắt đầu và hạn cuối trên đơn.",
             reservation.getId()
         );
     }

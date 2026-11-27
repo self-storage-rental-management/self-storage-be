@@ -17,6 +17,22 @@ import org.springframework.data.domain.*;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class ManagerRenewalPaymentHistoryTests {
+    @Test void searchUsesReturnReceiptCodesWithinTheFacilityQuery() {
+        var payments = mock(PaymentRepository.class);
+        var returns = mock(ReturnCaseRepository.class);
+        var service = new ManagerPaymentHistoryService(payments, returns, mock(AdminAuthorizationService.class), mock(FacilityScopeService.class));
+        var codes = mock(MoneyReceiptCodes.class);
+        ReflectionTestUtils.setField(service, "receiptCodes", codes);
+        var caseId = UUID.randomUUID();
+        var facilityId = UUID.randomUUID();
+        when(codes.findSourcesMatching("RETURN", "%pc-123%")).thenReturn(List.of(caseId));
+        when(payments.searchFacilityPaymentHistory(eq(facilityId), eq("%pc-123%"), any())).thenReturn(Page.empty());
+        when(returns.searchFacilityPaymentSettlements(eq(facilityId), eq("%pc-123%"), eq(List.of(caseId)), any())).thenReturn(Page.empty());
+        var actor = new ActorPrincipal(UUID.randomUUID(), UUID.randomUUID(), Set.of(RoleCode.MANAGER), Set.of(), Map.of());
+        service.list(actor, new ManagerPaymentHistoryQuery(0, 10, facilityId, "PC-123"), "test");
+        verify(returns).searchFacilityPaymentSettlements(eq(facilityId), eq("%pc-123%"), eq(List.of(caseId)), any());
+    }
+
     @Test void managerHistoryRetainsRawPaymentCodeButUsesVerifiedTransactionStatus(){
         var payments=mock(PaymentRepository.class);var returns=mock(ReturnCaseRepository.class);
         var service=new ManagerPaymentHistoryService(payments,returns,mock(AdminAuthorizationService.class),mock(FacilityScopeService.class));
@@ -27,14 +43,19 @@ class ManagerRenewalPaymentHistoryTests {
         when(p.getRenewal().getRental().getCustomer().getFullName()).thenReturn("Customer");
         when(p.getPurpose()).thenReturn(PaymentType.RENEWAL);when(p.getStatus()).thenReturn(PaymentStatus.PAID);
         when(p.getGatewayProvider()).thenReturn("VNPAY");when(p.getGatewayIntentId()).thenReturn("intent");
+        when(p.getGatewayTransactionNo()).thenReturn("gateway-number");
+        when(p.getReceiptCode()).thenReturn("PT-ABCD-EFGH-1234");
         when(p.getAmount()).thenReturn(new BigDecimal("100"));when(p.getCurrency()).thenReturn("VND");when(p.getPaidAt()).thenReturn(now);
         when(reader.read(eq(p),any())).thenReturn(new RenewalStatusSummary.Transaction(id,"intent","RENEWAL","RECONCILIATION_REQUIRED",
             new BigDecimal("100"),BigDecimal.ZERO,"VND",now,false,false,now));
         when(payments.searchFacilityPaymentHistory(any(),any(),any())).thenReturn(new PageImpl<>(List.of(p)));
-        when(returns.searchFacilityPaymentSettlements(any(),any(),any())).thenReturn(Page.empty());
+        when(returns.searchFacilityPaymentSettlements(any(),any(),any(),any())).thenReturn(Page.empty());
         var actor=new ActorPrincipal(UUID.randomUUID(),UUID.randomUUID(),Set.of(RoleCode.MANAGER),Set.of(),Map.of());
         var result=service.list(actor,new ManagerPaymentHistoryQuery(0,10,UUID.randomUUID(),""),"test").data().getFirst();
         assertThat(result.status()).isEqualTo("PAID");
+        assertThat(result.receiptCode()).isEqualTo("PT-ABCD-EFGH-1234");
+        assertThat(result.transactionReference()).isEqualTo("intent");
+        assertThat(result.gatewayTransactionNo()).isEqualTo("gateway-number");
         assertThat(result.transactionStatus()).isEqualTo("RECONCILIATION_REQUIRED");
         assertThat(result.receiptAvailable()).isFalse();
     }

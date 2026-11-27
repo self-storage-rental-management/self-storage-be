@@ -47,6 +47,9 @@ class RenewalExceptionProposalTests {
         policies=provider(policy);calendars=provider(calendar);safeties=provider(safety);
         service=new RenewalOperationService(em,mapper,store,mock(AuditLogService.class),clocks,
             provider(null),policies,calendars,safeties,provider(null),provider(null),provider(null));
+        var displayIdentity=mock(com.storagehub.service.renewal.RenewalDisplayIdentity.class);
+        when(displayIdentity.resolve(any())).thenReturn(new com.storagehub.service.renewal.RenewalDisplayIdentity.Identity(null,null));
+        ReflectionTestUtils.setField(service,"displayIdentity",displayIdentity);
         ReflectionTestUtils.setField(service,"assignmentSources",provider(null));
         ReflectionTestUtils.setField(service,"ledgers",provider(mock(com.storagehub.service.ledger.LedgerStore.class)));
         customer=id(new User());var facility=id(new Facility());var type=id(new UnitType());

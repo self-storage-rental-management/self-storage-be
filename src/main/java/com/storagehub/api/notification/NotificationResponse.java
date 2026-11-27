@@ -12,6 +12,7 @@ public record NotificationResponse(
     String content,
     UUID relatedEntityId,
     boolean isRead,
-    Instant createdAt
+    Instant createdAt,
+    String relatedEntityType
 ) {
 }

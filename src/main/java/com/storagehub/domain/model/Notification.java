@@ -28,6 +28,15 @@ public class Notification extends BaseEntity {
     @Column(nullable = false, length = 32)
     private NotificationType type;
 
+    /**
+     * Role that initiated an operational reminder. Ordinary notifications
+     * leave this empty. It lets role-specific reminder cooldowns be enforced
+     * without exposing the sender role to the recipient.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source_role", length = 32)
+    private RoleCode sourceRole;
+
     @Column(nullable = false, length = 200)
     private String title;
 

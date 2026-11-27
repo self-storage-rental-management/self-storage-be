@@ -10,6 +10,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 import java.time.LocalDate;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -21,6 +22,47 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class ReturnCase extends BaseEntity {
+    @org.hibernate.annotations.Formula("(select c.display_code from business_record_codes c where c.resource_key = concat('TK:', lower(bin_to_uuid({alias}.id))))")
+    private String displayCode;
+
+    @org.hibernate.annotations.Formula("(select m.receipt_code from money_receipt_codes m where m.source_type = 'RETURN' and m.source_id = {alias}.id)")
+    private String settlementReceiptCode;
+
+    @Column private Instant readyForInspectionAt;
+    @Column private Instant customerClearedAt;
+    @Column private Boolean warehouseEmptyVerified;
+    @Column private Instant warehouseEmptyVerifiedAt;
+    @Column(columnDefinition = "BINARY(16)") private java.util.UUID warehouseEmptyVerifiedBy;
+    @Column(nullable = false) private long clearanceRevision;
+    @Column(nullable = false) private long settlementVersion;
+    @Column private Instant settlementPublishedAt;
+    @Column private Instant settlementPaymentDueAt;
+    @Column private Long settlementLedgerRevision;
+    @Column private Instant returnArrivedAt;
+    @Column private UUID returnArrivalEvidenceId;
+    @Column private UUID returnFirstAttemptId;
+    @Column private UUID returnSecondAttemptId;
+    @Column private Instant returnSecondAttemptAt;
+    @Column private Instant returnIdentityVerifiedAt;
+    @Column private Instant returnArrivalReviewedAt;
+    @Column private Boolean returnArrivalReviewAccepted;
+    @Column private Instant returnReverificationStartedAt;
+    @Column private UUID returnReverificationStaffId;
+    @Column private Instant postReviewHandoverAppointmentAt;
+    @Column private Instant postReviewHandoverDueAt;
+    @Column private UUID postReviewHandoverStaffId;
+    @Column private Instant scheduledAppointmentAt;
+    @Column(nullable = false) private int appointmentVersion = 0;
+    @Column(nullable = false) private long returnVersion = 0L;
+    @Column(length = 128) private String lastExtensionIdempotencyKey;
+    @Column private Instant returnArrivalRecordedAt;
+    @Column(columnDefinition = "BINARY(16)") private UUID returnArrivalRecordedBy;
+    @Column(length = 500) private String returnArrivalEvidenceNote;
+    @Column private Instant returnLateArrivalClaimedAt;
+    @Column(length = 32) private String returnArrivalReviewStatus;
+    @Column private Instant returnArrivalReviewDeadlineAt;
+    @Column(length = 1000) private String returnArrivalReviewReason;
+    @Column(columnDefinition = "BINARY(16)") private UUID returnArrivalReviewedBy;
 
     @Column
     private Integer missingPalletCount;
@@ -81,8 +123,22 @@ public class ReturnCase extends BaseEntity {
     @Column(nullable = false)
     private Instant requestedAt;
 
-    @Column(nullable = false)
     private LocalDate scheduledDate;
+
+    /** The time after the scheduled return date and grace period when no-show recovery may start. */
+    @Column
+    private Instant recoveryEligibleAt;
+
+    /** Set when the customer did not arrive by recoveryEligibleAt. */
+    @Column
+    private Instant noShowAt;
+
+    /** Set once the operational recovery task has been created. */
+    @Column
+    private Instant recoveryTaskCreatedAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String recoveryNotes;
 
     @Column(columnDefinition = "TEXT")
     private String customerNotes;
@@ -117,6 +173,10 @@ public class ReturnCase extends BaseEntity {
 
     @Column(nullable = false)
     private boolean returnedLock = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lock_inspection_result", length = 32)
+    private LockInspectionResult lockInspectionResult;
 
     /** Whether this return was requested after the rental had become ACTIVE. */
     @Column(nullable = false)
@@ -214,4 +274,16 @@ public class ReturnCase extends BaseEntity {
 
     @Column
     private Instant refundExpectedAt;
+
+    @Column
+    private Integer returnWindowDays;
+
+    @Column
+    private Integer returnExtensionDays;
+
+    @Column(nullable = false)
+    private int returnExtensionCount = 0;
+
+    @Column(length = 64)
+    private String returnPolicyVersion;
 }

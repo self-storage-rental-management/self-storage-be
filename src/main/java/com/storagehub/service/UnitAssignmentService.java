@@ -75,7 +75,7 @@ public class UnitAssignmentService {
         Page<UnitAssignmentCandidateResponse> result = reservationRepository
             .findUnitAssignmentCandidates(
                 facilityId, unitTypeId, clean(q), scoped, facilityIds,
-                pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "confirmedAt"))
+                pageRequest(page, pageSize, Sort.unsorted())
             )
             .map(this::toCandidateResponse);
         return PageResponse.from(result, correlationId);
@@ -97,7 +97,7 @@ public class UnitAssignmentService {
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanRead(actor, reservation.getFacility().getId());
         assertAssignmentCanShowUnits(reservation);
-        var paging = pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "code"));
+        var paging = pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "code", "id"));
         Page<StorageUnit> units;
         if (reservation.getPalletHeldUnit() == null) {
             units = storageUnitRepository.findAssignableUnits(reservation.getFacility().getId(),
@@ -186,6 +186,15 @@ public class UnitAssignmentService {
                 "reason", request.reason().trim()
             )
         );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.RESERVATION,
+            "Gian kho đã được thay đổi",
+            "Đơn " + reservation.getReservationCode() + " đã được chuyển từ gian "
+                + previousUnit.getCode() + " sang gian " + nextUnit.getCode()
+                + ". Lý do: " + request.reason().trim()
+                + ". Vui lòng kiểm tra lại thông tin đơn và lịch nhận kho trên tài khoản.",
+            reservation.getId()
+        );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.RESERVATION,
             "Đã đổi kho cho đặt chỗ",
@@ -238,9 +247,7 @@ public class UnitAssignmentService {
         if (!unit.getUnitType().getId().equals(reservation.getUnitType().getId())) {
             throw ApiExceptions.conflict("Storage unit type does not match the reservation");
         }
-        if (unit.getStatus() != StorageUnitStatus.available) {
-            throw ApiExceptions.conflict("Storage unit is not available");
-        }
+        validateAvailableNow(unit);
         palletInventory.requireCompatibleAssignment(reservation, unit);
         if (assignmentRepository.existsByStorageUnit_IdAndStatus(
             unit.getId(), UnitAssignmentStatus.ACTIVE
@@ -329,8 +336,15 @@ public class UnitAssignmentService {
         if (!unit.getUnitType().getId().equals(reservation.getUnitType().getId())) {
             throw ApiExceptions.conflict("Storage unit type does not match the reservation");
         }
+        validateAvailableNow(unit);
+    }
+
+    private void validateAvailableNow(StorageUnit unit) {
         if (unit.getStatus() != StorageUnitStatus.available) {
             throw ApiExceptions.conflict("Storage unit is not available");
+        }
+        if (unit.getAvailableFrom() != null && unit.getAvailableFrom().isAfter(Instant.now())) {
+            throw ApiExceptions.conflict("Storage unit is not available yet");
         }
     }
 
