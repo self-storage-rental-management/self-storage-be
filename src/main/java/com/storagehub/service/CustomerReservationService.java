@@ -1870,7 +1870,8 @@ public class CustomerReservationService {
             ReservationSnapshotView.facilityName(payment.getReservation(), snapshot),
             ReservationSnapshotView.facilityAddress(payment.getReservation(), snapshot),
             ReservationSnapshotView.unitTypeName(payment.getReservation(), snapshot),
-            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode()
+            ReservationSnapshotView.assignedUnitCode(payment.getReservation(), snapshot), payment.getReceiptCode(),
+            paymentProvenance == null ? null : paymentProvenance.manualReceiptFileId(payment)
         );
     }
 

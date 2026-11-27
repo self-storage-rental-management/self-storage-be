@@ -22,12 +22,20 @@ public class ReturnFeeScheduleService {
     private final ReturnFeeScheduleVersionRepository versions;
     private final ObjectMapper mapper;
     public record Detail(String label, String trigger, String applies) {}
-    public record Schedule(long revision, Map<String, BigDecimal> prices, Map<String, Detail> details, String publishedAt) {
+    public record Schedule(long revision, Map<String, BigDecimal> prices, Map<String, Detail> details, String publishedAt, Boolean editableCatalog) {
+        public Schedule(long revision, Map<String, BigDecimal> prices, Map<String, Detail> details, String publishedAt) {
+            this(revision, prices, details, publishedAt, false);
+        }
         public Schedule {
             if (prices != null) prices = Collections.unmodifiableMap(new LinkedHashMap<>(prices));
             if (details != null) details = Collections.unmodifiableMap(new LinkedHashMap<>(details));
         }
         public Schedule(long revision, Map<String, BigDecimal> prices) { this(revision, prices, null, null); }
+    }
+
+    public static boolean isCleaningFee(String code) {
+        return "clean".equals(code) || "minor".equals(code) || "major".equals(code)
+            || (code != null && code.matches("custom_cleaning_[0-9a-f]{32}"));
     }
 
     public Schedule defaults() {
@@ -78,8 +86,15 @@ public class ReturnFeeScheduleService {
             var value = version.getPayload() == null ? defaults() : mapper.readValue(version.getPayload(), Schedule.class);
             var details = value.details() == null && version.getRevision() == 0 ? defaults().details() : value.details();
             if (value.prices() == null || details == null) throw new IllegalStateException("Incomplete schedule");
-            return new Schedule(version.getRevision(), value.prices(), details,
-                version.getPublishedAt() == null ? null : version.getPublishedAt().toString());
+            var prices = new LinkedHashMap<>(value.prices());
+            var compatibleDetails = new LinkedHashMap<>(details);
+            // Earlier publications contained no charge for damaged frames.
+            if (!Boolean.TRUE.equals(value.editableCatalog())) {
+                prices.putIfAbsent(ReturnDamagePricing.FRAME_DAMAGE, BigDecimal.ZERO);
+                compatibleDetails.putIfAbsent(ReturnDamagePricing.FRAME_DAMAGE, defaults().details().get(ReturnDamagePricing.FRAME_DAMAGE));
+            }
+            return new Schedule(version.getRevision(), prices, compatibleDetails,
+                version.getPublishedAt() == null ? null : version.getPublishedAt().toString(), value.editableCatalog());
         }
         catch (Exception e) { throw ApiExceptions.conflict("Không thể đọc biểu phí trả kho."); }
     }
@@ -90,14 +105,18 @@ public class ReturnFeeScheduleService {
         versions.lockBaseline().orElseThrow(this::missingBaseline);
         var current = get();
         if (input == null || input.revision() != current.revision()) throw ApiExceptions.conflict("Biểu phí đã thay đổi, vui lòng tải lại.");
-        if (input.prices() == null || !input.prices().keySet().equals(defaults().prices().keySet())
-            || input.details() == null || !input.details().keySet().equals(defaults().prices().keySet()))
+        if (input.prices() == null || input.details() == null || !input.details().keySet().equals(input.prices().keySet())
+            || input.prices().keySet().stream().anyMatch(code -> !ReturnDamagePricing.catalog().containsKey(code)
+                && !isCleaningFee(code) && !ReturnDamagePricing.isCustom(code)))
             throw ApiExceptions.validation("Danh sách hạng mục phí không hợp lệ.", null);
         for (var amount : input.prices().values()) {
             if (amount == null || amount.signum() < 0 || amount.compareTo(BigDecimal.valueOf(999999999)) > 0 || amount.stripTrailingZeros().scale() > 0)
                 throw ApiExceptions.validation("Mức phí phải là số nguyên không âm.", null);
         }
-        if (input.prices().get("clean").signum() != 0 || input.prices().get("minor").signum() <= 0 || input.prices().get("minor").compareTo(input.prices().get("major")) >= 0)
+        var minor = input.prices().get("minor");
+        var major = input.prices().get("major");
+        if (input.prices().getOrDefault("clean", BigDecimal.ZERO).signum() != 0 || minor != null && minor.signum() <= 0
+            || major != null && (major.signum() <= 0 || minor != null && minor.compareTo(major) >= 0))
             throw ApiExceptions.validation("Kho sạch có phí 0 đồng; phí vệ sinh nhẹ phải lớn hơn 0 và nhỏ hơn phí vệ sinh nặng.", null);
         for (var detail : input.details().values()) {
             if (detail == null || !validText(detail.label(), 160) || !validText(detail.trigger(), 1000) || !validText(detail.applies(), 1000))
@@ -106,7 +125,7 @@ public class ReturnFeeScheduleService {
         var publishedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
         if (current.publishedAt() != null && !publishedAt.isAfter(Instant.parse(current.publishedAt())))
             publishedAt = Instant.parse(current.publishedAt()).plus(1, ChronoUnit.MICROS);
-        var next = new Schedule(current.revision() + 1, input.prices(), input.details(), publishedAt.toString());
+        var next = new Schedule(current.revision() + 1, input.prices(), input.details(), publishedAt.toString(), true);
         try {
             versions.saveAndFlush(new ReturnFeeScheduleVersion(next.revision(), publishedAt,
                 mapper.writeValueAsString(next), publisherId == null ? null : publisherId.toString()));
