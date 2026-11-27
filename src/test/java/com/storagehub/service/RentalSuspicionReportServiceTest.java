@@ -81,7 +81,7 @@ class RentalSuspicionReportServiceTest {
     }
 
     @Test
-    void acceptanceRecordsManagerAndTimeOnlyOnce() {
+    void acceptanceAndClosureRecordEachDecisionOnlyOnce() {
         var rentals = mock(RentalRepository.class);
         var users = mock(UserRepository.class);
         var activity = mock(ActivityLogRepository.class);
@@ -148,5 +148,36 @@ class RentalSuspicionReportServiceTest {
         var staffView = service.staffReportDetail(staff, rentalId, reportId);
         assertThat(staffView.report().status()).isEqualTo("INVESTIGATING");
         assertThat(staffView.report().description()).isEqualTo("Dấu hiệu ban đầu");
+
+        var decidedAt = Instant.parse("2026-11-27T13:00:00Z");
+        var reason = "Đã đối chiếu và không phát hiện hàng cấm.";
+        var closure = new ActivityLog();
+        closure.setEntityId(reportId);
+        closure.setAction("RENTAL_SUSPICION_CLOSED");
+        closure.setAfterStateJson("{\"reason\":\"" + reason + "\"}");
+        closure.setActor(author);
+        org.springframework.test.util.ReflectionTestUtils.setField(closure, "createdAt", decidedAt);
+        when(activity.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc(
+            "RentalSuspicionReport", reportId, "RENTAL_SUSPICION_CLOSED")).thenReturn(List.of(), List.of(closure));
+
+        var input = new RentalSuspicionReportService.CloseInput("  " + reason + "  ");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.closeWithoutViolation(staff, reportId, input))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                error -> assertThat(error.getStatus().value()).isEqualTo(403));
+        var closed = service.closeWithoutViolation(manager, reportId, input);
+        assertThat(closed.report().status()).isEqualTo("CLOSED_NO_VIOLATION");
+        assertThat(closed.report().description()).isEqualTo("Dấu hiệu ban đầu");
+        assertThat(closed.transfer()).isNull();
+        assertThat(closed.closure()).isEqualTo(new RentalSuspicionReportService.Closure(reason, "Quản lý Quận 1", decidedAt));
+        assertThat(service.closeWithoutViolation(manager, reportId,
+            new RentalSuspicionReportService.CloseInput("Lý do khác"))).isEqualTo(closed);
+        assertThat(service.staffReportDetail(staff, rentalId, reportId).closure()).isEqualTo(closed.closure());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.transferToRecovery(manager, reportId,
+            new RentalSuspicionReportService.TransferInput("Kết luận mới", "Căn cứ mới")))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class,
+                error -> assertThat(error.getStatus().value()).isEqualTo(409));
+        verify(audit).recordMutation(author, "RENTAL_SUSPICION_CLOSED", "RentalSuspicionReport",
+            reportId, facilityId, "INVESTIGATING", new RentalSuspicionReportService.CloseInput(reason));
+        verify(rentals, never()).findByIdForUpdate(any());
     }
 }

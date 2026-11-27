@@ -36,6 +36,8 @@ public class RentalSuspicionReportService {
     private static final String INVESTIGATING = "INVESTIGATING";
     private static final String TRANSFER_ACTION = "RENTAL_SUSPICION_TRANSFERRED";
     private static final String TRANSFERRED = "TRANSFERRED_TO_RECOVERY";
+    private static final String CLOSE_ACTION = "RENTAL_SUSPICION_CLOSED";
+    private static final String CLOSED = "CLOSED_NO_VIOLATION";
     private static final DateTimeFormatter LOCAL_TIME = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(BusinessTime.ZONE);
 
     private final RentalQueryService queries;
@@ -67,7 +69,9 @@ public class RentalSuspicionReportService {
     public record TransferInput(@NotBlank @Size(max = 2000) String conclusion,
         @NotBlank @Size(max = 2000) String grounds) {}
     public record Transfer(UUID recoveryId, String conclusion, String grounds, String decidedBy, Instant decidedAt) {}
-    public record ManagerDetail(Detail report, RentalContext rental, Transfer transfer) {}
+    public record CloseInput(@NotBlank @Size(max = 2000) String reason) {}
+    public record Closure(String reason, String decidedBy, Instant decidedAt) {}
+    public record ManagerDetail(Detail report, RentalContext rental, Transfer transfer, Closure closure) {}
 
     @Transactional(readOnly = true)
     public ManagerDetail managerDetail(ActorPrincipal actor, UUID reportId) {
@@ -106,11 +110,12 @@ public class RentalSuspicionReportService {
                 && rental.rental().facility().id().equals(entry.getFacility().getId()))
             .findFirst().orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy báo cáo nghi vấn."));
         var transfer = transferLog(reportId);
-        var report = detail(log, acceptance(reportId), transfer != null);
+        var closure = actionLog(reportId, CLOSE_ACTION);
+        var report = detail(log, acceptance(reportId), terminalStatus(transfer != null, closure != null));
         if (!rentalId.equals(report.rentalId())) throw ApiExceptions.notFound("Không tìm thấy báo cáo nghi vấn.");
         var context = new RentalContext(rental.rental().displayCode(), rental.reservationCode(),
             rental.rental().storageUnit().code(), rental.rental().customer().fullName());
-        return new ManagerDetail(report, context, transferDetail(transfer));
+        return new ManagerDetail(report, context, transferDetail(transfer), closureDetail(closure));
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -119,7 +124,9 @@ public class RentalSuspicionReportService {
         var accepted = acceptance(reportId);
         if (accepted == null) throw ApiExceptions.conflict("Cần tiếp nhận và xác minh báo cáo trước khi chuyển thu hồi.");
         if (transferLog(reportId) != null) return managerDetail(log, accepted);
-        var report = detail(log, accepted, false);
+        if (actionLog(reportId, CLOSE_ACTION) != null)
+            throw ApiExceptions.conflict("Báo cáo đã đóng với kết luận không phát hiện hàng cấm.");
+        var report = detail(log, accepted, null);
         var rental = rentals.findByIdForUpdate(report.rentalId())
             .filter(record -> log.getFacility().getId().equals(record.getFacility().getId()))
             .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy hồ sơ thuê tại cơ sở của báo cáo."));
@@ -130,9 +137,36 @@ public class RentalSuspicionReportService {
         return managerDetail(log, accepted);
     }
 
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ManagerDetail closeWithoutViolation(ActorPrincipal actor, UUID reportId, CloseInput input) {
+        var log = lockManagerReport(actor, reportId);
+        var accepted = acceptance(reportId);
+        if (accepted == null) throw ApiExceptions.conflict("Cần tiếp nhận và xác minh báo cáo trước khi đóng.");
+        if (transferLog(reportId) != null) throw ApiExceptions.conflict("Báo cáo đã chuyển sang thu hồi.");
+        if (actionLog(reportId, CLOSE_ACTION) == null) {
+            audit.recordMutation(users.getReferenceById(actor.userId()), CLOSE_ACTION, ENTITY, reportId,
+                log.getFacility().getId(), INVESTIGATING, new CloseInput(input.reason().strip()));
+        }
+        return managerDetail(log, accepted);
+    }
+
     private ActivityLog transferLog(UUID reportId) {
-        return activity.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc(ENTITY, reportId, TRANSFER_ACTION)
+        return actionLog(reportId, TRANSFER_ACTION);
+    }
+
+    private ActivityLog actionLog(UUID reportId, String action) {
+        return activity.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc(ENTITY, reportId, action)
             .stream().findFirst().orElse(null);
+    }
+
+    private Closure closureDetail(ActivityLog log) {
+        if (log == null) return null;
+        try {
+            var data = objectMapper.readValue(log.getAfterStateJson(), CloseInput.class);
+            return new Closure(data.reason(), log.getActor() == null ? null : log.getActor().getFullName(), log.getCreatedAt());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
+            throw ApiExceptions.conflict("Không thể đọc lý do đóng báo cáo.");
+        }
     }
 
     private Transfer transferDetail(ActivityLog log) {
@@ -174,14 +208,15 @@ public class RentalSuspicionReportService {
 
     private ManagerDetail managerDetail(ActivityLog log, ActivityLog accepted) {
         var transfer = transferLog(log.getEntityId());
-        var report = detail(log, accepted, transfer != null);
+        var closure = actionLog(log.getEntityId(), CLOSE_ACTION);
+        var report = detail(log, accepted, terminalStatus(transfer != null, closure != null));
         var rental = rentals.findById(report.rentalId())
             .filter(record -> log.getFacility().getId().equals(record.getFacility().getId()))
             .map(record -> new RentalContext(displayCodes.find("TH:" + record.getId()),
                 record.getReservation().getReservationCode(), record.getStorageUnit().getCode(),
                 record.getCustomer().getFullName()))
             .orElse(null);
-        return new ManagerDetail(report, rental, transferDetail(transfer));
+        return new ManagerDetail(report, rental, transferDetail(transfer), closureDetail(closure));
     }
 
     @Transactional(readOnly = true)
@@ -200,18 +235,22 @@ public class RentalSuspicionReportService {
     private List<Detail> withAcceptance(List<ActivityLog> logs) {
         if (logs.isEmpty()) return List.of();
         var accepted = new java.util.HashMap<UUID, ActivityLog>();
-        activity.findByEntityTypeAndActionAndEntityIdIn(ENTITY, ACCEPT_ACTION,
-            logs.stream().map(ActivityLog::getEntityId).toList())
-            .forEach(entry -> accepted.put(entry.getEntityId(), entry));
-        var transferred = transferredIds(logs);
-        return logs.stream().map(log -> detail(log, accepted.get(log.getEntityId()), transferred.contains(log.getEntityId()))).toList();
+        var terminal = new java.util.HashMap<UUID, String>();
+        activity.findByEntityTypeAndActionInAndEntityIdIn(ENTITY, List.of(ACCEPT_ACTION, TRANSFER_ACTION, CLOSE_ACTION),
+            logs.stream().map(ActivityLog::getEntityId).toList()).forEach(entry -> {
+                switch (entry.getAction()) {
+                    case ACCEPT_ACTION -> accepted.put(entry.getEntityId(), entry);
+                    case TRANSFER_ACTION -> terminal.put(entry.getEntityId(), TRANSFERRED);
+                    case CLOSE_ACTION -> terminal.put(entry.getEntityId(), CLOSED);
+                    default -> throw new IllegalStateException("Unexpected suspicion report action");
+                }
+            });
+        return logs.stream().map(log -> detail(log, accepted.get(log.getEntityId()), terminal.get(log.getEntityId()))).toList();
     }
 
-    private java.util.Set<UUID> transferredIds(List<ActivityLog> logs) {
-        if (logs.isEmpty()) return java.util.Set.of();
-        return activity.findByEntityTypeAndActionAndEntityIdIn(ENTITY, TRANSFER_ACTION,
-            logs.stream().map(ActivityLog::getEntityId).toList()).stream()
-            .map(ActivityLog::getEntityId).collect(java.util.stream.Collectors.toSet());
+    private String terminalStatus(boolean transferred, boolean closed) {
+        if (transferred) return TRANSFERRED;
+        return closed ? CLOSED : null;
     }
 
     private java.util.Set<UUID> managedFacilities(ActorPrincipal actor) {
@@ -223,11 +262,11 @@ public class RentalSuspicionReportService {
             .map(java.util.Map.Entry::getKey).collect(java.util.stream.Collectors.toSet());
     }
 
-    private Detail detail(ActivityLog log, ActivityLog accepted, boolean transferred) {
+    private Detail detail(ActivityLog log, ActivityLog accepted, String terminalStatus) {
         try {
             var report = objectMapper.readTree(log.getAfterStateJson());
             var observation = report.path("observation");
-            return new Detail(log.getEntityId(), report.path("code").asText(), transferred ? TRANSFERRED : accepted == null ? PENDING : INVESTIGATING,
+            return new Detail(log.getEntityId(), report.path("code").asText(), terminalStatus != null ? terminalStatus : accepted == null ? PENDING : INVESTIGATING,
                 UUID.fromString(report.path("rentalId").asText()),
                 objectMapper.treeToValue(observation.path("detectedAt"), Instant.class),
                 objectMapper.treeToValue(report.path("submittedAt"), Instant.class),
@@ -278,8 +317,14 @@ public class RentalSuspicionReportService {
         if (!activity.findTop2ByEntityTypeAndEntityIdAndActionOrderByCreatedAtDesc(ENTITY, reportId, ACTION).isEmpty())
             return new Receipt(reportId, code, PENDING);
         var existing = reportsForRental(facilityId, rentalId);
-        if (existing.size() > transferredIds(existing).size())
-            throw ApiExceptions.conflict("Hồ sơ thuê đã có báo cáo nghi vấn chưa được xử lý xong.");
+        if (!existing.isEmpty()) {
+            var reportIds = existing.stream().map(ActivityLog::getEntityId).toList();
+            long resolved = activity.findByEntityTypeAndActionInAndEntityIdIn(
+                ENTITY, List.of(TRANSFER_ACTION, CLOSE_ACTION), reportIds).stream()
+                .map(ActivityLog::getEntityId).distinct().count();
+            if (reportIds.size() > resolved)
+                throw ApiExceptions.conflict("Hồ sơ thuê đã có báo cáo nghi vấn chưa được xử lý xong.");
+        }
         if (rental.getStatus() != RentalStatus.active)
             throw ApiExceptions.conflict("Chỉ gửi báo cáo từ hồ sơ đang thuê.");
 
