@@ -26,10 +26,32 @@ public class SystemSettingDataInitializer {
         var existing = repository.findBySettingKey(definition.key());
         if (existing.isPresent()) {
             SystemSetting setting = existing.get();
+            boolean changed = false;
             if (!isValidStoredValue(setting, definition)) {
                 setting.setValue(definition.value());
-                repository.save(setting);
+                changed = true;
             }
+            if (!definition.group().equals(setting.getGroupName())) {
+                setting.setGroupName(definition.group());
+                changed = true;
+            }
+            if (!java.util.Objects.equals(definition.description(), setting.getDescription())) {
+                setting.setDescription(definition.description());
+                changed = true;
+            }
+            if (!definition.label().equals(setting.getLabel())) {
+                setting.setLabel(definition.label());
+                changed = true;
+            }
+            if (!definition.type().equals(setting.getSettingType())) {
+                setting.setSettingType(definition.type());
+                changed = true;
+            }
+            if (!java.util.Objects.equals(definition.optionsJson(), setting.getOptionsJson())) {
+                setting.setOptionsJson(definition.optionsJson());
+                changed = true;
+            }
+            if (changed) repository.save(setting);
             return;
         }
         SystemSetting setting = new SystemSetting();
@@ -73,25 +95,17 @@ public class SystemSettingDataInitializer {
             new Definition("businessName", "Facility & Business Profile", "General organization parameters and primary contact channels.", "Company / Facility Name", "text", "\"StorageHub Vietnam\"", null),
             new Definition("contactEmail", "Facility & Business Profile", null, "Primary Support Email", "text", "\"support@storagehub.demo\"", null),
             new Definition("hotline", "Facility & Business Profile", null, "Customer Hotline", "text", "\"+84 28 3822 8888\"", null),
-            new Definition("currency", "Facility & Business Profile", null, "Operating Currency", "select", "\"VND (₫)\"", "[\"VND (₫)\"]"),
             new Definition("timezone", "Facility & Business Profile", null, "Facility Timezone", "select", "\"GMT+7 (Asia/Ho_Chi_Minh)\"", "[\"GMT+7 (Asia/Ho_Chi_Minh)\",\"GMT+8 (Asia/Singapore)\",\"GMT+0 (UTC)\"]"),
-            new Definition("gracePeriod", "Billing & Invoicing Rules", "Automated invoice generation, grace periods, and late penalty triggers.", "Late Fee Grace Period (Days)", "number", "5", null),
-            new Definition("lateFeeAmount", "Billing & Invoicing Rules", null, "Fixed Late Fee Amount (VND)", "number", "650000", null),
             new Definition("autoInvoiceDays", "Billing & Invoicing Rules", null, "Advance Invoice Generation (Days)", "select", "\"7 days before due date\"", "[\"3 days before due date\",\"7 days before due date\",\"14 days before due date\",\"30 days before due date\"]"),
             new Definition("autoProrate", "Billing & Invoicing Rules", null, "Prorate First Month Rent on Move-in", "toggle", "true", null),
             new Definition("require2FA", "Security & Access Controls", "Hardware controller security, access lockout, and authentication requirements.", "Enforce Two-Factor Authentication (2FA) for Staff", "toggle", "true", null),
-            new Definition("pinRotation", "Security & Access Controls", null, "Gate PIN Auto-Rotation Interval", "select", "\"90 days\"", "[\"30 days\",\"60 days\",\"90 days\",\"Never (Manual)\"]"),
-            new Definition("lockoutAttempts", "Security & Access Controls", null, "Failed PIN Lockout Threshold", "select", "\"3 failed attempts\"", "[\"3 failed attempts\",\"5 failed attempts\",\"10 failed attempts\"]"),
+            new Definition("lockoutAttempts", "Security & Access Controls", null, "Failed Login Lockout Threshold", "select", "\"3 failed attempts\"", "[\"3 failed attempts\",\"5 failed attempts\",\"10 failed attempts\"]"),
             new Definition("sessionTimeout", "Security & Access Controls", null, "Admin Session Inactivity Timeout", "select", "\"30 minutes\"", "[\"15 minutes\",\"30 minutes\",\"60 minutes\",\"4 hours\"]"),
-            new Definition("emailAlerts", "Automated Notifications & Webhooks", "Direct SMS and email dispatch configurations for operational alerts.", "Send Overdue Reminder Emails", "toggle", "true", null),
             new Definition(com.storagehub.service.WorkflowBusinessCalendar.KEY, "Automated Notifications & Webhooks",
                 "Định dạng Ngày làm việc|Giờ mở|Giờ đóng|Ngày nghỉ. Ví dụ MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY|08:00|17:00|2027-01-01. Dùng giờ Việt Nam.",
                 "Lịch làm việc SLA", "text", "\"" + com.storagehub.service.WorkflowBusinessCalendar.DEFAULT + "\"", null),
-            new Definition("smsGateAlerts", "Automated Notifications & Webhooks", null, "Send SMS on After-Hours Gate Access", "toggle", "false", null),
-            new Definition("slackWebhook", "Automated Notifications & Webhooks", null, "Operational Incident Slack Webhook", "text", "\"https://hooks.slack.com/services/T00/B00/XXXX\"", null),
-            new Definition("dailyDigest", "Automated Notifications & Webhooks", null, "Daily Executive Performance Digest to Managers", "toggle", "true", null),
-            new Definition("maintenanceMode", "Maintenance & Service Mode", "Emergency controls and maintenance banners.", "Maintenance Mode (Block New Bookings)", "toggle", "false", null),
-            new Definition("bannerNotice", "Maintenance & Service Mode", null, "Public Facility Announcement Banner", "text", "\"Routine fire alarm testing scheduled this Sunday 9:00 AM - 11:00 AM.\"", null)
+            new Definition("maintenanceMode", "Maintenance & Service Mode", "Tạm dừng tiếp nhận đơn đặt kho mới trong thời gian bảo trì.", "Chế độ bảo trì hệ thống", "toggle", "false", null),
+            new Definition("bannerNotice", "Maintenance & Service Mode", "Thông báo hiển thị công khai trên trang chủ khi cơ sở cần thông tin tới khách hàng.", "Thông báo công khai cho khách hàng", "text", "\"\"", null)
         );
     }
 
