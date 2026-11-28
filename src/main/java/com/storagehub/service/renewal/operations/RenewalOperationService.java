@@ -95,16 +95,7 @@ public class RenewalOperationService {
         }
         var phone = customer.getPhone();
         var unitCode = rental.getStorageUnit() != null ? rental.getStorageUnit().getCode() : null;
-        Integer months = null;
-        if (rental.getContractEndDate() != null && renewal.getNewEndDate() != null) {
-            long m = java.time.temporal.ChronoUnit.MONTHS.between(rental.getContractEndDate(), renewal.getNewEndDate());
-            if (m <= 0) {
-                m = java.time.Period.between(rental.getContractEndDate(), renewal.getNewEndDate()).getMonths();
-            }
-            if (m > 0) {
-                months = (int) m;
-            }
-        }
+        Integer months = renewalMonths(renewal);
         return new CustomerIdentity(
             id,
             customer.getId(),
@@ -114,6 +105,20 @@ public class RenewalOperationService {
             unitCode,
             months
         );
+    }
+    @Transactional
+    public CustomerIdentity revealCustomerIdentity(ActorPrincipal actor, UUID id) {
+        var identity = customerIdentity(actor, id);
+        var renewal = em.find(Renewal.class, id);
+        audit.recordMutation(
+            "RENEWAL_CUSTOMER_IDENTITY_REVEALED",
+            "Renewal",
+            id,
+            renewal.getRental().getFacility().getId(),
+            null,
+            Map.of("field", "identityDocumentNumber", "reason", "staff_arrival_verification")
+        );
+        return identity;
     }
     @Transactional(readOnly=true)
     public RenewalExceptionProposalResponse exceptionProposal(ActorPrincipal actor,UUID id) {
@@ -301,17 +306,25 @@ public class RenewalOperationService {
         var finance=accounting();var statement=finance.statement(c.renewal(),terms(c),now());validateStatement(c.renewal(),statement);
         if(statement.amount().signum()==0)throw ApiExceptions.conflict("Required obligations are already paid; no new CASH receipt allowed");
         if(!body.payableStatementRef().equals(statement.reference()))throw ApiExceptions.conflict("Payable statement is stale");
+        var receivedAmount = body.receivedAmount() == null ? statement.amount() : body.receivedAmount();
+        if(receivedAmount.compareTo(statement.amount())!=0)
+            throw ApiExceptions.validation("Số tiền thực nhận phải đúng bằng số tiền cần thu trong bảng kê.",null);
         if(body.receiptFileId()==null)throw ApiExceptions.validation("CASH receipt evidence file required",null);
         evidence(actor,c.renewal(),"CASH_RECEIPT",List.of(body.receiptFileId()));
         String method=body.paymentMethod()==null?"CASH":body.paymentMethod().trim().toUpperCase(java.util.Locale.ROOT);
         if(!Set.of("CASH","BANK_TRANSFER").contains(method))throw ApiExceptions.validation("Phương thức thanh toán không hợp lệ.",null);
-        String receiptReference=("CASH".equals(method)?"TM-":"CK-")+UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT);
+        String suppliedReference = body.receiptReference() == null ? "" : body.receiptReference().trim();
+        String receiptReference=suppliedReference.isBlank()
+            ? ("CASH".equals(method)?"TM-":"CK-")+UUID.randomUUID().toString().replace("-", "").toUpperCase(java.util.Locale.ROOT)
+            : suppliedReference;
         var receipt=finance.balance(c.renewal(),body.payableStatementRef(),receiptReference,body.receiptFileId(),method,actor.userId(),key,now());
         if(receipt==null||receipt.reference()==null||!id.equals(receipt.renewalId())||!statement.reference().equals(receipt.statementRef())||receipt.amount()==null||receipt.amount().compareTo(statement.amount())!=0||!statement.currency().equals(receipt.currency())||receipt.receivedAt()==null||receipt.receivedAt().isAfter(now()))throw deferred("Shared CASH receipt is incomplete or inconsistent");
         var eventData=new LinkedHashMap<String,Object>(mapper.convertValue(receipt,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}));
         eventData.put("transactionReference",receiptReference);
         if (receipt.paymentId() != null) eventData.put("receiptCode", receiptCodes.find("PAYMENT", receipt.paymentId()));
         eventData.put("receiptFileId",body.receiptFileId());
+        eventData.put("receivedAmount",receivedAmount);
+        eventData.put("difference",receivedAmount.subtract(statement.amount()));
         return finish(c,"d3_cash",key,body,event(c,"CASH",eventData),201);
     }
     public Result complete(ActorPrincipal actor,UUID id,Completion body,String key) {
@@ -649,7 +662,18 @@ public class RenewalOperationService {
             String content=e.getKind().equals("NO_SHOW")
                 ?"Cơ sở "+rental.getFacility().getName()+" đã ghi nhận khách không đến lịch ký gia hạn. Khoản đã thu được giữ nguyên để đối soát; gian kho đang thuê không bị giải phóng."
                 :"Yêu cầu gia hạn tại cơ sở "+rental.getFacility().getName()+" đã có cập nhật ("+e.getKind()+").";
-            notifications.createFacilityOperationsNotificationsExcept(rental.getFacility().getId(),NotificationType.RENEWAL,title,content,renewal.getId(),c.user().getId());
+            if(e.getKind().equals("INCIDENT")) {
+                var customerName=rental.getCustomer()==null?"khách hàng":rental.getCustomer().getFullName();
+                var unitCode=rental.getStorageUnit()==null?"chưa xác định":rental.getStorageUnit().getCode();
+                notifications.notifyManagersOfRenewalIncident(
+                    rental.getFacility().getId(),
+                    "Cần xử lý sự cố gia hạn",
+                    "Nhân viên đã ghi nhận sự cố cho "+customerName+" tại gian "+unitCode+". Vui lòng mở hồ sơ gia hạn để xác minh lỗi cơ sở và quyết định hướng xử lý.",
+                    renewal.getId()
+                );
+            } else {
+                notifications.createFacilityOperationsNotificationsExcept(rental.getFacility().getId(),NotificationType.RENEWAL,title,content,renewal.getId(),c.user().getId());
+            }
             if(e.getKind().equals("NO_SHOW")||!Objects.equals(customerId,c.user().getId()))notifications.createNotification(customerId,NotificationType.RENEWAL,title,content,renewal.getId());
         }
         return result;}
@@ -676,6 +700,31 @@ public class RenewalOperationService {
             missing,s==null?null:s.getAppointmentStart(),s==null?null:s.getAppointmentEnd(),s==null?null:s.getPendingExceptionRef(),
             s==null?null:s.getFullRentPaymentRef(),s==null?null:s.getFullRentPaidAt(),displayCodes==null?null:displayCodes.find("GH:"+n.getId()),
             identity.rentalDisplayCode(),identity.renewalSequence(),details);
+    }
+    private Integer renewalMonths(Renewal renewal) {
+        var workflow = renewal == null ? null : em.find(RenewalWorkflow.class, renewal.getId());
+        var accepted = workflow == null ? null : workflow.getAcceptedRevision();
+        if (accepted != null && accepted.getQuote() != null && accepted.getQuote().getTermsJson() != null) {
+            try {
+                var terms = decode(accepted.getQuote().getTermsJson(), RenewalQuoteResponse.Terms.class);
+                if (terms != null && terms.rentalMonths() > 0) return terms.rentalMonths();
+            } catch (RuntimeException ignored) {
+                // Fall through to the date-derived legacy fallback below.
+            }
+        }
+        var rental = renewal == null ? null : renewal.getRental();
+        var oldEnd = rental == null ? null : rental.getContractEndDate();
+        var newEnd = renewal == null ? null : renewal.getNewEndDate();
+        if (oldEnd != null && newEnd != null) {
+            var extensionStart = oldEnd.plusDays(1);
+            var extensionEndExclusive = newEnd.plusDays(1);
+            long months = java.time.temporal.ChronoUnit.MONTHS.between(extensionStart, extensionEndExclusive);
+            if (months > 0 && months <= Integer.MAX_VALUE
+                && extensionStart.plusMonths(months).equals(extensionEndExclusive)) {
+                return (int) months;
+            }
+        }
+        return null;
     }
     private RenewalOperationResponse.Event eventResponse(RenewalOperationEvent e,Audience audience){Object data=decode(e.getPayloadJson(),Object.class);
         if(data instanceof Map<?,?> raw&&raw.containsKey("rentalPeriodEvidence")){var safe=new LinkedHashMap<>(raw);safe.remove("rentalPeriodEvidence");data=safe;}
