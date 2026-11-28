@@ -293,6 +293,23 @@ public class NotificationService {
     }
 
     @Transactional
+    public void notifyManagersOfRenewalIncident(
+        UUID facilityId,
+        String title,
+        String content,
+        UUID renewalId
+    ) {
+        userRepository.findEligibleStaff(
+            UserStatus.ACTIVE,
+            RoleCode.MANAGER,
+            facilityId,
+            List.of(FacilityScopeLevel.MANAGE)
+        ).forEach(manager -> createNotification(
+            manager.getId(), NotificationType.RENEWAL, title, content, renewalId
+        ));
+    }
+
+    @Transactional
     public void createBusinessNotifications(
         NotificationType type, String title, String content, UUID relatedEntityId
     ) {
