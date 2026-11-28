@@ -373,11 +373,13 @@ public class CentralizedBusinessPolicyService {
         }
 
         // 2. Late penalty calculation
-        int grace = 0;
+        int grace = Math.max(0, policy.getGracePeriodDays());
         int chargeableOverdue = Math.max(0, overdueDays - grace);
         BigDecimal penalty;
         String penaltyFormula;
-        String penaltyMethod = "PERCENTAGE_DAILY_RATE";
+        String penaltyMethod = policy.getLatePenaltyCalculationMethod() == null
+            ? "PERCENTAGE_DAILY_RATE"
+            : policy.getLatePenaltyCalculationMethod();
 
         if (chargeableOverdue == 0) {
             penalty = BigDecimal.ZERO;
@@ -387,7 +389,7 @@ public class CentralizedBusinessPolicyService {
         } else {
             if ("PERCENTAGE_DAILY_RATE".equalsIgnoreCase(penaltyMethod)) {
                 BigDecimal dailyRent = monthlyRent.divide(BigDecimal.valueOf(30), 2, RoundingMode.HALF_UP);
-                BigDecimal dailyRate = BigDecimal.ONE;
+                BigDecimal dailyRate = percentageAsDecimal(policy.getLateFeePercentageRate());
                 BigDecimal dailyFee = dailyRent.multiply(dailyRate).multiply(new BigDecimal("1.5")).setScale(2, RoundingMode.HALF_UP);
                 penalty = dailyFee.multiply(BigDecimal.valueOf(chargeableOverdue)).setScale(2, RoundingMode.HALF_UP);
                 penaltyFormula = String.format("%d ngày tính phạt (ân hạn %d ngày) × (%s%% × %s đ/ngày × 1,5) = %s",
@@ -443,15 +445,24 @@ public class CentralizedBusinessPolicyService {
         if (overdueDays <= 0 || monthlyRent == null || monthlyRent.signum() <= 0) {
             return BigDecimal.ZERO;
         }
-        int chargeableDays = overdueDays;
-        if (true) {
+        int grace = Math.max(0, policy.getGracePeriodDays());
+        int chargeableDays = Math.max(0, overdueDays - grace);
+        String penaltyMethod = policy.getLatePenaltyCalculationMethod() == null
+            ? "PERCENTAGE_DAILY_RATE"
+            : policy.getLatePenaltyCalculationMethod();
+        if ("PERCENTAGE_DAILY_RATE".equalsIgnoreCase(penaltyMethod)) {
             BigDecimal dailyRent = monthlyRent.divide(BigDecimal.valueOf(30), 2, RoundingMode.HALF_UP);
-            BigDecimal rate = BigDecimal.ONE;
+            BigDecimal rate = percentageAsDecimal(policy.getLateFeePercentageRate());
             return dailyRent.multiply(rate).multiply(new BigDecimal("1.5")).multiply(BigDecimal.valueOf(chargeableDays)).setScale(2, RoundingMode.HALF_UP);
         } else {
             BigDecimal dailyFee = policy.getLateFeeAmount() != null ? policy.getLateFeeAmount() : new BigDecimal("50000.00");
             return dailyFee.multiply(BigDecimal.valueOf(chargeableDays)).setScale(2, RoundingMode.HALF_UP);
         }
+    }
+
+    private BigDecimal percentageAsDecimal(BigDecimal percentage) {
+        BigDecimal value = percentage != null ? percentage : BigDecimal.ZERO;
+        return value.divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP);
     }
 
     private void syncSystemSettings(CentralizedPolicy policy) {
