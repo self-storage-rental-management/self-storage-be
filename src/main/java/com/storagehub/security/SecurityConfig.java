@@ -72,6 +72,7 @@ public class SecurityConfig {
                     "/api/auth/captcha",
                     "/api/public/facilities",
                     "/api/public/unit-types",
+                    "/api/public/site-config",
                     "/api/public/support/knowledge",
                     "/api/public/payments/vnpay/return",
                     "/api/public/payments/vnpay/ipn"

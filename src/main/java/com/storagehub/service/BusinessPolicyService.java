@@ -1,6 +1,7 @@
 package com.storagehub.service;
 
 import com.storagehub.api.configuration.BusinessConfigResponse;
+import com.storagehub.api.configuration.PublicSiteConfigResponse;
 import com.storagehub.api.configuration.RentalPackagePolicyRequest;
 import com.storagehub.api.configuration.RentalPackagePolicyResponse;
 import com.storagehub.api.configuration.UpdateBusinessConfigRequest;
@@ -77,6 +78,19 @@ public class BusinessPolicyService {
             autoProrate,
             managerRefundApprovalLimit
         );
+    }
+
+    @Transactional(readOnly = true)
+    public PublicSiteConfigResponse getPublicSiteConfig() {
+        return new PublicSiteConfigResponse(
+            getBooleanSetting("maintenanceMode", false),
+            getStringSetting("bannerNotice", "")
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isMaintenanceMode() {
+        return getBooleanSetting("maintenanceMode", false);
     }
 
     @Transactional

@@ -49,8 +49,8 @@ public class ReservationCreationService {
     private int maxUnpaidHolds = 2;
     @org.springframework.beans.factory.annotation.Value("${app.reservation.complaint-window-minutes:1440}")
     private long complaintWindowMinutes = 1440;
-    @org.springframework.beans.factory.annotation.Value("${app.reservation.complaint-review-hours:24}")
-    private long complaintReviewHours = 24;
+    @org.springframework.beans.factory.annotation.Value("${app.reservation.complaint-review-hours:12}")
+    private long complaintReviewHours = 12;
     @org.springframework.beans.factory.annotation.Value("${app.refund.processing-days:7}")
     private int refundProcessingDays = 7;
     @org.springframework.beans.factory.annotation.Autowired
@@ -70,6 +70,7 @@ public class ReservationCreationService {
     private final ReservationCapacityService capacityService;
     private final DiscountCodeRepository discountCodeRepository;
     private final DiscountCodeService discountCodeService;
+    private final BusinessPolicyService businessPolicyService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ReservationCreationService(
@@ -82,7 +83,8 @@ public class ReservationCreationService {
         AuditLogService auditLogService,
         ReservationCapacityService capacityService,
         DiscountCodeRepository discountCodeRepository,
-        DiscountCodeService discountCodeService
+        DiscountCodeService discountCodeService,
+        BusinessPolicyService businessPolicyService
     ) {
         this.reservationRepository = reservationRepository;
         this.quoteRepository = quoteRepository;
@@ -94,6 +96,7 @@ public class ReservationCreationService {
         this.capacityService = capacityService;
         this.discountCodeRepository = discountCodeRepository;
         this.discountCodeService = discountCodeService;
+        this.businessPolicyService = businessPolicyService;
     }
 
     public ReservationCreationService(
@@ -109,7 +112,7 @@ public class ReservationCreationService {
         this(
             reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
             policyRepository, compatibilityService, auditLogService, capacityService,
-            null, null
+            null, null, null
         );
     }
 
@@ -140,6 +143,10 @@ public class ReservationCreationService {
                 .findByReservation_Id(existing.getId())
                 .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
             return toResponse(existing, existingSnapshot);
+        }
+
+        if (businessPolicyService != null && businessPolicyService.isMaintenanceMode()) {
+            throw ApiExceptions.conflict("Hệ thống đang bảo trì, hiện chưa nhận đơn đặt kho mới.");
         }
 
         if (!ReservationCheckInPolicy.ATTENDANCE_TERMS.equals(request.getAcceptedHandoverTermsVersion())) {
