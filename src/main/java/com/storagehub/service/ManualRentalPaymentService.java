@@ -19,6 +19,10 @@ public class ManualRentalPaymentService {
     private final PaymentRepository payments;
     private final AuditLogService audit;
     @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.storagehub.service.renewal.RenewalDisplayIdentity renewalIdentity;
+    @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.email.TransactionalEmailService receiptEmails;
 
     public record Recorded(Payment payment,boolean created) {}
@@ -74,7 +78,9 @@ public class ManualRentalPaymentService {
         p.setAmount(amount);p.setCurrency("VND");p.setPurpose(PaymentType.RENTAL_BALANCE);p.setStatus(PaymentStatus.PAID);
         p.setIdempotencyKey(key);p.setGatewayIntentId("MANUAL-RENTAL-"+UUID.randomUUID());p.setGatewayProvider("MANUAL");
         p.setGatewayTransactionNo(reference);p.setGatewayBankCode(method);p.setGatewayResponseCode("00");p.setGatewayTransactionStatus("PAID");
-        p.setPaidAt(now);p.setProcessedAt(now);payments.saveAndFlush(p);
+        p.setPaidAt(now);p.setProcessedAt(now);p.setReceiptFileId(file);payments.saveAndFlush(p);
+        p.setReceiptCode(receiptCodes.issue("PAYMENT", p.getId(), false));
+        payments.saveAndFlush(p);
         var proof=new LinkedHashMap<String,Object>();proof.put("paymentId",p.getId());proof.put("reservationId",reservation==null?null:reservation.getId());
         proof.put("renewalId",renewal==null?null:renewal.getId());proof.put("acceptedRevisionId",revision==null?null:revision.getId());
         proof.put("amount",amount);proof.put("currency","VND");proof.put("paymentMethod",method);proof.put("transactionReference",reference);
@@ -88,15 +94,18 @@ public class ManualRentalPaymentService {
         User customer = reservation != null ? reservation.getCustomer() : renewal.getRental().getCustomer();
         Facility facility = reservation != null ? reservation.getFacility() : renewal.getRental().getFacility();
         StorageUnit unit = reservation != null ? reservation.getAssignedUnit() : renewal.getRental().getStorageUnit();
-        String reference = payment.getGatewayTransactionNo();
+        String reference = payment.getReceiptCode() == null ? payment.getGatewayTransactionNo() : payment.getReceiptCode();
         String paidAtText = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
             .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(paidAt);
         String amount = java.text.NumberFormat.getNumberInstance(java.util.Locale.forLanguageTag("vi-VN")).format(payment.getAmount()) + " đ";
+        var identity = renewalIdentity != null ? renewalIdentity.resolve(renewal) : null;
+        String label = reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode()
+            : (identity != null && identity.label() != null ? identity.label() : "Hồ sơ gia hạn");
         receiptEmails.sendPaymentBillAsync(customer.getId(), customer.getEmail(), customer.getFullName(),
-            payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : payment.getId().toString(),
+            payment.getId(),
             reference, amount, paidAtText, unit == null ? "Chưa phân gian kho" : unit.getCode(),
             facility.getName(), facility.getAddress(),
-            reservation != null ? "Đơn giữ kho: " + reservation.getReservationCode() : "Kỳ gia hạn: " + renewal.getId(),
+            label,
             reservation != null ? "Thanh toán phần còn lại khi nhận kho" : "Thanh toán phần còn lại kỳ gia hạn",
             "Biên lai ghi nhận khoản thanh toán tại cơ sở. Vui lòng lưu email này để đối chiếu khi cần.");
     }

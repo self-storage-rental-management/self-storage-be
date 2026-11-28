@@ -48,6 +48,11 @@ public class UnitType extends BaseEntity {
     @Column(name = "width_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal widthM;
 
+    // Hibernate uses this expression when paginating unit types by floor area.
+    @org.hibernate.annotations.Formula("length_m * width_m")
+    @Setter(lombok.AccessLevel.NONE)
+    private BigDecimal areaM2;
+
     @Column(name = "height_m", nullable = false, precision = 10, scale = 2)
     private BigDecimal heightM;
 
@@ -66,6 +71,10 @@ public class UnitType extends BaseEntity {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal maxLoadKg;
 
+    /** Optional gross stored-load limit, including empty pallets. */
+    @Column(name = "max_stored_load_kg", precision = 12, scale = 2)
+    private BigDecimal maxStoredLoadKg;
+
     @Column(nullable = false)
     private int rackCount;
 
@@ -81,6 +90,25 @@ public class UnitType extends BaseEntity {
     @Column(name = "aisle_width_m", precision = 10, scale = 2)
     private BigDecimal aisleWidthM;
 
+    /** Designed clear gap between rack envelopes, in metres. */
+    @Column(name = "storage_aisle_width_m", precision = 10, scale = 2)
+    private BigDecimal storageAisleWidthM;
+
+    /** Optional clear gate dimensions used for an operational review. */
+    @Column(name = "gate_width_m", precision = 10, scale = 2)
+    private BigDecimal gateWidthM;
+
+    @Column(name = "gate_height_m", precision = 10, scale = 2)
+    private BigDecimal gateHeightM;
+
+    /** Lowest known obstruction or ceiling elevation, in metres. */
+    @Column(name = "lowest_obstruction_height_m", precision = 10, scale = 2)
+    private BigDecimal lowestObstructionHeightM;
+
+    /** Required clear gap below the obstruction or ceiling, in metres. */
+    @Column(name = "overhead_clearance_m", precision = 10, scale = 2)
+    private BigDecimal overheadClearanceM;
+
     @Column(name = "trolley_type", length = 160)
     private String trolleyType;
 
@@ -89,6 +117,13 @@ public class UnitType extends BaseEntity {
 
     @Column(name = "large_box_capacity")
     private Integer largeBoxCapacity;
+
+    @Column(name = "rack_layout_json", columnDefinition = "LONGTEXT")
+    private String rackLayoutJson;
+
+    /** Rating pallet theo kích thước, tách riêng để migration và đồng bộ dữ liệu cũ. */
+    @Column(name = "pallet_rating_catalog_json", columnDefinition = "LONGTEXT")
+    private String palletRatingCatalogJson;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)
@@ -102,6 +137,15 @@ public class UnitType extends BaseEntity {
     @Column(name = "accepted_goods_json", nullable = false, columnDefinition = "LONGTEXT")
     private String acceptedGoodsJson = "{\"categoryIds\":[],\"materialIds\":[]}";
 
+    @Column(nullable = false)
+    private int setupDeadlineDays = 5;
+    @Column(nullable = false)
+    private int setupMaxExtensionDays = 2;
+    @Column(nullable = false)
+    private int mismatchReturnDays = 3;
+    @Column(nullable = false)
+    private int mismatchReturnMaxExtensionDays = 2;
+
     @Version
     private long version;
 
@@ -111,5 +155,13 @@ public class UnitType extends BaseEntity {
 
     public BigDecimal getVolumeM3() {
         return getAreaM2().multiply(heightM);
+    }
+
+    /** The security deposit is always one month of the currently published rent. */
+    public BigDecimal getEffectiveSecurityDepositAmount() {
+        if (monthlyPrice != null && monthlyPrice.signum() > 0) {
+            return monthlyPrice;
+        }
+        return securityDepositAmount == null ? BigDecimal.ZERO : securityDepositAmount;
     }
 }

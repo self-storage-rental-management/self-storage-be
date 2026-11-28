@@ -2,6 +2,7 @@ package com.storagehub.domain.repo;
 
 import com.storagehub.domain.model.AccessCredential;
 import com.storagehub.domain.model.AccessCredentialStatus;
+import com.storagehub.domain.model.AccessCredentialType;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -19,7 +20,33 @@ public interface AccessCredentialRepository extends JpaRepository<AccessCredenti
 
     List<AccessCredential> findByRental_IdAndStatus(UUID rentalId, AccessCredentialStatus status);
 
+    List<AccessCredential> findByFacility_IdAndTypeAndReferenceIgnoreCaseOrderByIssuedAtDesc(
+        UUID facilityId, AccessCredentialType type, String reference
+    );
+
     boolean existsByReservation_IdAndStatus(UUID reservationId, AccessCredentialStatus status);
+    boolean existsByRental_IdAndStatus(UUID rentalId, AccessCredentialStatus status);
+
+    boolean existsByFacility_IdAndStatusAndReferenceIgnoreCaseAndIdNot(
+        UUID facilityId, AccessCredentialStatus status, String reference, UUID id
+    );
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        select c from AccessCredential c
+        where c.facility.id = :facilityId
+          and lower(trim(c.reference)) = lower(:reference)
+          and (c.status = com.storagehub.domain.model.AccessCredentialStatus.ACTIVE or c.lockCodeHeld = true)
+        """)
+    List<AccessCredential> findLockCodeConflictsForUpdate(@Param("facilityId") UUID facilityId, @Param("reference") String reference);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    List<AccessCredential> findByRental_IdAndStatusOrderById(UUID rentalId, AccessCredentialStatus status);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<AccessCredential> findFirstByRental_IdAndTypeOrderByIssuedAtDescIdDesc(
+        UUID rentalId, AccessCredentialType type
+    );
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from AccessCredential c where c.id = :id")

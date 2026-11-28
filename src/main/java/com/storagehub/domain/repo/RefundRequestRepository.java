@@ -11,7 +11,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RefundRequestRepository extends JpaRepository<RefundRequest, UUID> {
-    List<RefundRequest> findByStatusOrderByCreatedAtAsc(RefundRequestStatus status);
+    @Query("select r from RefundRequest r where r.status = :status order by r.createdAt asc, r.id asc")
+    List<RefundRequest> findByStatusOrderByCreatedAtAsc(@Param("status") RefundRequestStatus status);
 
     List<RefundRequest> findByPayment_IdAndStatusIn(UUID paymentId, Collection<RefundRequestStatus> statuses);
 
@@ -22,6 +23,20 @@ public interface RefundRequestRepository extends JpaRepository<RefundRequest, UU
         """)
     BigDecimal sumAmountsByPaymentIdAndStatusIn(
         @Param("paymentId") UUID paymentId,
+        @Param("statuses") Collection<RefundRequestStatus> statuses
+    );
+
+    @Query("""
+        select count(r) from RefundRequest r
+        join r.payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and r.status in :statuses
+        """)
+    long countOutstandingByFacilityId(
+        @Param("facilityId") UUID facilityId,
         @Param("statuses") Collection<RefundRequestStatus> statuses
     );
 }

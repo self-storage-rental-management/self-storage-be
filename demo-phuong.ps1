@@ -128,6 +128,14 @@ if (-not $SkipSeed) {
         try {
             cmd /c "chcp 65001 >nul && mysql --default-character-set=utf8mb4 -u $DbUser -p$DbPass $DbName < `"$seedScriptPath`""
             Print-Success "Đã reset và nạp dữ liệu chuẩn thành công vào database $DbName!"
+
+            $renewalBatch = 'QD' + (Get-Date -Format 'yyMMddHHmmss')
+            & (Join-Path $PSScriptRoot 'scripts\seed-renewal-template.ps1')
+            $prepareRenewalCases = Join-Path $PSScriptRoot 'scripts\prepare-overdue-web-demo.ps1'
+            $seedRenewalCases = Join-Path $PSScriptRoot 'scripts\seed-renewal-14-demo-cases.ps1'
+            & $prepareRenewalCases -Batch $renewalBatch -CustomerEmail 'thongvinh2@gmail.com'
+            & $seedRenewalCases -Batch $renewalBatch
+            Print-Success "Đã nạp 14 test case gia hạn GH-TC01 đến GH-TC14 cho thongvinh2@gmail.com."
         } catch {
             Write-Host "  [WARN] Không thể chạy cmd mysql client trực tiếp, bỏ qua bước nạp sql" -ForegroundColor Yellow
         }
@@ -325,7 +333,7 @@ Print-Info "Tên chi nhánh" $mgrSum.data.facilityName
 Print-Info "Tổng số gian kho" $mgrSum.data.totalUnits
 Print-Info "Số gian sẵn sàng (Available)" $mgrSum.data.availableUnits
 Print-Info "Số gian đang thuê (Occupied)" $mgrSum.data.occupiedUnits
-Print-Info "Tỷ lệ lấp đầy (Occupancy Rate)" ("{0:P1}" -f ([double]$mgrSum.data.occupancyRate / 100))
+Print-Info "Công suất sử dụng (Occupancy Rate)" ("{0:P1}" -f ([double]$mgrSum.data.occupancyRate / 100))
 Print-Info "Doanh thu đã thu (Collected)" (Format-Vnd ([decimal]$mgrSum.data.collectedRevenue))
 Print-Info "Công việc bảo trì còn mở" $mgrSum.data.openMaintenanceTasksCount
 

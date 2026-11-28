@@ -31,10 +31,11 @@ public class StaffReturnController {
         @RequestParam(required = false) ReturnCaseStatus status,
         @RequestParam(required = false) String q,
         @RequestParam(defaultValue = "0") int page,
-        @RequestParam(defaultValue = "20") int pageSize
+        @RequestParam(defaultValue = "20") int pageSize,
+        @RequestParam(defaultValue = "priority") String sort
     ) {
         return returnSettlementService.listReturns(
-            actorContext.required(), facilityId, status, q, page, pageSize, CorrelationIdContext.current()
+            actorContext.required(), facilityId, status, q, page, pageSize, sort, CorrelationIdContext.current()
         );
     }
 
@@ -46,24 +47,46 @@ public class StaffReturnController {
         );
     }
 
+    public record ArrivalRequest(
+        java.time.Instant actualArrivedAt,
+        @jakarta.validation.constraints.Size(max = 500) String evidenceNote,
+        UUID evidenceId,
+        Long expectedVersion
+    ) {}
+
+    @PostMapping("/{returnId}/arrival")
+    public ApiResponse<ReturnCaseResponse> recordArrival(
+        @PathVariable UUID returnId,
+        @Valid @RequestBody(required = false) ArrivalRequest request
+    ) {
+        return new ApiResponse<>(returnSettlementService.recordReturnArrival(
+            actorContext.required(),
+            returnId,
+            request == null ? null : request.actualArrivedAt(),
+            request == null ? null : request.evidenceNote(),
+            request == null ? null : request.evidenceId(),
+            request == null ? null : request.expectedVersion()),
+            CorrelationIdContext.current());
+    }
+
+    public record IdentityRequest(@jakarta.validation.constraints.NotNull UUID attemptId,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 32) String documentNumber,
+        java.time.Instant reverificationStartedAt, UUID evidenceId) {}
+
+    @PostMapping("/{returnId}/identity")
+    public ApiResponse<ReturnCaseResponse> verifyIdentity(@PathVariable UUID returnId, @Valid @RequestBody IdentityRequest request) {
+        return new ApiResponse<>(returnSettlementService.verifyReturnIdentity(actorContext.required(), returnId,
+            request.attemptId(), request.documentNumber(), request.reverificationStartedAt(), request.evidenceId()), CorrelationIdContext.current());
+    }
+
     @PostMapping("/{returnId}/inspection")
     public ApiResponse<ReturnCaseResponse> performInspection(
         @PathVariable UUID returnId,
+        @RequestParam(defaultValue = "0") long clearanceRevision,
         @Valid @RequestBody ReturnInspectionRequest request
     ) {
         return new ApiResponse<>(
-            returnSettlementService.performInspection(actorContext.required(), returnId, request),
-            CorrelationIdContext.current()
-        );
-    }
-
-    @PostMapping("/{returnId}/confirm")
-    public ApiResponse<ReturnCaseResponse> confirmSettlement(
-        @PathVariable UUID returnId,
-        @Valid @RequestBody(required = false) CustomerConfirmSettlementRequest request
-    ) {
-        return new ApiResponse<>(
-            returnSettlementService.staffConfirmSettlement(actorContext.required(), returnId, request),
+            returnSettlementService.performInspection(actorContext.required(), returnId, request, clearanceRevision),
             CorrelationIdContext.current()
         );
     }

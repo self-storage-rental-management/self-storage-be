@@ -63,9 +63,16 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
 params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");}
         boolean activitySort=q.sort().equals("updatedAt");
         String activityJoin=activitySort?" left join SupportState w on w.id=t.id":"";
-        String sortExpression=activitySort?"coalesce(w.changedAt,t.updatedAt)":"t."+q.sort();
+        String sortExpression=activitySort?"coalesce(w.changedAt,t.updatedAt)":q.sort().equals("priority")?"t.createdAt":"t."+q.sort();
         var rows=em.createQuery("select t from SupportTicket t"+activityJoin+where+" order by "+sortExpression+(q.descending()?" desc":" asc")+(q.sort().equals("id")?"":", t.id asc"),SupportTicket.class);
         var count=em.createQuery("select count(t) from SupportTicket t"+where,Long.class);params.forEach((k,v)->{rows.setParameter(k,v);count.setParameter(k,v);});
+        if(q.sort().equals("priority")) {
+            // SLA/calendar is an authoritative optional source, not a mapped column. Rank ALL scoped
+            // responses before paging; missing SLA stays missing rather than inventing a deadline.
+            var ordered=new SortedQueuePage<SupportResponse>(q.page(),q.size(),SupportQueueOrder.order(audience));
+            try(var stream=rows.getResultStream()) { stream.map(this::response).forEach(ordered::accept); }
+            return page(ordered.rows(),q,ordered.total(),correlation);
+        }
         return page(rows.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList().stream().map(this::response).toList(),q,count.getSingleResult(),correlation);
     }
     @Transactional(readOnly=true)
@@ -88,8 +95,14 @@ params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").re
         }
         var items=new ArrayList<SupportInboxResponse.Row>();
         if(!scopes.isEmpty()) {
-            var rows=bindInbox(em.createQuery("select t"+from+inboxWhere(view)+" order by coalesce(w.changedAt,t.updatedAt) desc,t.id",SupportTicket.class),params)
-                .setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList();
+            var query=bindInbox(em.createQuery("select t"+from+inboxWhere(view)+" order by coalesce(w.changedAt,t.updatedAt) desc,t.id",SupportTicket.class),params);
+            List<SupportTicket> rows;
+            if(view!=SupportInboxResponse.View.history) {
+                record Ranked(SupportTicket ticket,SupportResponse response) {}
+                var ordered=new SortedQueuePage<Ranked>(q.page(),q.size(),Comparator.comparing(Ranked::response,SupportQueueOrder.order(Audience.STAFF)));
+                try(var stream=query.getResultStream()) { stream.forEach(t->ordered.accept(new Ranked(t,response(t)))); }
+                rows=ordered.rows().stream().map(Ranked::ticket).toList();
+            } else rows=query.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList();
             for(var ticket:rows) {
                 boolean owned=ticket.getAssignedTo()!=null&&ticket.getAssignedTo().getId().equals(actor.userId());
                 var state=em.find(SupportState.class,ticket.getId());
@@ -205,14 +218,42 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
             params.put("search","%"+q.search().toLowerCase(Locale.ROOT).replace("!","!!").replace("%","!%").replace("_","!_")+"%");
         }
         String join=" from SupportTicket t join SupportState w on w.id=t.id";
-        String sort=q.sort().equals("updatedAt")?"coalesce(w.changedAt,t.updatedAt)":"t."+q.sort();
+        String sort=q.sort().equals("updatedAt")?"coalesce(w.changedAt,t.updatedAt)":q.sort().equals("priority")?"t.createdAt":"t."+q.sort();
         var rows=em.createQuery("select t.id,t.facility.id,t.subject,t.createdAt,w.version"+join+where
             +" order by "+sort+(q.descending()?" desc":" asc")+(q.sort().equals("id")?"":", t.id asc"),Object[].class);
         var count=em.createQuery("select count(t)"+join+where,Long.class);
         params.forEach((k,v)->{rows.setParameter(k,v);count.setParameter(k,v);});
-        var items=rows.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList().stream()
+        List<Object[]> selected;
+        if(q.sort().equals("priority")) {
+            record Ranked(Object[] row,SupportResponse response) {}
+            var ordered=new SortedQueuePage<Ranked>(q.page(),q.size(),Comparator.comparing(Ranked::response,SupportQueueOrder.order(Audience.STAFF)));
+            try(var stream=rows.getResultStream()) { stream.forEach(row->ordered.accept(new Ranked(row,response(em.find(SupportTicket.class,(UUID)row[0]))))); }
+            selected=ordered.rows().stream().map(Ranked::row).toList();
+        } else selected=rows.setFirstResult(q.page()*q.size()).setMaxResults(q.size()).getResultList();
+        var items=selected.stream()
             .map(row->new SupportQueueItem((UUID)row[0],(UUID)row[1],(String)row[2],(Instant)row[3],(Long)row[4],displayCodes==null?null:displayCodes.find("HT:"+row[0]))).toList();
         return page(items,q,count.getSingleResult(),correlation);
+    }
+
+    public SupportTicket createInventoryTransferRequest(ActorPrincipal actor, Rental rental, String note) {
+        var reservation = rental.getReservation();
+        var ticket = new SupportTicket();
+        ticket.setCustomer(reservation.getCustomer());
+        ticket.setFacility(rental.getFacility());
+        ticket.setSubject("Thu xếp chuyển hàng · " + reservation.getReservationCode());
+        ticket.setDescription("Hàng kiểm kê không vừa gian " + rental.getStorageUnit().getCode()
+            + ". Cần liên hệ khách và thu xếp chuyển hàng." + (note == null ? "" : "\n" + note));
+        em.persist(ticket);
+        em.flush();
+        displayCodes.assign("HT", "HT:" + ticket.getId(), now());
+        var state = new SupportState(ticket, LinkType.RENTAL.name(), rental.getId(), null, now());
+        em.persist(state);
+        append(actor, ticket, state, "STAFF", Visibility.PUBLIC, ticket.getDescription(), List.of());
+        event(actor, ticket, state, "CREATED", ticket.getSubject());
+        notifySupportStaff(ticket, "Yêu cầu chuyển hàng mới", ticket.getSubject());
+        notifyManagers(ticket, "Yêu cầu chuyển hàng mới", ticket.getSubject());
+        notify(ticket.getCustomer().getId(), ticket, "Đã ghi nhận yêu cầu chuyển hàng", ticket.getSubject());
+        return ticket;
     }
 
     public SupportResponse create(ActorPrincipal actor,Create body,String key){return create(actor,body,key,null);}
@@ -511,7 +552,13 @@ if(codeKey!=null)params.put("codeId",UUID.fromString(codeKey.substring(3)));
             }
             if(facility==null)throw ApiExceptions.notFound("Owned linked record not found");if(requested!=null&&!facility.getId().equals(requested))throw ApiExceptions.validation("Facility conflicts with linked record",null);
         } else {if(requested==null)throw ApiExceptions.validation("Facility required when no owned linked record is supplied",null);facility=em.find(Facility.class,requested);if(facility==null)throw ApiExceptions.notFound("Facility not found");}
-        if(facility.getStatus()!=FacilityStatus.active)throw ApiExceptions.conflict("Support facility is not active");return facility;
+        if (facility.getStatus() == FacilityStatus.maintenance && link == null) {
+            throw ApiExceptions.conflict("Cơ sở đang tạm ngưng nhận đơn mới. Hãy mở đơn đặt kho hoặc hồ sơ thuê của bạn để gửi yêu cầu hỗ trợ.");
+        }
+        if (facility.getStatus() != FacilityStatus.active && facility.getStatus() != FacilityStatus.maintenance) {
+            throw ApiExceptions.conflict("Cơ sở hiện không tiếp nhận yêu cầu hỗ trợ mới.");
+        }
+        return facility;
     }
     private SupportMessage append(ActorPrincipal actor,SupportTicket ticket,SupportState state,String role,Visibility visibility,String body,List<UUID> requested) {
         var files=files(requested);

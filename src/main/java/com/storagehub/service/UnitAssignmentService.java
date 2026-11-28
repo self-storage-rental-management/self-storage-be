@@ -32,6 +32,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 @Service
 @RequiredArgsConstructor
@@ -45,8 +46,11 @@ public class UnitAssignmentService {
     private final FacilityScopeService facilityScopeService;
     private final AuditLogService auditLogService;
     private final NotificationService notificationService;
+    private final PalletInventoryService palletInventory;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.domain.repo.UnitTypeRepository capacityMutex;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.storagehub.domain.repo.ReservationPricingSnapshotRepository pricingSnapshots;
 
     @Transactional(readOnly = true)
     public PageResponse<UnitAssignmentCandidateResponse> listCandidates(
@@ -71,7 +75,7 @@ public class UnitAssignmentService {
         Page<UnitAssignmentCandidateResponse> result = reservationRepository
             .findUnitAssignmentCandidates(
                 facilityId, unitTypeId, clean(q), scoped, facilityIds,
-                pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "confirmedAt"))
+                pageRequest(page, pageSize, Sort.unsorted())
             )
             .map(this::toCandidateResponse);
         return PageResponse.from(result, correlationId);
@@ -93,14 +97,21 @@ public class UnitAssignmentService {
             .orElseThrow(() -> ApiExceptions.notFound("Reservation was not found"));
         facilityScopeService.assertCanRead(actor, reservation.getFacility().getId());
         assertAssignmentCanShowUnits(reservation);
-        Page<AssignableUnitResponse> result = storageUnitRepository.findAssignableUnits(
-            reservation.getFacility().getId(), reservation.getUnitType().getId(), clean(q),
-            pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "code"))
-        ).map(this::toUnitResponse);
+        var paging = pageRequest(page, pageSize, Sort.by(Sort.Direction.ASC, "code", "id"));
+        Page<StorageUnit> units;
+        if (reservation.getPalletHeldUnit() == null) {
+            units = storageUnitRepository.findAssignableUnits(reservation.getFacility().getId(),
+                reservation.getUnitType().getId(), clean(q), paging);
+        } else {
+            var ids = palletInventory.assignableIds(reservation);
+            units = ids.isEmpty() ? Page.empty(paging) : storageUnitRepository.findAssignablePalletUnits(ids, clean(q), paging);
+        }
+        Page<AssignableUnitResponse> result = units.map(this::toUnitResponse);
         return PageResponse.from(result, correlationId);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    @ProcessingGuard(ProcessingLeaseService.Target.ASSIGNMENT)
     public UnitAssignmentResponse change(
         ActorPrincipal actor,
         UUID reservationId,
@@ -122,15 +133,16 @@ public class UnitAssignmentService {
             return toAssignmentResponse(current);
         }
 
-        StorageUnit previousUnit = storageUnitRepository.findByIdForUpdate(current.getStorageUnit().getId())
-            .orElseThrow(() -> ApiExceptions.notFound("Current storage unit was not found"));
         if (capacityMutex != null) {
             capacityMutex.findByIdForUpdate(reservation.getUnitType().getId())
                 .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         }
+        StorageUnit previousUnit = storageUnitRepository.findByIdForUpdate(current.getStorageUnit().getId())
+            .orElseThrow(() -> ApiExceptions.notFound("Current storage unit was not found"));
         StorageUnit nextUnit = storageUnitRepository.findByIdForUpdate(request.storageUnitId())
             .orElseThrow(() -> ApiExceptions.notFound("Storage unit was not found"));
         validateAssignableUnit(reservation, nextUnit);
+        palletInventory.requireCompatibleAssignment(reservation, nextUnit);
         if (assignmentRepository.existsByStorageUnit_IdAndStatus(
             nextUnit.getId(), UnitAssignmentStatus.ACTIVE
         )) {
@@ -141,7 +153,10 @@ public class UnitAssignmentService {
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
         Instant now = Instant.now();
         current.setStatus(UnitAssignmentStatus.CANCELLED);
-        if (previousUnit.getStatus() == StorageUnitStatus.reserved) {
+        if (Boolean.TRUE.equals(request.previousUnitNeedsMaintenance())) {
+            previousUnit.setStatus(StorageUnitStatus.maintenance);
+            previousUnit.setAvailableFrom(null);
+        } else if (previousUnit.getStatus() == StorageUnitStatus.reserved) {
             previousUnit.setStatus(StorageUnitStatus.available);
         }
         UnitAssignment replacement = new UnitAssignment();
@@ -151,12 +166,14 @@ public class UnitAssignmentService {
         replacement.setAssignedBy(operator);
         replacement.setAssignedAt(now);
         reservation.setAssignedUnit(nextUnit);
+        if (reservation.getPalletHeldUnit() != null) reservation.setPalletHeldUnit(nextUnit);
         nextUnit.setStatus(StorageUnitStatus.reserved);
         nextUnit.setAvailableFrom(null);
 
         storageUnitRepository.saveAndFlush(previousUnit);
         storageUnitRepository.saveAndFlush(nextUnit);
         reservationRepository.saveAndFlush(reservation);
+        captureAssignedUnitSnapshot(reservation, nextUnit, now);
         assignmentRepository.saveAndFlush(current);
         UnitAssignment saved = assignmentRepository.saveAndFlush(replacement);
         auditLogService.recordMutation(
@@ -169,8 +186,19 @@ public class UnitAssignmentService {
             Map.of(
                 "storageUnitId", nextUnit.getId(),
                 "assignmentStatus", UnitAssignmentStatus.ACTIVE,
-                "reason", request.reason().trim()
+                "reason", request.reason().trim(),
+                "previousStorageUnitStatus", previousUnit.getStatus(),
+                "previousUnitNeedsMaintenance", Boolean.TRUE.equals(request.previousUnitNeedsMaintenance())
             )
+        );
+        notificationService.createNotification(
+            reservation.getCustomer().getId(), NotificationType.RESERVATION,
+            "Gian kho đã được thay đổi",
+            "Đơn " + reservation.getReservationCode() + " đã được chuyển từ gian "
+                + previousUnit.getCode() + " sang gian " + nextUnit.getCode()
+                + ". Lý do: " + request.reason().trim()
+                + ". Vui lòng kiểm tra lại thông tin đơn và lịch nhận kho trên tài khoản.",
+            reservation.getId()
         );
         notificationService.createFacilityOperationsNotifications(
             reservation.getFacility().getId(), NotificationType.RESERVATION,
@@ -182,7 +210,8 @@ public class UnitAssignmentService {
         return toAssignmentResponse(saved);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    @ProcessingGuard(ProcessingLeaseService.Target.ASSIGNMENT)
     public UnitAssignmentResponse assign(
         ActorPrincipal actor,
         UUID reservationId,
@@ -223,9 +252,8 @@ public class UnitAssignmentService {
         if (!unit.getUnitType().getId().equals(reservation.getUnitType().getId())) {
             throw ApiExceptions.conflict("Storage unit type does not match the reservation");
         }
-        if (unit.getStatus() != StorageUnitStatus.available) {
-            throw ApiExceptions.conflict("Storage unit is not available");
-        }
+        validateAvailableNow(unit);
+        palletInventory.requireCompatibleAssignment(reservation, unit);
         if (assignmentRepository.existsByStorageUnit_IdAndStatus(
             unit.getId(), UnitAssignmentStatus.ACTIVE
         )) {
@@ -243,12 +271,14 @@ public class UnitAssignmentService {
         assignment.setAssignedAt(now);
 
         reservation.setAssignedUnit(unit);
+        if (reservation.getPalletHeldUnit() != null) reservation.setPalletHeldUnit(unit);
         reservation.setStatus(ReservationStatus.UNIT_RESERVED);
         unit.setStatus(StorageUnitStatus.reserved);
         unit.setAvailableFrom(null);
 
         storageUnitRepository.saveAndFlush(unit);
         reservationRepository.saveAndFlush(reservation);
+        captureAssignedUnitSnapshot(reservation, unit, now);
         UnitAssignment saved = assignmentRepository.saveAndFlush(assignment);
         auditLogService.recordMutation(
             operator, "UNIT_ASSIGNED_TO_RESERVATION", "UnitAssignment", saved.getId(),
@@ -311,8 +341,15 @@ public class UnitAssignmentService {
         if (!unit.getUnitType().getId().equals(reservation.getUnitType().getId())) {
             throw ApiExceptions.conflict("Storage unit type does not match the reservation");
         }
+        validateAvailableNow(unit);
+    }
+
+    private void validateAvailableNow(StorageUnit unit) {
         if (unit.getStatus() != StorageUnitStatus.available) {
             throw ApiExceptions.conflict("Storage unit is not available");
+        }
+        if (unit.getAvailableFrom() != null && unit.getAvailableFrom().isAfter(Instant.now())) {
+            throw ApiExceptions.conflict("Storage unit is not available yet");
         }
     }
 
@@ -364,6 +401,14 @@ public class UnitAssignmentService {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private void captureAssignedUnitSnapshot(Reservation reservation, StorageUnit unit, Instant assignedAt) {
+        if (pricingSnapshots == null || reservation.getId() == null || unit == null) return;
+        pricingSnapshots.findByReservation_Id(reservation.getId()).ifPresent(snapshot -> {
+            snapshot.setAssignedUnitSnapshotJson(ReservationSnapshotCodec.storageUnit(unit, assignedAt));
+            pricingSnapshots.saveAndFlush(snapshot);
+        });
     }
 
     private void requireOperator(ActorPrincipal actor) {

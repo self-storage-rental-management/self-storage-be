@@ -9,12 +9,14 @@ import java.util.UUID;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 @Schema(description = "Read-only rental record. monthlyPrice is the historical applied VND rate, not today's catalog price.")
-public record RentalSummaryResponse(UUID id, Customer customer, Facility facility,
+public record RentalSummaryResponse(UUID id, String displayCode, Customer customer, Facility facility,
     Unit storageUnit, UnitType unitType, RentalStatus status, LocalDate startDate,
     LocalDate contractEndDate, BigDecimal monthlyPrice, String currency, List<Warning> dataWarnings,
     DateSemantics dateSemantics, boolean inventoryPending, Instant inventoryDueAt,
+    Instant inventoryFinalDeadlineAt,
     Instant setupStartedAt, Instant setupEndsAt, Instant moveInCompletedAt, Instant inventoryVerifiedAt,
-    boolean setupExitReviewRequired, boolean canConfirmRentalStart) {
+    boolean setupExitReviewRequired, boolean canConfirmRentalStart, boolean inventoryMismatchReturn,
+    boolean intakeCompleted) {
     public record Customer(UUID id, String fullName) {}
     public record Facility(UUID id, String code, String name) {}
     public record Unit(UUID id, String code) {}

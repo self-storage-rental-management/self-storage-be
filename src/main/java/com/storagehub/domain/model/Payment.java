@@ -92,6 +92,10 @@ public class Payment extends BaseEntity {
     @Column(length = 32)
     private String gatewayPayDate;
 
+    /** Exact vnp_CreateDate sent with the original pay request (GMT+7). */
+    @Column(length = 14)
+    private String gatewayCreateDate;
+
     @Column
     private Instant lastReconciledAt;
 
@@ -105,6 +109,9 @@ public class Payment extends BaseEntity {
     @Column(name = "invoice_number", unique = true, length = 64)
     private String invoiceNumber;
 
+    @Column(name = "receipt_code", length = 17)
+    private String receiptCode;
+
     @Column(name = "invoice_issued_at")
     private Instant invoiceIssuedAt;
 
@@ -113,6 +120,10 @@ public class Payment extends BaseEntity {
 
     @Column
     private Instant paidAt;
+
+    /** Uploaded receipt/evidence asset for a manual rental-balance payment. */
+    @Column(name = "receipt_file_id")
+    private java.util.UUID receiptFileId;
 
     @Column(length = 100)
     private String failureCode;

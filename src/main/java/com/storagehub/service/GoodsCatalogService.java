@@ -66,6 +66,25 @@ public class GoodsCatalogService {
     }
 
     @Transactional(readOnly = true)
+    public void validateInventorySelection(UUID categoryId, UUID materialId, UUID declaredCategoryId, UUID declaredMaterialId) {
+        if (categoryId == null) {
+            if (declaredCategoryId != null || materialId != null)
+                throw ApiExceptions.validation("Chọn loại hàng thực tế theo danh mục.", null);
+            return;
+        }
+        var category = typeRepository.findById(categoryId)
+            .orElseThrow(() -> ApiExceptions.validation("Loại hàng thực tế không tồn tại.", null));
+        if (category.getStatus() != GoodsCatalogStatus.ACTIVE && !categoryId.equals(declaredCategoryId))
+            throw ApiExceptions.validation("Loại hàng thực tế đã ngừng sử dụng.", null);
+        if (materialId == null) return;
+        var material = materialRepository.findById(materialId)
+            .orElseThrow(() -> ApiExceptions.validation("Chất liệu thực tế không tồn tại.", null));
+        if (!material.getGoodsType().getId().equals(categoryId)
+            || (material.getStatus() != GoodsCatalogStatus.ACTIVE && !materialId.equals(declaredMaterialId)))
+            throw ApiExceptions.validation("Chất liệu thực tế không thuộc loại hàng đã chọn hoặc đã ngừng sử dụng.", null);
+    }
+
+    @Transactional(readOnly = true)
     public GoodsCatalogResponse managerCatalog(ActorPrincipal actor) {
         requireManager(actor);
         return response(typeRepository.findAllByOrderBySortOrderAscCodeAsc(), false);
@@ -205,7 +224,6 @@ public class GoodsCatalogService {
 
     @Transactional(readOnly = true, noRollbackFor = ApiException.class)
     public void validateForUnitType(UnitType unitType, GoodsCategory category, String materialName, int index) {
-        validate(category, materialName, index);
         try {
             var scope = new com.fasterxml.jackson.databind.ObjectMapper().readTree(unitType.getAcceptedGoodsJson());
             var type = typeRepository.findByCode(category.name())
@@ -215,11 +233,27 @@ public class GoodsCatalogService {
             for (var id : categoryIds) if (type.getId().toString().equals(id.asText())) categoryAllowed = true;
             if (!categoryAllowed) throw ApiExceptions.validation("goodsItems[" + index + "] không thuộc nhóm hàng loại kho này nhận.", null);
             if (category == GoodsCategory.OTHER || materialOptional(category, materialName)) return;
-            var material = materialRepository.findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE)
-                .stream().filter(value -> value.getDisplayName().equalsIgnoreCase(materialName.trim())).findFirst()
-                .orElseThrow(() -> ApiExceptions.validation("Vật liệu không còn được áp dụng.", null));
+
+            var activeMaterials = materialRepository.findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE);
             var materialIds = scope.path("materialIds");
-            boolean materialAllowed = !materialIds.isArray() || materialIds.isEmpty();
+            boolean hasConfiguredMaterials = false;
+            for (var mat : activeMaterials) {
+                for (var id : materialIds) {
+                    if (mat.getId().toString().equals(id.asText())) {
+                        hasConfiguredMaterials = true;
+                        break;
+                    }
+                }
+            }
+            if (categoryIds.isArray() && !categoryIds.isEmpty() && !hasConfiguredMaterials) {
+                if (materialName == null || materialName.isBlank()) return;
+                throw ApiExceptions.validation("goodsItems[" + index + "] không yêu cầu vật liệu chính tại loại kho này.", null);
+            }
+
+            var material = activeMaterials.stream()
+                .filter(value -> value.getDisplayName().equalsIgnoreCase(materialName.trim())).findFirst()
+                .orElseThrow(() -> ApiExceptions.validation("Vật liệu không còn được áp dụng.", null));
+            boolean materialAllowed = !materialIds.isArray() || (!categoryIds.isArray() || categoryIds.isEmpty());
             for (var id : materialIds) if (material.getId().toString().equals(id.asText())) materialAllowed = true;
             if (!materialAllowed) throw ApiExceptions.validation("goodsItems[" + index + "] có vật liệu không được nhận tại loại kho này.", null);
         } catch (com.storagehub.common.api.ApiException exception) {
@@ -256,16 +290,32 @@ public class GoodsCatalogService {
                 item.setMaterialName(null);
                 return;
             }
-            GoodsMaterialCatalog material = materialRepository
-                .findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE)
-                .stream().filter(value -> item.getCatalogMaterialId() != null
+
+            var activeMaterials = materialRepository.findAllByGoodsType_IdAndStatusOrderByDisplayNameAsc(type.getId(), GoodsCatalogStatus.ACTIVE);
+            var materialIds = scope.path("materialIds");
+            boolean hasConfiguredMaterials = false;
+            for (var mat : activeMaterials) {
+                for (var id : materialIds) {
+                    if (mat.getId().toString().equals(id.asText())) {
+                        hasConfiguredMaterials = true;
+                        break;
+                    }
+                }
+            }
+            if (categoryIds.isArray() && !categoryIds.isEmpty() && !hasConfiguredMaterials) {
+                item.setCatalogMaterialId(null);
+                item.setMaterialName(null);
+                return;
+            }
+
+            GoodsMaterialCatalog material = activeMaterials.stream()
+                .filter(value -> item.getCatalogMaterialId() != null
                     ? value.getId().equals(item.getCatalogMaterialId())
                     : value.getDisplayName().equalsIgnoreCase(item.getMaterialName() == null ? "" : item.getMaterialName().trim()))
                 .findFirst().orElseThrow(() -> ApiExceptions.validation("Vật liệu không thuộc loại hàng đã chọn.", null));
-            var materialIds = scope.path("materialIds");
-            allowed = !materialIds.isArray() || materialIds.isEmpty();
-            for (var id : materialIds) if (material.getId().toString().equals(id.asText())) allowed = true;
-            if (!allowed) throw ApiExceptions.validation("Loại kho này không nhận vật liệu đã chọn.", null);
+            boolean allowedMaterial = !materialIds.isArray() || (!categoryIds.isArray() || categoryIds.isEmpty());
+            for (var id : materialIds) if (material.getId().toString().equals(id.asText())) allowedMaterial = true;
+            if (!allowedMaterial) throw ApiExceptions.validation("Loại kho này không nhận vật liệu đã chọn.", null);
             item.setCatalogMaterialId(material.getId());
             item.setMaterialCode(material.getCode());
             item.setMaterialName(material.getDisplayName());

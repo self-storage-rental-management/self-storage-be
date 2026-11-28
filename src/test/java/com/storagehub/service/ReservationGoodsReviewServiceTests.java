@@ -23,6 +23,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.FileAssetRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
@@ -46,6 +47,7 @@ import org.springframework.data.domain.PageImpl;
 class ReservationGoodsReviewServiceTests {
 
     @Mock private ReservationRepository reservationRepository;
+    @Mock private UnitTypeRepository capacityMutex;
     @Mock private ReservationGoodsItemRepository goodsItemRepository;
     @Mock private FileAssetRepository fileAssetRepository;
     @Mock private UserRepository userRepository;
@@ -66,6 +68,7 @@ class ReservationGoodsReviewServiceTests {
             reservationRepository, goodsItemRepository, fileAssetRepository, userRepository,
             authorizationService, new FacilityScopeService(), auditLogService, notificationService
         );
+        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
         reviewer = entityWithId(new User());
         facility = entityWithId(new Facility());
         staff = new ActorPrincipal(
@@ -120,7 +123,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
             reservation.getCustomer().getId(),
             com.storagehub.domain.model.NotificationType.RESERVATION,
             "Hàng hóa đã được chấp thuận",
-            "Hàng hóa trong đơn RSV-REVIEW001 đã được chấp thuận. Vui lòng thanh toán cọc trước thời hạn hiển thị trên đơn.",
+            "Hàng hóa trong đơn RSV-REVIEW001 đã được chấp thuận. Bạn có 15 phút kể từ lúc duyệt để thanh toán khoản trả trước giữ chỗ. Xem giờ bắt đầu và hạn cuối trên đơn.",
             reservation.getId()
         );
     }
@@ -152,8 +155,7 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
 
     @Test
     void rejectionRequiresReason() {
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
 
         assertThatThrownBy(() -> service.review(
             staff, reservation.getId(),
@@ -195,22 +197,19 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     void staffCannotReviewReservationFromAnotherFacility() {
         Facility otherFacility = entityWithId(new Facility());
         reservation.setFacility(otherFacility);
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
 
         assertThatThrownBy(() -> service.review(
             staff, reservation.getId(),
             new ReservationReviewRequest(ReservationReviewDecision.APPROVE, null)
         ))
-            .isInstanceOf(ApiException.class)
-            .hasMessage("The actor has no required scope for this facility");
+            .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.getStatus().value()).isEqualTo(403));
     }
 
     @Test
     void expiredReviewCannotBeApproved() {
         reservation.setGoodsReviewDueAt(Instant.now().minusSeconds(1));
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
 
         assertThatThrownBy(() -> service.review(
             staff, reservation.getId(),
@@ -221,12 +220,17 @@ Map.of(facility.getId(), FacilityScopeLevel.OPERATE)
     }
 
     private void mockReviewData() {
-        when(reservationRepository.findByIdForUpdate(reservation.getId()))
-            .thenReturn(Optional.of(reservation));
+        mockLockedReservation();
         when(userRepository.findById(staff.userId())).thenReturn(Optional.of(reviewer));
         when(goodsItemRepository.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()))
             .thenReturn(List.of(goodsItem));
         when(reservationRepository.saveAndFlush(reservation)).thenReturn(reservation);
+    }
+
+    private void mockLockedReservation() {
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        UnitType unitType = reservation.getUnitType();
+        when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
     }
 
     private <T> T entityWithId(T entity) {

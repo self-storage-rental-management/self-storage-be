@@ -4,12 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.storagehub.api.reservation.CancelReservationRequest;
 import com.storagehub.api.reservation.CheckInAppointmentRequest;
 import com.storagehub.api.reservation.CheckInDocumentResponse;
+import com.storagehub.api.reservation.CustomerPreparationCompleteRequest;
 import com.storagehub.api.reservation.GoodsItemRequest;
 import com.storagehub.api.reservation.UpdateSetupGoodsRequest;
 import com.storagehub.common.api.ApiException;
@@ -138,6 +140,24 @@ class CustomerReservationServiceTests {
     }
 
     @Test
+    void ownedReservationAtPausedFacilityCanDisplayMissingHistoricalContactAndUnitDetails() {
+        reservation.getFacility().setStatus(com.storagehub.domain.model.FacilityStatus.maintenance);
+        reservation.getFacility().setName("Cơ sở tạm ngưng");
+        reservation.getFacility().setAddress("Địa chỉ cơ sở");
+        reservation.getUnitType().setName("Kho nhỏ");
+        when(reservationRepository.findByIdAndCustomer_Id(reservation.getId(), actor.userId())).thenReturn(Optional.of(reservation));
+
+        var detail = service.getDetail(actor, reservation.getId());
+
+        assertThat(detail.getCurrentFacility().name()).isEqualTo("Cơ sở tạm ngưng");
+        assertThat(detail.getCurrentFacility().address()).isEqualTo("Địa chỉ cơ sở");
+        assertThat(detail.getCurrentUnitType().name()).isEqualTo("Kho nhỏ");
+        assertThat(detail.getCurrentUnitType().volumeM3()).isEqualByComparingTo("64");
+        assertThat(detail.getReservation().getFacilitySnapshot()).isNull();
+        assertThat(detail.getReservation().getUnitTypeSnapshot()).isNull();
+    }
+
+    @Test
     void classifiesIdenticallyNamedCheckInDocumentsByTheirWorkflowReferences() {
         ReflectionTestUtils.setField(service, "paymentProvenance", paymentProvenance);
         ReflectionTestUtils.setField(service, "objectMapper", new com.fasterxml.jackson.databind.ObjectMapper());
@@ -236,6 +256,116 @@ class CustomerReservationServiceTests {
     }
 
     @Test
+    void preparationCompletionRepairsLegacyReceiptStatusAndOpensInventory() {
+        reservation.setStatus(ReservationStatus.PREPARING);
+        StorageUnit storageUnit = entityWithId(new StorageUnit());
+        storageUnit.setCode("HCM-Q1-F01-M-004");
+        Rental rental = entityWithId(new Rental());
+        rental.setReservation(reservation);
+        rental.setFacility(reservation.getFacility());
+        rental.setStorageUnit(storageUnit);
+        rental.setStatus(RentalStatus.setup);
+        rental.setInventoryDueAt(Instant.now().plusSeconds(86_400));
+        Instant setupStart = Instant.parse("2026-11-23T08:17:00Z");
+        Instant setupEnd = setupStart.plusSeconds(3 * 86_400);
+        rental.setSetupStartedAt(setupStart);
+        rental.setSetupEndsAt(setupEnd);
+
+        CheckIn checkIn = entityWithId(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setRental(rental);
+        checkIn.setStatus(CheckInStatus.handover_pending_receipt);
+
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+        when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+
+        var response = service.markPreparationComplete(actor, reservation.getId(),
+            new CustomerPreparationCompleteRequest("Khách đã sắp xếp hàng xong"));
+
+        assertThat(checkIn.getStatus()).isEqualTo(CheckInStatus.setup_completed);
+        assertThat(checkIn.getSetupCompletedAt()).isNotNull();
+        assertThat(rental.getMoveInCompletedAt()).isNotNull();
+        assertThat(rental.getInventoryDueAt()).isEqualTo(InventoryTimelinePolicy.reminderAt(checkIn.getSetupCompletedAt()));
+        assertThat(rental.getInventoryFinalDeadlineAt()).isEqualTo(InventoryTimelinePolicy.inventoryDeadline(checkIn.getSetupCompletedAt()));
+        assertThat(rental.getSetupStartedAt()).isEqualTo(setupStart);
+        assertThat(rental.getSetupEndsAt()).isEqualTo(setupEnd);
+        assertThat(response.getCheckInStatus()).isEqualTo(CheckInStatus.setup_completed.name());
+        assertThat(response.getSetupCompletedAt()).isEqualTo(checkIn.getSetupCompletedAt());
+        verify(checkInRepository).saveAndFlush(checkIn);
+    }
+
+    @Test
+    void schedulesAndReschedulesInventoryWithoutRestartingTheDeadline() {
+        CheckIn checkIn = inventoryReadyFixture();
+        Rental rental = checkIn.getRental();
+        Instant first = rental.getMoveInCompletedAt().plusSeconds(7200);
+        Instant second = first.plusSeconds(3600);
+        Instant reminder = rental.getInventoryDueAt();
+        Instant deadline = rental.getInventoryFinalDeadlineAt();
+        when(checkInRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(checkIn));
+        when(rentalRepository.findByReservation_Id(reservation.getId())).thenReturn(Optional.of(rental));
+
+        assertThat(service.setInventoryAppointment(actor, reservation.getId(), first, null).getInventoryAppointmentAt())
+            .isEqualTo(first);
+        assertThat(service.setInventoryAppointment(actor, reservation.getId(), second, "Khách đổi ca làm")
+            .getInventoryAppointmentAt()).isEqualTo(second);
+
+        assertThat(rental.getInventoryDueAt()).isEqualTo(reminder);
+        assertThat(rental.getInventoryFinalDeadlineAt()).isEqualTo(deadline);
+        verify(auditLogService).recordMutation(reservation.getCustomer(), "INVENTORY_APPOINTMENT_SAVED", "CheckIn",
+            checkIn.getId(), reservation.getFacility().getId(), Map.of("appointmentAt", first),
+            Map.of("appointmentAt", second, "reason", "Khách đổi ca làm"));
+        verify(notificationService).createFacilityOperationsNotifications(
+            org.mockito.ArgumentMatchers.eq(reservation.getFacility().getId()),
+            org.mockito.ArgumentMatchers.eq(com.storagehub.domain.model.NotificationType.CHECKIN),
+            org.mockito.ArgumentMatchers.eq("Đã đổi lịch kiểm kê"), any(String.class),
+            org.mockito.ArgumentMatchers.eq(reservation.getId()));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"past", "at deadline", "after deadline", "already arrived"})
+    void rejectsInventoryAppointmentOutsideTheOpenWindow(String scenario) {
+        CheckIn checkIn = inventoryReadyFixture();
+        Instant deadline = checkIn.getRental().getInventoryFinalDeadlineAt();
+        Instant appointment = switch (scenario) {
+            case "past" -> Instant.now().minusSeconds(60);
+            case "at deadline" -> deadline;
+            case "after deadline" -> deadline.plusSeconds(60);
+            default -> Instant.now().plusSeconds(3600);
+        };
+        if (scenario.equals("already arrived")) checkIn.setInventoryArrivedAt(Instant.now());
+
+        assertThatThrownBy(() -> service.setInventoryAppointment(actor, reservation.getId(), appointment, null))
+            .isInstanceOf(ApiException.class);
+        assertThat(checkIn.getInventoryAppointmentAt()).isNull();
+        verify(checkInRepository, never()).saveAndFlush(any());
+    }
+
+    private CheckIn inventoryReadyFixture() {
+        reservation.setStatus(ReservationStatus.PREPARING);
+        Instant readyAt = Instant.now().minusSeconds(300);
+        Rental rental = entityWithId(new Rental());
+        rental.setInventoryPending(true);
+        rental.setMoveInCompletedAt(readyAt);
+        rental.setInventoryDueAt(readyAt.plusSeconds(4 * 86_400));
+        rental.setInventoryFinalDeadlineAt(readyAt.plusSeconds(7 * 86_400));
+        CheckIn checkIn = entityWithId(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setRental(rental);
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setSetupCompletedAt(readyAt);
+        when(checkInRepository.findOwnedByReservationForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(checkIn));
+        when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
+            .thenReturn(Optional.of(reservation));
+        when(rentalRepository.findByReservationIdForUpdate(reservation.getId())).thenReturn(Optional.of(rental));
+        return checkIn;
+    }
+
+    @Test
     void paymentHistoryIncludesArchivedReservationsAndScopesToCustomer() {
         reservation.setArchivedAt(Instant.now());
         reservation.setStatus(ReservationStatus.COMPLETED);
@@ -259,7 +389,8 @@ class CustomerReservationServiceTests {
         assertThat(history.data().getFirst().reservationCode()).isEqualTo(reservation.getReservationCode());
         assertThat(history.data().getFirst().createdAt()).isEqualTo(payment.getCreatedAt());
         verify(paymentRepository).findAllByReservation_Customer_Id(actor.userId(), pageable);
-        org.mockito.Mockito.verifyNoInteractions(snapshotRepository, reservationRepository);
+        verify(snapshotRepository).findByReservation_Id(reservation.getId());
+        org.mockito.Mockito.verifyNoInteractions(reservationRepository);
     }
 
     @Test
@@ -278,7 +409,7 @@ class CustomerReservationServiceTests {
 
     @Test
     void listsOnlyReservationsOwnedByCustomer() {
-        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
+        when(reservationRepository.findCustomerVisibleReservations(eq(actor.userId()), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));
@@ -287,9 +418,7 @@ class CustomerReservationServiceTests {
 
         assertThat(response.data()).hasSize(1);
         assertThat(response.data().get(0).getId()).isEqualTo(reservation.getId());
-        verify(reservationRepository).findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(
-            eq(actor.userId()), eq(ReservationStatus.REJECTED), any()
-        );
+        verify(reservationRepository).findCustomerVisibleReservations(eq(actor.userId()), any());
     }
 
     @Test
@@ -336,7 +465,7 @@ class CustomerReservationServiceTests {
     void rejectsCheckInAppointmentOutsideTheSevenDayWindow() {
         reservation.setStatus(ReservationStatus.CONFIRMED);
         reservation.setStartDate(LocalDate.now().plusDays(2));
-        Instant invalidAppointment = Instant.now().plusSeconds(10 * 86_400L);
+        Instant invalidAppointment = Instant.now().plusSeconds(9 * 86_400L);
         when(reservationRepository.findOwnedByIdForUpdate(reservation.getId(), actor.userId()))
             .thenReturn(Optional.of(reservation));
 
@@ -358,7 +487,7 @@ class CustomerReservationServiceTests {
         snapshot.setVoucherDiscountAmount(new BigDecimal("100000.00"));
         snapshot.setNetRentalAmount(new BigDecimal("11040000.00"));
 
-        when(reservationRepository.findAllByCustomer_IdAndArchivedAtIsNullAndStatusNot(any(), any(), any()))
+        when(reservationRepository.findCustomerVisibleReservations(eq(actor.userId()), any()))
             .thenReturn(new PageImpl<>(List.of(reservation)));
         when(snapshotRepository.findByReservation_Id(reservation.getId()))
             .thenReturn(Optional.of(snapshot));

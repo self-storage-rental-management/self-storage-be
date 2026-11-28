@@ -65,9 +65,19 @@ public class RentalBookingEvidenceReader {
             p.getAmount(),p.getProcessedAt(),classification.name(),p.getInvoiceNumber(),p.getInvoiceStatus(),p.getInvoiceIssuedAt(),
             preflight.read(p,rental,snapshots.isEmpty()?null:snapshots.getFirst(),classification),sandboxPolicy.evaluate(p,classification));}).toList();
         // Do not return gateway intent, idempotency key, failure details or other internal identifiers.
+        // Older reservations may not have copied contact/identity fields. Keep the
+        // immutable reservation value when present, then fall back to the verified
+        // customer profile so the rental detail is not rendered as empty.
+        var profile = reservation.getCustomer().getProfileDetails();
+        String phone = reservation.getCustomerPhone();
+        if (phone == null || phone.isBlank()) phone = reservation.getCustomer().getPhone();
+        String address = reservation.getCustomerAddress();
+        if (address == null || address.isBlank()) address = reservation.getCustomer().getPermanentAddress();
+        String identity = reservation.getIdentityDocumentNumber();
+        if (identity == null || identity.isBlank()) identity = profile == null ? null : profile.getIdentityDocumentNumber();
         var customer = new RentalBookingEvidence.CustomerSnapshot(
             reservation.getCustomer().getFullName(), reservation.getCustomer().getEmail(),
-            reservation.getCustomerPhone(), reservation.getCustomerAddress(), reservation.getIdentityDocumentNumber());
+            phone, address, identity);
         var goods = goodsItems.findAllByReservation_IdOrderByCreatedAtAsc(reservation.getId()).stream().map(item -> {
             var images = files.findAllByEntityTypeAndEntityIdOrderByCreatedAtAsc("RESERVATION_GOODS_ITEM", item.getId()).stream()
                 .filter(asset -> asset.getStatus() == FileAssetStatus.ACTIVE)
@@ -75,7 +85,8 @@ public class RentalBookingEvidenceReader {
                     asset.getChecksumSha256(),asset.getEntityType(),asset.getEntityId(),asset.getStatus(),asset.getCreatedAt())).toList();
             return new RentalBookingEvidence.GoodsItem(item.getId(),item.getGoodsCode(),
                 item.getCategoryName(),item.getMaterialName(),item.getCustomGoodsName(),item.getDescription(),item.getQuantity(),
-                item.getLengthCm(),item.getWidthCm(),item.getHeightCm(),item.getWeightKg(),item.isFragile(),item.getCustomerNote(),images);
+                item.getLengthCm(),item.getWidthCm(),item.getHeightCm(),item.getWeightKg(),item.isFragile(),item.getCustomerNote(),images,
+                item.getCustomMaterial(),item.isStackable(),item.getMaxStackLayers(),item.isAllowHorizontalPlacement());
         }).toList();
         return Optional.of(new RentalBookingEvidence(rental.getId(),reservation.getId(),"VND",amounts,payments,rows.size()>20,customer,goods));
     }

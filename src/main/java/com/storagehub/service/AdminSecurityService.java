@@ -87,7 +87,7 @@ public class AdminSecurityService {
         if (page < 0 || size < 1 || size > 100) {
             throw ApiExceptions.validation("page must be >= 0 and size must be between 1 and 100", null);
         }
-        return PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, sort));
+        return PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, sort).and(Sort.by("id")));
     }
 
     private String clean(String value) {

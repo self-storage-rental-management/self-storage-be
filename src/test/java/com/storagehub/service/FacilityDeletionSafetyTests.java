@@ -6,6 +6,8 @@ import com.storagehub.security.ActorPrincipal;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 import static org.mockito.Mockito.*;
@@ -16,12 +18,17 @@ class FacilityDeletionSafetyTests {
     @Mock FacilityRepository facilities;
     @Mock UnitTypeRepository unitTypes;
     @Mock StorageUnitRepository units;
+    @Mock ReservationCapacityService reservationCapacity;
     @Mock RentalPackagePolicyRepository packages;
     @Mock FacilityScopeService scopes;
     @Mock AdminAuthorizationService authorization;
     @Mock AuditLogService audit;
     @Mock UserFacilityScopeRepository userFacilityScopes;
     @Mock ReservationRepository reservations;
+    @Mock ContractRepository contracts;
+    @Mock PaymentRepository payments;
+    @Mock RefundRepository refunds;
+    @Mock RefundRequestRepository refundRequests;
     @Mock NotificationService notifications;
     @Mock UnitTypeChangeRequestRepository changes;
     @Mock UserRepository users;
@@ -37,31 +44,68 @@ class FacilityDeletionSafetyTests {
 
     @Test void preservesFacilityWithReservationHistory() {
         Facility facility = new Facility();
-        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
         service.deleteFacility(actor, id);
         assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
-        verifyNoInteractions(reservations);
     }
 
-    @Test void archivesFacilityAndTypesWithoutDeletingPhysicalUnits() {
+    @ParameterizedTest
+    @EnumSource(value = FacilityStatus.class, names = {"maintenance", "inactive"})
+    void publishRejectsPausedOrArchivedFacilityAfterLocking(FacilityStatus currentStatus) {
         Facility facility = new Facility();
-        when(facilities.findById(id)).thenReturn(Optional.of(facility));
-        UnitType type = new UnitType();
-        type.setStatus(UnitTypeStatus.active);
-        when(unitTypes.findByFacility_IdOrderByCodeAsc(id)).thenReturn(List.of(type));
+        facility.setStatus(currentStatus);
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+
+        assertThatThrownBy(() -> service.publish(actor, id))
+            .isInstanceOfSatisfying(com.storagehub.common.api.ApiException.class, error -> {
+                assertThat(error.getStatus().value()).isEqualTo(409);
+                assertThat(error.getMessage()).contains("Trạng thái hoạt động");
+            });
+        assertThat(facility.getStatus()).isEqualTo(currentStatus);
+        verify(facilities).findByIdForUpdate(id);
+        verifyNoMoreInteractions(facilities);
+        verifyNoInteractions(unitTypes);
+    }
+
+    @Test void reopeningPausedFacilityPreservesArchivedUnitTypes() {
+        Facility facility = new Facility();
+        org.springframework.test.util.ReflectionTestUtils.setField(facility, "id", id);
+        facility.setStatus(FacilityStatus.maintenance);
+        UnitType published = new UnitType();
+        published.setStatus(UnitTypeStatus.active);
+        published.setMonthlyPrice(new java.math.BigDecimal("1000000"));
+        UnitType archived = new UnitType();
+        archived.setStatus(UnitTypeStatus.archived);
+        archived.setMonthlyPrice(new java.math.BigDecimal("2000000"));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(unitTypes.findByFacility_IdOrderByCodeAsc(id)).thenReturn(List.of(published, archived));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
+
+        assertThat(service.restoreFacility(actor, id).status()).isEqualTo(FacilityStatus.active);
+        assertThat(archived.getStatus()).isEqualTo(UnitTypeStatus.archived);
+        assertThat(archived.getMonthlyPrice()).isEqualByComparingTo("2000000");
+        verify(unitTypes, never()).saveAll(anyList());
+    }
+
+    @Test void archivesFacilityWithoutChangingUnitTypesOrDeletingPhysicalUnits() {
+        Facility facility = new Facility();
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
         service.deleteFacility(actor, id);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
         assertThat(facility.getStatus()).isEqualTo(FacilityStatus.inactive);
-        assertThat(type.getStatus()).isEqualTo(UnitTypeStatus.archived);
+        verifyNoInteractions(unitTypes);
         verify(units, never()).deleteAll(anyList());
     }
 
     @Test void archivesEmptyFacilityWithoutPhysicalDeletion() {
         Facility facility = new Facility();
-        when(facilities.findById(id)).thenReturn(Optional.of(facility));
+        when(facilities.findByIdForUpdate(id)).thenReturn(Optional.of(facility));
+        when(facilities.saveAndFlush(facility)).thenReturn(facility);
         service.deleteFacility(actor, id);
         verify(facilities).saveAndFlush(facility);
         verify(facilities, never()).delete(any());
@@ -178,10 +222,10 @@ class FacilityDeletionSafetyTests {
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(
             service, "createPhysicalUnits", type, 2, "Tầng 2", "Khu B");
 
-        var captor = ArgumentCaptor.forClass(StorageUnit.class);
-        verify(units, times(2)).save(captor.capture());
-        assertThat(captor.getAllValues()).extracting(StorageUnit::getCode)
-            .containsExactly("B-205", "B-206");
+        var codes = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, times(2)).update(contains("INSERT INTO storage_units"), any(), any(), any(),
+            codes.capture(), eq("Tầng 2"), eq("Khu B"), isNull());
+        assertThat(codes.getAllValues()).containsExactly("B-205", "B-206");
     }
 
     private UnitTypeChangeRequest submittedChange(UnitType type) {

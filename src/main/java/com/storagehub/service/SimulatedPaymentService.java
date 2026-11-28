@@ -28,6 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class SimulatedPaymentService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
 
     private final PaymentRepository paymentRepository;
     private final ReservationRepository reservationRepository;
@@ -116,7 +118,7 @@ public class SimulatedPaymentService {
         if (outcome == PaymentSimulationOutcome.SUCCESS) {
             payment.setStatus(PaymentStatus.PAID);
             payment.setPaidAt(now);
-            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), now);
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), snapshot.getFreeSetupDays(), now);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(now);
             reservation.setConfirmedAt(now);
@@ -129,7 +131,6 @@ public class SimulatedPaymentService {
                     + " đã thanh toán cọc và đang chờ nhân viên phân kho.",
                 reservation.getId()
             );
-            sendSimulatedReservationPaymentBillEmail(payment, reservation, now);
             message = "Payment was recorded successfully and the reservation is confirmed";
         } else if (outcome == PaymentSimulationOutcome.NOT_RECEIVED) {
             payment.setStatus(PaymentStatus.NOT_RECEIVED);
@@ -147,6 +148,13 @@ public class SimulatedPaymentService {
         }
 
         Payment saved = paymentRepository.saveAndFlush(payment);
+        if (saved.getStatus() == PaymentStatus.PAID && saved.getReceiptCode() == null) {
+            saved.setReceiptCode(receiptCodes.issue("PAYMENT", saved.getId(), false));
+            paymentRepository.saveAndFlush(saved);
+        }
+        if (outcome == PaymentSimulationOutcome.SUCCESS) {
+            sendSimulatedReservationPaymentBillEmail(saved, reservation, snapshot, now);
+        }
         SimulatedPaymentResponse response = toResponse(saved, outcome, now);
         auditLogService.recordMutation(
             initiator, "SIMULATED_PAYMENT_PROCESSED", "Payment", saved.getId(),
@@ -162,6 +170,7 @@ public class SimulatedPaymentService {
     }
 
     private void requirePayable(Reservation reservation) {
+        CustomerProfilePolicy.validate(reservation.getCustomer(), true);
         if (reservation.getStatus() != ReservationStatus.AWAITING_PAYMENT) {
             throw ApiExceptions.conflict("Reservation is not awaiting payment");
         }
@@ -210,7 +219,9 @@ public class SimulatedPaymentService {
         return nf.format(amount) + " đ";
     }
 
-    private void sendSimulatedReservationPaymentBillEmail(Payment payment, Reservation reservation, Instant paidAt) {
+    private void sendSimulatedReservationPaymentBillEmail(
+        Payment payment, Reservation reservation, ReservationPricingSnapshot snapshot, Instant paidAt
+    ) {
         if (transactionalEmailService == null || reservation == null) return;
         try {
             var customer = reservation.getCustomer();
@@ -219,20 +230,19 @@ public class SimulatedPaymentService {
 
             String fullName = customer != null && customer.getFullName() != null ? customer.getFullName() : "Quý khách";
 
-            String invoiceNumber = payment.getInvoiceNumber() != null ? payment.getInvoiceNumber() : reservation.getReservationCode();
             String transactionNo = payment.getGatewayTransactionNo() != null ? payment.getGatewayTransactionNo() : payment.getGatewayIntentId();
             String amountFormatted = formatVnd(payment.getAmount());
             String paidAtFormatted = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy")
                 .withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).format(paidAt != null ? paidAt : Instant.now());
 
-            String unitInfo = reservation.getUnitType() != null ? reservation.getUnitType().getName() : "Gian kho lưu trữ";
-            if (reservation.getAssignedUnit() != null) {
-                unitInfo += " (" + reservation.getAssignedUnit().getCode() + ")";
+            String unitInfo = ReservationSnapshotView.unitTypeName(reservation, snapshot);
+            String assignedUnitCode = ReservationSnapshotView.assignedUnitCode(reservation, snapshot);
+            if (assignedUnitCode != null) {
+                unitInfo += " (" + assignedUnitCode + ")";
             }
 
-            String facilityName = reservation.getFacility() != null ? reservation.getFacility().getName() : "StorageHub";
-            String facilityAddress = reservation.getFacility() != null && reservation.getFacility().getAddress() != null
-                ? reservation.getFacility().getAddress() : "";
+            String facilityName = ReservationSnapshotView.facilityName(reservation, snapshot);
+            String facilityAddress = ReservationSnapshotView.facilityAddress(reservation, snapshot);
 
             String periodOrAppointment = "";
             if (reservation.getAppointmentAt() != null) {
@@ -251,7 +261,7 @@ public class SimulatedPaymentService {
                 userId,
                 email,
                 fullName,
-                invoiceNumber,
+                payment.getId(),
                 transactionNo,
                 amountFormatted,
                 paidAtFormatted,

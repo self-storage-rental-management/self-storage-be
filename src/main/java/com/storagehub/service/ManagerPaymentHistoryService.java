@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -34,6 +35,8 @@ public class ManagerPaymentHistoryService {
     private PaymentProvenance paymentProvenance;
     @org.springframework.beans.factory.annotation.Autowired
     private org.springframework.beans.factory.ObjectProvider<com.storagehub.service.renewal.RenewalTransactionReader> renewalTransactions;
+    @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
 
     @Transactional(readOnly = true)
     public PageResponse<ManagerPaymentHistoryResponse> list(
@@ -52,8 +55,11 @@ public class ManagerPaymentHistoryService {
             : "%" + query.search().toLowerCase(Locale.ROOT) + "%";
         PageRequest fetch = PageRequest.of(0, fetchSize);
         Page<Payment> payments = paymentRepository.searchFacilityPaymentHistory(query.facilityId(), pattern, fetch);
+        var receiptIds = new ArrayList<java.util.UUID>();
+        if (pattern != null && receiptCodes != null) receiptIds.addAll(receiptCodes.findSourcesMatching("RETURN", pattern));
+        if (receiptIds.isEmpty()) receiptIds.add(new java.util.UUID(0, 0));
         Page<ReturnCase> settlements = returnCaseRepository.searchFacilityPaymentSettlements(
-            query.facilityId(), pattern, fetch
+            query.facilityId(), pattern, receiptIds, fetch
         );
 
         List<ManagerPaymentHistoryResponse> all = new ArrayList<>(
@@ -82,13 +88,18 @@ public class ManagerPaymentHistoryService {
             ? payment.getReservation().getCustomer().getFullName()
             : payment.getRenewal().getRental().getCustomer().getFullName();
         String reference = firstNonBlank(
-            payment.getGatewayTransactionNo(), payment.getGatewayIntentId(), payment.getId().toString()
+            payment.getGatewayIntentId(), payment.getGatewayTransactionNo(), payment.getId().toString()
         );
         String method = "MANUAL".equalsIgnoreCase(payment.getGatewayProvider())
             ? payment.getGatewayBankCode()
             : firstNonBlank(payment.getGatewayProvider(), payment.getGatewayBankCode());
         Instant occurredAt = payment.getPaidAt() != null ? payment.getPaidAt()
             : payment.getProcessedAt() != null ? payment.getProcessedAt() : payment.getCreatedAt();
+        String reservationCode = payment.getReservation() != null
+            ? payment.getReservation().getReservationCode()
+            : payment.getRenewal() != null && payment.getRenewal().getRental() != null && payment.getRenewal().getRental().getReservation() != null
+                ? payment.getRenewal().getRental().getReservation().getReservationCode()
+                : null;
         return new ManagerPaymentHistoryResponse(
             payment.getId().toString(), reference, customerName, payment.getPurpose().name(),
             payment.getStatus().name(), payment.getAmount(), payment.getCurrency(),
@@ -97,14 +108,34 @@ public class ManagerPaymentHistoryService {
             payment.getRenewal()==null?null:payment.getRenewal().getId(),
             paymentProvenance!=null&&"MANUAL".equalsIgnoreCase(payment.getGatewayProvider())?paymentProvenance.manualReceiptFileId(payment):null,
             payment.getInvoiceNumber(), payment.getInvoiceStatus(), payment.getInvoiceIssuedAt(),
-            transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable()
+            transaction==null?null:transaction.status(),transaction==null?null:transaction.receiptAvailable(),
+            reservationCode, payment.getGatewayTransactionNo(), payment.getReceiptCode()
         );
+    }
+
+    @Transactional(readOnly = true)
+    public ManagerPaymentHistoryResponse detail(ActorPrincipal actor, UUID paymentId) {
+        if (!actor.hasRole(RoleCode.MANAGER)) {
+            throw ApiExceptions.forbidden("Only managers can read facility payment history");
+        }
+        authorizationService.require(actor, SystemPermission.VIEW_PAYMENTS);
+        var payment = paymentRepository.findById(paymentId)
+            .orElseThrow(() -> ApiExceptions.notFound("Payment not found"));
+        var facility = payment.getReservation() != null ? payment.getReservation().getFacility()
+            : payment.getRenewal() != null && payment.getRenewal().getRental() != null
+                ? payment.getRenewal().getRental().getFacility() : null;
+        if (facility == null) throw ApiExceptions.notFound("Payment not found");
+        facilityScopeService.assertCanRead(actor, facility.getId());
+        return paymentRow(payment);
     }
 
     private ManagerPaymentHistoryResponse settlementRow(ReturnCase returnCase) {
         boolean refund = returnCase.getNetRefundAmount() != null
             && returnCase.getNetRefundAmount().signum() > 0;
         BigDecimal amount = refund ? returnCase.getNetRefundAmount() : returnCase.getAmountDueFromCustomer();
+        String reservationCode = returnCase.getRental() != null && returnCase.getRental().getReservation() != null
+            ? returnCase.getRental().getReservation().getReservationCode()
+            : null;
         return new ManagerPaymentHistoryResponse(
             returnCase.getId().toString(),
             firstNonBlank(returnCase.getSettlementPaymentId(), "RETURN-" + returnCase.getId()),
@@ -115,7 +146,10 @@ public class ManagerPaymentHistoryService {
             "VND",
             BigDecimal.ZERO,
             null,
-            returnCase.getSettlementPaidAt()
+            returnCase.getSettlementPaidAt(),
+            null, null, null, null, null, null, null,
+            reservationCode, returnCase.getSettlementPaymentId(),
+            receiptCodes == null ? null : receiptCodes.find("RETURN", returnCase.getId())
         );
     }
 

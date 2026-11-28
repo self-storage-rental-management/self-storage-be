@@ -1,16 +1,25 @@
 package com.storagehub.api.checkin;
 
-import com.storagehub.validation.IdentityDocumentPolicy;
-import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import com.storagehub.validation.ValidCccd;
 
 public record VerifyCheckInIdentityRequest(
-    @NotBlank @Size(max = 30) String identityDocumentNumber,
-    @Size(max = 1000) String note
+    @NotBlank @ValidCccd String identityDocumentNumber,
+    @Size(max = 1000) String note,
+    Boolean adulthoodConfirmed,
+    Boolean bookingOwnerConfirmed,
+    Boolean correctionConfirmed
 ) {
-    @AssertTrue(message = IdentityDocumentPolicy.MESSAGE)
-    public boolean isIdentityDocumentNumberValid() {
-        return IdentityDocumentPolicy.isValid(identityDocumentNumber);
+    public VerifyCheckInIdentityRequest(String identityDocumentNumber, String note, Boolean adulthoodConfirmed, Boolean bookingOwnerConfirmed) {
+        this(identityDocumentNumber, note, adulthoodConfirmed, bookingOwnerConfirmed, null);
+    }
+
+    public VerifyCheckInIdentityRequest(String identityDocumentNumber, String note, Boolean adulthoodConfirmed) {
+        this(identityDocumentNumber, note, adulthoodConfirmed, null);
+    }
+
+    public VerifyCheckInIdentityRequest(String identityDocumentNumber, String note) {
+        this(identityDocumentNumber, note, null);
     }
 }

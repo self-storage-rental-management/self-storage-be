@@ -19,6 +19,9 @@ import lombok.Setter;
 @Getter
 @Setter
 public class Rental extends BaseEntity {
+    @org.hibernate.annotations.Formula("(select c.display_code from business_record_codes c where c.resource_key = concat('TH:', lower(bin_to_uuid({alias}.id))))")
+    private String displayCode;
+
 
     public Rental() {
         super();
@@ -54,11 +57,14 @@ public class Rental extends BaseEntity {
     @Column(nullable = false)
     private LocalDate contractEndDate;
 
-    /** Actual handover instant. Contract responsibilities apply from this moment. */
+    /** Customer-selected handover appointment used as the timeline anchor. */
     @Column
     private Instant setupStartedAt;
 
-    /** Exclusive setup boundary. The paid rental becomes active at this instant. */
+    @Column(nullable = false)
+    private boolean staffHandoverPreparation;
+
+    /** Exclusive free-setup boundary calculated from the selected appointment. */
     @Column
     private Instant setupEndsAt;
 
@@ -75,8 +81,84 @@ public class Rental extends BaseEntity {
     @Column
     private Instant inventoryDueAt;
 
+    /** First operational deadline after the customer reports inventory readiness. */
+    @Column
+    private Instant inventoryFinalDeadlineAt;
+
+    /** New-policy removal window. Legacy records intentionally remain null. */
+    @Column
+    private Instant inventoryRemovalPublishedAt;
+    @Column
+    private Instant inventoryRemovalNotifiedAt;
+
+    @Column
+    private Instant inventoryRemovalDeadlineAt;
+
+    @Column
+    private Instant inventoryReturnLastReminderAt;
+
+    @Column
+    private Integer inventoryReturnWindowDays;
+
+    @Column
+    private Integer inventoryReturnExtensionDays;
+
+    @Column(nullable = false)
+    private int inventoryReturnExtensionCount = 0;
+
+    @Column(length = 64)
+    private String inventoryReturnPolicyVersion;
+
+    @Column private Instant setupCompletionDeadlineAt;
+    @Column private Integer setupExtensionDays;
+    @Column private Integer setupExtensionCount;
+    @Column private Instant originalInspectionArrivalDeadlineAt;
+    @Column(length = 64) private String intakePolicyVersion;
+    @Column private Integer intakeInitialDurationHours;
+    @Column private Integer intakeExtensionMaxHours;
+    @Column private Integer intakeExtensionMaxCount;
+    @Column private Integer intakeCompletionHours;
+    @Column(length = 32) private String appointmentStatus;
+    @Column(nullable = false) private int appointmentVersion = 0;
+    @Column private Instant actualArrivedAt;
+    @Column private Instant arrivalRecordedAt;
+    @Column private java.util.UUID arrivalRecordedBy;
+    @Column(length = 500) private String attendanceEvidenceNote;
+    @Column private java.util.UUID attendanceEvidenceFileId;
+    @Column private Instant attendanceReviewDeadlineAt;
+    @Column(length = 32) private String attendanceReviewStatus;
+    @Column private java.util.UUID attendanceReviewOwnerId;
+    @Column private Instant firstIdentityVerificationAt;
+    /** Start of the 72h inspection completion clock, set when staff confirm the customer arrived. */
+    @Column private Instant inspectionClockStartedAt;
+    @Column private Instant inspectionCompletionDeadlineAt;
+    @Column(nullable = false) private int verificationAttemptCount = 0;
+    @Column(nullable = false, length = 32) private String verificationStatus = "NOT_STARTED";
+    @Column private Instant inspectionStartedAt;
+    @Column private Instant inspectionCompletedAt;
+    @Column(length = 500) private String inspectionFailureReason;
+    @Column(length = 500) private String interruptionReason;
+    @Column private java.util.UUID exceptionOwnerId;
+    @Column private Instant exceptionDueAt;
+    @Column(length = 500) private String exceptionReason;
+    @Column private Instant lastMissedReminderAt;
+    @Column(nullable = false) private long intakeVersion = 0L;
+    @Column private Instant inventoryAppointmentAt;
+    @Column private Instant inventoryArrivedAt;
+    @Column private Instant inventoryIdentityVerifiedAt;
+    @Column private java.util.UUID inventoryIdentityPhotoId;
+    @Column private java.util.UUID inventoryIdentityVerifiedBy;
+    @Column private Instant inventoryResultPublishedAt;
+    @Column private Instant inventoryRemainderDeadlineAt;
+    @Column(columnDefinition = "LONGTEXT") private String workflowHistoryJson;
+
+
     @Column(nullable = false)
     private boolean inventoryPending;
+
+    /** The first inventory deadline reminder is separate from the final escalation. */
+    @Column
+    private Instant inventoryDeadlineReminderAt;
 
     /** A setup return must pass physical inspection and financial reconciliation. */
     @Column(nullable = false)

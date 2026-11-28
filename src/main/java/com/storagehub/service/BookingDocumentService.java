@@ -45,7 +45,9 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class BookingDocumentService {
 
-    private static final String CURRENT_FILE_PREFIX = "phieu-xac-nhan-giu-kho-";
+    // Bump this value whenever the PDF layout or displayed snapshot fields change.
+    // The generate command then replaces previously issued files exactly once.
+    private static final String CURRENT_FILE_PREFIX = "phieu-xac-nhan-giu-kho-v2-";
     private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
 
     private final BookingDocumentRepository documentRepository;
@@ -221,33 +223,62 @@ public class BookingDocumentService {
 
         drawLabelValue(graphics, "Mã đơn giữ kho", reservation.getReservationCode(), 105, 490, regular, medium, muted, ink);
         drawLabelValue(graphics, "Khách hàng", reservation.getCustomer().getFullName(), 640, 490, regular, medium, muted, ink);
-        drawLabelValue(graphics, "Cơ sở", reservation.getFacility().getName(), 105, 585, regular, medium, muted, ink);
-        drawLabelValue(graphics, "Loại kho giữ chỗ", ReservationSnapshotView.unitTypeName(reservation), 640, 585, regular, medium, muted, ink);
+        drawLabelValue(graphics, "Cơ sở", ReservationSnapshotView.facilityName(reservation, snapshot), 105, 585, regular, medium, muted, ink);
+        drawLabelValue(graphics, "Loại kho giữ chỗ", ReservationSnapshotView.unitTypeName(reservation, snapshot), 640, 585, regular, medium, muted, ink);
         String rentalPeriod = date(reservation.getStartDate()) + " - " + date(reservation.getEndDate());
         drawLabelValue(graphics, "Kỳ thuê dự kiến", rentalPeriod, 105, 680, regular, medium, muted, ink);
         String rentalMonths = snapshot.getRentalMonths() > 0 ? snapshot.getRentalMonths() + " tháng" : "-";
         drawLabelValue(graphics, "Thời hạn", rentalMonths, 640, 680, regular, medium, muted, ink);
-        drawLabelValue(graphics, "Địa chỉ cơ sở", nullToDash(reservation.getFacility().getAddress()), 105, 775, regular, medium.deriveFont(22f), muted, ink);
+        drawLabelValue(graphics, "Địa chỉ cơ sở", ReservationSnapshotView.facilityAddress(reservation, snapshot), 105, 775, regular, medium.deriveFont(22f), muted, ink);
 
-        drawCard(graphics, 72, 890, 1096, 570, Color.WHITE, new Color(225, 220, 210));
+        drawCard(graphics, 72, 875, 1096, 595, Color.WHITE, new Color(225, 220, 210));
         graphics.setFont(section);
         graphics.setColor(ink);
-        graphics.drawString("Chi tiết chi phí", 105, 945);
+        graphics.drawString("Chi tiết chi phí", 105, 925);
         graphics.setColor(orange);
-        graphics.fillRoundRect(105, 965, 80, 5, 3, 3);
+        graphics.fillRoundRect(105, 940, 80, 5, 3, 3);
 
-        int y = 1020;
+        BigDecimal grossRent = snapshot.getGrossRentalAmount() != null ? snapshot.getGrossRentalAmount() : BigDecimal.ZERO;
+        BigDecimal secDeposit = snapshot.getSecurityDepositAmount() != null ? snapshot.getSecurityDepositAmount() : BigDecimal.ZERO;
+        BigDecimal totalBeforeDiscount = grossRent.add(secDeposit);
+        BigDecimal discount = snapshot.getDiscountAmount() != null ? snapshot.getDiscountAmount() : BigDecimal.ZERO;
+        BigDecimal totalAfterDiscount = snapshot.getTotalInitialObligation() != null
+            ? snapshot.getTotalInitialObligation()
+            : totalBeforeDiscount.subtract(discount);
+        BigDecimal depositPaid = snapshot.getReservationDepositAmount() != null ? snapshot.getReservationDepositAmount() : BigDecimal.ZERO;
+        BigDecimal dueAtCheckIn = snapshot.getDueAtCheckIn() != null ? snapshot.getDueAtCheckIn() : totalAfterDiscount.subtract(depositPaid);
+
+        int y = 985;
+        // 1. Ở trên cùng: Tổng tiền phải trả
+        y = drawMoneyRow(graphics, "Tổng tiền phải trả", totalAfterDiscount, y, regular, medium, orange, ink, true);
+        // 2. Đơn giá mỗi tháng
         y = drawMoneyRow(graphics, "Đơn giá mỗi tháng", snapshot.getMonthlyPrice(), y, regular, medium, ink, muted, false);
-        y = drawMoneyRow(graphics, "Tiền thuê trước giảm", snapshot.getGrossRentalAmount(), y, regular, medium, ink, muted, false);
-        if (positive(snapshot.getDiscountAmount())) {
-            String rate = snapshot.getDiscountRate().multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString();
-            y = drawMoneyRow(graphics, "Ưu đãi (" + rate + "%)", snapshot.getDiscountAmount().negate(), y, regular, medium, green, muted, false);
+        // 3. Đơn giá của xx tháng
+        String rentalMonthsText = snapshot.getRentalMonths() > 0 ? "Tiền thuê (" + snapshot.getRentalMonths() + " tháng)" : "Tiền thuê";
+        y = drawMoneyRow(graphics, rentalMonthsText, grossRent, y, regular, medium, ink, muted, false);
+        // 4. Tiền đảm bảo kho
+        y = drawMoneyRow(graphics, "Tiền đảm bảo kho", secDeposit, y, regular, medium, ink, muted, false);
+        // 5. Tổng tiền trước giảm
+        y = drawMoneyRow(graphics, "Tổng tiền trước giảm", totalBeforeDiscount, y, regular, medium, ink, muted, true);
+        // 6. Ưu đãi giảm giá
+        String rate = snapshot.getDiscountRate() != null
+            ? snapshot.getDiscountRate().multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()
+            : "0";
+        if (positive(discount)) {
+            y = drawMoneyRow(graphics, "Ưu đãi giảm giá (" + rate + "%)", discount.negate(), y, regular, medium, green, muted, false);
+        } else {
+            y = drawMoneyRow(graphics, "Ưu đãi giảm giá (" + rate + "%)", BigDecimal.ZERO, y, regular, medium, muted, muted, false);
         }
-        y = drawMoneyRow(graphics, "Tiền thuê sau giảm", snapshot.getNetRentalAmount(), y, regular, medium, ink, muted, true);
-        y = drawMoneyRow(graphics, "Đặt cọc giữ chỗ đã thanh toán", snapshot.getReservationDepositAmount(), y, regular, medium, orange, muted, true);
-        y = drawMoneyRow(graphics, "Tiền thuê còn lại", snapshot.getRemainingRentalAmount(), y, regular, medium, ink, muted, false);
-        y = drawMoneyRow(graphics, "Tiền đảm bảo kho", snapshot.getSecurityDepositAmount(), y, regular, medium, ink, muted, false);
-        drawMoneyRow(graphics, "Tổng thanh toán khi nhận kho", snapshot.getDueAtCheckIn(), y, regular, medium, ink, muted, true);
+        if (positive(snapshot.getVoucherDiscountAmount())) {
+            String vCode = snapshot.getVoucherCode() != null ? " [" + snapshot.getVoucherCode() + "]" : "";
+            y = drawMoneyRow(graphics, "Mã ưu đãi" + vCode, snapshot.getVoucherDiscountAmount().negate(), y, regular, medium, green, muted, false);
+        }
+        // 7. Tổng tiền sau giảm
+        y = drawMoneyRow(graphics, "Tổng tiền sau giảm", totalAfterDiscount, y, regular, medium, ink, muted, true);
+        // 8. Đặt cọc giữ chỗ đã thanh toán
+        y = drawMoneyRow(graphics, "Đặt cọc giữ chỗ đã thanh toán", depositPaid, y, regular, medium, orange, muted, true);
+        // 9. Tổng thanh toán khi nhận kho
+        drawMoneyRow(graphics, "Tổng thanh toán khi nhận kho", dueAtCheckIn, y, regular, medium, ink, muted, true);
 
         drawCard(graphics, 72, 1490, 1096, 140, new Color(255, 248, 230), new Color(246, 199, 92));
         graphics.setFont(medium);
@@ -303,8 +334,8 @@ public class BookingDocumentService {
         graphics.setColor(valueColor);
         drawRight(graphics, money(value), 1135, y);
         graphics.setColor(new Color(235, 231, 223));
-        graphics.drawLine(105, y + 25, 1135, y + 25);
-        return y + 60;
+        graphics.drawLine(105, y + 16, 1135, y + 16);
+        return y + 49;
     }
 
     private void drawRight(Graphics2D graphics, String value, int right, int y) {

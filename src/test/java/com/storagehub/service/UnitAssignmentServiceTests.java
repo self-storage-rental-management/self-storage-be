@@ -7,8 +7,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import com.storagehub.api.unitassignment.CreateUnitAssignmentRequest;
+import com.storagehub.api.unitassignment.ChangeUnitAssignmentRequest;
 import com.storagehub.common.api.ApiException;
 import com.storagehub.domain.model.Facility;
 import com.storagehub.domain.model.FacilityScopeLevel;
@@ -24,6 +26,7 @@ import com.storagehub.domain.model.User;
 import com.storagehub.domain.repo.ReservationRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitAssignmentRepository;
+import com.storagehub.domain.repo.UnitTypeRepository;
 import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.time.Instant;
@@ -50,6 +53,8 @@ class UnitAssignmentServiceTests {
     @Mock private FacilityScopeService facilityScopeService;
     @Mock private AuditLogService auditLogService;
     @Mock private NotificationService notificationService;
+    @Mock private PalletInventoryService palletInventory;
+    @Mock private UnitTypeRepository capacityMutex;
 
     private UnitAssignmentService service;
     private ActorPrincipal actor;
@@ -61,8 +66,9 @@ class UnitAssignmentServiceTests {
     void setUp() {
         service = new UnitAssignmentService(
             reservationRepository, storageUnitRepository, assignmentRepository, userRepository,
-            authorizationService, facilityScopeService, auditLogService, notificationService
+            authorizationService, facilityScopeService, auditLogService, notificationService, palletInventory
         );
+        ReflectionTestUtils.setField(service, "capacityMutex", capacityMutex);
         operator = entityWithId(new User());
         UUID facilityId = UUID.randomUUID();
         actor = new ActorPrincipal(
@@ -75,6 +81,7 @@ class UnitAssignmentServiceTests {
         facility.setName("Facility A");
         UnitType unitType = entityWithId(new UnitType());
         unitType.setName("Medium");
+        lenient().when(capacityMutex.findByIdForUpdate(unitType.getId())).thenReturn(Optional.of(unitType));
 
         User customer = entityWithId(new User());
         customer.setFullName("Customer A");
@@ -118,6 +125,7 @@ class UnitAssignmentServiceTests {
             eq(com.storagehub.domain.model.NotificationType.RESERVATION),
             any(), any(), eq(reservation.getId())
         );
+        verify(palletInventory).requireCompatibleAssignment(reservation, unit);
     }
 
     @Test
@@ -181,6 +189,92 @@ class UnitAssignmentServiceTests {
         ))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("not available");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void changesAssignmentOnlyToACurrentlyAvailableReplacement(boolean needsMaintenance) {
+        reservation.setStatus(ReservationStatus.UNIT_RESERVED);
+        UnitAssignment current = entityWithId(new UnitAssignment());
+        current.setReservation(reservation);
+        current.setStorageUnit(unit);
+        current.setAssignedBy(operator);
+        current.setAssignedAt(Instant.now());
+        current.setStatus(UnitAssignmentStatus.ACTIVE);
+        reservation.setAssignedUnit(unit);
+        unit.setStatus(StorageUnitStatus.reserved);
+
+        StorageUnit replacement = entityWithId(new StorageUnit());
+        replacement.setFacility(unit.getFacility());
+        replacement.setUnitType(unit.getUnitType());
+        replacement.setCode("S002");
+        replacement.setStatus(StorageUnitStatus.available);
+
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(assignmentRepository.findByReservation_IdAndStatus(
+            reservation.getId(), UnitAssignmentStatus.ACTIVE
+        )).thenReturn(Optional.of(current));
+        when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
+        when(storageUnitRepository.findByIdForUpdate(replacement.getId())).thenReturn(Optional.of(replacement));
+        when(assignmentRepository.existsByStorageUnit_IdAndStatus(
+            replacement.getId(), UnitAssignmentStatus.ACTIVE
+        )).thenReturn(false);
+        when(userRepository.findById(actor.userId())).thenReturn(Optional.of(operator));
+        when(assignmentRepository.saveAndFlush(any(UnitAssignment.class)))
+            .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = service.change(
+            actor, reservation.getId(), new ChangeUnitAssignmentRequest(replacement.getId(), "Kho cũ cần bảo trì", needsMaintenance)
+        );
+
+        assertThat(response.storageUnitId()).isEqualTo(replacement.getId());
+        assertThat(unit.getStatus()).isEqualTo(needsMaintenance ? StorageUnitStatus.maintenance : StorageUnitStatus.available);
+        if (needsMaintenance) assertThat(unit.getAvailableFrom()).isNull();
+        assertThat(replacement.getStatus()).isEqualTo(StorageUnitStatus.reserved);
+        assertThat(current.getStatus()).isEqualTo(UnitAssignmentStatus.CANCELLED);
+        assertThat(reservation.getAssignedUnit()).isSameAs(replacement);
+        verify(notificationService).createNotification(
+            eq(reservation.getCustomer().getId()),
+            eq(com.storagehub.domain.model.NotificationType.RESERVATION),
+            eq("Gian kho đã được thay đổi"),
+            eq("Đơn RSV-001 đã được chuyển từ gian S001 sang gian S002. Lý do: Kho cũ cần bảo trì. Vui lòng kiểm tra lại thông tin đơn và lịch nhận kho trên tài khoản."),
+            eq(reservation.getId())
+        );
+    }
+
+    @Test
+    void rejectsReplacementThatBecameUnavailableBeforeConfirmation() {
+        reservation.setStatus(ReservationStatus.UNIT_RESERVED);
+        UnitAssignment current = entityWithId(new UnitAssignment());
+        current.setReservation(reservation);
+        current.setStorageUnit(unit);
+        current.setAssignedBy(operator);
+        current.setAssignedAt(Instant.now());
+        current.setStatus(UnitAssignmentStatus.ACTIVE);
+        reservation.setAssignedUnit(unit);
+        unit.setStatus(StorageUnitStatus.reserved);
+
+        StorageUnit replacement = entityWithId(new StorageUnit());
+        replacement.setFacility(unit.getFacility());
+        replacement.setUnitType(unit.getUnitType());
+        replacement.setCode("S002");
+        replacement.setStatus(StorageUnitStatus.reserved);
+
+        when(reservationRepository.findByIdForUpdate(reservation.getId())).thenReturn(Optional.of(reservation));
+        when(assignmentRepository.findByReservation_IdAndStatus(
+            reservation.getId(), UnitAssignmentStatus.ACTIVE
+        )).thenReturn(Optional.of(current));
+        when(storageUnitRepository.findByIdForUpdate(unit.getId())).thenReturn(Optional.of(unit));
+        when(storageUnitRepository.findByIdForUpdate(replacement.getId())).thenReturn(Optional.of(replacement));
+
+        assertThatThrownBy(() -> service.change(
+            actor, reservation.getId(), new ChangeUnitAssignmentRequest(replacement.getId(), "Kho cũ cần bảo trì")
+        ))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("not available");
+
+        verify(assignmentRepository, never()).saveAndFlush(any(UnitAssignment.class));
+        assertThat(current.getStatus()).isEqualTo(UnitAssignmentStatus.ACTIVE);
     }
 
     private void mockAssignmentChecks() {

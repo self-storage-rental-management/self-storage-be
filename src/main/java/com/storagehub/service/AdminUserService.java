@@ -25,6 +25,7 @@ import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -87,6 +88,7 @@ public class AdminUserService {
     private static final String TEMP_SPECIAL = "@#$%!*?";
     private static final String TEMP_ALL = TEMP_UPPER + TEMP_LOWER + TEMP_DIGITS + TEMP_SPECIAL;
     private final SecureRandom secureRandom = new SecureRandom();
+    private static final long TEMPORARY_PASSWORD_HOURS = 24;
 
     @Transactional(readOnly = true)
     public PageResponse<AdminUserResponse> list(
@@ -103,7 +105,7 @@ public class AdminUserService {
         if (page < 0 || size < 1 || size > 100) {
             throw ApiExceptions.validation("page must be >= 0 and size must be between 1 and 100", null);
         }
-        PageRequest pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        PageRequest pageable = PageRequest.of(page, size, Sort.by("fullName", "id"));
         Page<AdminUserResponse> result = userRepository.search(
             clean(search), role, status, facilityId, pageable
         ).map(this::toResponse);
@@ -126,6 +128,7 @@ public class AdminUserService {
 
         Set<RoleCode> roleCodes = normalizeRoles(request.roles());
         validateRoleCombination(roleCodes);
+        enforceActiveRoleCardinality(roleCodes, UserStatus.ACTIVE, null);
         if (!(roleCodes.size() == 1 && roleCodes.contains(RoleCode.CUSTOMER))) {
             authorizationService.require(actor, SystemPermission.MANAGE_ROLES);
         }
@@ -146,6 +149,7 @@ public class AdminUserService {
         user.setPhone(normalizeNullable(request.phone()));
         user.setStatus(UserStatus.ACTIVE);
         user.setMustChangePassword(true);
+        user.setTemporaryPasswordExpiresAt(Instant.now().plus(TEMPORARY_PASSWORD_HOURS, ChronoUnit.HOURS));
         user.setRoles(resolveRoles(roleCodes));
         User saved = userRepository.saveAndFlush(user);
         replaceScopes(saved, scopes);
@@ -218,7 +222,11 @@ public class AdminUserService {
         }
         if (request.roles() != null) {
             authorizationService.require(actor, SystemPermission.MANAGE_ROLES);
-            user.setRoles(resolveRoles(validateRoleAssignment(actor, user, request.roles())));
+            Set<RoleCode> roleCodes = validateRoleAssignment(actor, user, request.roles());
+            enforceActiveRoleCardinality(roleCodes, user.getStatus(), user.getId());
+            validateFacilityAssignment(roleCodes,
+                request.facilityScopes() == null ? currentScopeMap(user) : normalizeScopes(request.facilityScopes()));
+            user.setRoles(resolveRoles(roleCodes));
             securityChanged = true;
         }
         if (request.facilityScopes() != null) {
@@ -289,6 +297,7 @@ public class AdminUserService {
         AdminUserResponse before = toResponse(user);
         assertNotCustomerSelfMutation(actor, user);
         Set<RoleCode> roleCodes = validateRoleAssignment(actor, user, request.roles());
+        enforceActiveRoleCardinality(roleCodes, user.getStatus(), user.getId());
         user.setRoles(resolveRoles(roleCodes));
         User saved = userRepository.saveAndFlush(user);
         validateFacilityAssignment(roleCodes, currentScopeMap(saved));
@@ -338,16 +347,26 @@ public class AdminUserService {
         assertEditableTarget(actor, user);
         if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
             && request.status() != UserStatus.ACTIVE
-            && userRepository.countByRoles_Code(RoleCode.ADMIN) <= 1) {
+            && user.getStatus() == UserStatus.ACTIVE
+            && roleRepository.findByCodeForUpdate(RoleCode.ADMIN).isPresent()
+            && userRepository.countByRoles_CodeAndStatus(RoleCode.ADMIN, UserStatus.ACTIVE) <= 1) {
             throw ApiExceptions.conflict("Không thể khóa hoặc vô hiệu hóa Admin cuối cùng");
         }
+        enforceActiveRoleCardinality(roleCodes(user), request.status(), user.getId());
         AdminUserResponse before = toResponse(user);
         user.setStatus(request.status());
+        if (request.status() == UserStatus.LOCKED) {
+            user.setLockedUntil(null); // Manual locks remain until an explicit unlock.
+        } else {
+            user.setLockedUntil(null);
+            user.setFailedLoginAttempts(0);
+        }
         User saved = userRepository.saveAndFlush(user);
         revokeSessions(saved);
 
         AdminUserResponse response = toResponse(saved);
-        auditLogService.recordMutation("ADMIN_USER_STATUS_CHANGED", "User", saved.getId(), null, before, response);
+        auditLogService.recordMutation("ADMIN_USER_STATUS_CHANGED", "User", saved.getId(), null, before,
+            Map.of("user", response, "reason", request.reason() == null ? "" : request.reason().trim()));
         return response;
     }
 
@@ -362,6 +381,8 @@ public class AdminUserService {
 
         AdminUserResponse before = toResponse(user);
         user.setStatus(UserStatus.ACTIVE);
+        user.setLockedUntil(null);
+        user.setFailedLoginAttempts(0);
         User saved = userRepository.saveAndFlush(user);
         revokeSessions(saved);
 
@@ -374,7 +395,7 @@ public class AdminUserService {
     public AdminUserResponse resetPassword(ActorPrincipal actor, UUID id, AdminPasswordResetRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_USERS);
         User user = requiredUser(id);
-        assertEditableTarget(actor, user);
+        assertPasswordResetTarget(actor, user);
         boolean wasRequiredToChangePassword = user.isMustChangePassword();
 
         String temporaryPassword;
@@ -386,6 +407,7 @@ public class AdminUserService {
 
         user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
         user.setMustChangePassword(true);
+        user.setTemporaryPasswordExpiresAt(Instant.now().plus(TEMPORARY_PASSWORD_HOURS, ChronoUnit.HOURS));
         User saved = userRepository.saveAndFlush(user);
         revokeSessions(saved);
 
@@ -420,6 +442,14 @@ public class AdminUserService {
         }
     }
 
+    private void assertPasswordResetTarget(ActorPrincipal actor, User user) {
+        if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
+            && !actor.userId().equals(user.getId())) {
+            throw ApiExceptions.forbidden("Một Admin không được đặt lại mật khẩu của Admin khác");
+        }
+        assertEditableTarget(actor, user);
+    }
+
     private Set<RoleCode> normalizeRoles(Set<RoleCode> roles) {
         if (roles == null || roles.isEmpty() || roles.contains(null)) {
             throw ApiExceptions.validation("At least one valid role is required", null);
@@ -431,17 +461,25 @@ public class AdminUserService {
         Set<RoleCode> roleCodes = normalizeRoles(requestedRoles);
         validateRoleCombination(roleCodes);
         boolean currentlyAdmin = target.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN);
+        boolean currentlyCustomer = target.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.CUSTOMER);
+        if (currentlyCustomer && !roleCodes.equals(Set.of(RoleCode.CUSTOMER))) {
+            throw ApiExceptions.conflict("Customer chỉ có thể tự đăng ký và không thể đổi sang vai trò nhân sự");
+        }
         if (roleCodes.contains(RoleCode.ADMIN) && !actor.hasRole(RoleCode.ADMIN)) {
             throw ApiExceptions.forbidden("Only an Admin can grant the ADMIN role");
         }
         if (currentlyAdmin && !roleCodes.contains(RoleCode.ADMIN)
-            && userRepository.countByRoles_Code(RoleCode.ADMIN) <= 1) {
+            && target.getStatus() == UserStatus.ACTIVE
+            && roleRepository.findByCodeForUpdate(RoleCode.ADMIN).isPresent()
+            && userRepository.countByRoles_CodeAndStatus(RoleCode.ADMIN, UserStatus.ACTIVE) <= 1) {
             throw ApiExceptions.conflict("Không thể thu hồi ADMIN của Admin cuối cùng");
         }
         if (actor.userId().equals(target.getId())
             && target.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
             && !roleCodes.contains(RoleCode.ADMIN)
-            && userRepository.countByRoles_Code(RoleCode.ADMIN) <= 1) {
+            && target.getStatus() == UserStatus.ACTIVE
+            && roleRepository.findByCodeForUpdate(RoleCode.ADMIN).isPresent()
+            && userRepository.countByRoles_CodeAndStatus(RoleCode.ADMIN, UserStatus.ACTIVE) <= 1) {
             throw ApiExceptions.conflict("The last administrator cannot remove their own ADMIN role");
         }
         return roleCodes;
@@ -468,6 +506,10 @@ public class AdminUserService {
             || targetRoles.contains(RoleCode.MANAGER)
             || targetRoles.contains(RoleCode.BUSINESS);
         boolean hasCustomerRole = targetRoles.contains(RoleCode.CUSTOMER);
+        boolean requiresFacility = targetRoles.contains(RoleCode.STAFF) || targetRoles.contains(RoleCode.MANAGER);
+        if (requiresFacility && scopes.isEmpty()) {
+            throw ApiExceptions.validation("Manager và Staff bắt buộc phải được gắn ít nhất một cơ sở", null);
+        }
         if (!scopes.isEmpty() && (!hasFacilityRole || hasCustomerRole)) {
             throw ApiExceptions.validation("Only Staff, Manager or Business accounts can have facility scopes", null);
         }
@@ -527,6 +569,21 @@ public class AdminUserService {
         sessionRepository.revokeActiveByUserId(user.getId(), Instant.now());
     }
 
+    private void enforceActiveRoleCardinality(Set<RoleCode> roles, UserStatus status, UUID excludingUserId) {
+        if (status != UserStatus.ACTIVE) return;
+        if (roles.contains(RoleCode.BUSINESS)) {
+            // Locking the role row serializes concurrent account creation/role changes.
+            roleRepository.findByCodeForUpdate(RoleCode.BUSINESS)
+                .orElseThrow(() -> ApiExceptions.conflict("The BUSINESS role is not initialized"));
+            long active = userRepository.countByRoles_CodeAndStatus(RoleCode.BUSINESS, UserStatus.ACTIVE);
+            if (excludingUserId != null && userRepository.findById(excludingUserId)
+                .map(u -> u.getStatus() == UserStatus.ACTIVE && roleCodes(u).contains(RoleCode.BUSINESS)).orElse(false)) {
+                active--;
+            }
+            if (active >= 1) throw ApiExceptions.conflict("Chỉ được có một Business Owner đang hoạt động trong hệ thống");
+        }
+    }
+
     private AdminUserResponse toResponse(User user) {
         Map<UUID, FacilityScopeLevel> scopes = currentScopeMap(user);
         return new AdminUserResponse(
@@ -571,7 +628,9 @@ public class AdminUserService {
         }
         assertEditableTarget(actor, user);
         if (user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.ADMIN)
-            && userRepository.countByRoles_Code(RoleCode.ADMIN) <= 1) {
+            && user.getStatus() == UserStatus.ACTIVE
+            && roleRepository.findByCodeForUpdate(RoleCode.ADMIN).isPresent()
+            && userRepository.countByRoles_CodeAndStatus(RoleCode.ADMIN, UserStatus.ACTIVE) <= 1) {
             throw ApiExceptions.conflict("Không thể xóa Admin cuối cùng");
         }
 

@@ -24,7 +24,7 @@ public class ManagerRentalPaymentController {
     public record Receipt(UUID paymentId,UUID rentalId,UUID renewalId,String purpose,String status,
         BigDecimal amount,String currency,BigDecimal refundedAmount,String transactionReference,String gatewayTransactionNo,
         String paymentMethod,String gatewayPayDate,Instant paidAt,Instant processedAt,Instant createdAt,
-        String initiatedByName,String verification) {}
+        String initiatedByName,String verification,String receiptCode,String rentalDisplayCode,UUID receiptFileId) {}
     @GetMapping("/api/manager/rentals/{id}/payments") @Transactional(readOnly=true)
     public ApiResponse<List<Receipt>> read(@PathVariable UUID id) {
         var actor=actors.required();
@@ -36,7 +36,7 @@ public class ManagerRentalPaymentController {
             .setParameter("purposes",List.of(PaymentType.RESERVATION_DEPOSIT,PaymentType.RENTAL_BALANCE,PaymentType.MONTHLY_RENT,PaymentType.RENEWAL)).getResultList();
         var result=rows.stream().map(p->new Receipt(p.getId(),id,p.getRenewal()==null?null:p.getRenewal().getId(),p.getPurpose().name(),p.getStatus().name(),
             p.getAmount(),p.getCurrency(),p.getRefundedAmount(),p.getGatewayIntentId(),p.getGatewayTransactionNo(),p.getGatewayBankCode(),
-            p.getGatewayPayDate(),p.getPaidAt(),p.getProcessedAt(),p.getCreatedAt(),p.getInitiatedBy().getFullName(),provenance.classify(p).name())).toList();
+            p.getGatewayPayDate(),p.getPaidAt(),p.getProcessedAt(),p.getCreatedAt(),p.getInitiatedBy().getFullName(),provenance.classify(p).name(),p.getReceiptCode(), rental.displayCode(), provenance.manualReceiptFileId(p))).toList();
         return new ApiResponse<>(result,CorrelationIdContext.current());
     }
 }

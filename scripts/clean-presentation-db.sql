@@ -44,7 +44,6 @@ DELETE FROM renewal_extension_holds;
 DELETE FROM renewal_installment_notices;
 DELETE FROM renewal_installment_payment_bindings;
 DELETE FROM renewal_installment_payment_quotes;
-DELETE FROM renewal_ledger_cancellation_credits;
 DELETE FROM rental_ledger_refunds;
 DELETE FROM rental_ledger_receipts;
 DELETE FROM rental_ledger_obligations;
@@ -101,7 +100,8 @@ WHERE u.email NOT IN (
   'business@storagehub.demo',
   'manager@storagehub.demo',
   'staff@storagehub.demo',
-  'customer@storagehub.demo'
+  'customer@storagehub.demo',
+  'thongvinh2@gmail.com'
 );
 DELETE FROM users
 WHERE email NOT IN (
@@ -109,7 +109,8 @@ WHERE email NOT IN (
   'business@storagehub.demo',
   'manager@storagehub.demo',
   'staff@storagehub.demo',
-  'customer@storagehub.demo'
+  'customer@storagehub.demo',
+  'thongvinh2@gmail.com'
 );
 
 -- Remove profile values that may have been changed during testing.

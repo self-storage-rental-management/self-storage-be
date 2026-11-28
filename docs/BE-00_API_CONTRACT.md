@@ -10,6 +10,8 @@
 
 ## Success envelopes
 
+Quy ước sắp xếp danh sách: hàng chờ ưu tiên trách nhiệm của vai trò hiện tại, tình huống khẩn cấp/ngoại lệ, hạn của bước hiện tại và người chờ lâu; hồ sơ đã kết thúc để sau hàng đang xử lý. Danh mục mặc định theo tên/mã tăng dần; lịch sử giao dịch/đăng nhập/hoạt động theo thời điểm xảy ra giảm dần. Dùng ID làm tiêu chí cuối cùng, không dùng `updatedAt` để làm mới vị trí chờ do một ghi chú. Sort trước khi phân trang; danh sách ghép nhiều nguồn phải sort lại sau khi ghép. Thiếu hạn được giữ là thiếu dữ liệu. Hạn chỉ có ngày được hiểu hết ngày Việt Nam. Quy tắc chi tiết theo contract từng luồng; lựa chọn sort thủ công được giữ trong các màn hỗ trợ.
+
 Single-resource response:
 
 ```json

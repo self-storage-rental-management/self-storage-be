@@ -5,6 +5,7 @@ import com.storagehub.common.api.CorrelationIdContext;
 import com.storagehub.common.api.PageResponse;
 import com.storagehub.security.ActorContext;
 import com.storagehub.service.PaymentComplaintService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +44,18 @@ public class ManagerPaymentComplaintController {
     public ApiResponse<PaymentComplaintResponse> detail(@PathVariable UUID complaintId) {
         return new ApiResponse<>(
             complaintService.managerDetail(actorContext.required(), complaintId),
+            CorrelationIdContext.current()
+        );
+    }
+
+    @PostMapping("/{complaintId}/query-vnpay")
+    public ApiResponse<PaymentComplaintResponse> queryVnpay(
+        @PathVariable UUID complaintId,
+        HttpServletRequest servletRequest
+    ) {
+        String ip = servletRequest != null ? servletRequest.getRemoteAddr() : "127.0.0.1";
+        return new ApiResponse<>(
+            complaintService.queryVnpay(actorContext.required(), complaintId, ip),
             CorrelationIdContext.current()
         );
     }

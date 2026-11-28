@@ -2,6 +2,7 @@ package com.storagehub.api.reservation;
 
 import com.storagehub.validation.PhoneNumberPolicy;
 import com.storagehub.validation.IdentityDocumentPolicy;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
@@ -22,15 +23,12 @@ public class CreateReservationRequest {
     @NotNull
     private UUID quoteId;
 
-    @NotBlank
-    @Size(min = 9, max = 30)
+    @com.storagehub.validation.ValidCccd
     private String identityDocumentNumber;
 
-    @NotBlank
     @Size(max = 40)
     private String customerPhone;
 
-    @NotBlank
     @Size(max = 500)
     private String customerAddress;
 
@@ -45,10 +43,15 @@ public class CreateReservationRequest {
     @Valid
     private List<@NotNull @Valid GoodsItemRequest> goodsItems;
 
+    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "Ngày giờ nhận kho do khách chọn khi tạo đơn.")
     private Instant appointmentAt;
 
     /** Must be explicitly true on the public create endpoint before payment is possible. */
     private Boolean acceptedTerms;
+    @Size(max = 40)
+    private String acceptedHandoverTermsVersion;
+    public String getAcceptedHandoverTermsVersion() { return acceptedHandoverTermsVersion; }
+    public void setAcceptedHandoverTermsVersion(String value) { acceptedHandoverTermsVersion = value; }
 
     public CreateReservationRequest() {
     }
@@ -89,11 +92,11 @@ public class CreateReservationRequest {
 
     @AssertTrue(message = PhoneNumberPolicy.MESSAGE)
     public boolean isCustomerPhoneValid() {
-        return PhoneNumberPolicy.isValid(customerPhone);
+        return PhoneNumberPolicy.isOptionalValid(customerPhone);
     }
 
     @AssertTrue(message = IdentityDocumentPolicy.MESSAGE)
     public boolean isIdentityDocumentNumberValid() {
-        return IdentityDocumentPolicy.isValid(identityDocumentNumber);
+        return identityDocumentNumber == null || identityDocumentNumber.isBlank() || com.storagehub.validation.CccdPolicy.error(identityDocumentNumber) == null;
     }
 }

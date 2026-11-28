@@ -28,10 +28,12 @@ public class StaffReservationReviewController {
     public PageResponse<ReservationReviewResponse> listPending(
         @RequestParam(required = false) UUID facilityId,
         @RequestParam(defaultValue = "0") int page,
-        @RequestParam(defaultValue = "20") int size
+        @RequestParam(defaultValue = "20") int size,
+        @RequestParam(defaultValue = "false") boolean completed,
+        @RequestParam(defaultValue = "priority") String sort
     ) {
-        return reviewService.listPending(
-            actorContext.required(), facilityId, page, size, CorrelationIdContext.current()
+        return reviewService.listReviews(
+            actorContext.required(), facilityId, page, size, CorrelationIdContext.current(), completed, sort
         );
     }
 

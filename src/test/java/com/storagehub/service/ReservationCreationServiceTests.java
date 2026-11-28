@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import com.storagehub.api.reservation.CompatibilityCheckResponse;
 import com.storagehub.api.reservation.CreateReservationRequest;
@@ -20,13 +21,16 @@ import com.storagehub.domain.model.ReservationPricingSnapshot;
 import com.storagehub.domain.model.ReservationQuote;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.RoleCode;
+import com.storagehub.domain.model.StorageUnit;
 import com.storagehub.domain.model.UnitType;
 import com.storagehub.domain.model.User;
+import com.storagehub.domain.model.UserStatus;
 import com.storagehub.domain.repo.RentalPackagePolicyRepository;
 import com.storagehub.domain.repo.ReservationGoodsItemRepository;
 import com.storagehub.domain.repo.ReservationPricingSnapshotRepository;
 import com.storagehub.domain.repo.ReservationQuoteRepository;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.UserRepository;
 import com.storagehub.security.ActorPrincipal;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -39,6 +43,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -54,11 +60,15 @@ class ReservationCreationServiceTests {
     @Mock private ReservationCompatibilityService compatibilityService;
     @Mock private AuditLogService auditLogService;
     @Mock private ReservationCapacityService capacityService;
+    @Mock private UserRepository bookingUsers;
+    @Mock private com.storagehub.service.email.CustomerLifecycleEmailService customerEmails;
 
     private ReservationCreationService service;
     private ActorPrincipal actor;
     private ReservationQuote quote;
     private RentalPackagePolicy policy;
+    private StorageUnit heldUnit;
+    private final Instant selectedAppointment = Instant.now().plusSeconds(86400);
 
     @BeforeEach
     void setUp() {
@@ -66,6 +76,8 @@ class ReservationCreationServiceTests {
             reservationRepository, quoteRepository, goodsItemRepository, snapshotRepository,
             policyRepository, compatibilityService, auditLogService, capacityService
         );
+        ReflectionTestUtils.setField(service, "bookingUsers", bookingUsers);
+        ReflectionTestUtils.setField(service, "customerEmails", customerEmails);
 
         Facility facility = new Facility();
         ReflectionTestUtils.setField(facility, "id", UUID.randomUUID());
@@ -78,6 +90,11 @@ class ReservationCreationServiceTests {
 
         User customer = new User();
         ReflectionTestUtils.setField(customer, "id", UUID.randomUUID());
+        customer.setStatus(UserStatus.ACTIVE);
+        lenient().when(bookingUsers.findByIdForUpdate(customer.getId())).thenReturn(Optional.of(customer));
+        heldUnit = new StorageUnit();
+        heldUnit.setUnitType(unitType);
+        heldUnit.setFacility(facility);
         actor = new ActorPrincipal(
             customer.getId(), UUID.randomUUID(), Set.of(RoleCode.CUSTOMER), Set.of(), Map.of()
         );
@@ -118,9 +135,15 @@ class ReservationCreationServiceTests {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 3, 6})
-    void createsReservationAndCopiesPricingSnapshot(int handoverOffsetDays) {
+    @org.junit.jupiter.params.provider.CsvSource({"1,false", "3,false", "6,false", "3,true"})
+    void createsReservationAndCopiesPricingSnapshot(int handoverOffsetDays, boolean needsReview) {
         CreateReservationRequest request = request();
+        if (needsReview) {
+            var item = request.getGoodsItems().getFirst();
+            item.setCategory(GoodsCategory.OTHER);
+            item.setCustomGoodsName("Mô hình gỗ");
+            quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(request.getGoodsItems()));
+        }
         quote.getFacility().setAccessHours("06:00 - 22:00 hàng ngày");
         quote.setFreeSetupDays(6);
         policy.setFreeSetupDays(6);
@@ -129,7 +152,8 @@ class ReservationCreationServiceTests {
             .thenReturn(Optional.empty());
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
+        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibilityResponse(
+            needsReview ? CompatibilityResult.REVIEW_REQUIRED : CompatibilityResult.COMPATIBLE));
         when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), "THREE_MONTHS"))
             .thenReturn(Optional.of(policy));
         when(reservationRepository.saveAndFlush(any(Reservation.class))).thenAnswer(invocation -> {
@@ -137,6 +161,10 @@ class ReservationCreationServiceTests {
             assertThat(reservation.getRequestFingerprint()).hasSize(64);
             assertThat(reservation.getIdentityDocumentNumber()).isEqualTo("079203009988");
             assertThat(reservation.getAppointmentAt()).isEqualTo(request.getAppointmentAt());
+            if (needsReview) {
+                assertThat(reservation.getPaymentExpiresAt()).isNull();
+                assertThat(reservation.getGoodsReviewDueAt()).isEqualTo(reservation.getGoodsReviewSubmittedAt().plusSeconds(6 * 3600));
+            }
             var expectedStart = request.getAppointmentAt().atZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh")).toLocalDate().plusDays(6);
             assertThat(reservation.getStartDate()).isEqualTo(expectedStart);
             assertThat(reservation.getEndDate()).isEqualTo(expectedStart.plusMonths(quote.getRentalMonths()));
@@ -163,7 +191,7 @@ class ReservationCreationServiceTests {
         assertThat(checkedPeriod.getValue().getEndDate()).isEqualTo(expectedEnd);
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo(quote.getTotalInitialObligation());
         assertThat(quote.getStartDate()).isEqualTo(LocalDate.of(2026, 10, 10));
-        assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
+        assertThat(response.getStatus()).isEqualTo(needsReview ? ReservationStatus.AWAITING_REVIEW : ReservationStatus.AWAITING_PAYMENT);
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("4301000.00");
         assertThat(response.getRemainingRentalAmount()).isEqualByComparingTo("11704000.00");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
@@ -172,6 +200,12 @@ class ReservationCreationServiceTests {
         var savedReservation=org.mockito.ArgumentCaptor.forClass(Reservation.class);
         var savedSnapshot=org.mockito.ArgumentCaptor.forClass(ReservationPricingSnapshot.class);
         org.mockito.Mockito.verify(reservationRepository).saveAndFlush(savedReservation.capture());
+        assertThat(savedReservation.getValue().getPalletHeldUnit()).isSameAs(heldUnit);
+        assertThat(savedReservation.getValue().getAssignedUnit()).isNull();
+        var order = org.mockito.Mockito.inOrder(capacityService, compatibilityService);
+        order.verify(capacityService).lockAndRequireAvailableCapacity(
+            quote.getFacility().getId(), quote.getUnitType().getId(), handoverDate, expectedEnd);
+        order.verify(compatibilityService).checkQuotedSnapshot(eq(actor), any());
         org.mockito.Mockito.verify(snapshotRepository).saveAndFlush(savedSnapshot.capture());
         var captured=savedSnapshot.getValue();var originalSetup=captured.getFreeSetupDays();var originalPrice=captured.getMonthlyPrice();var originalVersion=captured.getPricingPolicyVersion();
         policy.setFreeSetupDays(99);policy.setPolicyVersion("TEST-NEW-POLICY");policy.setDiscountRate(new BigDecimal("0.9"));
@@ -180,20 +214,22 @@ class ReservationCreationServiceTests {
         assertThat(captured.getFreeSetupDays()).isEqualTo(originalSetup);
         assertThat(captured.getMonthlyPrice()).isEqualByComparingTo(originalPrice);
         assertThat(captured.getPricingPolicyVersion()).isEqualTo(originalVersion);
-        assertThat(response.getReservationCode()).matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
+        assertThat(response.getReservationCode())
+            .matches("RSV-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}");
     }
 
     @Test
     void rejectsStaleAndOutOfWindowAppointmentsWithActionableFieldDetails() {
         when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId()))
             .thenReturn(Optional.of(quote));
-        for (long offsetSeconds : new long[] {-60, 6 * 3600, 9 * 24 * 3600}) {
+        // The production policy validates calendar dates in Vietnam, not offsets within a date.
+        for (long offsetSeconds : new long[] {-24 * 3600, 9 * 24 * 3600}) {
             var input = request();
             input.setAppointmentAt(Instant.now().plusSeconds(offsetSeconds));
             assertThatThrownBy(() -> service.create(actor, input, "stale-appointment"))
                 .isInstanceOfSatisfying(ApiException.class, error -> {
                     assertThat(error.getDetails()).isEqualTo(Map.of("appointmentAt", error.getMessage()));
-                    assertThat(error.getMessage()).contains("Lịch nhận kho").doesNotContain(";");
+                    assertThat(error.getMessage()).contains("Ngày nhận kho");
                 });
         }
         org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
@@ -210,8 +246,8 @@ class ReservationCreationServiceTests {
     }
 
     @Test
-    void createsReservationWhenSecurityDepositDiffersFromMonthlyPrice() {
-        // Cỡ kho có tiền cọc đảm bảo 200.000 khác đơn giá tháng 2.000.000
+    void createsReservationWithSecurityDepositEqualToMonthlyPrice() {
+        // Dữ liệu cũ có thể lưu cọc khác giá thuê, nhưng khi tạo đơn phải dùng đúng một tháng tiền thuê.
         quote.getUnitType().setMonthlyPrice(new BigDecimal("2000000.00"));
         quote.getUnitType().setSecurityDepositAmount(new BigDecimal("200000.00"));
         quote.setMonthlyPrice(new BigDecimal("2000000.00"));
@@ -220,11 +256,11 @@ class ReservationCreationServiceTests {
         quote.setDiscountRate(new BigDecimal("0.0300"));
         quote.setDiscountAmount(new BigDecimal("180000.00"));
         quote.setTotalAfterDiscount(new BigDecimal("5820000.00"));
-        quote.setReservationDepositAmount(new BigDecimal("1204000.00"));
-        quote.setSecurityDepositAmount(new BigDecimal("200000.00"));
-        quote.setRemainingRentalAmount(new BigDecimal("4616000.00"));
-        quote.setDueAtCheckIn(new BigDecimal("4816000.00"));
-        quote.setTotalInitialObligation(new BigDecimal("6020000.00"));
+        quote.setReservationDepositAmount(new BigDecimal("1564000.00"));
+        quote.setSecurityDepositAmount(new BigDecimal("2000000.00"));
+        quote.setRemainingRentalAmount(new BigDecimal("4256000.00"));
+        quote.setDueAtCheckIn(new BigDecimal("6256000.00"));
+        quote.setTotalInitialObligation(new BigDecimal("7820000.00"));
 
         CreateReservationRequest request = request();
         when(reservationRepository.findByCustomer_IdAndIdempotencyKey(actor.userId(), "create-diff-deposit"))
@@ -246,7 +282,7 @@ class ReservationCreationServiceTests {
         var response = service.create(actor, request, "create-diff-deposit");
 
         assertThat(response.getStatus()).isEqualTo(ReservationStatus.AWAITING_PAYMENT);
-        assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("200000.00");
+        assertThat(response.getSecurityDepositAmount()).isEqualByComparingTo("2000000.00");
     }
 
     @Test
@@ -282,6 +318,7 @@ class ReservationCreationServiceTests {
         existing.setTotalGoodsVolumeM3(new BigDecimal("0.180000"));
         existing.setTotalGoodsWeightKg(new BigDecimal("36.00"));
         existing.setHoldExpiresAt(Instant.now().plusSeconds(600));
+        existing.setHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
         existing.setIdentityDocumentNumber(request().getIdentityDocumentNumber());
         existing.setCustomerPhone(request().getCustomerPhone());
         existing.setCustomerAddress(request().getCustomerAddress());
@@ -313,7 +350,9 @@ class ReservationCreationServiceTests {
             .thenReturn(List.of(storedItem));
         when(snapshotRepository.findByReservation_Id(existing.getId())).thenReturn(Optional.of(snapshot));
 
-        var response = service.create(actor, request(), "create-retry");
+        var legacyRequest = request();
+        legacyRequest.setAppointmentAt(null);
+        var response = service.create(actor, legacyRequest, "create-retry");
 
         assertThat(response.getId()).isEqualTo(existing.getId());
         assertThat(response.getReservationCode()).isEqualTo("RSV-EXISTING001");
@@ -374,6 +413,28 @@ class ReservationCreationServiceTests {
         org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"price", "policyVersion"})
+    void requestsNewQuoteAfterPriceOrPackageVersionChanges(String change) {
+        if ("price".equals(change)) {
+            quote.getUnitType().setMonthlyPrice(new BigDecimal("6000000.00"));
+        } else {
+            policy.setPolicyVersion("2026-02");
+        }
+        when(quoteRepository.findByIdAndCustomer_Id(quote.getId(), actor.userId())).thenReturn(Optional.of(quote));
+        when(compatibilityService.checkQuotedSnapshot(any(), any())).thenReturn(compatibleResponse());
+        when(policyRepository.findByFacility_IdAndCode(quote.getFacility().getId(), quote.getPricingPackageCode()))
+            .thenReturn(Optional.of(policy));
+
+        var input = request();
+        assertThatThrownBy(() -> service.create(actor, input, "stale-quote"))
+            .isInstanceOfSatisfying(ApiException.class, error -> {
+                assertThat(error.getStatus().value()).isEqualTo(409);
+                assertThat(error.getMessage()).contains("Vui lòng lấy báo giá mới trước khi đặt kho.");
+            });
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+    }
+
     @Test
     void setupPolicyAcceptanceIsBoundToTheIdempotencyFingerprint() {
         var original = request();
@@ -383,6 +444,17 @@ class ReservationCreationServiceTests {
             .isNotEqualTo(ReservationCreationService.requestFingerprint(original));
     }
 
+    @Test
+    void missingAppointmentBlocksANewReservationBeforeCapacityIsHeld() {
+        var input = request();
+        input.setAppointmentAt(null);
+        assertThatThrownBy(() -> service.create(actor, input, "missing-appointment"))
+            .isInstanceOfSatisfying(ApiException.class, error ->
+                assertThat(error.getDetails()).isEqualTo(Map.of("appointmentAt", error.getMessage())));
+        org.mockito.Mockito.verifyNoInteractions(capacityService, quoteRepository);
+        org.mockito.Mockito.verify(reservationRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+    }
+
     private CreateReservationRequest request() {
         GoodsItemRequest item = new GoodsItemRequest(
             GoodsCategory.FURNITURE, null, "Wood", null, "Desk", null, 2,
@@ -390,24 +462,31 @@ class ReservationCreationServiceTests {
             new BigDecimal("18"), false
         );
         CreateReservationRequest request = new CreateReservationRequest(
-            quote.getId(), "Packed", "Handle with care", List.of(item)
+            quote.getId(), "Packed", "Handle with care", List.of(item), selectedAppointment
         );
         request.setIdentityDocumentNumber("079203009988");
         request.setCustomerPhone("0908123456");
         request.setCustomerAddress("Quận 1, TP. Hồ Chí Minh");
         request.setAcceptedSetupEarlyExitPolicyVersion(SetupEarlyExitPolicy.VERSION);
+        request.setAcceptedHandoverTermsVersion(ReservationCheckInPolicy.ATTENDANCE_TERMS);
         quote.setGoodsSnapshotJson(GoodsSnapshotCodec.encode(List.of(item)));
         quote.setUnitTypeSnapshotJson("{\"name\":\"Kho tại lúc báo giá\"}");
         return request;
     }
 
     private CompatibilityCheckResponse compatibleResponse() {
-        return new CompatibilityCheckResponse(
+        return compatibilityResponse(CompatibilityResult.COMPATIBLE);
+    }
+
+    private CompatibilityCheckResponse compatibilityResponse(CompatibilityResult result) {
+        var response = new CompatibilityCheckResponse(
             quote.getFacility().getId(), quote.getUnitType().getId(), quote.getStartDate(),
-            quote.getEndDate(), CompatibilityResult.COMPATIBLE, new BigDecimal("0.180000"),
+            quote.getEndDate(), result, new BigDecimal("0.180000"),
             new BigDecimal("36.00"), new BigDecimal("15.000000"),
             new BigDecimal("1000.00"), new BigDecimal("0.80"),
-            new BigDecimal("28.800000"), 1, 4, 2, false, List.of()
+            new BigDecimal("28.800000"), 1, 4, 2, result == CompatibilityResult.REVIEW_REQUIRED, List.of()
         );
+        response.setPalletHeldUnit(heldUnit);
+        return response;
     }
 }

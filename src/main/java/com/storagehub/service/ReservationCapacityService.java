@@ -1,9 +1,11 @@
 package com.storagehub.service;
 
 import com.storagehub.common.api.ApiExceptions;
+import com.storagehub.domain.model.FacilityStatus;
 import com.storagehub.domain.model.ReservationStatus;
 import com.storagehub.domain.model.StorageUnitStatus;
 import com.storagehub.domain.repo.ReservationRepository;
+import com.storagehub.domain.repo.FacilityRepository;
 import com.storagehub.domain.repo.StorageUnitRepository;
 import com.storagehub.domain.repo.UnitTypeRepository;
 import java.time.Instant;
@@ -38,6 +40,41 @@ public class ReservationCapacityService {
     private final StorageUnitRepository storageUnitRepository;
     private final ReservationRepository reservationRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private FacilityRepository facilityRepository;
+
+    public void lockFacilityForNewReservation(UUID facilityId) {
+        var facility = facilityRepository.findByIdForUpdate(facilityId)
+            .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
+        if (facility.getStatus() != FacilityStatus.active) {
+            throw ApiExceptions.conflict("Cơ sở hiện không nhận đơn đặt kho mới.");
+        }
+    }
+
+    public java.util.Set<UUID> livePalletHoldUnitIds(UUID unitTypeId) {
+        // An unassigned pallet hold reserves one physical unit until it is assigned or released.
+        return new java.util.HashSet<>(reservationRepository.findLivePalletHoldUnitIds(
+            unitTypeId, Instant.now(), TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES));
+    }
+
+    public boolean hasLiveCapacityHold(UUID unitTypeId) {
+        return reservationRepository.existsLiveCapacityHoldByUnitTypeId(
+            unitTypeId, Instant.now(), TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES);
+    }
+
+    public java.util.Set<UUID> livePalletHoldUnitIds(
+        UUID unitTypeId,
+        LocalDate startDate,
+        LocalDate endDate
+    ) {
+        // Compatibility checks must ignore holds outside the requested rental
+        // period. Otherwise a future hold can hide a unit that is available
+        // for this booking interval.
+        return new java.util.HashSet<>(reservationRepository.findLivePalletHoldUnitIdsForPeriod(
+            unitTypeId, startDate, endDate, Instant.now(),
+            TEMPORARY_HOLD_STATUSES, PERMANENT_HOLD_STATUSES));
+    }
+
     public void lockAndRequireAvailableCapacity(
         UUID facilityId,
         UUID unitTypeId,
@@ -48,6 +85,9 @@ public class ReservationCapacityService {
             .orElseThrow(() -> ApiExceptions.notFound("Unit type was not found"));
         if (!lockedUnitType.getFacility().getId().equals(facilityId)) {
             throw ApiExceptions.validation("Unit type does not belong to the selected facility", null);
+        }
+        if (lockedUnitType.getStatus() != com.storagehub.domain.model.UnitTypeStatus.active) {
+            throw ApiExceptions.conflict("Loại kho đã được lưu trữ hoặc chưa được công bố, không thể tạo đơn đặt kho mới.");
         }
 
         if (availableCount(facilityId, unitTypeId, startDate, endDate) < 1) {

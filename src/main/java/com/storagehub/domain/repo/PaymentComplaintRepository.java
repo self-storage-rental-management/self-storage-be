@@ -28,6 +28,11 @@ public interface PaymentComplaintRepository extends JpaRepository<PaymentComplai
         PaymentComplaintStatus status, Instant now
     );
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    List<PaymentComplaint> findTop100ByStatusAndReviewDueAtAfterOrderByReviewDueAtAsc(
+        PaymentComplaintStatus status, Instant now
+    );
+
     @Query("""
         select complaint from PaymentComplaint complaint
         where complaint.status in :statuses
@@ -35,8 +40,8 @@ public interface PaymentComplaintRepository extends JpaRepository<PaymentComplai
           and (:scoped = false or complaint.reservation.facility.id in :facilityIds)
         order by
           case when complaint.status = com.storagehub.domain.model.PaymentComplaintStatus.REVIEW_OVERDUE then 0 else 1 end,
-          complaint.reviewDueAt asc,
-          complaint.createdAt desc
+          complaint.reviewDueAt asc nulls last,
+          complaint.submittedAt asc, complaint.id asc
         """)
     Page<PaymentComplaint> findManagerQueue(
         @Param("statuses") Collection<PaymentComplaintStatus> statuses,
@@ -63,8 +68,8 @@ public interface PaymentComplaintRepository extends JpaRepository<PaymentComplai
           case when complaint.status in (
             com.storagehub.domain.model.PaymentComplaintStatus.REVIEW_OVERDUE,
             com.storagehub.domain.model.PaymentComplaintStatus.PENDING
-          ) then complaint.reviewDueAt else null end asc,
-          reservation.createdAt desc
+          ) then complaint.reviewDueAt else null end asc nulls last,
+          reservation.createdAt asc, reservation.id asc
         """, countQuery = """
         select count(reservation)
         from Reservation reservation

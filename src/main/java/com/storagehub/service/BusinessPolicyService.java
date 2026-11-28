@@ -1,6 +1,7 @@
 package com.storagehub.service;
 
 import com.storagehub.api.configuration.BusinessConfigResponse;
+import com.storagehub.api.configuration.PublicSiteConfigResponse;
 import com.storagehub.api.configuration.RentalPackagePolicyRequest;
 import com.storagehub.api.configuration.RentalPackagePolicyResponse;
 import com.storagehub.api.configuration.UpdateBusinessConfigRequest;
@@ -54,7 +55,7 @@ public class BusinessPolicyService {
     public BusinessConfigResponse getBusinessConfig(ActorPrincipal actor) {
         authorizationService.require(actor, SystemPermission.VIEW_POLICIES);
 
-        int gracePeriodDays = getIntSetting("gracePeriod", 3);
+        int gracePeriodDays = 0;
         BigDecimal lateFeeAmount = getBigDecimalSetting("lateFeeAmount", new BigDecimal("650000"));
         BigDecimal defaultDepositRatio = getBigDecimalSetting("defaultDepositRatio", new BigDecimal("0.20"));
         double holdExpiryHours = getDoubleSetting("holdExpiryHours", 2.0);
@@ -79,6 +80,19 @@ public class BusinessPolicyService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public PublicSiteConfigResponse getPublicSiteConfig() {
+        return new PublicSiteConfigResponse(
+            getBooleanSetting("maintenanceMode", false),
+            getStringSetting("bannerNotice", "")
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isMaintenanceMode() {
+        return getBooleanSetting("maintenanceMode", false);
+    }
+
     @Transactional
     public BusinessConfigResponse updateBusinessConfig(ActorPrincipal actor, UpdateBusinessConfigRequest request) {
         requirePolicyOwner(actor);
@@ -86,7 +100,7 @@ public class BusinessPolicyService {
         BusinessConfigResponse before = getBusinessConfig(actor);
 
         if (request.gracePeriodDays() != null) {
-            saveSetting("gracePeriod", String.valueOf(request.gracePeriodDays()));
+            saveSetting("gracePeriod", "0");
         }
         if (request.lateFeeAmount() != null) {
             saveSetting("lateFeeAmount", request.lateFeeAmount().toPlainString());
@@ -170,12 +184,12 @@ public class BusinessPolicyService {
         requirePolicyOwner(actor);
 
         Facility facility = facilityRepository.findById(request.facilityId())
-            .orElseThrow(() -> ApiExceptions.notFound("Facility was not found"));
+            .orElseThrow(() -> ApiExceptions.notFound("Không tìm thấy cơ sở."));
 
         facilityScopeService.assertCanManage(actor, facility.getId());
 
         if (policyRepository.findByFacility_IdAndCode(facility.getId(), request.code().trim()).isPresent()) {
-            throw ApiExceptions.conflict("A package policy with code '" + request.code() + "' already exists for this facility");
+            throw ApiExceptions.conflict("Mã gói thuê '" + request.code() + "' đã tồn tại tại cơ sở này.");
         }
         validatePackagePeriod(request, facility.getId(), null);
 
@@ -391,33 +405,23 @@ public class BusinessPolicyService {
             }
         }
 
-        if (targets.isEmpty()) {
-            return;
-        }
-
-        try {
-            policyRepository.deleteAll(targets);
-            policyRepository.flush();
-        } catch (Exception e) {
-            for (RentalPackagePolicy p : targets) {
-                p.setPublicationStatus(PublicationStatus.INACTIVE);
-                p.setActive(false);
-            }
-            policyRepository.saveAll(targets);
-        }
-
         for (RentalPackagePolicy p : targets) {
+            if (p.getPublicationStatus() == PublicationStatus.INACTIVE && !p.isActive()) continue;
+            RentalPackagePolicyResponse before = toResponse(p);
+            p.setPublicationStatus(PublicationStatus.INACTIVE);
+            p.setActive(false);
             auditLogService.recordMutation(
-                "RENTAL_PACKAGE_POLICY_DELETED_ALL",
+                "RENTAL_PACKAGE_POLICY_INACTIVATED",
                 "RentalPackagePolicy",
                 p.getId(),
                 p.getFacility().getId(),
-                toResponse(p),
-                null
+                before,
+                toResponse(p)
             );
         }
     }
 
+    @Transactional
     public void deletePackagePolicy(ActorPrincipal actor, UUID policyId) {
         requirePolicyOwner(actor);
 
@@ -544,9 +548,9 @@ public class BusinessPolicyService {
     }
 
     private void requirePolicyOwner(ActorPrincipal actor) {
-        if (actor == null) throw ApiExceptions.unauthorized("Authentication is required");
+        if (actor == null) throw ApiExceptions.unauthorized("Vui lòng đăng nhập để tiếp tục.");
         if (!actor.hasRole(RoleCode.BUSINESS)) {
-            throw ApiExceptions.forbidden("Only Business Operations may edit rental policies");
+            throw ApiExceptions.forbidden("Chỉ quản lý vận hành kinh doanh được chỉnh sửa chính sách thuê.");
         }
         authorizationService.require(actor, SystemPermission.MANAGE_POLICIES);
     }
@@ -572,10 +576,21 @@ public class BusinessPolicyService {
             }
         }
 
+        UUID facilityId = null;
+        String facilityName = null;
+        if (p.getFacility() != null) {
+            facilityId = p.getFacility().getId();
+            try {
+                facilityName = p.getFacility().getName();
+            } catch (Exception ignored) {
+                facilityName = "Cơ sở " + facilityId;
+            }
+        }
+
         return new RentalPackagePolicyResponse(
             p.getId(),
-            p.getFacility().getId(),
-            p.getFacility().getName(),
+            facilityId,
+            facilityName,
             p.getCode(),
             p.getName(),
             p.getRentalMonths(),

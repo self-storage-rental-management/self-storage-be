@@ -19,6 +19,10 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class Contract extends BaseEntity {
+    @jakarta.persistence.Lob
+    @Column(columnDefinition = "LONGTEXT")
+    private String emergencyContactsSnapshot;
+
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "rental_id", nullable = false)
@@ -28,7 +32,7 @@ public class Contract extends BaseEntity {
     @Column(nullable = false, length = 24)
     private ContractStatus status = ContractStatus.DRAFT;
 
-    @Column(nullable = false, unique = true, length = 64)
+    @Column(nullable = false, unique = true, length = 76)
     private String contractNumber;
 
     @Column

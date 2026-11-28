@@ -1,0 +1,53 @@
+package com.storagehub.api.processing;
+
+import com.storagehub.common.api.ApiResponse;
+import com.storagehub.common.api.CorrelationIdContext;
+import com.storagehub.security.ActorContext;
+import com.storagehub.service.ProcessingLeaseService;
+import com.storagehub.service.ProcessingLeaseService.Target;
+import com.storagehub.service.ProcessingLeaseService.View;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/processing-locks/{type}/{id}")
+@RequiredArgsConstructor
+public class ProcessingLeaseController {
+    public record TokenRequest(@NotNull UUID token, Boolean reclaimSameOwner) {
+        public TokenRequest(UUID token) { this(token, false); }
+    }
+    public record DecisionRequest(@NotNull UUID token, @NotNull Boolean approve) {}
+    private final ActorContext actors;
+    private final ProcessingLeaseService leases;
+    @PostMapping("/requests") public ApiResponse<View> request(@PathVariable Target type, @PathVariable UUID id,
+        @Valid @RequestBody TokenRequest request) {
+        return envelope(leases.requestAccess(actors.required(), type, id, request.token()));
+    }
+    @PostMapping("/requests/{requestId}/decision") public ApiResponse<View> decide(@PathVariable Target type, @PathVariable UUID id,
+        @PathVariable UUID requestId, @Valid @RequestBody DecisionRequest request) {
+        return envelope(leases.decideRequest(actors.required(), type, id, request.token(), requestId, request.approve()));
+    }
+    @GetMapping public ApiResponse<View> status(@PathVariable Target type, @PathVariable UUID id,
+        @RequestHeader(value = "X-Processing-Token", required = false) UUID token) {
+        return envelope(leases.status(actors.required(), type, id, token));
+    }
+    @PostMapping("/acquire") public ApiResponse<View> acquire(@PathVariable Target type, @PathVariable UUID id,
+        @Valid @RequestBody TokenRequest request) {
+        return envelope(leases.acquire(actors.required(), type, id, request.token(), Boolean.TRUE.equals(request.reclaimSameOwner())));
+    }
+    @PostMapping("/heartbeat") public ApiResponse<View> heartbeat(@PathVariable Target type, @PathVariable UUID id,
+        @Valid @RequestBody TokenRequest request) {
+        return envelope(leases.heartbeat(actors.required(), type, id, request.token()));
+    }
+    @PostMapping("/release") public ApiResponse<View> release(@PathVariable Target type, @PathVariable UUID id,
+        @Valid @RequestBody TokenRequest request) {
+        return envelope(leases.release(actors.required(), type, id, request.token()));
+    }
+    @PostMapping("/force-release") public ApiResponse<View> forceRelease(@PathVariable Target type, @PathVariable UUID id) {
+        return envelope(leases.forceRelease(actors.required(), type, id));
+    }
+    private ApiResponse<View> envelope(View view) { return new ApiResponse<>(view, CorrelationIdContext.current()); }
+}

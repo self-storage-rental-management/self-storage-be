@@ -80,7 +80,13 @@ public class AdminRoleService {
         Role role = roleRepository.findByCode(roleCode)
             .orElseThrow(() -> ApiExceptions.notFound("The requested role was not found"));
         Set<String> permissionCodes = normalizePermissionCodes(request.permissions());
-        validateInternalRolePolicy(roleCode, permissionCodes);
+        Set<String> effectivePermissionCodes = new HashSet<>(permissionCodes);
+        if (role.getParentRole() != null) {
+            role.getParentRole().getEffectivePermissions().stream()
+                .map(Permission::getCode)
+                .forEach(effectivePermissionCodes::add);
+        }
+        validateInternalRolePolicy(roleCode, permissionCodes, effectivePermissionCodes);
 
         AdminRoleResponse before = toResponse(role);
         role.setPermissions(resolvePermissions(permissionCodes));
@@ -137,7 +143,7 @@ public class AdminRoleService {
         );
     }
 
-    private void validateInternalRolePolicy(RoleCode roleCode, Set<String> permissions) {
+    private void validateInternalRolePolicy(RoleCode roleCode, Set<String> directPermissions, Set<String> permissions) {
         if (roleCode == RoleCode.CUSTOMER) {
             throw ApiExceptions.forbidden("Customer access is managed by the customer portal policy");
         }
@@ -150,17 +156,18 @@ public class AdminRoleService {
             SystemPermission.VIEW_AUDIT_LOGS.code(),
             SystemPermission.MANAGE_SESSIONS.code()
         );
-        if (roleCode == RoleCode.ADMIN && !permissions.equals(adminOnly)) {
+        if (roleCode == RoleCode.ADMIN && !directPermissions.equals(adminOnly)) {
             throw ApiExceptions.conflict("Admin permissions are limited to account, role, system and audit administration");
         }
 
         if (roleCode != RoleCode.ADMIN && intersects(permissions, Set.of(
+            SystemPermission.MANAGE_SETTINGS.code(),
             SystemPermission.MANAGE_USERS.code(),
             SystemPermission.MANAGE_ROLES.code(),
             SystemPermission.VIEW_AUDIT_LOGS.code(),
             SystemPermission.MANAGE_SESSIONS.code()
         ))) {
-            throw ApiExceptions.conflict("Only Admin may hold user, role, session or audit-log management permissions");
+            throw ApiExceptions.conflict("Chỉ Admin được giữ quyền quản trị hệ thống, tài khoản, vai trò, phiên và nhật ký");
         }
 
         if (roleCode == RoleCode.MANAGER) {

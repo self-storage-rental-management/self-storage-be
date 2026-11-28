@@ -120,7 +120,11 @@ class ReservationQuoteServiceTests {
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("17204000.00");
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("21505000.00");
         assertThat(response.getSetupEarlyExitPolicyVersion()).isEqualTo(SetupEarlyExitPolicy.VERSION);
-        assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("5500000");
+        // V2 setup-return policy: the quote stores 20% of the accepted net rental,
+        // not a one-month (list price) early-termination fee.
+        assertThat(response.getSetupEarlyExitFee()).isEqualByComparingTo("3201000");
+        assertThat(response.getSetupEarlyExitFee())
+            .isEqualByComparingTo(response.getTotalAfterDiscount().multiply(new BigDecimal("0.20")));
         assertThat(response.getQuoteId()).isNotNull();
     }
 
@@ -139,6 +143,15 @@ class ReservationQuoteServiceTests {
         assertThat(response.getTotalInitialObligation()).isEqualByComparingTo("38000000");
         assertThat(response.getReservationDepositAmount()).isEqualByComparingTo("7600000");
         assertThat(response.getDueAtCheckIn()).isEqualByComparingTo("30400000");
+    }
+
+    @Test
+    void securityDepositAlwaysUsesOneMonthOfRent() {
+        unitType.setSecurityDepositAmount(new BigDecimal("1"));
+
+        var pricing = ReservationQuoteService.priceForPackage(unitType, policy, 3);
+
+        assertThat(pricing.securityDepositAmount()).isEqualByComparingTo("5500000");
     }
 
     @Test

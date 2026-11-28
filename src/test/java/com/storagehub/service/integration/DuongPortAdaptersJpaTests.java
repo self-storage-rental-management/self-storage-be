@@ -32,7 +32,7 @@ import org.springframework.test.context.*;
 @TestPropertySource(properties="storagehub.integration.rental-period.enabled=true")
 @Import({com.storagehub.testsupport.DisplayCodeTestConfiguration.class,DuongResourceAccess.class,DuongFileEvidence.class,RenewalAssignmentSource.class,
     RenewalPolicyPublicationService.class,EffectiveRenewalPolicySource.class,PublishedRenewalPolicyAdapters.class,RenewalAssignmentReadService.class,
-    ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,
+    ProjectHandoffRentalPeriodAdapter.class,RentalPeriodResolver.class,RenewalOperationService.class,com.storagehub.service.renewal.RenewalDisplayIdentity.class,
     RenewalPersistence.class,com.storagehub.service.FileStorageService.class,
     com.storagehub.service.AdminAuthorizationService.class,com.storagehub.service.FacilityScopeService.class,
     com.storagehub.service.NotificationService.class,com.storagehub.service.support.SupportService.class,
@@ -104,8 +104,8 @@ class DuongPortAdaptersJpaTests {
         assertThat(adapters.read(rental,LocalDate.of(2026,10,7)).orElseThrow().depositRate()).isEqualByComparingTo("0.2");
         assertThat(adapters.read(renewal).orElseThrow().signingWindow()).isEqualTo(Duration.ofMinutes(4320));
         var term=adapters.term(rental,NOW).orElseThrow();assertThat(term.lastPermittedDate()).isEqualTo(LocalDate.of(2026,10,6));
-        assertThat(term.recoveryCutoff()).isEqualTo(Instant.parse("2026-10-13T10:00:00Z"));
-        assertThat(term.recoveryStart()).isEqualTo(Instant.parse("2026-10-14T01:00:00Z"));
+        assertThat(term.recoveryCutoff()).isEqualTo(Instant.parse("2026-10-13T16:59:59.999999999Z"));
+        assertThat(term.recoveryStart()).isEqualTo(Instant.parse("2026-10-13T17:00:00Z"));
         assertThat(rental.getContractEndDate()).isEqualTo(LocalDate.of(2026,10,7));
     }
     @Test void managerCannotPublishEvenWithManagePolicyClaim(){assertThatThrownBy(()->policies.publish(actor(manager,RoleCode.MANAGER),facility.getId(),input(0))).hasMessageContaining("permission");}

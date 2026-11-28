@@ -47,6 +47,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Slf4j
 public class AuthService {
 
+    private static final long LOGIN_LOCK_MINUTES = 15;
+
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final SessionRepository sessionRepository;
@@ -63,6 +65,7 @@ public class AuthService {
     private final com.storagehub.service.email.EmailService transactionalEmailService;
     private final com.storagehub.domain.repo.LoginHistoryRepository loginHistoryRepository;
     private final com.storagehub.domain.repo.ActivityLogRepository activityLogRepository;
+    private final SecurityPolicyService securityPolicyService;
 
     @Value("${app.security.alert-cooldown-hours:6}")
     private int alertCooldownHours;
@@ -98,20 +101,46 @@ public class AuthService {
     @Transactional
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent) {
         String email = normalizeEmail(request.email());
-        if (loginHistoryService.isRateLimited(email)) {
-            User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
+        User user = userRepository.findByEmailIgnoreCaseForUpdate(email).orElse(null);
+        Instant now = Instant.now();
+        if (loginHistoryService.isRateLimited(email)
+            && (user == null || user.getStatus() != UserStatus.LOCKED
+                || user.getLockedUntil() == null || user.getLockedUntil().isAfter(now))) {
             handleFailedLoginAlert(user, email, ipAddress);
             throw ApiExceptions.unauthorized("Email or password is incorrect");
         }
-        User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
+        if (user != null && user.getStatus() == UserStatus.LOCKED
+            && user.getLockedUntil() != null && !user.getLockedUntil().isAfter(now)) {
+            user.setStatus(UserStatus.ACTIVE);
+            user.setLockedUntil(null);
+            user.setFailedLoginAttempts(0);
+            userRepository.saveAndFlush(user);
+            auditLogService.recordMutation("ACCOUNT_LOCKOUT_EXPIRED", "User", user.getId(), null,
+                Map.of("status", UserStatus.LOCKED), Map.of("status", UserStatus.ACTIVE));
+        }
+        if (user != null && user.getStatus() == UserStatus.LOCKED) {
+            loginHistoryService.record(user, email, false, ipAddress, userAgent, "ACCOUNT_LOCKED");
+            throw ApiExceptions.unauthorized("Email or password is incorrect");
+        }
         if (user == null || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             loginHistoryService.record(user, email, false, ipAddress, userAgent, "INVALID_CREDENTIALS");
+            applyFailedLogin(user, email, ipAddress, userAgent);
             handleFailedLoginAlert(user, email, ipAddress);
             throw ApiExceptions.unauthorized("Email or password is incorrect");
         }
         if (user.getStatus() != UserStatus.ACTIVE) {
             loginHistoryService.record(user, email, false, ipAddress, userAgent, "ACCOUNT_NOT_ACTIVE");
             throw ApiExceptions.unauthorized("The account is not active");
+        }
+        if (user.isMustChangePassword() && user.getTemporaryPasswordExpiresAt() != null
+            && !user.getTemporaryPasswordExpiresAt().isAfter(now)) {
+            loginHistoryService.record(user, email, false, ipAddress, userAgent, "TEMPORARY_PASSWORD_EXPIRED");
+            throw ApiExceptions.unauthorized("Mật khẩu tạm đã hết hạn. Vui lòng yêu cầu Admin cấp lại mật khẩu.");
+        }
+        if (user.getFailedLoginAttempts() != 0 || user.getLockedUntil() != null) {
+            user.setFailedLoginAttempts(0);
+            user.setLockedUntil(null);
+            userRepository.saveAndFlush(user);
         }
 
         return issueSession(user, email, ipAddress, userAgent);
@@ -312,6 +341,27 @@ public class AuthService {
         return value.substring(0, Math.min(value.length(), 160));
     }
 
+    private void applyFailedLogin(User user, String email, String ipAddress, String userAgent) {
+        if (user == null || user.getStatus() != UserStatus.ACTIVE) return;
+        int failures = user.getFailedLoginAttempts() + 1;
+        user.setFailedLoginAttempts(failures);
+        int lockoutAttempts = securityPolicyService.lockoutAttempts();
+        if (failures >= lockoutAttempts) {
+            Instant now = Instant.now();
+            user.setStatus(UserStatus.LOCKED);
+            user.setLockedUntil(now.plus(LOGIN_LOCK_MINUTES, ChronoUnit.MINUTES));
+            user.setFailedLoginAttempts(0);
+            user.setAuthzVersion(user.getAuthzVersion() + 1);
+            userRepository.saveAndFlush(user);
+            sessionRepository.revokeActiveByUserId(user.getId(), now);
+            auditLogService.recordMutation("ACCOUNT_LOCKED_LOGIN_FAILURE", "User", user.getId(), null,
+                Map.of("status", UserStatus.ACTIVE),
+                Map.of("status", UserStatus.LOCKED, "lockedUntil", user.getLockedUntil(), "reason", lockoutAttempts + " lần đăng nhập sai"));
+        } else {
+            userRepository.saveAndFlush(user);
+        }
+    }
+
     private String limitAvatar(String picture) {
         if (picture == null || picture.isBlank() || picture.length() > 2048) return null;
         return picture;
@@ -369,10 +419,6 @@ public class AuthService {
         ActorPrincipal actor = actorContext.required();
         User user = userRepository.findById(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
-        boolean isCustomer = user.getRoles().stream().anyMatch(role -> role.getCode() == RoleCode.CUSTOMER);
-        if (!isCustomer && !user.isMustChangePassword()) {
-            throw ApiExceptions.forbidden("Only customer accounts can change their password");
-        }
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
             throw ApiExceptions.unauthorized("The current password is incorrect");
         }
@@ -383,6 +429,9 @@ public class AuthService {
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         user.setMustChangePassword(false);
+        user.setTemporaryPasswordExpiresAt(null);
+        user.setFailedLoginAttempts(0);
+        user.setLockedUntil(null);
         userRepository.saveAndFlush(user);
 
         Session session = sessionRepository.findByIdAndRevokedAtIsNull(actor.sessionId())
@@ -460,7 +509,7 @@ public class AuthService {
     @Transactional
     public ActorResponse updateCurrentActor(UpdateProfileRequest request) {
         ActorPrincipal actor = actorContext.required();
-        User user = userRepository.findById(actor.userId())
+        User user = userRepository.findByIdForUpdate(actor.userId())
             .orElseThrow(() -> ApiExceptions.unauthorized("The actor no longer exists"));
         ActorResponse before = actorResponseMapper.toResponse(user);
 
@@ -481,6 +530,19 @@ public class AuthService {
             user.setAvatarUrl(normalizeNullable(request.avatarUrl()));
         }
 
+        if (request.profileDetails() != null) {
+            var previous = user.getProfileDetails();
+            var verifiedAt = previous == null ? null : previous.getIdentityVerifiedAt();
+            String oldIdentity = previous == null ? null : com.storagehub.validation.CccdPolicy.normalize(previous.getIdentityDocumentNumber());
+            String newIdentity = com.storagehub.validation.CccdPolicy.normalize(request.profileDetails().getIdentityDocumentNumber());
+            if ((verifiedAt != null || (oldIdentity != null && !oldIdentity.isBlank()))
+                && !java.util.Objects.equals(oldIdentity, newIdentity))
+                throw ApiExceptions.conflict("CCCD đã lưu. Vui lòng liên hệ nhân viên cơ sở để chỉnh sửa.");
+            request.profileDetails().setIdentityVerifiedAt(verifiedAt);
+            user.setProfileDetails(request.profileDetails());
+            CustomerIdentityPolicy.assign(user, newIdentity, userRepository);
+        }
+        com.storagehub.service.CustomerProfilePolicy.validate(user, false);
         User saved = userRepository.saveAndFlush(user);
         ActorResponse response = actorResponseMapper.toResponse(saved);
         auditLogService.recordMutation(user, "USER_PROFILE_UPDATED", "User", user.getId(), null, before, response);

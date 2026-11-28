@@ -5,5 +5,6 @@ public enum RentalEndReason {
     RETURN_IN_SETUP,
     EARLY_RETURN,
     NORMAL,
-    FACILITY_CANCELLED
+    FACILITY_CANCELLED,
+    VIOLATION_RECOVERY
 }

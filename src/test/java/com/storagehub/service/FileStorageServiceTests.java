@@ -29,6 +29,11 @@ import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import com.storagehub.domain.model.MaintenanceTask;
+import com.storagehub.domain.model.MaintenanceTaskStatus;
+import com.storagehub.domain.model.MaintenanceRecoveryType;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
@@ -70,7 +75,7 @@ class FileStorageServiceTests {
         reservation.setCustomer(customer);
         goodsItem = entity(new ReservationGoodsItem());
         goodsItem.setReservation(reservation);
-        when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
+        org.mockito.Mockito.lenient().when(userRepository.findById(customer.getId())).thenReturn(Optional.of(customer));
     }
 
     @Test
@@ -160,8 +165,100 @@ class FileStorageServiceTests {
         verify(fileAssetRepository, never()).saveAndFlush(any());
     }
 
+    @ParameterizedTest
+    @EnumSource(value = MaintenanceTaskStatus.class, names = {"completed", "cancelled"})
+    void businessCanUploadLiquidationEvidenceForClosedViolationTask(MaintenanceTaskStatus status) {
+        var boActor = new ActorPrincipal(customer.getId(), UUID.randomUUID(), Set.of(RoleCode.BUSINESS), Set.of(), Map.of());
+        var task = entity(new MaintenanceTask());
+        var facility = entity(new Facility());
+        task.setFacility(facility);
+        task.setStatus(status);
+        task.setRecoveryType(MaintenanceRecoveryType.VIOLATION);
+        when(maintenanceTaskRepository.findById(task.getId())).thenReturn(Optional.of(task));
+        when(fileAssetRepository.saveAndFlush(any())).thenAnswer(invocation -> entity(invocation.getArgument(0)));
+        var file = new MockMultipartFile("file", "liquidation.png", "image/png",
+            new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a});
+        var result = service.store(boActor, file, "MAINTENANCE_TASK", task.getId());
+        assertThat(result.entityId()).isEqualTo(task.getId());
+        verify(facilityScopeService).assertCanManage(boActor, facility.getId());
+    }
+
+    @Test
+    void businessCannotUploadLiquidationEvidenceWithoutManagementScope() {
+        var boActor = new ActorPrincipal(customer.getId(), UUID.randomUUID(), Set.of(RoleCode.BUSINESS), Set.of(), Map.of());
+        var task = entity(new MaintenanceTask());
+        var facility = entity(new Facility());
+        task.setFacility(facility);
+        task.setStatus(MaintenanceTaskStatus.completed);
+        task.setRecoveryType(MaintenanceRecoveryType.VIOLATION);
+        when(maintenanceTaskRepository.findById(task.getId())).thenReturn(Optional.of(task));
+        org.mockito.Mockito.doThrow(com.storagehub.common.api.ApiExceptions.forbidden("Ngoài phạm vi quản lý"))
+            .when(facilityScopeService).assertCanManage(boActor, facility.getId());
+        var file = new MockMultipartFile("file", "liquidation.png", "image/png",
+            new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a});
+        assertThatThrownBy(() -> service.store(boActor, file, "MAINTENANCE_TASK", task.getId()))
+            .hasMessageContaining("Ngoài phạm vi quản lý");
+        verify(fileAssetRepository, never()).saveAndFlush(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = RoleCode.class, names = {"MANAGER", "CUSTOMER"})
+    void otherRolesCannotUploadLiquidationEvidence(RoleCode role) {
+        var unauthorized = new ActorPrincipal(customer.getId(), UUID.randomUUID(), Set.of(role), Set.of(), Map.of());
+        var task = entity(new MaintenanceTask());
+        task.setFacility(entity(new Facility()));
+        task.setStatus(MaintenanceTaskStatus.completed);
+        task.setRecoveryType(MaintenanceRecoveryType.VIOLATION);
+        when(maintenanceTaskRepository.findById(task.getId())).thenReturn(Optional.of(task));
+        var file = new MockMultipartFile("file", "liquidation.png", "image/png",
+            new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a});
+        assertThatThrownBy(() -> service.store(unauthorized, file, "MAINTENANCE_TASK", task.getId()))
+            .hasMessageContaining("nhân viên phụ trách");
+        verify(fileAssetRepository, never()).saveAndFlush(any());
+    }
+
     private static <T> T entity(T value) {
         ReflectionTestUtils.setField(value, "id", UUID.randomUUID());
         return value;
+    }
+
+    @Test
+    void customerCannotDownloadInventoryIdentityPhotoEvenIfListedAsUploader() {
+        var asset = entity(new com.storagehub.domain.model.FileAsset());
+        asset.setUploadedBy(customer);
+        asset.setEntityType(FileStorageService.INVENTORY_IDENTITY_ENTITY);
+        asset.setEntityId(UUID.randomUUID());
+        when(fileAssetRepository.findById(asset.getId())).thenReturn(Optional.of(asset));
+
+        assertThatThrownBy(() -> service.download(actor, asset.getId())).hasMessageContaining("File was not found");
+    }
+
+    @Test
+    void staffCanUploadAndDownloadInventoryIdentityPhotoAfterArrival() {
+        User staff = entity(new User());
+        var staffActor = new ActorPrincipal(staff.getId(), UUID.randomUUID(), Set.of(RoleCode.STAFF), Set.of(), Map.of());
+        Facility facility = entity(new Facility());
+        Reservation reservation = entity(new Reservation());
+        reservation.setFacility(facility);
+        CheckIn checkIn = entity(new CheckIn());
+        checkIn.setReservation(reservation);
+        checkIn.setRental(new com.storagehub.domain.model.Rental());
+        checkIn.setStatus(CheckInStatus.setup_completed);
+        checkIn.setInventoryArrivedAt(java.time.Instant.now().minusSeconds(5));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(checkInRepository.findById(checkIn.getId())).thenReturn(Optional.of(checkIn));
+        when(fileAssetRepository.saveAndFlush(any())).thenAnswer(invocation -> {
+            var asset = entity(invocation.<com.storagehub.domain.model.FileAsset>getArgument(0));
+            when(fileAssetRepository.findById(asset.getId())).thenReturn(Optional.of(asset));
+            return asset;
+        });
+        byte[] png = {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
+
+        var saved = service.store(staffActor, new MockMultipartFile("file", "arrival.png", "image/png", png),
+            FileStorageService.INVENTORY_IDENTITY_ENTITY, checkIn.getId());
+
+        assertThat(service.download(staffActor, saved.id()).contentType()).isEqualTo("image/png");
+        verify(authorizationService).require(staffActor, com.storagehub.domain.model.SystemPermission.VIEW_CHECKINS);
+        verify(facilityScopeService, org.mockito.Mockito.times(2)).assertCanOperate(staffActor, facility.getId());
     }
 }

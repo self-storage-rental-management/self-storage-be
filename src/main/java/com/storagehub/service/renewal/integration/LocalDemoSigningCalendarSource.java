@@ -22,7 +22,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-/** Local-demo signing calendar: Vietnam time, daily 08:00-17:00, 30-minute slots, one at a time per facility. */
+/** Local-demo signing calendar: Vietnam time, daily 24/7, 30-minute slots, one at a time per facility. */
 @Component
 @RequiredArgsConstructor
 @ConditionalOnExpression("${storagehub.integration.local-demo-operational-sources.enabled:false} && !${storagehub.integration.renewal-signing-calendar.enabled:false}")
@@ -44,7 +44,8 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
     public java.util.Optional<Boolean> feasible(Rental rental, Instant now, Instant deadline) {
         if (rental == null || rental.getFacility() == null || rental.getFacility().getId() == null
             || now == null || deadline == null) return java.util.Optional.empty();
-        return java.util.Optional.of(hasAvailableSlot(rental.getFacility().getId(), now, deadline));
+        return java.util.Optional.of(rental.getFacility().getStatus().allowsRenewalSigning()
+            && hasAvailableSlot(rental.getFacility().getId(), now, deadline));
     }
 
     @Override
@@ -53,7 +54,7 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
             || renewal.getRental().getFacility() == null || renewal.getRental().getFacility().getId() == null || start == null)
             return java.util.Optional.empty();
         Instant end = start.plus(SLOT_LENGTH);
-        if (!isBusinessSlot(start) || !available(
+        if (!renewal.getRental().getFacility().getStatus().allowsRenewalSigning() || !isBusinessSlot(start) || !available(
             renewal.getRental().getFacility().getId(), start, end, renewal.getId())) return java.util.Optional.empty();
         return java.util.Optional.of(new RenewalOperationSources.Slot(reference(renewal.getRental().getFacility().getId(), start), start, end));
     }
@@ -62,7 +63,8 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
     public boolean feasible(Renewal renewal, Instant start, Instant deadline) {
         if (renewal == null || renewal.getRental() == null || renewal.getRental().getFacility() == null
             || start == null || deadline == null || !deadline.isAfter(start)) return false;
-        return hasAvailableSlot(renewal.getRental().getFacility().getId(), start, deadline);
+        return renewal.getRental().getFacility().getStatus().allowsRenewalSigning()
+            && hasAvailableSlot(renewal.getRental().getFacility().getId(), start, deadline);
     }
 
     @Override
@@ -78,8 +80,8 @@ public class LocalDemoSigningCalendarSource implements RenewalOperationSources.C
         Facility facility = em.find(Facility.class, facilityId, LockModeType.PESSIMISTIC_WRITE);
         if (facility == null) throw ApiExceptions.conflict("Signing facility is unavailable");
         em.refresh(facility, LockModeType.PESSIMISTIC_WRITE);
-        if (facility.getStatus() != com.storagehub.domain.model.FacilityStatus.active)
-            throw ApiExceptions.conflict("Signing facility is not active");
+        if (!facility.getStatus().allowsRenewalSigning())
+            throw ApiExceptions.conflict("Cơ sở hiện không tiếp nhận lịch ký gia hạn.");
 
         if (!slot.start().isAfter(now) || !slot.end().equals(slot.start().plus(SLOT_LENGTH))
             || !isBusinessSlot(slot.start())

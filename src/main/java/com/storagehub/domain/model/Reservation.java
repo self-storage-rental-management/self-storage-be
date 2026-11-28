@@ -70,6 +70,10 @@ public class Reservation extends BaseEntity {
     @JoinColumn(name = "assigned_unit_id")
     private StorageUnit assignedUnit;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "pallet_held_unit_id")
+    private StorageUnit palletHeldUnit;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private ReservationStatus status = ReservationStatus.AWAITING_EMAIL;
@@ -116,6 +120,17 @@ public class Reservation extends BaseEntity {
     @Column
     private Instant appointmentAt;
 
+    @Column(length = 40)
+    private String handoverTermsVersion;
+    private Instant handoverArrivedAt;
+    private Instant firstHandoverComparisonAt;
+    private Instant disputedArrivalAt;
+    private Instant arrivalReviewOpenedAt;
+    @Column(length = 500)
+    private String arrivalReviewEvidence;
+    @Column(nullable = false)
+    private int attendanceReminderHours;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount = BigDecimal.ZERO;
 
@@ -134,11 +149,18 @@ public class Reservation extends BaseEntity {
     @Column
     private Instant paymentExpiresAt;
 
+    /** Start of the customer payment window; kept with the reservation for audit and display. */
+    @Column
+    private Instant paymentStartedAt;
+
     @Column
     private Instant complaintExpiresAt;
 
     @Column
     private Instant archivedAt;
+
+    @Column
+    private Instant customerArchivedAt;
 
     @Column
     private Instant confirmedAt;

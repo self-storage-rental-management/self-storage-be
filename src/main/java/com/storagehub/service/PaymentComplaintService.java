@@ -23,6 +23,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class PaymentComplaintService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private MoneyReceiptCodes receiptCodes;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VnpayService vnpayService;
     private static final String FILE_ENTITY_TYPE = "PAYMENT_COMPLAINT";
     private static final List<PaymentComplaintStatus> ACTIVE_STATUSES = List.of(
         PaymentComplaintStatus.REVIEW_OVERDUE, PaymentComplaintStatus.PENDING
@@ -57,11 +61,17 @@ public class PaymentComplaintService {
         if (complaintRepository.findByReservation_Id(reservationId).isPresent()) {
             throw ApiExceptions.conflict("A payment complaint already exists for this reservation");
         }
-        Payment payment = paymentRepository.findReservationPaymentsForUpdate(
+        List<Payment> depositAttempts = paymentRepository.findReservationPaymentsForUpdate(
             reservationId, PaymentType.RESERVATION_DEPOSIT
-        ).stream()
+        );
+        Payment payment = depositAttempts.stream()
             .filter(item -> item.getStatus() == PaymentStatus.NOT_RECEIVED)
             .findFirst()
+            .or(() -> depositAttempts.stream()
+                .filter(item -> item.getStatus() == PaymentStatus.FAILED
+                    || item.getStatus() == PaymentStatus.PENDING
+                    || item.getStatus() == PaymentStatus.PROCESSING)
+                .findFirst())
             .orElseThrow(() -> ApiExceptions.conflict(
                 "A payment complaint requires a payment attempt that was not received"
             ));
@@ -91,6 +101,14 @@ public class PaymentComplaintService {
             reservation.getCustomer().getId(), NotificationType.PAYMENT,
             "Đã gửi khiếu nại thanh toán",
             "Khiếu nại của đơn " + reservation.getReservationCode() + " đang chờ đối soát.",
+            reservation.getId()
+        );
+        notificationService.createFacilityOperationsNotifications(
+            reservation.getFacility().getId(), NotificationType.PAYMENT,
+            "Có khiếu nại thanh toán cần đối soát",
+            "Đơn " + reservation.getReservationCode() + " vừa gửi khiếu nại thanh toán: \""
+                + (request.reason().length() > 60 ? request.reason().substring(0, 57) + "..." : request.reason())
+                + "\". Vui lòng kiểm tra và xử lý.",
             reservation.getId()
         );
         return toResponse(saved);
@@ -193,6 +211,45 @@ public class PaymentComplaintService {
     }
 
     @Transactional
+    public PaymentComplaintResponse queryVnpay(ActorPrincipal actor, UUID complaintId, String clientIp) {
+        requireManager(actor, SystemPermission.VIEW_PAYMENTS);
+        PaymentComplaint complaint = complaintRepository.findByIdForUpdate(complaintId)
+            .orElseThrow(() -> ApiExceptions.notFound("Payment complaint was not found"));
+        Reservation reservation = complaint.getReservation();
+        facilityScopeService.assertCanOperate(actor, reservation.getFacility().getId());
+        Payment payment = paymentRepository.findReservationPaymentsForUpdate(
+            reservation.getId(), PaymentType.RESERVATION_DEPOSIT
+        ).stream()
+            .filter(item -> item.getId().equals(complaint.getPayment().getId()))
+            .findFirst()
+            .orElse(complaint.getPayment());
+        VnpayService.QueryDrVerification result = vnpayService == null
+            ? new VnpayService.QueryDrVerification(Instant.now(), null, null, null, null, "UNAVAILABLE",
+                "Dịch vụ đối soát VNPAY chưa sẵn sàng.")
+            : vnpayService.verifyPaymentForComplaint(payment, clientIp);
+        complaint.setGatewayQueryCheckedAt(result.checkedAt());
+        complaint.setGatewayQueryResponseCode(result.responseCode());
+        complaint.setGatewayQueryTransactionStatus(result.transactionStatus());
+        complaint.setGatewayQueryTransactionNo(result.transactionNo());
+        complaint.setGatewayQueryPayDate(result.payDate());
+        complaint.setGatewayQueryConclusion(result.conclusion());
+        complaint.setGatewayQueryMessage(result.message());
+        paymentRepository.saveAndFlush(payment);
+        PaymentComplaint saved = complaintRepository.saveAndFlush(complaint);
+        User reviewer = userRepository.findById(actor.userId()).orElse(null);
+        auditLogService.recordMutation(
+            reviewer, "PAYMENT_COMPLAINT_VNPAY_QUERIED", "PaymentComplaint",
+            saved.getId(), reservation.getFacility().getId(), null,
+            Map.of(
+                "conclusion", String.valueOf(result.conclusion()),
+                "responseCode", String.valueOf(result.responseCode()),
+                "transactionStatus", String.valueOf(result.transactionStatus())
+            )
+        );
+        return toResponse(saved);
+    }
+
+    @Transactional
     public PaymentComplaintResponse decide(
         ActorPrincipal actor, UUID complaintId, PaymentComplaintDecisionRequest request
     ) {
@@ -224,11 +281,14 @@ public class PaymentComplaintService {
         if (request.decision() == PaymentComplaintDecisionRequest.Decision.APPROVE) {
             complaint.setStatus(PaymentComplaintStatus.APPROVED);
             payment.setStatus(PaymentStatus.PAID);
+            if (payment.getReceiptCode() == null) {
+                payment.setReceiptCode(receiptCodes.issue("PAYMENT", payment.getId(), false));
+            }
             payment.setPaidAt(now);
             payment.setProcessedAt(now);
             ReservationPricingSnapshot snapshot = snapshotRepository.findByReservation_Id(reservation.getId())
                 .orElseThrow(() -> ApiExceptions.conflict("Reservation pricing snapshot is missing"));
-            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), now);
+            ReservationPaymentTerms.apply(reservation, snapshot.getRentalMonths(), snapshot.getFreeSetupDays(), now);
             reservation.setStatus(ReservationStatus.CONFIRMED);
             reservation.setDepositPaidAt(now);
             reservation.setConfirmedAt(now);
@@ -262,8 +322,11 @@ public class PaymentComplaintService {
     }
 
     private List<FileAsset> requireOwnedImages(ActorPrincipal actor, List<UUID> ids) {
-        if (ids == null || ids.isEmpty() || new HashSet<>(ids).size() != ids.size()) {
-            throw ApiExceptions.validation("At least one unique complaint image is required", null);
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        if (new HashSet<>(ids).size() != ids.size()) {
+            throw ApiExceptions.validation("Complaint image IDs must be unique", null);
         }
         List<FileAsset> files = fileAssetRepository.findAllById(ids);
         if (files.size() != ids.size()) throw ApiExceptions.validation("A complaint image was not found", null);
@@ -318,7 +381,17 @@ public class PaymentComplaintService {
                 "/api/files/" + image.getId()
             )).toList(),
             complaint.getSubmittedAt(), complaint.getReviewDueAt(), complaint.getReviewedAt(),
-            complaint.getWithdrawnAt(), complaint.getDecisionReason()
+            complaint.getWithdrawnAt(), complaint.getDecisionReason(),
+            complaint.getPayment().getId(),
+            complaint.getPayment().getGatewayIntentId(),
+            complaint.getPayment().getCreatedAt(),
+            complaint.getGatewayQueryCheckedAt(),
+            complaint.getGatewayQueryResponseCode(),
+            complaint.getGatewayQueryTransactionStatus(),
+            complaint.getGatewayQueryTransactionNo(),
+            complaint.getGatewayQueryPayDate(),
+            complaint.getGatewayQueryConclusion(),
+            complaint.getGatewayQueryMessage()
         );
     }
 
@@ -337,6 +410,8 @@ public class PaymentComplaintService {
         response.setHeightCm(item.getHeightCm());
         response.setWeightPerItemKg(item.getWeightKg());
         response.setFragile(item.isFragile());
+        response.setStackable(item.isStackable());
+        response.setAllowHorizontalPlacement(item.isAllowHorizontalPlacement());
         response.setCustomerNote(item.getCustomerNote());
         return response;
     }

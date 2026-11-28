@@ -28,7 +28,7 @@ public class OverdueService {
     private static final ZoneId ZONE=BusinessTime.ZONE;
     private final EntityManager em;private final ObjectMapper mapper;private final RenewalPersistence store;private final AuditLogService audit;
     private final ObjectProvider<Clock> clocks;private final ObjectProvider<FinancialSource> finances;
-    private final ObjectProvider<TermSource> terms;private final ObjectProvider<ReminderSource> reminders;private final ObjectProvider<RecoverySource> recoveries;
+    private final ObjectProvider<TermSource> terms;private final ObjectProvider<RecoverySource> recoveries;
     @org.springframework.beans.factory.annotation.Autowired
     private com.storagehub.service.rental.period.RentalPeriodResolver periods;
     @org.springframework.beans.factory.annotation.Autowired
@@ -46,12 +46,17 @@ public class OverdueService {
         Instant asOf=now();var missing=new TreeSet<String>();String search=q.search().toLowerCase(Locale.ROOT);
         Comparator<OverdueResponse> order=switch(q.sort()){case "overdueDays"->Comparator.comparingLong(OverdueResponse::overdueDays);case "caseRef"->Comparator.comparing(r->r.displayCode()==null?r.caseRef():r.displayCode());default->Comparator.comparingInt(r->"COMPLETED".equals(r.workflowStatus())?0:priority(r.priority()));};
         if(q.descending())order=order.reversed();
-        var page=new OverduePageCollector<OverdueResponse>(q.page(),q.size(),order.thenComparing(OverdueResponse::caseRef));
+        // Within the same group the nearest deadline must come first. Cases without a due
+        // time sort after cases that have one, and the case reference is only the last tie-break.
+        Comparator<OverdueResponse> nearestDue=Comparator.comparing(
+            (OverdueResponse r)->r.dueAt()==null?null:r.dueAt(),
+            Comparator.nullsLast(Comparator.naturalOrder()));
+        var page=new OverduePageCollector<OverdueResponse>(q.page(),q.size(),order.thenComparing(nearestDue).thenComparing(OverdueResponse::caseRef));
         // Do not paginate rentals before expanding/filtering cases: one rental may create several cases.
         // Closing the JPA stream releases cursor resources; managed entities/owner source work still require benchmarking.
         try(var rentals=query.getResultStream()) {
             rentals.forEach(rental->{for(var r:cases(rental,asOf,q.kind(),missing))
-                if(search.isEmpty()||r.displayCode()!=null&&r.displayCode().toLowerCase(Locale.ROOT).contains(search)||r.caseRef().toLowerCase(Locale.ROOT).contains(search)||r.rentalId().toString().contains(search)||r.customerName().toLowerCase(Locale.ROOT).contains(search)||r.storageUnitCode().toLowerCase(Locale.ROOT).contains(search))page.accept(r);});
+                if(search.isEmpty()||r.displayCode()!=null&&r.displayCode().toLowerCase(Locale.ROOT).contains(search)||r.rentalDisplayCode()!=null&&r.rentalDisplayCode().toLowerCase(Locale.ROOT).contains(search)||r.caseRef().toLowerCase(Locale.ROOT).contains(search)||r.rentalId().toString().contains(search)||r.customerName().toLowerCase(Locale.ROOT).contains(search)||r.storageUnitCode().toLowerCase(Locale.ROOT).contains(search))page.accept(r);});
         }
         return new OverdueResponse.ListResult(page.page(),new PageResponse.Pagination(q.page(),q.size(),page.total(),(int)((page.total()+q.size()-1)/q.size()),q.sort()+","+(q.descending()?"desc":"asc")),correlation,asOf,missing.isEmpty()?"COMPLETE":"PARTIAL",List.copyOf(missing));
     }
@@ -59,21 +64,6 @@ public class OverdueService {
     public OverdueResponse detail(ActorPrincipal actor,String id){
         id=resolveCaseRef(id);
         var ref=parse(id);var rental=visible(actor,ref,false);return current(rental,ref);
-    }
-    public OverdueResponse.FollowUp followUp(ActorPrincipal actor,String id,OverdueCommands.FollowUp body,String key) {
-        id=resolveCaseRef(id);
-        var ref=parse(id);var r=visible(actor,ref,true);var user=lockActor(actor);r=store.lockRental(r.getId());em.refresh(r);visible(actor,ref,true);
-        Object payload=Map.of("caseRef",id,"command",body);var replay=store.replay(user,"overdue_follow_up",key,r.getId(),payload);if(replay.isPresent())return decode(replay.get().dataJson());
-        var current=current(r,ref);
-        if(body.type()==OverdueCommands.Type.REMINDER&&"COMPLETED".equals(current.workflowStatus()))throw ApiExceptions.conflict("Hồ sơ thu hồi đã hoàn tất, không thể gửi nhắc quá hạn.");
-        var state=stream(id,body.expectedVersion());UUID notification=null;String policyRef=null,version=null;
-        if(body.type()==OverdueCommands.Type.REMINDER){var source=reminders.getIfAvailable();if(source==null||!source.atomic())throw deferred("Reminder policy/delivery unavailable");var policy=source.policy(r).orElseThrow(()->deferred("Reminder policy UNKNOWN"));
-            if(policy.reference()==null||policy.reference().isBlank()||policy.version()==null||policy.version().isBlank()||policy.cooldown()==null||policy.cooldown().isNegative()||policy.cooldown().isZero())throw deferred("Reminder policy incomplete");
-            var previous=em.createQuery("select f from OverdueFollowUp f where f.caseRef=:id and f.type='REMINDER' order by f.recordedAt desc",OverdueFollowUp.class).setParameter("id",id).setMaxResults(1).getResultList();
-            if(!previous.isEmpty()&&now().isBefore(previous.getFirst().getRecordedAt().plus(policy.cooldown())))throw ApiExceptions.conflict("Reminder throttled by shared policy");
-            notification=source.enqueue(r,id,body.content(),key,now());if(notification==null)throw deferred("No persisted notification reference");policyRef=policy.reference();version=policy.version();
-        }
-        var event=new OverdueFollowUp(id,r,body.type().name(),body.content(),actor.userId(),now(),notification,policyRef,version);return finish(user,r,state,event,"overdue_follow_up",key,payload);
     }
     public OverdueResponse.FollowUp recovery(ActorPrincipal actor,String id,OverdueCommands.Recovery body,String key) {
         id=resolveCaseRef(id);
@@ -134,7 +124,7 @@ public class OverdueService {
             if(progress.isPresent())status=switch(progress.get().status()){case "CLOSED"->"COMPLETED";case "IN_PROGRESS"->"RECOVERING";default->"WAITING_RECOVERY";};
             else if(priority.equals("RECOVERY")||cutoff!=null&&!now().isBefore(cutoff))status="WAITING_RECOVERY";
         }
-        return new OverdueResponse(ref,r.getId(),r.getFacility().getId(),r.getCustomer().getId(),r.getCustomer().getFullName(),r.getStorageUnit().getCode(),kind,days,priority,obligation,due,amount,currency,policy,version,cutoff,recovery&&progress.isEmpty(),revision(ref),status,progress.map(RecoveryTaskSource.Progress::taskId).orElse(null),displayCodes==null?null:displayCodes.find(ref));
+        return new OverdueResponse(ref,r.getId(),r.getFacility().getId(),r.getCustomer().getId(),r.getCustomer().getFullName(),r.getStorageUnit().getCode(),kind,days,priority,obligation,due,amount,currency,policy,version,cutoff,recovery&&progress.isEmpty(),revision(ref),status,progress.map(RecoveryTaskSource.Progress::taskId).orElse(null),displayCodes==null?null:displayCodes.find(ref),r.getDisplayCode());
     }
     private OverdueResponse current(Rental r,Ref ref){var missing=new TreeSet<String>();var rows=cases(r,now(),ref.kind(),missing);if(!missing.isEmpty())throw deferred(String.join(",",missing));return rows.stream().filter(c->c.caseRef().equals(ref.value())).findFirst().orElseThrow(()->ApiExceptions.conflict("Case is no longer overdue"));}
     private Rental visible(ActorPrincipal actor,Ref ref,boolean write){RenewalReadService.authorize(actor,true,write);var r=em.find(Rental.class,ref.rentalId());if(r==null)throw ApiExceptions.notFound("Overdue case not found");var scope=actor.facilityScopes().get(r.getFacility().getId());if(scope==null||!scope.includes(write?FacilityScopeLevel.MANAGE:FacilityScopeLevel.READ))throw ApiExceptions.notFound("Overdue case not found");return r;}
@@ -145,7 +135,7 @@ public class OverdueService {
             r.getFacility().getId(),NotificationType.OVERDUE,"Hồ sơ quá hạn có cập nhật mới",
             "Hồ sơ thuê "+r.getId()+" tại cơ sở "+r.getFacility().getName()+" có cập nhật xử lý quá hạn.",r.getId(),user.getId());
         return response;}
-    private OverdueResponse.FollowUp response(OverdueFollowUp f,long revision){return new OverdueResponse.FollowUp(f.getId(),f.getCaseRef(),f.getType(),f.getContent(),f.getActorId(),f.getRecordedAt(),f.getExternalRef(),f.getPolicyRef(),f.getPolicyVersion(),revision);}
+    private OverdueResponse.FollowUp response(OverdueFollowUp f,long revision){return new OverdueResponse.FollowUp(f.getId(),f.getCaseRef(),f.getType(),f.getContent(),f.getActorId(),f.getRecordedAt(),f.getExternalRef(),f.getPolicyRef(),f.getPolicyVersion(),revision,f.getActorName());}
     private User lockActor(ActorPrincipal a){var u=em.find(User.class,a.userId(),LockModeType.PESSIMISTIC_WRITE);if(u==null)throw ApiExceptions.unauthorized("Actor not found");return u;}
     private OverdueResponse.FollowUp decode(String json){try{return mapper.readValue(json,OverdueResponse.FollowUp.class);}catch(Exception e){throw ApiExceptions.conflict("Stored follow-up result invalid");}}
     private String resolveCaseRef(String id) {

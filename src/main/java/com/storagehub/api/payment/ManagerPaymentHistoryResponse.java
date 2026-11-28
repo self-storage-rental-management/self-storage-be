@@ -21,14 +21,25 @@ public record ManagerPaymentHistoryResponse(
     InvoiceStatus invoiceStatus,
     Instant invoiceIssuedAt,
     String transactionStatus,
-    Boolean receiptAvailable
+    Boolean receiptAvailable,
+    String reservationCode,
+    String gatewayTransactionNo,
+    String receiptCode
 ) {
+    public ManagerPaymentHistoryResponse(String id, String transactionReference, String customerName, String type, String status,
+        BigDecimal amount, String currency, BigDecimal refundedAmount, String paymentMethod, Instant occurredAt,
+        java.util.UUID renewalId, java.util.UUID receiptFileId, String invoiceNumber, InvoiceStatus invoiceStatus,
+        Instant invoiceIssuedAt, String transactionStatus, Boolean receiptAvailable, String reservationCode, String gatewayTransactionNo) {
+        this(id, transactionReference, customerName, type, status, amount, currency, refundedAmount, paymentMethod, occurredAt,
+            renewalId, receiptFileId, invoiceNumber, invoiceStatus, invoiceIssuedAt, transactionStatus, receiptAvailable,
+            reservationCode, gatewayTransactionNo, null);
+    }
     public ManagerPaymentHistoryResponse(String id,String transactionReference,String customerName,String type,String status,
         BigDecimal amount,String currency,BigDecimal refundedAmount,String paymentMethod,Instant occurredAt,java.util.UUID renewalId,java.util.UUID receiptFileId) {
-        this(id,transactionReference,customerName,type,status,amount,currency,refundedAmount,paymentMethod,occurredAt,renewalId,receiptFileId,null,null,null,null,null);
+        this(id,transactionReference,customerName,type,status,amount,currency,refundedAmount,paymentMethod,occurredAt,renewalId,receiptFileId,null,null,null,null,null,null,null);
     }
     public ManagerPaymentHistoryResponse(String id,String transactionReference,String customerName,String type,String status,
         BigDecimal amount,String currency,BigDecimal refundedAmount,String paymentMethod,Instant occurredAt) {
-        this(id,transactionReference,customerName,type,status,amount,currency,refundedAmount,paymentMethod,occurredAt,null,null,null,null,null,null,null);
+        this(id,transactionReference,customerName,type,status,amount,currency,refundedAmount,paymentMethod,occurredAt,null,null,null,null,null,null,null,null,null);
     }
 }

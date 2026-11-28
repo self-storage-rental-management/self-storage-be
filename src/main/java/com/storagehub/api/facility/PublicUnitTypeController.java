@@ -20,7 +20,7 @@ public class PublicUnitTypeController {
 
     @GetMapping
     public PageResponse<PublicUnitTypeResponse> list(
-        @PageableDefault(size = 50, sort = "monthlyPrice", direction = Sort.Direction.ASC) Pageable pageable
+        @PageableDefault(size = 50, sort = {"areaM2", "code", "id"}, direction = Sort.Direction.ASC) Pageable pageable
     ) {
         return unitTypeQueryService.searchPublicUnitTypes(pageable, CorrelationIdContext.current());
     }

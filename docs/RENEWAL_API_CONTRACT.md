@@ -1,5 +1,18 @@
 # Renewal API contract
 
+## Luồng gia hạn hiện hành
+
+Danh sách Customer/Manager mặc định `sort=priority,asc`: yêu cầu đang chờ đúng vai trò xử lý trước, tiếp theo hạn thanh toán đã lưu (thiếu hạn xếp sau), ngày kết thúc hợp đồng gốc, thời điểm tạo và ID. Hồ sơ đã kết thúc nằm sau hàng đang xử lý. Các lựa chọn `createdAt`, `newEndDate`, `amount`, `id` asc/desc tiếp tục được hỗ trợ; không nhận `priority,desc`. Thứ tự được áp dụng trong truy vấn trước khi phân trang. Danh sách ký của Staff ưu tiên khách đã được ghi nhận có mặt, lịch còn hiệu lực gần nhất, lịch lỡ hẹn và hồ sơ hoàn tất; sort không thay thế điều kiện được phép thực hiện thao tác.
+
+- Khách gửi yêu cầu cho hồ sơ thuê đang hoạt động, trong cửa sổ chính sách. Backend kiểm tra công nợ đến hạn, tranh chấp và xung đột với kỳ gia hạn theo các nguồn vận hành được cấu hình.
+- Báo giá mới có `expiresAt: null`. Backend kiểm tra lại điều khoản khi khách chấp nhận và mở thanh toán. Nếu điều khoản thay đổi, khách lấy báo giá mới và xác nhận lại.
+- Khách lưu lịch ký còn hiệu lực trước khi mở VNPay. Backend giữ lượt 30 phút khi tạo giao dịch. Hạn thanh toán tối đa 15 phút, kết thúc trước giờ hẹn và mốc xử lý thu hồi nếu các mốc đó đến sớm hơn.
+- VNPay thu trước 20% tổng tiền thuê sau giảm giá. Sau khi xác thực và phân bổ cọc, hạn ký tính từ `depositPaidAt` cộng `signingWindowDays`, giới hạn bởi `recoveryCutoff`. Với báo giá mới, số ngày là số tháng gia hạn cộng hai, tối đa 14. Điều khoản legacy không có `signingWindowDays` dùng ba ngày.
+- Khách còn hạn ký có thể đổi lịch mà giữ nguyên hạn ký và khoản đã trả. Staff ghi nhận khách đến, đọc bảng kê, thu phần còn lại, lưu phụ lục đã ký và hoàn tất. Ngày hiệu lực tính theo [quy tắc kỳ gia hạn](RENEWAL_EFFECTIVE_PERIOD.md).
+- Khi hết hạn thanh toán, backend xác nhận kết quả VNPay trước khi đóng yêu cầu và nhả lượt. Khi hết hạn ký sau khi đã cọc, tiền chuyển sang đối soát. Mất cọc chỉ được ghi nhận từ mốc thu hồi ngày quá hạn thứ 8 khi đủ chứng cứ. Hoàn cọc đi qua luồng ngoại lệ.
+
+Các mục có ngày bên dưới ghi lại lịch sử triển khai.
+
 ## Mốc hẹn ký và hạn hoàn tất - 22/10/2026
 
 - Lịch ký hiển thị một mốc `appointmentStart`: giờ khách dự kiến đến cơ sở.
@@ -358,6 +371,7 @@ SafetySource có adapter persistence opt-in `TransactionalRenewalExtensionHoldSo
 | Staff                  | GET `/staff/renewal-appointments`        | page,size,facilityId,date theo ISO YYYY-MM-DD,status SIGNING/SIGNING_EXPIRED/COMPLETED              | Lọc quyền và phạm vi OPERATE TRƯỚC phân trang; sắp xếp appointmentStart/id                                      |
 | Staff                  | POST `/staff/renewals/{id}/arrival`      | appointmentRef,evidenceFileIds,expectedVersion                                                      | 201 sự kiện theo đồng hồ server; không nhận arrivalAt từ client/ghi lùi thời gian                                   |
 | Staff                  | POST `.../facility-incidents`            | appointmentRef,reason,evidenceFileIds,expectedVersion                                               | 201 sự kiện; có thể ghi nhận sự cố sau hết hạn để xem xét                                                           |
+| Staff                  | POST `.../no-show`                       | appointmentRef,reason,expectedVersion                                                                | 201 sự kiện khi lịch ký hiện tại đã kết thúc và chưa ghi nhận khách đến; nhả hold/lịch gia hạn, giữ nguyên gian đang thuê và khoản đã thu để đối soát |
 | Staff                  | GET `.../payable-statement`              | -                                                                                                   | statementRef/phiên bản/hạn/số tiền/nghĩa vụ bắt buộc thực tế                                                        |
 | Staff                  | POST `.../cash-receipts`                 | payableStatementRef,receiptReference,receiptFileId,received=true,expectedVersion                                  | 201 sự kiện biên nhận thực từ Ledger và chứng từ Staff; không phải hoàn tất                                                 |
 | Staff                  | POST `.../refund-executions`             | refundId,receiptFileId,transactionReference,transferred=true,expectedVersion                                      | 201 ghi nhận hoàn cọc đã thực hiện; Staff có quyền thực thi và không được là người duyệt khoản hoàn đó                  |
@@ -375,10 +389,11 @@ Result = `{state: RenewalOperationResponse, event: {id,kind,occurredAt,actorId,d
 
 - Điều khoản đã duyệt giữ bất biến. Số tiền cọc lấy từ báo giá Customer đã chấp nhận, không phải danh mục đang chạy hoặc giá trị Manager nhập. Bộ xử lý dùng chung ghi SUCCESS/FAILED/NOT_RECEIVED; lần thử thất bại không ghi đè trạng thái nghiệp vụ đã duyệt/đang ký.
 - Trước khi nộp cọc: kiểm tra duyệt/hạn thanh toán/mốc giới hạn, hold và tính khả thi lịch hẹn. Kiểm tra paidAt theo đồng hồ server SAU khi gọi bộ xử lý, số tiền/tiền tệ/liên kết và các hạn. Hạn ký được tính từ thời lượng ký dùng chung và mốc giới hạn Recovery; nộp cọc không kéo dài Rental.
-- `renewal_operation_states` riêng theo dõi SIGNING, SIGNING_EXPIRED, PAYMENT_EXPIRED, COMPLETED. Không đổi tên/thêm RenewalStatus dùng chung. Hết hạn ký sau khi đã nộp tiền KHÔNG trở thành payment_expired hoặc tự quy lỗi/mất cọc cho Customer.
+- `renewal_operation_states` riêng theo dõi SIGNING, NO_SHOW, SIGNING_EXPIRED, PAYMENT_EXPIRED, COMPLETED. Không đổi tên/thêm RenewalStatus dùng chung. Hết hạn ký hoặc ghi nhận khách không đến sau khi đã nộp tiền KHÔNG trở thành payment_expired hoặc tự quy lỗi/mất cọc cho Customer.
 - Trạng thái đọc có thể hiển thị SIGNING_EXPIRY_PENDING khi thời gian đã qua nhưng chưa chạy đối soát; GET không thực thi hết hạn. Yêu cầu đã duyệt được xác minh nhưng chưa có dòng D3 hiển thị AWAITING_DEPOSIT; dữ liệu cũ chưa xác định vẫn là UNKNOWN/null.
 - Lịch hẹn chỉ thay tham chiếu lịch hiện tại và đặt lại ghi nhận đến hiện tại trước khi khách đến; sau khi khách đến cần xem xét sự cố cơ sở. Calendar giữ khung hẹn thực trong giao dịch, mục đích RENEWAL, không phải Check-in.
 - Ghi nhận đến là sự kiện server thực gắn với lịch hiện tại; không thay endDate/hạn. Bằng chứng đã ký và tập nghĩa vụ tài chính đã thanh toán đầy đủ vẫn bắt buộc khi hoàn tất.
+- Ghi nhận `NO_SHOW` chỉ được thực hiện sau khi lịch ký hiện tại kết thúc, bắt buộc lý do và bị chặn nếu đã ghi nhận khách đến. Thao tác kết thúc nhánh ký hiện tại, nhả extension hold và lịch phục vụ nhưng không đổi kỳ thuê, không giải phóng gian vật lý đang occupied, không tự mất/hoàn khoản đã thu và không cấp số lần gia hạn hoàn tất. Nếu Staff chưa ghi nhận `NO_SHOW`, khách vẫn có thể đổi lịch theo quy tắc còn hạn ký hiện hành.
 - Hoàn tất thông thường khóa actor User → Rental → workflow D2, kiểm tra lại đang hoạt động/chưa trả kho/phân bổ/bản chụp ngày kết thúc, bằng chứng, toàn bộ tập thanh toán bắt buộc và an toàn dùng chung; sau đó tiêu thụ hold, đặt ngày kết thúc Rental đúng newEndDate đã chấp nhận, đánh dấu hoàn tất và chỉ giải phóng renewal open slot khớp. Không giải phóng gian vật lý/quyền truy cập.
 - Cho phép hoàn tất đúng thời điểm bằng hạn/mốc giới hạn có hiệu lực; sau đó bị chặn. Cần bảo đảm khóa từ nguồn chung để xử lý cạnh tranh Return/Recovery; chỉ khóa Rental local không chứng minh điều này.
 - Ngoại lệ APPROVE_RESCHEDULE_BEFORE_CUTOFF chỉ là đề xuất. Cần lỗi cơ sở đã xác minh, khung hẹn thực và giới hạn kéo dài BO so với hạn GỐC. Theo dõi rõ đề xuất mới nhất; Customer xác nhận thì kiểm tra lại và tái giữ chỗ/tiếp tục giữ hold. Giữ nguyên hạn gốc; yêu cầu kết thúc không được hồi sinh, sau mốc giới hạn không được hoàn tất/tạm dừng Recovery.

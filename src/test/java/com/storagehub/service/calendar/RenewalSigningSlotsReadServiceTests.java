@@ -34,8 +34,10 @@ class RenewalSigningSlotsReadServiceTests {
     }
     @Test void returnsOnlyWholeSlotsBeforeSigningDeadline() {
         var result=service.read(actor,id,date,RenewalOperationService.Audience.CUSTOMER);
-        assertThat(result.slots()).hasSize(17);
+        assertThat(result.slots()).hasSize(18);
+        assertThat(result.slots().getFirst().start()).isEqualTo(Instant.parse("2026-10-14T00:30:00Z"));
         assertThat(result.slots().getLast().start()).isEqualTo(Instant.parse("2026-10-14T09:00:00Z"));
+        assertThat(result.slots().getLast().end()).isEqualTo(Instant.parse("2026-10-14T09:30:00Z"));
     }
     @Test void missingAtomicCalendarDoesNotProduceAvailableTimes() {
         when(calendar.atomic()).thenReturn(false);

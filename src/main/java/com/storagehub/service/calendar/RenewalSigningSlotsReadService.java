@@ -29,7 +29,7 @@ public class RenewalSigningSlotsReadService {
 
     public View read(ActorPrincipal actor,UUID id,LocalDate date,RenewalOperationService.Audience audience) {
         var detail=operations.detail(actor,id,audience); // Existing ownership/current Staff assignment authorization.
-        if(!Set.of("SIGNING","AWAITING_PAYMENT_INTENT").contains(detail.phase())||detail.arrivalRef()!=null)
+        if(!Set.of("SIGNING","NO_SHOW","AWAITING_PAYMENT_INTENT").contains(detail.phase())||detail.arrivalRef()!=null)
             throw ApiExceptions.conflict("Renewal is not available for signing appointment selection");
         var clock=clocks.getIfAvailable();Instant now=(clock==null?Clock.systemUTC():clock).instant();
         if(date==null||date.isBefore(now.atZone(ServiceCalendarPolicy.ZONE).toLocalDate()))
@@ -49,7 +49,8 @@ public class RenewalSigningSlotsReadService {
         String coverage=demo?"LOCAL_DEMO":"VERIFIED";
         if(!source.feasible(renewal,now,deadline))return new View(id,detail.expectedVersion(),now,date,coverage,List.of(),availableAt,latestStart);
         var result=new ArrayList<RenewalOperationSources.Slot>();
-        for(LocalTime time=ServiceCalendarPolicy.OPEN;!time.isAfter(ServiceCalendarPolicy.LAST_APPOINTMENT_START);time=time.plusMinutes(ServiceCalendarPolicy.SLOT_STEP_MINUTES)) {
+        for(int minute=0;minute<24*60;minute+=ServiceCalendarPolicy.SLOT_STEP_MINUTES) {
+            LocalTime time=LocalTime.MIDNIGHT.plusMinutes(minute);
             Instant at=date.atTime(time).atZone(ServiceCalendarPolicy.ZONE).toInstant();
             if(!at.isAfter(now)||!at.isBefore(deadline))continue;
             var candidate=source.slot(renewal,at);

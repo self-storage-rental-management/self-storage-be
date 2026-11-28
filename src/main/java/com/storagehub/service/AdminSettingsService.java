@@ -13,11 +13,23 @@ import com.storagehub.security.ActorPrincipal;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AdminSettingsService {
+
+    private static final Set<String> RETIRED_SETTING_KEYS = Set.of(
+        "pinRotation",
+        "gracePeriod",
+        "currency",
+        "lateFeeAmount",
+        "emailAlerts",
+        "smsGateAlerts",
+        "slackWebhook",
+        "dailyDigest"
+    );
 
     private final SystemSettingRepository repository;
     private final AdminAuthorizationService authorizationService;
@@ -40,6 +52,7 @@ public class AdminSettingsService {
     public List<AdminSettingResponse> list(ActorPrincipal actor) {
         authorizationService.require(actor, SystemPermission.MANAGE_SETTINGS);
         return repository.findAll().stream()
+            .filter(setting -> !RETIRED_SETTING_KEYS.contains(setting.getSettingKey()))
             .sorted(Comparator.comparing(SystemSetting::getGroupName).thenComparing(SystemSetting::getId))
             .map(this::toResponse)
             .toList();
@@ -48,6 +61,9 @@ public class AdminSettingsService {
     @Transactional
     public AdminSettingResponse update(ActorPrincipal actor, String key, AdminUpdateSettingRequest request) {
         authorizationService.require(actor, SystemPermission.MANAGE_SETTINGS);
+        if (RETIRED_SETTING_KEYS.contains(key)) {
+            throw ApiExceptions.notFound("Setting was not found");
+        }
         SystemSetting setting = repository.findBySettingKey(key)
             .orElseThrow(() -> ApiExceptions.notFound("Setting was not found"));
         JsonNode value = objectMapper.valueToTree(request.value());
@@ -83,6 +99,10 @@ public class AdminSettingsService {
                 }
                 if ("select".equals(setting.getSettingType()) && !readOptions(setting).contains(value.textValue())) {
                     throw ApiExceptions.validation("Setting value is not one of the supported options", setting.getSettingKey());
+                }
+                if (WorkflowBusinessCalendar.KEY.equals(setting.getSettingKey())) {
+                    if (value.toString().length() > 2000) throw ApiExceptions.validation("Lịch SLA vượt quá độ dài cho phép.", setting.getSettingKey());
+                    WorkflowBusinessCalendar.parse(value.textValue());
                 }
             }
             default -> throw ApiExceptions.conflict("Setting type is not supported: " + setting.getSettingType());

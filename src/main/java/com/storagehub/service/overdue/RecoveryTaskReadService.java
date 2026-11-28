@@ -22,21 +22,23 @@ public class RecoveryTaskReadService {
     private final JdbcTemplate jdbc;
     private final DuongResourceAccess access;
     public record View(UUID id,String caseRef,UUID rentalId,UUID facilityId,String status,String reason,Instant receivedAt,
-        String customerName,String storageUnitCode) {}
+        String customerName,String storageUnitCode,UUID assignedStaffId,String assignedStaffName) {}
     private static final String SELECT="select t.id,t.case_ref,t.rental_id,t.facility_id,t.status,t.reason,t.received_at,"
-        +"u.full_name as customer_name,s.code as storage_unit_code from recovery_tasks t "
+        +"u.full_name as customer_name,s.code as storage_unit_code,t.assigned_staff_id,staff.full_name as assigned_staff_name from recovery_tasks t "
         +"join rentals r on r.id=t.rental_id join users u on u.id=r.customer_id "
-        +"join storage_units s on s.id=r.storage_unit_id ";
+        +"join storage_units s on s.id=r.storage_unit_id left join users staff on staff.id=t.assigned_staff_id ";
 
     public PageResponse<View> list(ActorPrincipal actor,RoleCode role,UUID facilityId,int page,int size,String correlation) {
         scope(actor,role,facilityId);
         if(page<0||size<1||size>100||(long)page*size>Integer.MAX_VALUE)
             throw ApiExceptions.validation("Invalid pagination",null);
-        var rows=jdbc.query(SELECT+"where t.facility_id=? order by t.received_at desc,t.id desc limit ? offset ?",
-            (rs,i)->view(rs),bytes(facilityId),size,page*size);
-        long total=jdbc.queryForObject("select count(*) from recovery_tasks where facility_id=?",Long.class,bytes(facilityId));
+        var staffId=role==RoleCode.STAFF?bytes(actor.userId()):null;
+        String filter="where t.facility_id=? and (? is null or t.assigned_staff_id is null or t.assigned_staff_id=?)";
+        var rows=jdbc.query(SELECT+filter+" order by case when t.status='CLOSED' then 1 else 0 end,t.received_at asc,t.id asc limit ? offset ?",
+            (rs,i)->view(rs),bytes(facilityId),staffId,staffId,size,page*size);
+        long total=jdbc.queryForObject("select count(*) from recovery_tasks t "+filter,Long.class,bytes(facilityId),staffId,staffId);
         return new PageResponse<>(rows,new PageResponse.Pagination(page,size,total,
-            (int)((total+size-1)/size),"receivedAt,desc"),correlation);
+            (int)((total+size-1)/size),"priority,asc"),correlation);
     }
 
     public View detail(ActorPrincipal actor,RoleCode role,UUID id) {
@@ -60,7 +62,8 @@ public class RecoveryTaskReadService {
         Timestamp at=rs.getTimestamp("received_at");
         return new View(uuid(rs.getBytes("id")),rs.getString("case_ref"),uuid(rs.getBytes("rental_id")),
             uuid(rs.getBytes("facility_id")),rs.getString("status"),rs.getString("reason"),at.toInstant(),
-            rs.getString("customer_name"),rs.getString("storage_unit_code"));
+            rs.getString("customer_name"),rs.getString("storage_unit_code"),RecoverySql.uuid(rs.getBytes("assigned_staff_id")),
+            rs.getString("assigned_staff_name"));
     }
     private static byte[] bytes(UUID id) {return ByteBuffer.allocate(16).putLong(id.getMostSignificantBits()).putLong(id.getLeastSignificantBits()).array();}
     private static UUID uuid(byte[] value) {var b=ByteBuffer.wrap(value);return new UUID(b.getLong(),b.getLong());}

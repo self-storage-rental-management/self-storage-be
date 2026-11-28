@@ -1,5 +1,7 @@
 package com.storagehub.domain.repo;
 
+import com.storagehub.domain.model.PaymentStatus;
+
 import com.storagehub.domain.model.Payment;
 import com.storagehub.domain.model.PaymentType;
 import java.util.Optional;
@@ -15,6 +17,20 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from Payment p where p.renewal.id=:id order by p.createdAt,p.id")
+    List<Payment> findRenewalPaymentsForUpdate(@Param("id") UUID id);
+    List<Payment> findByPurposeAndFailureCode(PaymentType purpose, String failureCode);
+
+    @Query("""
+        select count(p)>0 from Payment p
+        where p.renewal.rental.id=:rentalId and p.renewal.status=com.storagehub.domain.model.RenewalStatus.payment_expired
+          and p.purpose=com.storagehub.domain.model.PaymentType.RENEWAL
+          and (p.status in :unresolved or (p.status=com.storagehub.domain.model.PaymentStatus.PAID
+              and (p.refundedAmount is null or p.refundedAmount<p.amount)))
+        """)
+    boolean hasUnresolvedClosedRenewalPayment(@Param("rentalId") UUID rentalId,
+        @Param("unresolved") java.util.Collection<PaymentStatus> unresolved);
     @Query("""
         select coalesce(sum(p.amount), 0) from Payment p
         left join p.reservation reservation
@@ -44,6 +60,7 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
           and (:pattern is null
             or lower(coalesce(p.gatewayTransactionNo, '')) like :pattern
             or lower(coalesce(p.gatewayIntentId, '')) like :pattern
+            or lower(coalesce(p.receiptCode, '')) like :pattern
             or lower(coalesce(reservation.reservationCode, '')) like :pattern
             or lower(coalesce(reservationCustomer.fullName, '')) like :pattern
             or lower(coalesce(reservationUnit.code, '')) like :pattern
@@ -63,6 +80,7 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
           and (:pattern is null
             or lower(coalesce(p.gatewayTransactionNo, '')) like :pattern
             or lower(coalesce(p.gatewayIntentId, '')) like :pattern
+            or lower(coalesce(p.receiptCode, '')) like :pattern
             or lower(coalesce(reservation.reservationCode, '')) like :pattern
             or lower(coalesce(reservationCustomer.fullName, '')) like :pattern
             or lower(coalesce(reservationUnit.code, '')) like :pattern
@@ -149,4 +167,17 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     List<Payment> findPaidPaymentsByFacility(@Param("facilityId") UUID facilityId);
 
     List<Payment> findByStatus(com.storagehub.domain.model.PaymentStatus status);
+
+    @Query("""
+        select count(p) from Payment p
+        left join p.reservation reservation
+        left join p.renewal renewal
+        left join renewal.rental rental
+        where (reservation.facility.id = :facilityId or rental.facility.id = :facilityId)
+          and p.status in :statuses
+        """)
+    long countOutstandingByFacilityId(
+        @Param("facilityId") UUID facilityId,
+        @Param("statuses") Collection<com.storagehub.domain.model.PaymentStatus> statuses
+    );
 }

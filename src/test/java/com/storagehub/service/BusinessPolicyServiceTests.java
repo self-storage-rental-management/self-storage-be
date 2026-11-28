@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -78,10 +79,6 @@ class BusinessPolicyServiceTests {
 
     @Test
     void getBusinessConfig_success() {
-        SystemSetting graceSetting = new SystemSetting();
-        graceSetting.setValue("5");
-        when(systemSettingRepository.findBySettingKey("gracePeriod")).thenReturn(Optional.of(graceSetting));
-
         SystemSetting lateFeeSetting = new SystemSetting();
         lateFeeSetting.setValue("500000");
         when(systemSettingRepository.findBySettingKey("lateFeeAmount")).thenReturn(Optional.of(lateFeeSetting));
@@ -89,7 +86,7 @@ class BusinessPolicyServiceTests {
         BusinessConfigResponse config = service.getBusinessConfig(businessActor);
 
         assertThat(config).isNotNull();
-        assertThat(config.gracePeriodDays()).isEqualTo(5);
+        assertThat(config.gracePeriodDays()).isZero();
         assertThat(config.lateFeeAmount()).isEqualByComparingTo("500000");
         verify(authorizationService).require(businessActor, SystemPermission.VIEW_POLICIES);
     }
@@ -282,7 +279,7 @@ class BusinessPolicyServiceTests {
     }
 
     @Test
-    void deleteAllPackagePolicies_allFacilities_deletesAll() {
+    void deleteAllPackagePolicies_allFacilities_deactivatesAll() {
         RentalPackagePolicy p1 = new RentalPackagePolicy();
         ReflectionTestUtils.setField(p1, "id", UUID.randomUUID());
         p1.setFacility(facility);
@@ -295,12 +292,13 @@ class BusinessPolicyServiceTests {
 
         service.deleteAllPackagePolicies(businessActor, null);
 
-        verify(policyRepository).deleteAll(List.of(p1, p2));
-        verify(policyRepository).flush();
+        assertThat(p1.isActive()).isFalse();
+        assertThat(p2.isActive()).isFalse();
+        verify(policyRepository, never()).deleteAll(List.of(p1, p2));
     }
 
     @Test
-    void deleteAllPackagePolicies_specificFacility_deletesFacilityPolicies() {
+    void deleteAllPackagePolicies_specificFacility_deactivatesFacilityPolicies() {
         RentalPackagePolicy p = new RentalPackagePolicy();
         ReflectionTestUtils.setField(p, "id", UUID.randomUUID());
         p.setFacility(facility);
@@ -309,8 +307,8 @@ class BusinessPolicyServiceTests {
 
         service.deleteAllPackagePolicies(businessActor, facilityId);
 
-        verify(policyRepository).deleteAll(List.of(p));
-        verify(policyRepository).flush();
+        assertThat(p.isActive()).isFalse();
+        verify(policyRepository, never()).deleteAll(List.of(p));
     }
 
     private RentalPackagePolicy packagePolicy(

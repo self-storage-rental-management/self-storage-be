@@ -117,6 +117,7 @@ class RenewalPaymentTransactionTests {
         gateway=new VnpayService(config,payments,mock(PaymentComplaintRepository.class),mock(ReservationRepository.class),
             mock(ReservationPricingSnapshotRepository.class),mock(UserRepository.class),mock(AdminAuthorizationService.class),
             audit,mock(NotificationService.class),mapper,mock(RenewalWorkflowService.class),settlementProvider);
+        org.springframework.test.util.ReflectionTestUtils.setField(gateway, "receiptCodes", mock(com.storagehub.service.MoneyReceiptCodes.class));
     }
 
     @Test void callbackCommitsVerifiedMoneyBeforeAnyAllocationAndDelayedArrivalStillAllocates() throws Exception {
@@ -196,6 +197,33 @@ class RenewalPaymentTransactionTests {
     }
     private Map<String,String> callbackUnchecked(UUID id) {
         try{return callback(id,Map.of());}catch(Exception error){throw new IllegalStateException(error);}
+    }
+    @Test void signingRemindersFollowCurrentPaidAppointment() throws Exception {
+        var paymentId = fixture();
+        var emails = mock(com.storagehub.service.email.CustomerLifecycleEmailService.class);
+        var reminders = new com.storagehub.service.email.RenewalSigningReminderScheduler(em, emails);
+        tx.executeWithoutResult(transaction -> {
+            var renewal = payments.findById(paymentId).orElseThrow().getRenewal();
+            var state = new com.storagehub.service.renewal.operations.RenewalOperationState(renewal);
+            var now = Instant.now();
+            var tomorrow = now.plus(Duration.ofHours(23));
+            state.awaitingPayment(tomorrow, tomorrow, "test", "1");
+            state.appointment(UUID.randomUUID(), tomorrow, tomorrow.plusSeconds(1800));
+            em.persist(state);
+            reminders.remind();
+            verify(emails, never()).signingReminder(eq(state), anyBoolean());
+            renewal.setStatus(RenewalStatus.appointment_scheduled);
+            state.deposit(paymentId, now, tomorrow, tomorrow, "test", "1");
+            reminders.remind();
+            verify(emails).signingReminder(state, false);
+            state.appointment(UUID.randomUUID(), now.plusSeconds(3600), now.plusSeconds(5400));
+            reminders.remind();
+            verify(emails).signingReminder(state, true);
+            state.arrival(UUID.randomUUID());
+            reminders.remind();
+            verify(emails, times(2)).signingReminder(eq(state), anyBoolean());
+            transaction.setRollbackOnly();
+        });
     }
     @Test void signingCanRetryAfterAllocationWithoutExtendingRentalOrDuplicatingReceipt() throws Exception {
         UUID id=fixture();var callback=callback(id,Map.of());tx.executeWithoutResult(s->gateway.processCallback(callback));worker.reconcile(id);
@@ -303,6 +331,11 @@ class RenewalPaymentTransactionTests {
         var provider=new org.springframework.beans.factory.support.StaticListableBeanFactory();provider.addBean("finance",finance);
         var accounting=new RenewalLedgerAccountingConfiguration.Accounting(em,ledger,payments,provenance,provider.getBeanProvider(RenewalSources.FinancialSource.class));
         var manualPayments = new ManualRentalPaymentService(payments, audit);
+        org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptCodes", mock(com.storagehub.service.MoneyReceiptCodes.class));
+        var mockRenewalIdentity = mock(com.storagehub.service.renewal.RenewalDisplayIdentity.class);
+        when(mockRenewalIdentity.resolve(any())).thenReturn(new com.storagehub.service.renewal.RenewalDisplayIdentity.Identity(
+            "SH-100001", 1));
+        org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "renewalIdentity", mockRenewalIdentity);
         org.springframework.test.util.ReflectionTestUtils.setField(manualPayments, "receiptEmails",
             mock(com.storagehub.service.email.TransactionalEmailService.class));
         org.springframework.test.util.ReflectionTestUtils.setField(accounting, "manualPayments", manualPayments);

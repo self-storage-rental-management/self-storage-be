@@ -39,6 +39,20 @@ class EmailTemplateRendererTest {
     }
 
     @Test
+    void paymentBillDistinguishesTheTransactionFromAnUnissuedOrIssuedInvoice() {
+        var fields = new HashMap<String, Object>();
+        fields.put("transactionNo", "BANK-0001");
+        String pending = renderer.render("payment-bill", fields);
+        assertTrue(pending.contains(">Chưa cấp</td>"));
+        assertTrue(pending.contains(">BANK-0001</td>"));
+        fields.put("invoiceNumber", "INV-LEGACY");
+        String issued = renderer.render("payment-bill", fields);
+        assertTrue(issued.contains(">INV-LEGACY</td>"));
+        assertTrue(issued.contains(">BANK-0001</td>"));
+        assertFalse(issued.contains(">Chưa cấp</td>"));
+    }
+
+    @Test
     @DisplayName("1. verify-email template renders correctly with UTF-8 Vietnamese and escaped inputs")
     void testVerifyEmailTemplate() {
         Map<String, Object> vars = new HashMap<>();

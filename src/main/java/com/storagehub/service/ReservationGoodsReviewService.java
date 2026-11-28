@@ -30,7 +30,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -60,6 +59,22 @@ public class ReservationGoodsReviewService {
         int size,
         String correlationId
     ) {
+        return listReviews(actor, facilityId, page, size, correlationId, false);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<ReservationReviewResponse> listReviews(
+        ActorPrincipal actor, UUID facilityId, int page, int size, String correlationId, boolean completed
+    ) {
+        return listReviews(actor, facilityId, page, size, correlationId, completed, "priority");
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<ReservationReviewResponse> listReviews(
+        ActorPrincipal actor, UUID facilityId, int page, int size, String correlationId, boolean completed, String sort
+    ) {
+        if (!java.util.Set.of("priority", "createdAt,asc", "createdAt,desc", "appointmentAt,asc").contains(sort))
+            throw ApiExceptions.validation("Thứ tự sắp xếp không hợp lệ.", null);
         requireStaffActor(actor);
         authorizationService.require(actor, SystemPermission.VIEW_RESERVATIONS);
         if (facilityId != null) {
@@ -69,9 +84,10 @@ public class ReservationGoodsReviewService {
         List<UUID> facilityIds = actor.facilityScopes().isEmpty()
             ? List.of(new UUID(0, 0))
             : actor.facilityScopes().keySet().stream().toList();
-        Page<ReservationReviewResponse> result = reservationRepository.findPendingGoodsReviews(
-            facilityId, scoped, facilityIds, pageRequest(page, size)
-        ).map(this::toResponse);
+        Page<ReservationReviewResponse> result = (completed
+            ? (sort.equals("priority") ? reservationRepository.findCompletedGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size)) : reservationRepository.findCompletedGoodsReviewsOrdered(facilityId, scoped, facilityIds, sort, pageRequest(page, size)))
+            : (sort.equals("priority") ? reservationRepository.findPendingGoodsReviews(facilityId, scoped, facilityIds, pageRequest(page, size)) : reservationRepository.findPendingGoodsReviewsOrdered(facilityId, scoped, facilityIds, sort, pageRequest(page, size))))
+            .map(this::toResponse);
         return PageResponse.from(result, correlationId);
     }
 
@@ -140,7 +156,7 @@ public class ReservationGoodsReviewService {
         boolean approved = decision == ReservationReviewDecision.APPROVE;
         String content = approved
             ? "Hàng hóa trong đơn " + reservation.getReservationCode()
-                + " đã được chấp thuận. Vui lòng thanh toán cọc trước thời hạn hiển thị trên đơn."
+                + " đã được chấp thuận. Bạn có 15 phút kể từ lúc duyệt để thanh toán khoản trả trước giữ chỗ. Xem giờ bắt đầu và hạn cuối trên đơn."
             : "Hàng hóa trong đơn " + reservation.getReservationCode()
                 + " không được chấp thuận. Suất kho đã được giải phóng. Lý do: " + note;
         notificationService.createNotification(
@@ -160,6 +176,7 @@ public class ReservationGoodsReviewService {
     ) {
         reservation.setGoodsReviewStatus(GoodsReviewStatus.APPROVED);
         reservation.setStatus(ReservationStatus.AWAITING_PAYMENT);
+        reservation.setPaymentStartedAt(now);
         Instant paymentDueAt = now.plus(paymentWindowMinutes, ChronoUnit.MINUTES);
         reservation.setPaymentExpiresAt(paymentDueAt);
         reservation.setHoldExpiresAt(paymentDueAt);
@@ -184,6 +201,7 @@ public class ReservationGoodsReviewService {
         reservation.setRejectionReason(note);
         reservation.setHoldExpiresAt(now);
         reservation.setPaymentExpiresAt(null);
+        reservation.setPaymentStartedAt(null);
         reservation.setComplaintExpiresAt(null);
         for (ReservationGoodsItem item : items) {
             if (item.isRequiresStaffReview()) {
@@ -205,7 +223,7 @@ public class ReservationGoodsReviewService {
                 "page must be >= 0 and size must be between 1 and 100", null
             );
         }
-        return PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt"));
+        return PageRequest.of(page, size);
     }
 
     private ReservationReviewResponse toResponse(Reservation reservation) {
@@ -251,6 +269,8 @@ public class ReservationGoodsReviewService {
         response.setHeightCm(item.getHeightCm());
         response.setWeightPerItemKg(item.getWeightKg());
         response.setFragile(item.isFragile());
+        response.setStackable(item.isStackable());
+        response.setAllowHorizontalPlacement(item.isAllowHorizontalPlacement());
         response.setCustomerNote(item.getCustomerNote());
         response.setRequiresStaffReview(item.isRequiresStaffReview());
         response.setReviewStatus(item.getReviewStatus());
